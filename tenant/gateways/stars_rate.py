@@ -50,7 +50,7 @@ async def star_toman(margin_pct: float = 0.0, bot_id: int | None = None) -> floa
             if b > 0:
                 base_usd = b
         except Exception:
-            pass
+            logger.debug("stars_base_usd نامعتبر است؛ نرخِ پیش‌فرض", exc_info=True)
         try:
             usd = float(await get_setting(bot_id, "stars_usd_toman", "0") or 0)
         except Exception:

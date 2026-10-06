@@ -105,12 +105,25 @@ def faces_of(emoji: str) -> list[int]:
     return list(range(lo, hi + 1))
 
 
+# DicePlay.amount ستونِ INTEGER (int32) است. قبلاً مبلغِ جایزه هیچ سقفی نداشت و
+# با جایزهٔ ۵۰۰ میلیارد تومانی هر بار بازی با «value out of int32 range»
+# می‌ترکید (error.log). جایزهٔ بالاتر از این سقف نامعتبر حساب می‌شود.
+MAX_PRIZE = 1_000_000_000
+
+
 def prizes_of(game: DiceGame) -> dict[str, int]:
     try:
         data = json.loads(game.prizes or "{}") or {}
     except Exception:
         data = {}
-    return {str(k): int(v or 0) for k, v in data.items()}
+    out = {}
+    for k, v in data.items():
+        try:
+            n = int(v or 0)
+        except (TypeError, ValueError):
+            n = 0
+        out[str(k)] = n if 0 <= n <= MAX_PRIZE else 0
+    return out
 
 
 def prize_for(game: DiceGame, value: int) -> int:
@@ -796,8 +809,9 @@ async def dga_prize_save(msg: Message, state: FSMContext, bot: Bot):
         await state.clear()
         return
     val = fa_to_int(msg.text)
-    if val is None or val < 0:
-        await msg.answer("عدد نامعتبر است. مبلغ را به تومان بفرست (مثلاً 5000):")
+    if val is None or val < 0 or val > MAX_PRIZE:
+        await msg.answer("عدد نامعتبر است. مبلغ را به تومان بفرست (مثلاً 5000؛ "
+                         f"حداکثر {MAX_PRIZE:,}):")
         return
     data = await state.get_data()
     gid, face = data.get("dg_id"), data.get("dg_face")
@@ -907,7 +921,7 @@ async def dga_tries_save(msg: Message, state: FSMContext, bot: Bot):
         await state.clear()
         return
     val = fa_to_int(msg.text)
-    if val is None or val < 0:
+    if val is None or val < 0 or val > 1_000_000:
         await msg.answer("عدد نامعتبر است. یک عدد بفرست (0 = نامحدود):")
         return
     gid = (await state.get_data()).get("dg_id")

@@ -126,7 +126,7 @@ try:
                 elif default.link_preview is None and default.link_preview_is_disabled is None:
                     default = _dc.replace(default, link_preview_is_disabled=True)
         except Exception:
-            pass
+            logger.debug("تنظیمِ پیش‌فرضِ link_preview ممکن نشد", exc_info=True)
         return _orig_bot_init(self, token, session=session, default=default, **kwargs)
 
     _AioBotCls.__init__ = _bot_init_no_preview

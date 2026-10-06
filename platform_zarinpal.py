@@ -27,6 +27,36 @@ except Exception:
 
 _TIMEOUT = 15
 
+
+async def _post_json(url: str, payload: dict, what: str):
+    """POST به زرین‌پال و برگرداندنِ پاسخِ JSON (dict) یا None.
+
+    قبلاً هر تایم‌اوت/قطعیِ شبکه با logger.exception (ERROR + traceback کامل)
+    ثبت می‌شد — صدها بار در error.log — و پاسخِ غیر-JSON (صفحهٔ HTMLِ خطا)
+    JSONDecodeError می‌داد. این‌ها شرایطِ عادیِ شبکه‌اند، نه باگ؛ حالا یک
+    WARNINGِ یک‌خطی ثبت می‌شود و صداکننده مثلِ قبل پیامِ «دوباره امتحان کن» می‌دهد.
+    """
+    import asyncio
+    import json
+    try:
+        t = aiohttp.ClientTimeout(total=_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=t) as s:
+            async with s.post(url, json=payload) as resp:
+                raw = await resp.text()
+                status = resp.status
+    except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+        logger.warning("زرین‌پال (%s): خطای شبکه/تایم‌اوت: %s", what, type(e).__name__)
+        return None
+    except Exception:
+        logger.exception("زرین‌پال (%s): خطای غیرمنتظره", what)
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        logger.warning("زرین‌پال (%s): پاسخِ غیر-JSON (HTTP %s): %s", what, status, raw[:200])
+        return None
+    return data if isinstance(data, dict) else None
+
 REQUEST_URL = "https://payment.zarinpal.com/pg/v4/payment/request.json"
 VERIFY_URL = "https://payment.zarinpal.com/pg/v4/payment/verify.json"
 STARTPAY_URL = "https://payment.zarinpal.com/pg/StartPay/{authority}"
@@ -58,15 +88,12 @@ async def calc_fee(merchant_id: str, amount_toman: int) -> tuple[bool, int]:
         return False, 0
     payload = {"merchant_id": merchant_id, "amount": int(amount_toman),
                "currency": "IRT"}
-    try:
-        t = aiohttp.ClientTimeout(total=_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=t) as s:
-            async with s.post(FEE_URL, json=payload) as resp:
-                data = await resp.json(content_type=None)
-    except Exception:
-        logger.exception("استعلامِ کارمزدِ زرین‌پال ناموفق بود")
+    data = await _post_json(FEE_URL, payload, "کارمزد")
+    if data is None:
         return False, 0
-    inner = (data or {}).get("data") or {}
+    inner = data.get("data") or {}
+    if not isinstance(inner, dict):
+        inner = {}
     if inner.get("code") in (100,):
         fee_rial = inner.get("fee")
         try:
@@ -140,17 +167,14 @@ async def request_payment(
     if metadata:
         payload["metadata"] = metadata
 
-    try:
-        t = aiohttp.ClientTimeout(total=_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=t) as s:
-            async with s.post(REQUEST_URL, json=payload) as resp:
-                data = await resp.json(content_type=None)
-    except Exception:
-        logger.exception("خطای شبکه در درخواستِ پرداختِ زرین‌پال")
+    data = await _post_json(REQUEST_URL, payload, "درخواستِ پرداخت")
+    if data is None:
         return False, "خطا در اتصال به زرین‌پال. دوباره امتحان کن."
 
-    inner = (data or {}).get("data") or {}
-    errors = (data or {}).get("errors") or {}
+    inner = data.get("data") or {}
+    if not isinstance(inner, dict):
+        inner = {}
+    errors = data.get("errors") or {}
     code = inner.get("code")
     if code in _REQUEST_SUCCESS_CODES and inner.get("authority"):
         _remember_link(inner["authority"], inner.get("link") or inner.get("payment_url"))  # PATCH_ZARINPAL_API_LINK_V1
@@ -192,17 +216,14 @@ async def verify_payment(
         "currency": "IRT",
         "authority": authority,
     }
-    try:
-        t = aiohttp.ClientTimeout(total=_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=t) as s:
-            async with s.post(VERIFY_URL, json=payload) as resp:
-                data = await resp.json(content_type=None)
-    except Exception:
-        logger.exception("خطای شبکه در استعلامِ پرداختِ زرین‌پال")
+    data = await _post_json(VERIFY_URL, payload, "استعلام")
+    if data is None:
         return False, "خطا در اتصال به زرین‌پال برای استعلام. بعداً دوباره امتحان کن."
 
-    inner = (data or {}).get("data") or {}
-    errors = (data or {}).get("errors") or {}
+    inner = data.get("data") or {}
+    if not isinstance(inner, dict):
+        inner = {}
+    errors = data.get("errors") or {}
     code = inner.get("code")
     if code in _VERIFY_SUCCESS_CODES:
         ref_id = inner.get("ref_id") or inner.get("ref_id ") or ""

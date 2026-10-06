@@ -80,6 +80,7 @@ def fetch(url: str, timeout: int = TIMEOUT, retries: int = 2) -> tuple[int, dict
                     elif enc == "deflate":
                         raw = zlib.decompress(raw)
                 except Exception:  # noqa: BLE001
+                    # فشرده‌سازیِ خراب: همان بایت‌هایِ خام را نگه می‌داریم
                     pass
                 return r.status, dict(r.headers), raw
         except urllib.error.HTTPError as e:

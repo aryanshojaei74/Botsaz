@@ -8622,6 +8622,12 @@ async def _smm_myorder_detail_content(bot_id: int, user_id: int, oid: int, back_
 def panel_err_friendly(raw: str, what: str = "درخواست") -> str:
     """پاسخِ خامِ پنل را به یک جملهٔ کوتاه و قابل‌فهم برای مشتری تبدیل می‌کند (نه متنِ فنیِ دقیق)."""
     t = (raw or "").lower()
+    # محدودیت‌هایِ زمانیِ رایجِ پنل‌ها — قبلاً به پیامِ کلیِ «بعداً امتحان کن» می‌افتادند
+    # و مشتری نمی‌فهمید چرا ریفیل رد شد.
+    if any(k in t for k in ("expired", "period has", "منقضی")):
+        return f"مهلتِ {what} برای این سفارش تمام شده است."
+    if any(k in t for k in ("24 hour", "once every", "per day", "try again after")):
+        return f"{what} برای هر سفارش فقط یک‌بار در هر ۲۴ ساعت ممکن است؛ کمی بعد دوباره امتحان کن."
     if any(k in t for k in ("already", "in progress", "pending", "duplicate")):
         return f"برای این سفارش قبلاً {what} ثبت شده؛ منتظر پاسخِ پنل بمان."
     if any(k in t for k in ("incorrect order", "not found", "no order", "invalid order", "wrong order")):

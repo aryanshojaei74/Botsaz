@@ -36,7 +36,11 @@ _configured = False
 # کاربر دوبار پشت‌سرهم دکمه را می‌زند یا پیام قبلاً پاک شده، تلگرام همین را می‌گوید.
 # این رکوردها دیگر error.log را پر نمی‌کنند تا خطاهای واقعی دیده شوند.
 _BENIGN_TG = ("message is not modified", "message to edit not found",
-              "message can't be deleted", "message to delete not found")
+              "message can't be deleted", "message to delete not found",
+              # کاربر ربات را بلاک/حذف‌اکانت کرده یا روی دکمهٔ خیلی قدیمی زده —
+              # شرایطِ عادیِ سمتِ کاربرند، نه باگ (ده‌ها ERROR در error.log).
+              "bot was blocked by the user", "user is deactivated",
+              "query is too old")
 
 
 class _BenignTelegramFilter(logging.Filter):

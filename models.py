@@ -3379,6 +3379,7 @@ def _alloc_sync(conn, bot_id: int) -> str:
             with conn.begin_nested():
                 conn.execute(t.insert().values(bot_id=bot_id, last=0))   # اولین فاکتورِ هر رباتِ تازه = ۱
         except Exception:
+            # ردیفِ شمارنده هم‌زمان توسطِ درخواستِ دیگری ساخته شد؛ پایین‌تر UPDATE می‌شود
             pass   # هم‌زمان ساخته شد؛ دوباره UPDATE
     import secrets
     import string

@@ -6167,12 +6167,13 @@ async def vpn_del_ok(cb: CallbackQuery, bot: Bot):
             a.status = "hidden"
             await s.commit()
     await cb.answer("کانفیگ از لیستِ تو پنهان شد")
-    try:
-        await cb.message.edit_text(
-            "✅ کانفیگ از لیستِ سرویس‌هایِ تو حذف شد.\n"
-            "(خودِ سرویس هنوز فعال است؛ فقط دیگر در لیستِ تو نشان داده نمی‌شود.)")
-    except Exception:
-        logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+    # پیامِ کانفیگ معمولاً عکسِ QR است و edit_text رویش «there is no text in
+    # the message to edit» می‌داد (در error.log)؛ _progress_edit عکس/متن را
+    # جدا می‌کند.
+    await _progress_edit(
+        cb,
+        "✅ کانفیگ از لیستِ سرویس‌هایِ تو حذف شد.\n"
+        "(خودِ سرویس هنوز فعال است؛ فقط دیگر در لیستِ تو نشان داده نمی‌شود.)")
     await show_my_services(bot, cb.message, bot_id, cb.from_user.id)
 
 

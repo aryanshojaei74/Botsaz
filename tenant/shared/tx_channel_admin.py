@@ -105,7 +105,7 @@ async def txch_save(msg: Message, bot: Bot, state: FSMContext):
     try:
         m = await bot.send_message(chat_id, "✅ کانالِ لاگِ تراکنش‌ها وصل شد.")
         try:
-            await bot.unpin_chat_message(chat_id, m.message_id)
+            await bot.unpin_chat_message(chat_id, message_id=m.message_id)
         except Exception:
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     except Exception as e:

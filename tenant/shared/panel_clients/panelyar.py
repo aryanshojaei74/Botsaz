@@ -1037,7 +1037,7 @@ def _dst_names(dst_clients: list[dict]) -> set[str]:
             try:
                 out.add(_safe_username(e).lower())
             except Exception:
-                pass
+                logger.debug("_safe_username(%r) failed", e)
     return out
 
 

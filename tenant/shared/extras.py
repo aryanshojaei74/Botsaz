@@ -508,7 +508,7 @@ async def build_referral_screen(bot: Bot, bot_row, user, back_rows: list | None 
             from tenant.shared.ref_points import get_points as _gp
             _pts_s = str(await _gp(bot_row.id, user.id))
         except Exception:
-            pass
+            logger.debug("خواندنِ امتیازِ رفرال ناموفق بود", exc_info=True)
         head = (_custom.replace("{link}", f"<code>{link}</code>").replace("{count}", _cnt)
                 .replace("{clicks}", _clk).replace("{points}", _pts_s))
         if "{link}" not in _custom:

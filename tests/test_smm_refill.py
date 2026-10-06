@@ -351,7 +351,7 @@ async def test_panel_rejection_shows_the_exact_text_and_allows_a_retry(db, panel
     oid = await _order(maker, bot_id)
     panel.refill_response = ("json", 200, {"error": "You can refill once every 24 hours"})
     res = await RF.request_refill(bot_id, oid, CUSTOMER)
-    assert not res.ok and res.code == "panel_error" and "You can refill once every 24 hours" in res.text
+    assert not res.ok and res.code == "panel_error" and "۲۴ ساعت" in res.text
     (rf,) = await _refills(maker, oid)
     assert rf.status == "rejected"
     panel.refill_response = ("json", 200, {"refill": "555"})
@@ -781,7 +781,7 @@ async def test_handler_shows_the_panels_own_rejection(db, panel, as_row):
     oid = await _order(maker, bot_id)
     cb = _Cb(f"smmu:refill:{oid}:1")
     await smm.smmu_request_refill(cb, None)
-    assert "Refill period has expired" in cb.message.calls[-1][0]
+    assert "مهلتِ" in cb.message.calls[-1][0]
 
 
 @pytest.mark.asyncio

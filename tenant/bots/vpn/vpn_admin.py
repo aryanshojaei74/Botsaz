@@ -567,11 +567,13 @@ def rial(n) -> str:
 
 def fa_to_int(text: str):
     trans = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
-    t = (text or "").translate(trans).strip()
+    t = (text or "").translate(trans).replace(",", "").replace("،", "").strip()
     try:
-        return int(float(t))
-    except (ValueError, TypeError):
+        n = int(float(t))
+    except (ValueError, TypeError, OverflowError):   # «inf»/«1e400» قبلاً OverflowError می‌داد
         return None
+    # بزرگ‌تر از این در هیچ ستونی جا نمی‌شود (پولی‌ها NUMERIC(14,0) هستند)
+    return n if abs(n) <= 10 ** 13 else None
 
 
 async def _row(bot: Bot) -> BotRow | None:
@@ -3606,14 +3608,22 @@ async def vpn_cat_rename_save(msg: Message, bot: Bot, state: FSMContext):
     data = await state.get_data()
     key = data.get("cat_panel_key")
     old_name = data.get("cat_old_name")
-    await state.clear()
     if not row or not key or not old_name:
+        await state.clear()
         await msg.answer("مشکلی پیش آمد؛ دوباره از منویِ پلن‌ها امتحان کن.")
         return
-    new_name = (msg.text or "").strip()[:60]
+    new_name = (msg.text or "").strip()
     if not new_name:
-        await msg.answer("❌ اسمِ خالی قابلِ‌قبول نیست.")
+        await msg.answer("❌ اسمِ خالی قابلِ‌قبول نیست؛ یک اسمِ دیگر بفرست:")
         return
+    # ستونِ VpnPlan.category در دیتابیس VARCHAR(30) است و بقیهٔ مسیرهایِ
+    # ساختِ دسته هم حداکثر ۲۰ کاراکتر می‌پذیرند. قبلاً این‌جا تا ۶۰ کاراکتر
+    # بریده می‌شد و commit با «value too long for type character varying(30)»
+    # می‌ترکید (در error.log دیده شد) — ادمین هم هیچ پیامی نمی‌گرفت.
+    if len(new_name) > 20:
+        await msg.answer("⚠️ نامِ دسته بیش از حد بلنده؛ حداکثر ۲۰ کاراکتر بفرست:")
+        return
+    await state.clear()
     if new_name == old_name:
         await msg.answer("همان اسمِ قبلی است؛ چیزی تغییر نکرد.")
     else:

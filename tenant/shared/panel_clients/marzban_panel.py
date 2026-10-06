@@ -517,6 +517,15 @@ class MarzbanPanelClient:
         auth_retried = False
         conn_attempts_left = 2  # جمعاً تا ۳ تلاش برایِ خطایِ خالصِ اتصال
         while True:
+            # کلاینت در panel_pool بینِ درخواست‌هایِ هم‌زمان مشترک است؛ اگر
+            # درخواستِ دیگری بعد از شکستِ اتصال نشست را بسته باشد، نشستِ
+            # محلیِ قبلی «Session is closed» می‌داد (error.log). هر تلاش
+            # نشستِ زندهٔ فعلی را می‌گیرد.
+            if s.closed:
+                s = await self._ensure_session()
+                if not self._logged_in:
+                    await self.login()
+                    kwargs["headers"]["Authorization"] = f"Bearer {self._token}"
             try:
                 async with s.request(method, url, **kwargs) as r:
                     text = await r.text()
@@ -562,6 +571,12 @@ class MarzbanPanelClient:
                         return {"raw": text}
             except PanelError:
                 raise
+            except RuntimeError as e:
+                # نشست وسطِ کار توسطِ درخواستِ هم‌زمانِ دیگری بسته شد
+                if "session is closed" not in str(e).lower() or conn_attempts_left <= 0:
+                    raise
+                conn_attempts_left -= 1
+                continue
             except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, OSError) as e:
                 if conn_attempts_left > 0:
                     conn_attempts_left -= 1

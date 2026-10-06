@@ -64,6 +64,8 @@ SKIP_HANDLERS = frozenset({
     "tenant.shared.support_ticket.ticket_view",
     "tenant.tadm_order_del",
     "tenant.thb_exdisc",
+    "tenant.set_auto_approve_confirm",
+    "tenant.bots.virtual_service.smm.smmu_reorder",
 })
 
 

@@ -224,7 +224,7 @@ async def apply_fixes(bot_id: int) -> list[str]:
             from tenant import _BTN_CFG_CACHE
             _BTN_CFG_CACHE.clear()
         except Exception:
-            pass
+            logger.debug("پاک‌کردنِ کشِ دکمه‌ها ممکن نشد", exc_info=True)
     return done
 
 

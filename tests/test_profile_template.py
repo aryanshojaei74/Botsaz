@@ -189,18 +189,26 @@ async def test_banned_virtual_service_user_is_inactive(db):
     assert st.account_active is False
 
 
+async def _pay_referral_rewards(maker, ids, u, n=3, amount=5000):
+    """پاداشِ رفرال حالا از تراکنش‌هایِ واقعیِ کیف پول (kind=referral) جمع زده می‌شود
+    (PATCH_MINIAPP_REF_REWARD_V1)، نه «تعدادِ زیرمجموعه × مبلغِ تنظیم»."""
+    async with maker() as s:
+        for _ in range(n):
+            s.add(models.WalletTxn(bot_id=ids["bot"], user_id=u.id, amount=amount, kind="referral"))
+        await s.commit()
+
+
 @pytest.mark.asyncio
 async def test_referral_reward_math(db):
     maker, ids, _ = db
     import tenant
     u = await user(maker, ids)
-    assert (await PS.compute(ids["bot"], u)).ref_total_earned == 0                 # پاداشی تنظیم نشده
+    assert (await PS.compute(ids["bot"], u)).ref_total_earned == 0                 # هنوز پاداشی واریز نشده
     await tenant.set_setting(ids["bot"], "referral_reward", "5000")
     tenant._SETTING_CACHE.clear()
+    assert (await PS.compute(ids["bot"], u)).ref_total_earned == 0                 # تنظیم ≠ واریز
+    await _pay_referral_rewards(maker, ids, u)
     assert (await PS.compute(ids["bot"], u)).ref_total_earned == 3 * 5000
-    await tenant.set_setting(ids["bot"], "referral_reward_enabled", "0")
-    tenant._SETTING_CACHE.clear()
-    assert (await PS.compute(ids["bot"], u)).ref_total_earned == 0
 
 
 @pytest.mark.asyncio
@@ -323,6 +331,7 @@ async def test_default_template_equals_builtin_with_rewards_too(db):
     await tenant.set_setting(ids["bot"], "referral_reward", "5000")
     tenant._SETTING_CACHE.clear()
     u = await user(maker, ids)
+    await _pay_referral_rewards(maker, ids, u)
     m = Msg()
     await tenant.show_profile(m, ids["bot"], u)
     assert await render(ids, u, PS.DEFAULT_TEMPLATE) == m.sent[-1][0]

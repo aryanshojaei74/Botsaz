@@ -310,10 +310,22 @@ def rial(n) -> str:
     return f"{int(n):,} تومان"
 
 
+# بزرگ‌ترین عددی که اصلاً جایی در دیتابیس جا می‌شود (ستون‌هایِ پولی NUMERIC(14,0)
+# هستند؛ آیدیِ تلگرام هم خیلی کمتر از این است). قبلاً عددهایی مثلِ
+# 550045757643676767 بی‌قیدوشرط قبول می‌شد و commit با overflow می‌ترکید.
+FA_INT_MAX = 10 ** 13
+
+# سقفِ «تعدادِ استفاده»/شمارنده‌ها که در ستون‌هایِ INTEGER (int32) ذخیره می‌شوند.
+MAX_USES = 1_000_000
+
+
 def fa_to_int(text: str) -> int | None:
     trans = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
     digits = (text or "").translate(trans).replace(",", "").replace("،", "").strip()
-    return int(digits) if digits.isdigit() else None
+    if not digits.isdigit() or len(digits) > 14:
+        return None
+    n = int(digits)
+    return n if n <= FA_INT_MAX else None
 
 
 # === PATCH_PERSIAN_DIGITS_RTL_V1 ===
@@ -621,7 +633,13 @@ def _glass_edit_begin(bot: Bot, cb_msg, generic: bool = False):
     if not getattr(bot.session, "_glass_edit_mw", False):
         bot.session.middleware(_glass_edit_session_mw)
         bot.session._glass_edit_mw = True
-    st = {"chat_id": cb_msg.chat.id, "message_id": cb_msg.message_id, "msg": cb_msg, "done": False,
+    # پیامِ ساختگی (_FakeCbMessage — مثلاً وقتی mbtn_tap از دیپ‌لینکِ /start
+    # صدا زده می‌شود) chat/message_id ندارد و پیامِ کاربر هم قابلِ ویرایش
+    # نیست؛ پس ویرایشِ درجا را از همان اول خاموش می‌کنیم (done=True) به‌جای
+    # AttributeError که قبلاً کلِ دکمه را از کار می‌انداخت.
+    chat = getattr(cb_msg, "chat", None)
+    st = {"chat_id": getattr(chat, "id", None), "message_id": getattr(cb_msg, "message_id", None),
+          "msg": cb_msg, "done": chat is None or getattr(cb_msg, "_is_fake", False),
           "generic": generic, "sent": False, "converted": False}
     return st, _GLASS_EDIT.set(st)
 
@@ -12824,12 +12842,22 @@ class _FakeCbMessage:
     یک صفحهٔ مدیریتیِ اینلاین را باز می‌کنیم (حالتِ کیبورد). به‌جای edit، همیشه
     پیامِ جدید می‌فرستد — کاملاً امن، چه هندلر try/except برای edit داشته باشد
     چه نه."""
+    _is_fake = True
+
     def __init__(self, real_msg: Message):
         self._real = real_msg
         self.caption = None
         self.text = None
         self.photo = None
         self.document = None
+        # فیلدهایِ فقط‌خواندنیِ پیامِ واقعی — خیلی از هندلرهایِ اینلاین
+        # cb.message.chat.id / message_id را می‌خوانند و قبلاً با
+        # AttributeError می‌ترکیدند.
+        self.chat = real_msg.chat
+        self.message_id = real_msg.message_id
+        self.from_user = real_msg.from_user
+        self.message_thread_id = getattr(real_msg, "message_thread_id", None)
+        self.reply_markup = None
 
     async def edit_text(self, *a, **kw):
         return await self._real.answer(*a, **kw)
@@ -15566,7 +15594,7 @@ async def thb_exdisc_maxuses_save(msg: Message, bot: Bot, state: FSMContext):
         await msg.answer("لغو شد.", reply_markup=kb or ReplyKeyboardRemove())
         return
     n = fa_to_int(raw)
-    if n is None or n < 0:
+    if n is None or n < 0 or n > MAX_USES:
         await msg.answer("عدد نامعتبر است؛ 0 برای نامحدود، یا عددِ مثبت بفرست:")
         return
     async with Session() as s:
@@ -20108,12 +20136,15 @@ async def tenant_btn_rule_accept(cb: CallbackQuery, bot: Bot, state: FSMContext)
     if cb.message is not None and await get_setting(bot_id, "menu_mode", "reply") == "inline":
         await _mbtn_proceed(cb, bot, state, row, u, bot_id, btn)
         return
-    try:
-        await cb.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     if cb.message is None:
         return
+    # پیامِ قدیمی‌تر از ۴۸ ساعت InaccessibleMessage است و edit_reply_markup ندارد
+    from bot_utils import is_live_message
+    if is_live_message(cb.message):
+        try:
+            await cb.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     fake = cb.message.model_copy(update={"from_user": cb.from_user}).as_(bot)
     await _exec_main_button(btn, fake, bot, state, row, u, bot_id)
 
@@ -27855,8 +27886,8 @@ async def disc_edit_uses_save(msg: Message, bot: Bot, state: FSMContext):
     if not row or not await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id):  # PATCH_ADMIN_FSM_SAVE_V1
         return
     uses = fa_to_int(msg.text)
-    if uses is None or uses < 0:
-        await msg.answer("عدد نامعتبر:", reply_markup=await smart_cancel_kb(bot))
+    if uses is None or uses < 0 or uses > MAX_USES:
+        await msg.answer(f"عدد نامعتبر (۰ تا {MAX_USES:,}):", reply_markup=await smart_cancel_kb(bot))
         return
     data = await state.get_data()
     dc_id = data["edit_dc_id"]
@@ -28045,8 +28076,8 @@ async def disc_uses_enter(msg: Message, state: FSMContext, bot: Bot):
         return
 
     uses = fa_to_int(msg.text)
-    if uses is None or uses < 0:
-        await msg.answer("عدد نامعتبر:", reply_markup=await smart_cancel_kb(bot))
+    if uses is None or uses < 0 or uses > MAX_USES:
+        await msg.answer(f"عدد نامعتبر (۰ تا {MAX_USES:,}):", reply_markup=await smart_cancel_kb(bot))
         return
     await state.update_data(new_disc_uses=uses)
 

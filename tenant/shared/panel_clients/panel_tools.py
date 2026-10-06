@@ -335,7 +335,7 @@ async def _bulk_run(bot: Bot, chat_id: int, bot_id: int, key: str, gb: int, days
         try:
             await bot.send_message(chat_id, f"⚠️ عملیات با خطا قطع شد (موفق: {ok}، ناموفق: {fail}).")
         except Exception:
-            pass
+            logger.info("ارسالِ پیامِ خطایِ عملیاتِ گروهی ممکن نشد")
 
 
 # ═══════════════════════ ۲) افزودنِ دستیِ سرویس ═══════════════════════
@@ -389,7 +389,7 @@ async def _find_account_on_panel(client, email: str):
         try:
             usage = await client.get_usage(n)
         except Exception:
-            pass
+            logger.info("ptl find get_usage(%r) failed", n)
         if cur or usage:
             return n, cur, usage, []
     try:
@@ -409,11 +409,11 @@ async def _find_account_on_panel(client, email: str):
             try:
                 cur = await client.get_client(nm)
             except Exception:
-                pass
+                logger.info("ptl find get_client(%r) failed", nm)
             try:
                 usage = await client.get_usage(nm)
             except Exception:
-                pass
+                logger.info("ptl find get_usage(%r) failed", nm)
             return nm, (cur or it), usage, []
         if low and (low in nm.lower() or nm.lower() in low):
             similar.append(nm)
@@ -500,7 +500,7 @@ async def ptl_add_email(msg: Message, bot: Bot, state: FSMContext):
             await bot.send_message(int(uid), "✅ یک سرویسِ VPN به حسابت اضافه شد.\n"
                                    "از «📡 سرویس‌هایِ من» می‌توانی ببینی و مدیریتش کنی.")
         except Exception:
-            pass
+            logger.info("اطلاعِ سرویسِ تازه به کاربر %s نرسید", uid)
         await wait.edit_text(
             f"✅ سرویسِ <code>{email}</code> به کاربرِ <code>{uid}</code> وصل شد.\n"
             f"حجم: {gb or 'نامحدود'} | مدتِ باقی‌مانده: {days or 'بی‌انقضا'} روز",
@@ -863,7 +863,7 @@ async def _restore_run(bot: Bot, chat_id: int, bot_id: int, key: str, mode: str,
         try:
             await bot.send_message(chat_id, "⚠️ بازیابی با خطا قطع شد؛ لاگ را ببین.")
         except Exception:
-            pass
+            logger.info("ارسالِ پیامِ خطایِ بازیابی ممکن نشد")
 
 
 @panel_tools_router.message(PtlFSM.restore_file, F.text)

@@ -171,11 +171,11 @@ def test_error_text_key_priority_and_shapes():
 # ═════════════════ ۲) مشتری چه می‌بیند؟ ═════════════════
 
 @pytest.mark.parametrize("note,expected", [
-    ("HTTP 503: Service Unavailable", "پاسخ نامعتبر از پنل"),
-    ("ارتباط با پنل برقرار نشد (TimeoutError)", "پاسخ نامعتبر از پنل"),
-    ("پاسخ غیرقابل‌فهم از پنل: Maintenance", "پاسخ نامعتبر از پنل"),
-    ("پاسخ بدون شناسه سفارش: {}", "پاسخ نامعتبر از پنل"),
-    ("", "پاسخ نامعتبر از پنل"),
+    ("HTTP 503: Service Unavailable", "مشکلِ موقت"),
+    ("ارتباط با پنل برقرار نشد (TimeoutError)", "مشکلِ موقت"),
+    ("پاسخ غیرقابل‌فهم از پنل: Maintenance", "مشکلِ موقت"),
+    ("پاسخ بدون شناسه سفارش: {}", "مشکلِ موقت"),
+    ("", "مشکلِ موقت"),
     ("Incorrect link", "Incorrect link"),                    # متنی که خودِ پنل دربارهٔ سفارش نوشته همان می‌ماند
     ("Quantity less than minimum", "Quantity less than minimum"),
 ])
