@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="fa" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <title>SwapPay API Reference</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Persian font -->
+    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn&display=swap" rel="stylesheet">
+    <link rel="icon" href="https://swapwallet.app/favicon.ico" type="image/x-icon" sizes="48x48">
+    <style>
+      .markdown, .section-header, .group\/summary, .sidebar-heading-link-method, .sidebar-heading-link-title, .endpoint-method {
+        direction: rtl;
+        text-align: right;
+      }
+
+      code, pre, .examples, .sticky-cards, .operation-details ul, .endpoints-card, #models {
+        direction: ltr;
+        text-align: left;
+      }
+
+      .markdown table th,
+      .markdown table td {
+        text-align: right;
+      }
+
+      .section-header-wrapper {
+        display: flex !important; /* overrides grid temporarily */
+        flex-wrap: wrap; /* keep wrapping if needed */
+        flex-direction: row-reverse;
+      }
+
+      .group\/heading, .section-columns, .sidebar-heading-link {
+        display: inline-flex;
+        flex-direction: row-reverse;
+      }
+
+      .sidebar-heading-chevron {
+        transform: scaleX(-1);
+      }
+
+      #scalar-refs-0 span {
+        overflow-y: hidden;
+      }
+
+    </style>
+  </head>
+
+  <body>
+    <header class="custom-header">
+      <a href="https://swapwallet.app/">
+        <img height="20px" src="https://swapwallet.app/wp-content/themes/swapwallet-blog/assets/images/swapwallet-logo-header.png" alt="SwapWallet Logo">
+      </a>
+    </header>
+    <div id="app"></div>
+    <script src="scalar.js"></script>
+    <script>
+      async function init() {
+        const yamlSpec = "/openapi/openapi.yaml?v=" + Date.now();
+
+        // Merge mountedDocuments with environment config
+        let userConfig = {
+          theme: "default",
+          baseServerURL: "https://swapwallet.app/api",
+          url: yamlSpec,
+          expandAllResponses: true,
+          hideSearch: true,
+          hideModels: true,
+          hideClientButton: true,
+          expandAllModelSections: true,
+          title: "API V1",
+          slug: "api-v1",
+          showSidebar: true,
+          showToolbar: "never",
+          operationTitleSource: "summary",
+          persistAuth: false,
+          telemetry: false,
+          layout: "modern",
+          isEditable: false,
+          isLoading: false,
+          documentDownloadType: "none",
+          hideTestRequestButton: false,
+          showOperationId: false,
+          hideDarkModeToggle: false,
+          withDefaultFonts: true,
+          defaultOpenAllTags: false,
+          defaultHttpClient: {
+            targetKey: "python",
+            clientKey: "requests",
+          },
+          orderSchemaPropertiesBy: "alpha",
+          orderRequiredPropertiesFirst: true,
+        };
+
+        await Scalar.createApiReference('#app', userConfig);
+
+        const observer = new MutationObserver(() => {
+            document.querySelectorAll('.sidebar-heading-link-title span, .references-mobile-breadcrumbs').forEach(el => {
+                if (el.textContent.trim() === 'Introduction') {
+                    el.textContent = 'معرفی';
+                }
+            });
+
+            document.querySelectorAll('a').forEach(el => {
+              if (el.href.trim() === 'https://www.scalar.com/') {
+                el.remove();
+              }
+            });
+        });
+
+        observer.observe(document.body, { childList: true, subtree: true });
+      }
+
+      init();
+    </script>
+
+    <style>
+      :root {
+        --scalar-font: 'Vazirmatn', sans-serif;
+      }
+
+       /* --- Static Header --- */
+      .custom-header {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 64px;
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        background-color: var(--scalar-background-1);
+        border-bottom: 1px solid #e5e7eb;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+        padding: 0 24px;
+        z-index: 9999;
+      }
+
+      .custom-header img {
+        margin-left: 25px;
+        height: 30px;
+        width: auto;
+        object-fit: contain;
+      }
+
+      @media (max-width: 1000px) {
+        .custom-header {
+          display: none;
+        }
+      }
+
+      .sidebar-heading {
+        padding-right: calc((var(--scalar-sidebar-level) * var(--scalar-sidebar-indent-base)) + 8px) !important;
+        display: flex;
+        flex-direction: row-reverse;
+      }
+
+      .sidebar-group-title {
+        direction: rtl;
+        text-align: right;
+        font-size: 1rem !important;
+      }
+
+      @media (min-width: 1000px) {
+        #app {
+          margin-top: 65px;
+        }
+
+        :root {
+          --scalar-custom-header-height: 65px;
+        }
+      }
+
+      .schema-card--compact {
+        align-self: unset !important;
+      }
+
+      .scalar-card-header-title {
+        white-space: pre-wrap !important;
+      }
+    </style>
+  </body>
+</html>

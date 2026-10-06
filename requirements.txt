@@ -1,0 +1,30 @@
+aiogram==3.29.1
+fastapi==0.139.0
+uvicorn[standard]==0.51.0
+sqlalchemy==2.0.51
+aiosqlite==0.22.1
+qrcode[pil]==8.2
+Pillow==12.3.0
+python-dotenv==1.2.2
+jdatetime==6.0.0
+# نکته: نسخه‌ی aiohttp روی 3.13.1 پین شده. دلیلِ اصلیِ این پین (ناسازگاریِ
+# کتابخانه‌ی تستِ aioresponses با aiohttp 3.14+) با حذفِ tests/test_aqp_pay.py
+# (تنها تستی که از aioresponses استفاده می‌کرد) دیگر منتفی شده؛ اگر لازم شد
+# می‌توان امن این پین را برداشت و به آخرین نسخه‌ی aiohttp ارتقا داد (فقط قبلش
+# یه دور تست کامل بگیر).
+aiohttp==3.13.1
+aiohttp-socks==0.11.0
+asyncpg==0.31.0
+# === PATCH_REDIS_DEP_V1 ===
+# main_tenant.py:37 بی‌قیدوشرط `from aiogram.fsm.storage.redis import RedisStorage`
+# را import می‌کند (برای FSM Storage با Redis) — یعنی این پکیج جزوِ
+# وابستگی‌هایِ واقعیِ سرویسِ تنانت است، نه فقط ورکرهایِ جداگانه؛ قبلاً اینجا
+# پین نشده بود.
+redis==5.2.1
+tonsdk
+cryptography
+tonsdk
+cryptography
+
+# === PATCH_VPN_API_V1 === web_panel.py (Form) و صفحه‌هایِ وب به این پکیج نیاز دارند؛ قبلاً در لیست نبود
+python-multipart
