@@ -479,3 +479,14 @@ def test_new_callback_prefix_does_not_collide_with_other_handlers():
     src = inspect.getsource(smm)
     assert src.count('F.data.startswith("smm:vs:st:")') == 1
     assert 'F.data.startswith("smm:vs:s")' not in src
+
+
+@pytest.mark.asyncio
+async def test_full_refund_after_partial_only_returns_the_rest(db, notified):
+    """PATCH_SMM_PARTIAL_OVERREFUND: لغو/بازگشتِ کامل بعد از نیمه‌تمام نباید کلِ مبلغ را دوباره پس بدهد."""
+    bot_id, oid = await _make(db)
+    assert await smm._apply_partial(bot_id, oid, 32, source="panel") == "partial"   # ۱۶ تومان برگشت
+    assert await smm._refund_order(bot_id, oid, reason="لغو توسطِ ادمین") is True
+    o, u, txns = await _state(db, bot_id, oid)
+    assert float(u.balance) == 132139 + 172                  # جمعاً دقیقاً همان مبلغِ پرداختی
+    assert float(o.refunded_toman) == 172 and o.status == "refunded"

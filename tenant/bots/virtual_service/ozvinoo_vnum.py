@@ -519,7 +519,7 @@ async def _sync_provider_locked(bot_id: int, provider: dict) -> tuple[bool, str,
                 # یک‌بار در هر ری‌استارت: کلیدهایِ واقعیِ پاسخِ API را لاگ کن
                 # تا اگر نامِ فیلدِ هزینه چیزِ دیگری بود، بدونِ حدس‌زدن
                 # معلوم شود و به فهرستِ بالا اضافه‌اش کنیم.
-                logger.warning("OzVinoo فیلدهایِ یک آیتمِ نمونه: %s", sorted(item.keys()))
+                logger.debug("OzVinoo فیلدهایِ یک آیتمِ نمونه: %s", sorted(item.keys()))
                 _OZ_FIELDS_LOGGED.add(True)
             service_id = f"ozv:{provider['id']}:{country_id}{_suf}"
             seen.add(service_id)

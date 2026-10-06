@@ -5736,6 +5736,7 @@ def _customer_fail_reason(note: str) -> str:
 
 
 _VS_STATUS_LABELS = {
+    "sending": "📤 در حالِ ارسال به پنل",   # PATCH_SMM_PLACE_CLAIM_V1 (وضعیتِ گذرا)
     "awaiting_admin": "⏳ منتظر تأیید",
     "sent": "🚀 ثبت‌شده",
     "completed": "✅ تکمیل",
@@ -6631,9 +6632,23 @@ async def _place_on_panel(bot_id: int, order_pk: int) -> tuple[bool, str]:
         if o.status not in ("awaiting_admin", "failed"):
             return False, "این سفارش قبلاً پردازش شده"
         link, qty, sid, panel_pk = o.link, o.quantity, o.service_id, o.panel_pk
+        prev_status = o.status
+        # === PATCH_SMM_PLACE_CLAIM_V1 === تصاحبِ اتمیک: دو کلیکِ هم‌زمانِ «ارسال به پنل»
+        # (یا دو ادمین) قبلاً هر دو از چکِ وضعیت رد می‌شدند و سفارش دوبار در پنل ثبت می‌شد.
+        res_claim = await s.execute(
+            update(SmmOrder)
+            .where(SmmOrder.id == order_pk, SmmOrder.status == prev_status)
+            .values(status="sending", updated_at=datetime.utcnow()))
+        await s.commit()
+        if (res_claim.rowcount or 0) != 1:
+            return False, "این سفارش قبلاً پردازش شده"
     # === PATCH_SMM_MULTI_PANEL_V1 ===
     api_url, api_key, _ = await _panel_creds(bot_id, panel_pk)
-    res = await smm_api.add_order(api_url, api_key, sid, link, qty)
+    try:
+        res = await smm_api.add_order(api_url, api_key, sid, link, qty)
+    except Exception as e:   # نباید سفارش در وضعیتِ «sending» گیر کند
+        logger.exception("[SMM] add_order برای سفارش #%s استثنا داد", order_pk)
+        res = {"error": f"ارتباط با پنل برقرار نشد ({type(e).__name__})"}
     if not res or res.get("error") or not res.get("order"):
         err = (res or {}).get("error", "پاسخ نامعتبر از پنل")
         # === PATCH_SMM_PER_PANEL_SETTINGS_V1 ===
@@ -6683,12 +6698,15 @@ async def _refund_order(bot_id: int, order_pk: int, reason: str = "",
             return False
         u = await s.scalar(select(BotUser).where(
             BotUser.bot_id == bot_id, BotUser.telegram_id == o.user_telegram_id).with_for_update())
-        credit = float(o.price_toman or 0)
+        # سفارشِ «partial» قبلاً بخشی از مبلغ را پس گرفته (refunded_toman)؛ بدونِ کسرِ
+        # آن، لغو/بازگشتِ بعدیِ ادمین کلِ مبلغ را دوباره برمی‌گرداند (بیش از پرداختی).
+        credit = max(0.0, float(o.price_toman or 0) - float(o.refunded_toman or 0))
         if u and credit > 0:
             u.balance = float(u.balance) + credit
             s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=credit,
                             kind="smm_refund", note=f"بازگشت وجه SMM #{o.tracking_code or o.id} — {reason}"[:200]))
         o.status = "refunded"
+        o.refunded_toman = float(o.refunded_toman or 0) + (credit if u else 0)
         o.updated_at = datetime.utcnow()
         if reason:
             o.note = (o.note or "") + f" | {reason}"
