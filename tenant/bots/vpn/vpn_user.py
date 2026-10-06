@@ -7,6 +7,7 @@ vpn_user.py — جریان کاربر نهایی برای «VPN خودکار»:
 
 callbackها با پیشوند: vbuy / vpay / vsvc / vrenew
 """
+from html import escape as _esc_html
 import asyncio
 import html
 import io
@@ -6292,7 +6293,7 @@ async def _vpn_add_traffic_pay_impl(cb: CallbackQuery, bot: Bot):
                 s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=price,
                                 kind="refund", note="برگشت وجه افزایش حجم ناموفق"))
                 await s.commit()
-        await _safe_edit(cb, f"❌ افزایش حجم ناموفق. وجه برگشت خورد.\n<code>{e}</code>")
+        await _safe_edit(cb, f"❌ افزایش حجم ناموفق. وجه برگشت خورد.\n<code>{_esc_html(str(e))}</code>")
 
 
 @vpn_user_router.callback_query(F.data.startswith("vadd:"))
@@ -6388,7 +6389,7 @@ async def vpn_reset_link_ok(cb: CallbackQuery, bot: Bot):
         except Exception:
             await cb.message.answer(_txt)
     except Exception as e:
-        await cb.message.answer(f"❌ تغییر لینک ناموفق.\n<code>{e}</code>")
+        await cb.message.answer(f"❌ تغییر لینک ناموفق.\n<code>{_esc_html(str(e))}</code>")
 
 
 @vpn_user_router.callback_query(F.data.startswith("vreset:"))

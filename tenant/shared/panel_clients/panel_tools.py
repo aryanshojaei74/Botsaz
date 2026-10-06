@@ -12,6 +12,7 @@ panel_tools.py — ابزارهای مدیریتیِ پنل‌های VPN (=== PA
 حلقهٔ بکاپ در worker_tenant.py اسپان می‌شود.
 """
 from __future__ import annotations
+from html import escape as _esc_html
 
 import asyncio
 import json
@@ -198,7 +199,7 @@ async def ptl_health(cb: CallbackQuery, bot: Bot):
     if missing:
         lines.append("\n<b>پیدا نشدند:</b>")
         for e, uid in missing[:20]:
-            lines.append(f"• <code>{e}</code> — کاربر <code>{uid}</code>")
+            lines.append(f"• <code>{_esc_html(str(e))}</code> — کاربر <code>{uid}</code>")
         if len(missing) > 20:
             lines.append(f"… و {len(missing) - 20} مورد دیگر")
     if errs:

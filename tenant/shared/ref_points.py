@@ -18,6 +18,7 @@ tenant/referral_gate.py با ملاکِ شمارشِ «points» گیت شده‌
   refpoint_reward_vol | refpoint_reward_days | refpoint_reward_text
 """
 from __future__ import annotations
+from html import escape as _esc_html
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ButtonStyle
@@ -367,11 +368,11 @@ async def _deliver_auto(bot: Bot, bot_id: int, u: BotUser, msg: Message,
         await _send_config_delivery(bot, u.telegram_id, aid)
         return True
     except PanelError as e:
-        await msg.answer(f"❌ ساختِ کانفیگِ جایزه ناموفق بود.\n<code>{e}</code>")
+        await msg.answer(f"❌ ساختِ کانفیگِ جایزه ناموفق بود.\n<code>{_esc_html(str(e))}</code>")
         return False
     except Exception as e:
         logger.exception("خطا در ساختِ کانفیگِ جایزهٔ امتیازِ رفرال")
-        await msg.answer(f"❌ خطای غیرمنتظره در ساختِ جایزه.\n<code>{type(e).__name__}: {e}</code>")
+        await msg.answer(f"❌ خطای غیرمنتظره در ساختِ جایزه.\n<code>{type(e).__name__}: {_esc_html(str(e))}</code>")
         return False
     finally:
         try:
@@ -971,11 +972,11 @@ async def _topup_reward(bot: Bot, bot_id: int, u: BotUser, msg: Message,
         if days > 0:
             await client.renew(email, days)
     except PanelError as e:
-        await msg.answer(f"❌ شارژِ سرویس ناموفق بود.\n<code>{e}</code>")
+        await msg.answer(f"❌ شارژِ سرویس ناموفق بود.\n<code>{_esc_html(str(e))}</code>")
         return False
     except Exception as e:
         logger.exception("خطا در شارژِ کانفیگِ جایزهٔ امتیازِ رفرال")
-        await msg.answer(f"❌ خطای غیرمنتظره در شارژِ سرویس.\n<code>{type(e).__name__}: {e}</code>")
+        await msg.answer(f"❌ خطای غیرمنتظره در شارژِ سرویس.\n<code>{type(e).__name__}: {_esc_html(str(e))}</code>")
         return False
     finally:
         try:

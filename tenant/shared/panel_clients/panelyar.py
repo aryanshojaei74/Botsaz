@@ -38,6 +38,7 @@ callbackها: همه با پیشوند pyar: (نگاه کن به references/call
   pyar:miggo:{src}:{dst}:{r|t}   — شروعِ انتقال
 """
 from __future__ import annotations
+from html import escape as _esc_html
 
 import asyncio
 import datetime as _dt
@@ -476,7 +477,7 @@ async def pyar_users(cb: CallbackQuery):
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     except PanelError as e:
         await loading.edit_text(
-            f"❌ خواندنِ کاربران ناموفق بود:\n<code>{str(e)[:300]}</code>",
+            f"❌ خواندنِ کاربران ناموفق بود:\n<code>{_esc_html(str(e)[:300])}</code>",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"pyar:panel:{panel_id}",
                                      style=ButtonStyle.DANGER)]]), parse_mode="HTML")
@@ -572,7 +573,7 @@ async def pyar_admins_menu(cb: CallbackQuery, state: FSMContext):
         text, kb = await _admins_menu_content(panel)
     except PanelError as e:
         await loading.edit_text(
-            f"❌ خواندنِ ادمین‌ها ناموفق بود:\n<code>{str(e)[:300]}</code>",
+            f"❌ خواندنِ ادمین‌ها ناموفق بود:\n<code>{_esc_html(str(e)[:300])}</code>",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"pyar:panel:{panel_id}",
                                      style=ButtonStyle.DANGER)]]), parse_mode="HTML")
@@ -641,7 +642,7 @@ async def pyar_admadd_password(msg: Message, state: FSMContext):
         await client.create_admin(uname, pw, is_sudo=False)
     except PanelError as e:
         await msg.bot.edit_message_text(
-            f"❌ افزودنِ ادمین ناموفق بود:\n<code>{str(e)[:300]}</code>",
+            f"❌ افزودنِ ادمین ناموفق بود:\n<code>{_esc_html(str(e)[:300])}</code>",
             chat_id=view_chat, message_id=view_msg, parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"pyar:admins:{panel_id}", style=ButtonStyle.DANGER)]]))
@@ -693,7 +694,7 @@ async def pyar_admpw_save(msg: Message, state: FSMContext):
         await client.modify_admin_password(uname, pw)
     except PanelError as e:
         await msg.bot.edit_message_text(
-            f"❌ تغییرِ پسورد ناموفق بود:\n<code>{str(e)[:300]}</code>",
+            f"❌ تغییرِ پسورد ناموفق بود:\n<code>{_esc_html(str(e)[:300])}</code>",
             chat_id=view_chat, message_id=view_msg, parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"pyar:admins:{panel_id}", style=ButtonStyle.DANGER)]]))
@@ -722,7 +723,7 @@ async def pyar_admdel(cb: CallbackQuery):
         await client.delete_admin(uname)
     except PanelError as e:
         await cb.message.edit_text(
-            f"❌ حذفِ ادمین ناموفق بود:\n<code>{str(e)[:300]}</code>", parse_mode="HTML",
+            f"❌ حذفِ ادمین ناموفق بود:\n<code>{_esc_html(str(e)[:300])}</code>", parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"pyar:admins:{panel_id}", style=ButtonStyle.DANGER)]]))
         return
@@ -791,7 +792,7 @@ async def pyar_inbounds_refresh(cb: CallbackQuery):
         inbounds = await client.list_inbounds()
     except PanelError as e:
         await cb.message.edit_text(
-            f"❌ خواندنِ اینباندها ناموفق بود:\n<code>{str(e)[:300]}</code>", parse_mode="HTML",
+            f"❌ خواندنِ اینباندها ناموفق بود:\n<code>{_esc_html(str(e)[:300])}</code>", parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"pyar:panel:{panel_id}", style=ButtonStyle.DANGER)]]))
         return
@@ -959,7 +960,7 @@ async def pyar_backup(cb: CallbackQuery):
     try:
         clients = await _read_clients(panel)
     except PanelError as e:
-        await cb.message.answer(f"❌ خواندنِ کاربران ناموفق بود:\n<code>{str(e)[:300]}</code>",
+        await cb.message.answer(f"❌ خواندنِ کاربران ناموفق بود:\n<code>{_esc_html(str(e)[:300])}</code>",
                                 parse_mode="HTML", reply_markup=_back_kb(panel.id))
         return
     except Exception:
@@ -1092,7 +1093,7 @@ async def _render_confirm(cb: CallbackQuery, src, dst, mode: str):
         dst_clients = await _read_clients(dst)
     except PanelError as e:
         await cb.message.edit_text(
-            f"❌ خواندنِ کاربران ناموفق بود:\n<code>{str(e)[:300]}</code>",
+            f"❌ خواندنِ کاربران ناموفق بود:\n<code>{_esc_html(str(e)[:300])}</code>",
             parse_mode="HTML", reply_markup=_back_kb(src.id))
         return
     except Exception:
@@ -1249,7 +1250,7 @@ async def _run_migration(bot, msg: Message, row, src, dst, mode: str, key: tuple
                                   filename="migrate_failed.json"),
                 caption="❌ کاربرانِ منتقل‌نشده")
     except PanelError as e:
-        await msg.edit_text(f"❌ انتقال متوقف شد:\n<code>{str(e)[:300]}</code>",
+        await msg.edit_text(f"❌ انتقال متوقف شد:\n<code>{_esc_html(str(e)[:300])}</code>",
                             parse_mode="HTML", reply_markup=_back_kb(src.id))
     except Exception:
         logger.exception("[panelyar] انتقال با خطا متوقف شد (src=%s dst=%s)", src.id, dst.id)
@@ -1352,7 +1353,7 @@ async def _render_file_confirm(target: Message, row, dst, mode: str) -> None:
     try:
         dst_clients = await _read_clients(dst)
     except Exception as e:  # noqa: BLE001
-        await target.edit_text(f"❌ خواندنِ کاربرانِ پنلِ مقصد ناموفق بود:\n<code>{str(e)[:300]}</code>",
+        await target.edit_text(f"❌ خواندنِ کاربرانِ پنلِ مقصد ناموفق بود:\n<code>{_esc_html(str(e)[:300])}</code>",
                                parse_mode="HTML", reply_markup=_back_kb(dst.id))
         return
     _jobs, st = _make_plan(clients, _dst_names(dst_clients), mode, panel_base_key(dst.panel_key))

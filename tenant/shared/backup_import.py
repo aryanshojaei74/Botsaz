@@ -7,6 +7,7 @@ backup_import.py — بک‌آپ‌گیری و ایمپورتِ کانفیگ‌�
 استفاده می‌کند — بررسی شد که آن استیت فقط همین‌جا استفاده می‌شد.
 """
 from __future__ import annotations
+from html import escape as _esc_html
 
 import io
 import json
@@ -159,7 +160,7 @@ async def tadm_cfg_import_file(msg: Message, bot: Bot, state: FSMContext):
         raw = buf.getvalue().decode("utf-8")
         data = json.loads(raw)
     except Exception as e:
-        await msg.answer(f"❌ خطا در خواندن فایل:\n<code>{e}</code>", reply_markup=await smart_cancel_kb(bot))
+        await msg.answer(f"❌ خطا در خواندن فایل:\n<code>{_esc_html(str(e))}</code>", reply_markup=await smart_cancel_kb(bot))
         return
 
     # بررسی magic

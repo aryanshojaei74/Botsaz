@@ -6,6 +6,7 @@ The Telegram UI lives in the platform bot; account workers remain in the
 independent /opt/selfsaz service. No tenant router or tenant database model is used.
 """
 from __future__ import annotations
+from html import escape as _esc_html
 
 import os
 import uuid
@@ -1352,7 +1353,7 @@ async def selfsaz_status_dashboard(cb: CallbackQuery):
             f'فعال‌سازی: <b>{enabled}</b>\nworker: <b>{alive}</b>\n'
             f'ساعت: <b>{time_state}</b>\nفرمت‌های روشن: <b>{", ".join(formats) if formats else "هیچ‌کدام"}</b>\n'
             f'قفل‌های روشن: <b>{", ".join(locks) if locks else "هیچ‌کدام"}</b>\n'
-            f'آخرین خطا: <code>{error}</code>')
+            f'آخرین خطا: <code>{_esc_html(str(error))}</code>')
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='🔄 بروزرسانی', callback_data='pss:ctl:status')],
         [InlineKeyboardButton(text='⬅️ کنترل‌های واقعی', callback_data='pss:controls')],

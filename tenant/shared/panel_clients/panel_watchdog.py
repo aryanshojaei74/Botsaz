@@ -15,6 +15,7 @@ test_connection() که خودِ ادمین موقعِ تنظیمِ پنل است
 """
 from __future__ import annotations
 
+import html as _html
 import asyncio
 import json
 from datetime import datetime
@@ -135,7 +136,7 @@ async def _check_panel_once(panel_id: int) -> None:
 
     if notify == "up":
         text = (f"✅ <b>اتصال به پنل برقرار شد</b>\n\n"
-                f"🔑 پنل: <code>{panel_key}</code>\n"
+                f"🔑 پنل: <code>{_html.escape(str(panel_key))}</code>\n"
                 f"اتصال به این پنل که قطع شده بود، الان دوباره برقراره.")
     else:
         since_line = (f"⏱ از {down_for_min} دقیقه پیش پیوسته قطع است "
@@ -143,9 +144,9 @@ async def _check_panel_once(panel_id: int) -> None:
                       if down_for_min else
                       f"❗️ {new_count} بررسیِ ناموفقِ پشتِ‌هم.\n")
         text = (f"⚠️ <b>اتصال به پنل قطع شد!</b>\n\n"
-                f"🔑 پنل: <code>{panel_key}</code>\n"
+                f"🔑 پنل: <code>{_html.escape(str(panel_key))}</code>\n"
                 + since_line
-                + (f"❗️ خطا: <code>{err_text}</code>\n" if err_text else "")
+                + (f"❗️ خطا: <code>{_html.escape(err_text)}</code>\n" if err_text else "")
                 + "\nهرچه سریع‌تر بررسی کن — تا وصل نشه، خرید/تمدید رویِ این پنل کار نمی‌کنه."
                 + "\n\n<i>تا وقتی وصل نشود دیگر پیامِ تکراری نمی‌فرستم.</i>")
 
@@ -249,18 +250,19 @@ async def _check_nodes_once(panel_id: int) -> None:
     if not brow or not brow.owner_id:
         return
     if notify == "up":
-        text = (f"✅ <b>نودهایِ پنل دوباره وصل شدند</b>\n\n🔑 پنل: <code>{panel_key}</code>\n"
+        text = (f"✅ <b>نودهایِ پنل دوباره وصل شدند</b>\n\n🔑 پنل: <code>{_html.escape(str(panel_key))}</code>\n"
                 "همهٔ نودها الان سالم‌اند؛ کانفیگ‌هایِ وایرگارد/لوکیشن‌ها باید دوباره کار کنند.")
     else:
         lines = []
         for n in bad[:10]:
             msg = str(n.get("message") or "")[:80]
             hint = _node_reason_hint(msg)
-            lines.append(f"• {str(n.get('name') or n.get('id'))[:28]} — {str(n.get('address') or '')[:24]}\n"
-                         f"   <code>{msg}</code>" + (f"\n   ↳ {hint}" if hint else ""))
+            lines.append(f"• {_html.escape(str(n.get('name') or n.get('id'))[:28])} — "
+                         f"{_html.escape(str(n.get('address') or '')[:24])}\n"
+                         f"   <code>{_html.escape(msg)}</code>" + (f"\n   ↳ {hint}" if hint else ""))
         more = f"\n… و {len(bad) - 10} نودِ دیگر" if len(bad) > 10 else ""
         head = "⚠️ <b>نودهایِ پنل قطع/خطادارند!</b>" if notify == "down" else "⏰ <b>یادآوری: نودهایِ پنل هنوز خطا دارند</b>"
-        text = (f"{head}\n\n🔑 پنل: <code>{panel_key}</code>\n❌ {len(bad)} نود در حالتِ error:\n\n"
+        text = (f"{head}\n\n🔑 پنل: <code>{_html.escape(str(panel_key))}</code>\n❌ {len(bad)} نود در حالتِ error:\n\n"
                 + "\n".join(lines) + more
                 + "\n\nتا وقتی این نودها وصل نشوند، کانفیگ‌هایِ جدید/تمدیدشده روی لوکیشن‌هایِ مربوط کار نمی‌کنند "
                   "(پنل بالاست ولی به نودها نمی‌رسد). سرویس/پورتِ نودها یا فایروالِ سرورشان را چک کن.")

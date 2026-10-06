@@ -263,15 +263,39 @@ def _clear_local_tenant_cache(token: str | None = None) -> None:
     برمی‌گشت."""
     if token:
         _tenant_status_cache.pop(token, None)
-        _tenant_bots.pop(token, None)
+        _close_bot_later(_tenant_bots.pop(token, None))
     else:
         _tenant_status_cache.clear()
+        for _b in list(_tenant_bots.values()):
+            _close_bot_later(_b)
         _tenant_bots.clear()
     try:
         from tenant import invalidate_bot_row_cache
         invalidate_bot_row_cache(token)
     except Exception:
         logger.exception("MARKER_BOTROW_CACHE_CROSSPROCESS_V1: باطل‌سازیِ کشِ BotRow ناموفق بود")
+
+
+def _close_bot_later(bot: "Bot | None", delay: float = 60.0) -> None:
+    """نشستِ HTTPِ یک Botِ کنارگذاشته‌شده را با کمی تأخیر می‌بندد.
+
+    قبلاً Bot فقط از کش pop می‌شد و نشستِ aiohttpاش هیچ‌وقت بسته نمی‌شد —
+    error.log پر از «Unclosed client session / Unclosed connector» بود. تأخیر
+    برایِ این است که درخواست‌هایِ در جریان با همین Bot وسطِ کار نشکنند."""
+    if bot is None:
+        return
+
+    async def _close():
+        await asyncio.sleep(delay)
+        try:
+            await bot.session.close()
+        except Exception:
+            logger.debug("بستنِ نشستِ Botِ کنارگذاشته ناموفق بود", exc_info=True)
+
+    try:
+        asyncio.get_running_loop().create_task(_close())
+    except RuntimeError:
+        pass  # بیرون از event loop (مثلاً تست‌هایِ همگام) — چیزی برایِ بستن نیست
 
 
 async def _get_tenant_bot(token: str) -> tuple[Bot | None, str | None]:
@@ -287,7 +311,7 @@ async def _get_tenant_bot(token: str) -> tuple[Bot | None, str | None]:
             status = await s.scalar(select(BotRow.status).where(BotRow.token == token))
         _tenant_status_cache[token] = (status, now_mono + _TENANT_STATUS_TTL)
     if not status or status == "disabled_bad_token":
-        _tenant_bots.pop(token, None)
+        _close_bot_later(_tenant_bots.pop(token, None))
         return None, status
     bot = _tenant_bots.get(token)
     if bot is None:
@@ -412,6 +436,20 @@ def _log_unauthorized(tbot) -> None:
 
 
 
+_MISSING_CLIENT_LOGGED: dict[int, float] = {}
+
+
+def _missing_client_should_log(account_id: int) -> bool:
+    """هشدارِ «کلاینت رویِ پنل نیست» برایِ هر حساب حداکثر روزی یک‌بار."""
+    import time as _t
+    now = _t.monotonic()
+    last = _MISSING_CLIENT_LOGGED.get(account_id)
+    if last is not None and now - last < 86_400:
+        return False
+    _MISSING_CLIENT_LOGGED[account_id] = now
+    return True
+
+
 async def vpn_expiry_loop():
     """اخطار روزانه به کاربران VPN خودکار + حذف خودکار سرویس‌های منقضی‌شده."""
     from aiogram.exceptions import TelegramForbiddenError
@@ -516,7 +554,9 @@ async def vpn_expiry_loop():
                         # این حساب بی‌صدا رد می‌شد — نه پیامی، نه لاگی، هیچ
                         # اثری از خطا. حالا حداقل یک لاگ ثبت می‌شود تا این
                         # حالت قابلِ‌ردیابی باشد، نه یک سکوتِ کاملاً نامرئی.
-                        if c is None:
+                        # هر دور (هر ~۲۰ دقیقه) برایِ همان حساب تکرار می‌شد و error.log
+                        # را با ده‌ها هزار خطِ تکراری پر می‌کرد؛ حالا روزی یک‌بار.
+                        if c is None and _missing_client_should_log(aid):
                             logger.warning(
                                 "vpn_expiry_loop: پنلِ %s هیچ کلاینتی با email=%r برای "
                                 "PanelAccount#%s (bot_id=%s) برنگرداند — هشدارِ حجم/انقضا "

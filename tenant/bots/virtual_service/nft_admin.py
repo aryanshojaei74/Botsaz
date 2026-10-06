@@ -15,6 +15,7 @@ nft_admin.py — سمتِ رباتِ «مینی‌اپ ۲ / مارکتِ NFT».
 پیشوندِ callback: nftm:  (در callback-map آزاد بود)
 """
 from __future__ import annotations
+from html import escape as _esc_html
 
 import datetime as _dt
 
@@ -386,7 +387,7 @@ async def notify_source_expired(bot_id: int, source_id: int) -> None:
     txt = (
         f"⚠️ <b>توکنِ منبعِ «{title}» منقضی شد</b>\n\n"
         "همگام‌سازیِ قیمت‌ها متوقف شده و آیتم‌ها دیگر به‌روز نمی‌شوند.\n"
-        + (f"\n<code>{err}</code>\n" if err else "")
+        + (f"\n<code>{_esc_html(str(err))}</code>\n" if err else "")
         + "\nبرایِ رفعش: مینی‌اپ ۲ → تبِ «⚙️ مدیریت» → «🔌 منابع» → "
         "همین منبع → توکنِ تازه را بگذار.\n\n"
         "<i>توکنِ این مارکت‌ها هر ۲ تا ۳ روز باطل می‌شود؛ این طبیعی است.</i>"

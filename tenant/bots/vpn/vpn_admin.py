@@ -23,6 +23,7 @@ callbackها: همه با پیشوند tvpn:
   tvpn:delete_ok:{key}      — تأیید حذف یک پنل
   tvpn:refresh_subs:{key}   — بروزرسانی اینباندها و ساب‌لینک کاربران
 """
+from html import escape as _esc_html
 import json
 import re
 # === PATCH_VPN_PANEL_ERROR_HTML_CRASH_V1 ===
@@ -4034,7 +4035,7 @@ async def vpn_cf_addgb_do(msg: Message, bot: Bot, state: FSMContext):
         return
     err = await _cf_apply_panel(row, a, add_gb=gb)
     if err:
-        await msg.answer(f"❌ خطا در اعمال روی پنل:\n<code>{err}</code>")
+        await msg.answer(f"❌ خطا در اعمال روی پنل:\n<code>{_esc_html(str(err))}</code>")
         return
     async with Session() as s:
         a2 = await s.get(_PA, aid)
@@ -4073,7 +4074,7 @@ async def vpn_cf_adddays_do(msg: Message, bot: Bot, state: FSMContext):
         return
     err = await _cf_apply_panel(row, a, add_days=d)
     if err:
-        await msg.answer(f"❌ خطا در اعمال روی پنل:\n<code>{err}</code>")
+        await msg.answer(f"❌ خطا در اعمال روی پنل:\n<code>{_esc_html(str(err))}</code>")
         return
     async with Session() as s:
         a2 = await s.get(_PA, aid)

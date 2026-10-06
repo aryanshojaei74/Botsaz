@@ -5,6 +5,7 @@ tx_channel_admin.py — PATCH_TX_LOG_CHANNEL_V1
 کلیدِ تنظیمات: tx_log_channel
 """
 from __future__ import annotations
+from html import escape as _esc_html
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ButtonStyle
@@ -111,7 +112,7 @@ async def txch_save(msg: Message, bot: Bot, state: FSMContext):
     except Exception as e:
         await msg.answer(
             "❌ ارسال به این کانال ممکن نشد. مطمئن شو ربات در کانال "
-            f"<b>ادمین</b> است.\n\n<code>{e}</code>", parse_mode="HTML")
+            f"<b>ادمین</b> است.\n\n<code>{_esc_html(str(e))}</code>", parse_mode="HTML")
         return
 
     await set_setting(row.id, "tx_log_channel", str(chat_id))

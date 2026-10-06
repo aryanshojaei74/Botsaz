@@ -284,7 +284,9 @@ async def fetch_incoming(address: str, limit: int = 40) -> list[dict]:
         _TCK = ""
     headers = {"X-Api-Key": _TCK} if _TCK else {}
     data = None
-    for _attempt in (1, 2):
+    _status = None
+    _retried_429 = _retried_archival = False
+    while True:
         try:
             t = aiohttp.ClientTimeout(total=_TIMEOUT)
             async with aiohttp.ClientSession(timeout=t, headers=headers) as s:
@@ -294,8 +296,20 @@ async def fetch_incoming(address: str, limit: int = 40) -> list[dict]:
         except Exception:
             logger.warning("ton_direct: toncenter پاسخ نداد (%s)", address, exc_info=True)
             return []
-        if _status == 429 and _attempt == 1:
+        if _status == 429 and not _retried_429:
+            _retried_429 = True
             await asyncio.sleep(1.6)
+            continue
+        # === PATCH_TONCENTER_ARCHIVAL_FALLBACK_V1 ===
+        # error.log: هزاران «LITE_SERVER_UNKNOWN: cannot find block … lt not in db» رویِ
+        # همان آدرس، روزها پشتِ‌سرِ هم. لایت‌سرورِ غیرآرشیوی بلاک‌هایِ قدیمی را ندارد و
+        # وقتی ۴۰ تراکنشِ اخیرِ کیف‌پول به آن‌ها برسد، درخواست *همیشه* شکست می‌خورد —
+        # یعنی واریزهایِ TON هرگز تشخیص داده نمی‌شد. در این حالت از نودِ آرشیوی می‌خوانیم.
+        _err = str((data or {}).get("error") or "") if isinstance(data, dict) else ""
+        if (not _retried_archival and isinstance(data, dict) and not data.get("ok")
+                and ("not in db" in _err or "cannot find block" in _err)):
+            _retried_archival = True
+            params = dict(params, archival="true")
             continue
         break
     if not isinstance(data, dict) or not data.get("ok"):

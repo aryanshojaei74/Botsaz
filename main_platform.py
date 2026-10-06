@@ -712,6 +712,7 @@ BIO_VIOLATION_LIMIT = 5
 # ناپایدار، تویِ platform_settings ثبت می‌کنه که آخرین‌بار کِی خبر داده،
 # تا با هر ری‌استارت دوباره اسپم نشه (کول‌داونِ ۲۴ ساعته).
 _DUP_ALERT_COOLDOWN_HOURS = 24
+_DUP_NO_ACTION = "بدونِ اقدام"
 
 
 async def _dup_autofix_group(uname: str, ids: list[int]) -> str | None:
@@ -777,7 +778,7 @@ async def _dup_autofix_group(uname: str, ids: list[int]) -> str | None:
         if ok:
             notes.append(f"drop={d}")
     if not notes:
-        return f"@{uname}: فقط بایگانی با مالک‌هایِ متفاوت — بی‌خطر، بدونِ اقدام"
+        return f"@{uname}: فقط بایگانی با مالک‌هایِ متفاوت — بی‌خطر، {_DUP_NO_ACTION}"
     return f"@{uname}: خودکار ادغام شد (keep={keep}, {', '.join(notes)})"
 
 
@@ -842,7 +843,11 @@ async def dup_bot_watch_loop(interval_min: int = 60):
                     fixed = None
                     logger.exception("ادغامِ خودکارِ @%s ناموفق بود", uname)
                 if fixed:
-                    logger.warning("ربات تکراری خودکار ادغام شد: %s", fixed)
+                    # «بدونِ اقدام» هر ساعت برایِ همان گروه تکرار می‌شد (صدها WARNING)
+                    if fixed.endswith(_DUP_NO_ACTION):
+                        logger.debug("ربات تکراری: %s", fixed)
+                    else:
+                        logger.warning("ربات تکراری خودکار ادغام شد: %s", fixed)
                     continue
 
                 logger.warning("ربات تکراری (نیازِ تصمیمِ دستی): @%s (%s ردیف)", uname, cnt)

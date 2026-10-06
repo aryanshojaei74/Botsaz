@@ -1,3 +1,4 @@
+from html import escape as _esc_html
 # PATCH_PREMIUM_EMOJI_WIRE_V1
 # PATCH_PLATFORM_HOME_SUBMENUS_COMMANDS_2_V1
 # PATCH_PLATFORM_HOME_SUBMENUS_COMMANDS_V1
@@ -19207,7 +19208,7 @@ async def adm_health_purge_bad_yes(cb: CallbackQuery, bot: Bot):
         [hx_button("⬅️ بازگشت", callback_data="adm:health", style=ButtonStyle.DANGER)]])
     msg = f"🗑 {done} ربات حذف شد."
     if failed:
-        msg += f"\n⚠️ {failed} مورد با خطا مواجه شد:\n" + "\n".join(f"<code>{e}</code>" for e in errors[:8])
+        msg += f"\n⚠️ {failed} مورد با خطا مواجه شد:\n" + "\n".join(f"<code>{_esc_html(str(e))}</code>" for e in errors[:8])
     try:
         await cb.message.edit_text(msg, reply_markup=kb)
     except Exception:
