@@ -129,6 +129,13 @@ async def platform_group_balance(msg: Message):
     ]]))
 
 
+@platform_group_money_router.callback_query(F.data == "pgm:noop")
+async def platform_group_noop(cb: CallbackQuery):
+    """دکمهٔ نمایشِ موجودی فقط نمایشی است؛ بی‌هندلر بودنش دکمه را در حالتِ
+    «در حالِ بارگذاری» گیر می‌انداخت."""
+    await cb.answer()
+
+
 @platform_group_money_router.message(
     F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}),
     F.func(lambda m: (m.text or "").strip().startswith("انتقال")),

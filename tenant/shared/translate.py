@@ -17,6 +17,10 @@ smm_ai.py استفاده می‌کنه (Claude/Gemini/ChatGPT، هرکدوم ک�
 """
 from __future__ import annotations
 
+from logging_setup import get_logger as _get_logger
+
+logger = _get_logger(__name__)
+
 # کشِ ساده: { (bot_id, متنِ اصلی): متنِ ترجمه‌شده }
 _CACHE: dict[tuple[int, str], str] = {}
 _CACHE_MAX = 2000  # سقف برایِ جلوگیری از رشدِ بی‌حدِ حافظه

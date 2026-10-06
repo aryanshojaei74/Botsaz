@@ -20811,7 +20811,7 @@ async def _pvso_content() -> tuple[str, InlineKeyboardMarkup]:
             style=(ButtonStyle.DANGER if typewriter_on else ButtonStyle.SUCCESS))],
         [hx_button("✏️ ویرایشِ متنِ خوش‌آمد", callback_data="pvso:setwelcome")],
         [hx_button("🔍 پیش‌نمایشِ تجربهٔ ورود", callback_data="pvso:preview")],
-        [hx_button("⬅️ بازگشت", callback_data="set:menu", style=ButtonStyle.DANGER)],
+        [hx_button("⬅️ بازگشت", callback_data="adm:settings", style=ButtonStyle.DANGER)],
     ]
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 

@@ -445,11 +445,14 @@ async def pp_pay_wallet(cb: CallbackQuery, bot: Bot, state: FSMContext):
                           note=f"خرید عمده ربات همکار: {g} رشد + {p} حرفه‌ای"))
         await s.commit()
         new_g, new_p = pb.stock_growth, pb.stock_pro
+        pb_bot_id = pb.bot_id
 
     # === PATCH_PARTNER_V27 ===
     try:
         from tenant.partner_bot.partner_sales import invalidate_pb_cache
-        invalidate_pb_cache(row.id)
+        # قبلاً invalidate_pb_cache(row.id) بود ولی `row` در این تابع تعریف
+        # نشده — NameError بی‌صدا گرفته می‌شد و کشِ موجودی باطل نمی‌شد.
+        invalidate_pb_cache(pb_bot_id)
     except Exception:
         logger.exception("باطل‌سازیِ کشِ PartnerBot ناموفق بود")
 

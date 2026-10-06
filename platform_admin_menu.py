@@ -19,16 +19,12 @@ platform_admin_menu.py — بخشِ «چیدمانِ پنل مدیریت» جد�
 from __future__ import annotations
 
 from aiogram import Bot, F, Router
-from aiogram.fsm.context import FSMContext  # SELFSaz_ADMIN_FSM_IMPORT
-from aiogram.fsm.state import State, StatesGroup  # SELFSaz_ADMIN_FSM_IMPORT
 from aiogram.enums import ButtonStyle
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
-from aiogram.types import Message  # SELFSaz_ADMIN_MESSAGE_IMPORT
 
 from config import PLATFORM_ADMIN_ID, Session
-from platform_selfsaz import selfsaz_api  # SELFSaz_ADMIN_API
 from platform_selfsaz import selfsaz_api
 from premium_emoji import hx_button
 from sqlalchemy import select
@@ -399,6 +395,24 @@ async def selfsaz_admin_toggle_fix(cb: CallbackQuery):
         await _render_selfsaz_admin(cb)
 
 
+@admin_menu_router.callback_query(F.data == "sszg2:visibility")
+async def selfsaz_admin_visibility(cb: CallbackQuery):
+    """دکمهٔ «حالت تست / نمایش برای کاربران» در پنلِ سلف‌ساز هندلر نداشت و
+    کاری نمی‌کرد؛ همان کلیدِ hbtn:self_saz:admin_only را جابه‌جا می‌کند."""
+    if cb.from_user.id != PLATFORM_ADMIN_ID:
+        await cb.answer("فقط مدیر اصلی", show_alert=True)
+        return
+    from platform_bot import get_pset, set_pset, refresh_home_cfg
+    cur = await get_pset("hbtn:self_saz:admin_only", "off")
+    new = "off" if cur == "on" else "on"
+    await set_pset("hbtn:self_saz:admin_only", new)
+    await refresh_home_cfg()
+    await cb.answer("✅ حالت تست SelfSaz " + ("فعال شد؛ فقط شما می‌بینید" if new == "on"
+                                            else "غیرفعال شد؛ برای کاربران نمایش داده می‌شود"),
+                    show_alert=True)
+    await _render_selfsaz_admin(cb)
+
+
 @admin_menu_router.callback_query(F.data == "sszg2:price")
 async def selfsaz_admin_price_fix_start(cb: CallbackQuery, state: FSMContext):
     if cb.from_user.id != PLATFORM_ADMIN_ID:
@@ -719,79 +733,3 @@ async def selfsaz_final_receipts(cb: CallbackQuery):
     data = await selfsaz_api('GET', '/v1/admin/receipts') or {}; rows = data.get('receipts', [])
     body = '\n'.join(f"#{r['id']} · کاربر {r['owner_id']} · {r['amount']:,} · {r['status']}" for r in rows) or 'هنوز رسیدی ثبت نشده است.'
     await cb.message.edit_text('🧾 <b>رسیدهای سلف‌ساز</b>\n\n' + body, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[hx_button('⬅️ کاربران', callback_data='ssfinal:users', style=ButtonStyle.DANGER)]])); await cb.answer()
-
-# SELFSaz_ADMIN_BUTTON_SSZG2_V1
-
-# SELFSaz_ADMIN_HELPER_FIX_V1
-
-# SELFSaz_CONTACT_AND_ADMIN_V1
-
-# SELFSaz_ADMIN_DEDUP_V2
-
-# SELFSaz_PLATFORM_ADMIN_HANDLERS
-
-
-# ======================= SELFSaz platform admin =======================
-async def _render_selfsaz_admin(cb: CallbackQuery):
-    cfg = await selfsaz_api("GET", "/v1/config")
-    if not cfg:
-        text = "🧩 <b>مدیریت سلف‌ساز</b>\n\n⚠️ سرویس مستقل سلف‌ساز در دسترس نیست."
-        kb = InlineKeyboardMarkup(inline_keyboard=[[hx_button("⬅️ بازگشت", callback_data="adm:cat:settings", style=ButtonStyle.DANGER)]])
-    else:
-        text = ("🧩 <b>مدیریت سلف‌ساز</b>\n\n"
-                f"وضعیت سرویس: {'🟢 روشن' if cfg.get('enabled') else '🔴 خاموش'}\n"
-                f"قیمت پیش‌فرض: {int(cfg.get('default_price', 0)):,} تومان")
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [hx_button("🔄 روشن/خاموش کردن", callback_data="psa:toggle", style=ButtonStyle.PRIMARY)],
-            [hx_button("💰 تعیین قیمت پیش‌فرض", callback_data="psa:price", style=ButtonStyle.SUCCESS)],
-            [hx_button("⬅️ بازگشت", callback_data="adm:cat:settings", style=ButtonStyle.DANGER)],
-        ])
-    try:
-        await cb.message.edit_text(text, reply_markup=kb)
-    except Exception:
-        await cb.message.answer(text, reply_markup=kb)
-
-
-@admin_menu_router.callback_query(F.data == "adm:selfsaz")
-async def admin_selfsaz(cb: CallbackQuery):
-    if cb.from_user.id != PLATFORM_ADMIN_ID:
-        await cb.answer("فقط مدیر اصلی", show_alert=True)
-        return
-    await _render_selfsaz_admin(cb)
-    await cb.answer()
-
-
-@admin_menu_router.callback_query(F.data == "psa:toggle")
-async def admin_selfsaz_toggle(cb: CallbackQuery):
-    if cb.from_user.id != PLATFORM_ADMIN_ID:
-        await cb.answer("فقط مدیر اصلی", show_alert=True)
-        return
-    result = await selfsaz_api("POST", "/v1/config/toggle")
-    if not result:
-        await cb.answer("سرویس مستقل در دسترس نیست", show_alert=True)
-        return
-    await _render_selfsaz_admin(cb)
-    await cb.answer("وضعیت تغییر کرد")
-
-
-@admin_menu_router.callback_query(F.data == "psa:price")
-async def admin_selfsaz_price_start(cb: CallbackQuery, state: FSMContext):
-    if cb.from_user.id != PLATFORM_ADMIN_ID:
-        await cb.answer("فقط مدیر اصلی", show_alert=True)
-        return
-    await state.set_state(_SelfSazAdminFSM.price)
-    await cb.message.answer("قیمت پیش‌فرض سلف‌ساز را به تومان و فقط به‌صورت عدد بفرستید:")
-    await cb.answer()
-
-
-@admin_menu_router.message(_SelfSazAdminFSM.price, F.text)
-async def admin_selfsaz_price_save(msg: Message, state: FSMContext):
-    if msg.from_user.id != PLATFORM_ADMIN_ID:
-        return
-    value = (msg.text or "").strip()
-    if not value.isdigit():
-        await msg.answer("فقط عدد معتبر بفرستید.")
-        return
-    result = await selfsaz_api("PUT", "/v1/config/price", {"price": int(value)})
-    await state.clear()
-    await msg.answer("✅ قیمت در سرویس مستقل ذخیره شد." if result else "⚠️ سرویس مستقل در دسترس نیست.")

@@ -1384,7 +1384,7 @@ async def selfsaz_logout_execute(cb: CallbackQuery):
     result = await selfsaz_api('POST', f'/v1/accounts/{cb.from_user.id}/logout')
     if not result:
         await cb.answer('خروج انجام نشد؛ سرویس در دسترس نیست', show_alert=True); return
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='🔐 اتصال دوباره', callback_data='pss:secure_connect')], [InlineKeyboardButton(text='⬅️ سلف‌ساز', callback_data='pss:back')]])
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='🔐 اتصال دوباره', callback_data='pss:secure_connect')], [InlineKeyboardButton(text='⬅️ سلف‌ساز', callback_data='pss:status')]])
     await cb.message.edit_text('✅ از حساب SelfSaz خارج شدید. session حذف شد و worker متوقف می‌شود. برای اتصال دوباره روی دکمهٔ زیر بزنید.', reply_markup=kb)
     await cb.answer('خروج با موفقیت انجام شد')
 
