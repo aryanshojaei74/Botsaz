@@ -1386,6 +1386,18 @@ async def all_categories(bot_id: int, panel_key: str | None = None) -> list[str]
 # پلن‌ها می‌توانند مخصوصِ نماینده یا مخصوصِ مشتریِ عادی باشند. این فیلتر
 # در همهٔ جاهایی که فهرستِ پلن ساخته می‌شود اعمال می‌شود تا نماینده منویِ
 # خودش را ببیند و مشتریِ عادی پلن‌هایِ نمایندگی را نبیند.
+async def _plan_allowed_for(plan, bot_id: int, telegram_id: int | None) -> bool:
+    """=== PATCH_PLAN_AUDIENCE_ENFORCE_V1 ===
+    فیلترِ مخاطب فقط رویِ *نمایشِ* فهرست اعمال می‌شد؛ مسیرهایِ پرداخت با
+    plan_idِ دست‌ساز پلنِ «فقط نماینده» (معمولاً ارزان‌تر) را هم به مشتریِ
+    عادی می‌فروختند. همان قاعدهٔ _plan_audience_filter، برایِ یک پلن."""
+    aud = (getattr(plan, "audience", None) or "all")
+    if aud == "all":
+        return True
+    _cond, is_rs = await _plan_audience_filter(bot_id, telegram_id)
+    return aud == ("resellers" if is_rs else "users")
+
+
 async def _plan_audience_filter(bot_id: int, telegram_id: int | None):
     """شرطِ SQL برایِ مخاطبِ درست."""
     from models import VpnPlan
@@ -2312,6 +2324,8 @@ async def _build_buy_summary(bot: Bot, bot_id: int, plan_id: int,
         plan = await s.get(VpnPlan, plan_id)
         if not plan or plan.bot_id != bot_id or not plan.active:
             return None, None
+        if not await _plan_allowed_for(plan, bot_id, telegram_id):
+            return None, None
         u = await s.scalar(select(BotUser).where(
             BotUser.bot_id == bot_id, BotUser.telegram_id == telegram_id))
         bal = float(u.balance) if u else 0
@@ -2835,7 +2849,8 @@ async def _vpn_pay_impl(cb: CallbackQuery, bot: Bot, state: FSMContext, plan_id:
         if plan and plan.bot_id == bot_id:
             panel = await s.scalar(select(VpnPanel).where(
                 VpnPanel.bot_id == bot_id, VpnPanel.panel_key == plan.panel_key))
-        if not plan or plan.bot_id != bot_id or not plan.active or not panel or not panel.enabled:
+        if (not plan or plan.bot_id != bot_id or not plan.active or not panel or not panel.enabled
+                or not await _plan_allowed_for(plan, bot_id, cb.from_user.id)):
             await cb.answer("این پلن دیگر در دسترس نیست.", show_alert=True)
             return
         u = await s.scalar(select(BotUser).where(
@@ -3647,7 +3662,8 @@ async def vpn_pay_card_plan(cb: CallbackQuery, bot: Bot, state: FSMContext):
             await cb.answer()
             return
         plan = await s.get(VpnPlan, plan_id)
-        if not plan or plan.bot_id != row.id or not plan.active:
+        if (not plan or plan.bot_id != row.id or not plan.active
+                or not await _plan_allowed_for(plan, row.id, cb.from_user.id)):
             await cb.answer("پلن در دسترس نیست.", show_alert=True)
             return
         u = await s.scalar(select(BotUser).where(
@@ -3741,8 +3757,10 @@ async def vc_pay_card(cb: CallbackQuery, bot: Bot, state: FSMContext):
             _st_gb = max(1, int(cfg.get("vc_step_gb", 1) or 1))
             _st_d  = max(1, int(cfg.get("vc_step_days", 1) or 1))
         except Exception:
-            logger.exception("[VC_CARDPAY] خواندنِ بازهٔ مجاز ناموفق بود")
-            _mn_gb = _mx_gb = _mn_d = _mx_d = None
+            # fail-closed (مثلِ مسیرِ کیف‌پول) — رد کردنِ اعتبارسنجی یعنی دستکاریِ callback
+            logger.exception("[VC_CARDPAY] خواندنِ بازهٔ مجاز ناموفق بود؛ خرید رد شد")
+            await cb.answer("تنظیماتِ فروشِ این پنل ناقص است؛ به پشتیبانی خبر بده.", show_alert=True)
+            return
 
         if _mn_gb is not None:
             _bad = None
@@ -4905,8 +4923,11 @@ async def _vc_pay_impl(cb: CallbackQuery, bot: Bot, state: FSMContext):
             _st_gb = max(1, int(cfg.get("vc_step_gb", 1) or 1))
             _st_d  = max(1, int(cfg.get("vc_step_days", 1) or 1))
         except Exception:
-            logger.exception("[VC_PAY] خواندنِ بازهٔ مجاز ناموفق بود")
-            _mn_gb = _mx_gb = _mn_d = _mx_d = None
+            # قبلاً در این حالت اعتبارسنجی کلاً رد می‌شد (fail-open) — یعنی همان
+            # سوءاستفادهٔ دستکاریِ callback دوباره ممکن می‌شد. حالا خرید رد می‌شود.
+            logger.exception("[VC_PAY] خواندنِ بازهٔ مجاز ناموفق بود؛ خرید رد شد")
+            await cb.answer("تنظیماتِ فروشِ این پنل ناقص است؛ به پشتیبانی خبر بده.", show_alert=True)
+            return
 
         if _mn_gb is not None:
             _bad = None
@@ -6234,7 +6255,16 @@ async def _vpn_add_traffic_pay_impl(cb: CallbackQuery, bot: Bot):
         if not row or not a or a.bot_id != row.id or a.user_telegram_id != cb.from_user.id:
             await cb.answer("یافت نشد.", show_alert=True); return
         panel = await _panel_for_account(s, row.id, a)
-        price_gb = int(await _vc(row.id, "renew_price_gb", panel.panel_key if panel else ""))
+        _pk = panel.panel_key if panel else ""
+        price_gb = int(await _vc(row.id, "renew_price_gb", _pk))
+        # === PATCH_RENEW_DAYS_VALIDATE_V1 === فقط همان گزینه‌هایِ منویِ افزایشِ حجم
+        _mn = int(await _vc(row.id, "renew_min_gb", _pk))
+        _mx = int(await _vc(row.id, "renew_max_gb", _pk))
+        _st = max(1, int(await _vc(row.id, "renew_step_gb", _pk)))
+        _ok = {_mn + i * _st for i in range(8) if _mn + i * _st <= _mx}
+        if gb <= 0 or gb not in _ok:
+            await cb.answer("این گزینه معتبر نیست؛ دوباره از منو انتخاب کن.", show_alert=True)
+            return
         price    = gb * price_gb
         # باگ‌گارد: اگه قیمت صفر باشه، اجازه نده
         if price <= 0:
@@ -6592,7 +6622,8 @@ async def vpn_renew_menu(cb: CallbackQuery, bot: Bot):
         panel = await _panel_for_account(s, row.id, a)
         plans = (await s.scalars(select(VpnPlan).where(
             VpnPlan.bot_id == row.id, VpnPlan.active == True,
-            VpnPlan.panel_key == (panel.panel_key if panel else "")
+            VpnPlan.panel_key == (panel.panel_key if panel else ""),
+            (await _plan_audience_filter(row.id, cb.from_user.id))[0],  # PATCH_PLAN_AUDIENCE_ENFORCE_V1
         ).order_by(VpnPlan.id))).all()
 # === PATCH_RENEW_PLAN_MATCH_V1 ===
         # تفکیکِ حجمی از نامحدود: سرویسِ حجمی نباید پلنِ «نامحدود» را
@@ -6679,6 +6710,24 @@ async def vpn_renew_pay_days(cb: CallbackQuery, bot: Bot):
         mn_g = int(await _vc(bot_id, "renew_min_gb", panel.panel_key))
         mx_g = int(await _vc(bot_id, "renew_max_gb", panel.panel_key))
         st_g = max(1, int(await _vc(bot_id, "renew_step_gb", panel.panel_key)))
+        # === PATCH_RENEW_DAYS_VALIDATE_V1 ===
+        # روز/گیگ مستقیم از callback_data می‌آمد و هیچ اعتبارسنجی‌ای نداشت؛
+        # با یک callbackِ دست‌ساز مثلِ «vrend:<aid>:-100:0» قیمت منفی می‌شد و
+        # «کسر از کیف پول» در واقع موجودی را *زیاد* می‌کرد. فقط همان گزینه‌هایی
+        # که منو می‌سازد (vpn_renew_menu) پذیرفته می‌شوند.
+        _mn_d = int(await _vc(bot_id, "renew_min_days", panel.panel_key))
+        _mx_d = int(await _vc(bot_id, "renew_max_days", panel.panel_key))
+        _st_d = int(await _vc(bot_id, "renew_step_days", panel.panel_key))
+        _ok_days = {_mn_d + i * _st_d for i in range(6) if _mn_d + i * _st_d <= _mx_d}
+        _ok_gb = {0}
+        if price_gb > 0 and mx_g > 0:
+            _ok_gb |= {max(mn_g, 1) + i * st_g for i in range(6)
+                       if max(mn_g, 1) + i * st_g <= mx_g}
+        if (add_days <= 0 or add_days not in _ok_days
+                or (add_gb is not None and add_gb not in _ok_gb)):
+            await cb.answer("این گزینهٔ تمدید معتبر نیست؛ دوباره از منوی تمدید انتخاب کن.",
+                            show_alert=True)
+            return
         if add_gb is None and price_gb > 0 and mx_g > 0:
             # مرحلهٔ دوم: انتخابِ حجمِ همراهِ تمدید (یا فقط روز)
             from tenant import ibtn_style as _ibs
@@ -6828,8 +6877,10 @@ async def _vpn_renew_pay_impl(cb: CallbackQuery, bot: Bot):
         plan = await s.get(VpnPlan, pid)
         panel = await _panel_for_account(s, row.id, a) if (row and a) else None
         if (not row or not a or a.bot_id != row.id or a.user_telegram_id != cb.from_user.id
-                or not plan or plan.bot_id != row.id or not panel or not panel.enabled
-                or plan.panel_key != panel.panel_key):
+                or not plan or plan.bot_id != row.id or not plan.active
+                or not panel or not panel.enabled
+                or plan.panel_key != panel.panel_key
+                or not await _plan_allowed_for(plan, row.id, cb.from_user.id)):
             await cb.answer("امکان تمدید نیست.", show_alert=True)
             return
         bot_id = row.id

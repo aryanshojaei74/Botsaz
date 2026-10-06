@@ -158,6 +158,13 @@ async def pnlbuy_pay(cb: CallbackQuery, bot: Bot):
         return await cb.answer()
     if not c0:
         return await cb.answer("این پنل دیگر موجود نیست.", show_alert=True)
+    # مثلِ بقیهٔ مسیرهایِ پرداخت: تأییدِ شماره (اگر ربات الزامی کرده) و روشن‌بودنِ
+    # پرداخت از کیف پول — قبلاً با callbackِ مستقیم هر دو دور زده می‌شد.
+    from tenant import pay_phone_gate, wallet_pay_on
+    if not await wallet_pay_on(row.id):
+        return await cb.answer("پرداخت از کیف پول فعلاً غیرفعال است.", show_alert=True)
+    if await pay_phone_gate(cb.message, row, cb.from_user.id):
+        return await cb.answer("📱 اول شماره‌ات را تایید کن.", show_alert=True)
     price, cat = int(c0.price), c0.category
     err = None
     assigned = None
