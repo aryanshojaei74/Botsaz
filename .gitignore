@@ -34,3 +34,4 @@ tenant_experimental/
 # آرشیوهایِ نسخه‌های قدیمی
 v*.zip
 botsaz.db-*
+fix_backups/
