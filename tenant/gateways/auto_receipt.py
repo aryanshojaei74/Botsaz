@@ -766,6 +766,48 @@ async def is_duplicate_receipt(scope: str, fingerprint: str) -> bool:
         return False  # در صورتِ خطا، سخت‌گیری نکن (تاییدِ دستی جلوی سوءاستفاده را می‌گیرد)
 
 
+async def claim_receipts(scope: str, fingerprints, amount: int | None = None,
+                         user_telegram_id: int | None = None) -> bool:
+    """=== PATCH_RECEIPT_CLAIM_ATOMIC_V1 ===
+    «چکِ تکراری» و «ثبتِ مصرف» قبلاً دو مرحلهٔ جدا بودند (اولی قبل و دومی بعد
+    از شارژ)؛ دو سفارشِ هم‌زمان با یک رسید هر دو از چک رد می‌شدند و یک رسید
+    دوبار شارژ/تحویل می‌گرفت. این تابع همهٔ اثرانگشت‌ها را *قبل* از شارژ در یک
+    تراکنش ثبت می‌کند؛ UniqueConstraint تضمین می‌کند فقط یکی موفق شود.
+    False یعنی رسید تکراری است (یا ثبت ممکن نشد) و باید به تأییدِ دستی برود."""
+    fps = [f for f in (fingerprints or []) if f]
+    if not fps:
+        return True
+    from config import Session
+    from models import UsedReceipt
+    try:
+        async with Session() as s:
+            for f in dict.fromkeys(fps):
+                s.add(UsedReceipt(scope=scope, fingerprint=f, amount=amount,
+                                  user_telegram_id=user_telegram_id))
+            await s.commit()
+        return True
+    except Exception:
+        logger.info("claim_receipts: رسیدِ تکراری یا خطایِ ثبت (scope=%s)", scope)
+        return False
+
+
+async def release_receipts(scope: str, fingerprints) -> None:
+    """آزادسازیِ اثرانگشت‌هایی که claim شدند ولی شارژ انجام نشد."""
+    fps = [f for f in (fingerprints or []) if f]
+    if not fps:
+        return
+    try:
+        from config import Session
+        from models import UsedReceipt
+        from sqlalchemy import delete
+        async with Session() as s:
+            await s.execute(delete(UsedReceipt).where(
+                UsedReceipt.scope == scope, UsedReceipt.fingerprint.in_(fps)))
+            await s.commit()
+    except Exception:
+        logger.exception("release_receipts ناموفق بود (scope=%s)", scope)
+
+
 async def mark_receipt_used(scope: str, fingerprint: str,
                             amount: int | None = None,
                             user_telegram_id: int | None = None) -> None:

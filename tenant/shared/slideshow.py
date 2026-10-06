@@ -28,6 +28,44 @@ logger = _get_logger(__name__)
 
 slideshow_router = Router(name="slideshow")
 
+
+# === PATCH_TENANT_SCOPE_V1 ===
+# همهٔ دکمه‌هایِ مدیریتِ اسلاید «sla:<action>:<button_id>[:<slide_id>…]» هستند و
+# اسلاید/دکمه را فقط با id می‌خواندند/حذف می‌کردند؛ ادمینِ یک ربات با callbackِ
+# دست‌ساز اسلایدهایِ رباتِ دیگری را حذف/ویرایش می‌کرد. این‌جا یک‌جا چک می‌شود
+# که دکمه مالِ همین ربات و اسلاید مالِ همان دکمه است.
+_SLA_PRODUCT_3RD = ("newprodpick",)   # در این‌ها جزءِ چهارم idِ محصول است، نه اسلاید
+
+
+async def _sla_scope_mw(handler, event, data):
+    cbd = getattr(event, "data", None) or ""
+    if not cbd.startswith("sla:"):
+        return await handler(event, data)
+    parts = cbd.split(":")
+    try:
+        button_id = int(parts[2])
+        slide_id = int(parts[3]) if len(parts) > 3 and parts[1] not in _SLA_PRODUCT_3RD else None
+    except (IndexError, ValueError):
+        await event.answer()
+        return None
+    from tenant import get_bot_row
+    from models import MainButton
+    row = await get_bot_row(data.get("bot"))
+    async with Session() as s:
+        btn = await s.get(MainButton, button_id)
+        ok = bool(row and btn and btn.bot_id == row.id)
+        if ok and slide_id is not None:
+            owner_btn = (await s.execute(text(
+                "SELECT button_id FROM button_slides WHERE id=:sid"), {"sid": slide_id})).scalar()
+            ok = owner_btn == button_id
+    if not ok:
+        await event.answer("یافت نشد.", show_alert=True)
+        return None
+    return await handler(event, data)
+
+
+slideshow_router.callback_query.middleware(_sla_scope_mw)
+
 # === PATCH_SLIDESHOW_ENHANCEMENTS_V1 ===
 # کمک‌تابع‌های سبکِ Setting — عمداً مستقیم از مدلِ Setting استفاده می‌کنن
 # (نه ایمپورت از tenant/__init__.py) چون این ماژول از اونجا import می‌شه؛
@@ -629,6 +667,8 @@ async def sls_buyprod_view(cb: CallbackQuery, bot: Bot):
 
     async with Session() as s:
         p = await s.get(Product, pid)
+        if p is not None and await _is_foreign(p, bot):   # PATCH_TENANT_SCOPE_V1
+            p = None
     if not p:
         await cb.answer("محصول یافت نشد", show_alert=True)
         return
@@ -939,6 +979,8 @@ async def sla_new_from_product_create(cb: CallbackQuery):
     from models import Product
     async with Session() as s:
         p = await s.get(Product, product_id)
+        if p is not None and await _is_foreign(p, cb.bot):   # PATCH_TENANT_SCOPE_V1
+            p = None
     if not p:
         await cb.answer("محصول یافت نشد", show_alert=True)
         return
@@ -1501,3 +1543,13 @@ async def sla_recv_btn_url(msg: Message, state: FSMContext):
         ),
         parse_mode="HTML"
     )
+
+
+async def _is_foreign(obj, bot) -> bool:
+    """=== PATCH_TENANT_SCOPE_V1 === True اگر رکوردی که با idِ داخلِ
+    callback_data/state خوانده شده مالِ رباتِ جاریِ این آپدیت نباشد."""
+    if bot is None or getattr(obj, "bot_id", None) is None:
+        return False
+    from tenant import get_bot_row as _gbr
+    _r = await _gbr(bot)
+    return bool(_r) and obj.bot_id != _r.id

@@ -544,8 +544,8 @@ async def ps_pay_wallet(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
         # موجودیِ انبار را همین‌جا هم چک کن — نباید پولی بگیریم که
         # جنسش موجود نیست.
-        pb_now = await s.get(PartnerBot, pb.id)
-        stock = pb_now.stock_growth if kind == "growth" else pb_now.stock_pro
+        pb_now = await s.get(PartnerBot, pb.id, with_for_update=True)  # موجودیِ انبار: دو خریدِ هم‌زمان آخرین عدد را نبرند
+        stock = (pb_now.stock_growth if kind == "growth" else pb_now.stock_pro) if pb_now else 0
         if not pb_now or pb_now.status != "active" or stock <= 0:
             await cb.answer("متأسفانه موجودی این پلن تمام شد.", show_alert=True)
             return
@@ -634,7 +634,7 @@ async def ps_token(msg: Message, bot: Bot, state: FSMContext):
                 "رباتِ تازه بساز و توکنِ آن را بفرست.")
             return
 
-        pb = await s.get(PartnerBot, pb_id)
+        pb = await s.get(PartnerBot, pb_id, with_for_update=True)  # موجودیِ انبار: دو خریدِ هم‌زمان آخرین عدد را نبرند
         if not pb or pb.status != "active":
             await state.clear()
             await msg.answer("این ربات همکار در حال حاضر فعال نیست.",

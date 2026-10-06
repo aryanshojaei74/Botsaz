@@ -687,7 +687,7 @@ async def _run_play_locked(bot: Bot, chat_id: int, telegram_id: int, gid: int,
                                value=value, amount=amount))
         if amount > 0:
             u = await s.scalar(select(PlatformUser).where(
-                PlatformUser.telegram_id == telegram_id))
+                PlatformUser.telegram_id == telegram_id).with_for_update())   # lost update نشود
             if u:
                 u.balance = float(u.balance or 0) + amount
                 s.add(PlatformTxn(user_telegram_id=telegram_id, amount=amount,

@@ -1250,6 +1250,8 @@ async def gate_off(cb: CallbackQuery, bot: Bot):
     mb_id = int(cb.data.split(":")[2])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
+        if mb is not None and mb.bot_id != row.id:   # PATCH_TENANT_SCOPE_V1: رکوردِ رباتِ دیگر
+            mb = None
         if mb:
             keep = None
             cur = {}

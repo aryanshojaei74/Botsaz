@@ -2168,6 +2168,8 @@ async def smmu_pick_service_breadcrumb_raw(cb: CallbackQuery, bot: Bot, state: F
     try:
         async with Session() as s_:
             sv = await s_.get(SmmService, vid)
+            if sv is not None and await _is_foreign(sv, bot):   # PATCH_TENANT_SCOPE_V1
+                sv = None
         if sv is not None and getattr(sv, "category_pk", None):
             _nm = (await _qlc_category_names(row.id, [sv.category_pk])).get(sv.category_pk)
             if _nm:
@@ -6102,6 +6104,8 @@ async def smm_vs_setstatus(cb: CallbackQuery, bot: Bot, state: FSMContext):
             return
         async with Session() as s:
             oo = await s.get(SmmOrder, oid, with_for_update=True)
+            if oo is not None and await _is_foreign(oo, bot):   # PATCH_TENANT_SCOPE_V1
+                oo = None
             if not oo or oo.status != "awaiting_admin":
                 await cb.answer("وضعیتِ سفارش عوض شده.", show_alert=True)
                 return
@@ -6130,6 +6134,8 @@ async def smm_vs_setstatus(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if code == "doneok":
         async with Session() as s:
             oo = await s.get(SmmOrder, oid, with_for_update=True)
+            if oo is not None and await _is_foreign(oo, bot):   # PATCH_TENANT_SCOPE_V1
+                oo = None
             if not oo or oo.status not in _PARTIAL_FROM_ADMIN:
                 await cb.answer("وضعیتِ سفارش عوض شده.", show_alert=True)
                 await _vs_show_detail(cb, row.id, oid, back_cb)
@@ -6351,6 +6357,8 @@ async def smm_vs_bulkdo(cb: CallbackQuery, bot: Bot):
         for oid in ids:
             async with Session() as s:
                 o = await s.get(SmmOrder, oid)
+                if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
+                    o = None
                 if not o or o.status != "failed":
                     continue
                 o.status = "completed"
@@ -6488,6 +6496,8 @@ async def smm_approve(cb: CallbackQuery, bot: Bot):
     # آیا این سفارش برای یک سرویس دستی است؟
     async with Session() as s:
         o = await s.get(SmmOrder, oid)
+        if o is not None and o.bot_id != row.id:   # PATCH_TENANT_SCOPE_V1: رکوردِ رباتِ دیگر
+            o = None
         is_manual = False
         if o and o.smm_service_pk:
             v = await s.get(SmmService, o.smm_service_pk)
@@ -8843,6 +8853,8 @@ async def smmu_request_cancel(cb: CallbackQuery, bot: Bot):
     if note == "requested":   # PATCH_SMM_CANCEL_REQUESTED_V1
         async with Session() as s:
             oo = await s.get(SmmOrder, oid, with_for_update=True)
+            if oo is not None and await _is_foreign(oo, bot):   # PATCH_TENANT_SCOPE_V1
+                oo = None
             if oo and "درخواستِ لغو ثبت شد" not in (oo.note or ""):
                 oo.note = (oo.note or "") + " | درخواستِ لغو ثبت شد (منتظرِ تأییدِ پنل)"
                 await s.commit()
@@ -8864,6 +8876,8 @@ async def smmu_request_cancel(cb: CallbackQuery, bot: Bot):
         if is_completed:
             async with Session() as s:
                 oo = await s.get(SmmOrder, oid, with_for_update=True)
+                if oo is not None and await _is_foreign(oo, bot):   # PATCH_TENANT_SCOPE_V1
+                    oo = None
                 if oo and oo.status not in ("refunded", "canceled", "completed"):
                     oo.status = "completed"
                     oo.updated_at = datetime.utcnow()
@@ -8894,6 +8908,8 @@ async def smmu_request_cancel(cb: CallbackQuery, bot: Bot):
         refund = round(float(o.price_toman) * (min(remains, o.quantity) / o.quantity))
     async with Session() as s:
         oo = await s.get(SmmOrder, oid, with_for_update=True)
+        if oo is not None and await _is_foreign(oo, bot):   # PATCH_TENANT_SCOPE_V1
+            oo = None
         if not oo or oo.status in ("refunded", "canceled", "completed"):
             await cb.message.answer("این سفارش قبلاً پردازش شده بود؛ چیزی تغییر نکرد.")
             return
@@ -9592,6 +9608,8 @@ async def smmu_bulk_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     vid = int(cb.data.rsplit(":", 1)[1])
     async with Session() as s:
         v = await s.get(SmmService, vid)
+        if v is not None and await _is_foreign(v, bot):   # PATCH_TENANT_SCOPE_V1
+            v = None
     if not v or not v.is_active:
         await cb.answer("این سرویس دیگر موجود نیست.", show_alert=True)
         return
@@ -9768,6 +9786,16 @@ async def smmu_bulk_confirm(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if not v or v.bot_id != row.id or not v.is_active:
         await state.clear()
         await cb.answer("این سرویس دیگر در دسترس نیست.", show_alert=True)
+        return
+    # قیمت در لحظهٔ پرداخت دوباره حساب می‌شود (نه از state): اگر ادمین بینِ
+    # پیش‌نمایش و تأیید قیمت/حداقل را عوض کرده باشد، نباید با عددِ کهنه فروخت.
+    if ((v.min_qty and qty < v.min_qty) or (v.max_qty and qty > v.max_qty)
+            or not isinstance(qty, int) or qty <= 0):
+        await cb.answer("تعدادِ سفارش دیگر معتبر نیست؛ دوباره تعداد را وارد کن.", show_alert=True)
+        return
+    unit_price = await compute_sell_price(row.id, v, qty)
+    if unit_price <= 0:
+        await cb.answer("قیمت این سرویس تنظیم نشده. لطفاً بعداً تلاش کن.", show_alert=True)
         return
     total = float(unit_price) * len(links)
     disc = data.get("smmu_bulk_discount") or None
@@ -9947,6 +9975,8 @@ async def smmu_link_in(msg: Message, bot: Bot, state: FSMContext):
     if svc_id:
         async with Session() as s:
             v = await s.get(SmmService, int(svc_id))
+            if v is not None and await _is_foreign(v, bot):   # PATCH_TENANT_SCOPE_V1
+                v = None
             cat = await s.get(SmmCategory, v.category_pk) if v and v.category_pk else None
         # === PATCH_SMM_CATEGORY_LINK_TYPES_V1 === (نوعِ لینکِ مجازِ دسته، وگرنه نمونه‌لینک)
         _wrong1, _hint1 = await _check_links_for_category(cat, [link])
@@ -12270,7 +12300,7 @@ async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
         row.id, cb.from_user.id, cb.from_user.full_name, cb.from_user.username or "",
         return_created=True)
     async with Session() as s:
-        b = await s.get(BotUser, buyer.id)
+        b = await s.get(BotUser, buyer.id, with_for_update=True)  # قفلِ ردیف: دابل‌کلیک = دو خرید با یک پول
         # === PATCH_FIRST_PURCHASE_DISCOUNT_V1 ===
         _note_extra = ""
         from tenant.gateways.discount_engine import first_purchase_discount
@@ -12324,6 +12354,8 @@ async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if g.is_manual or manual_mode:
         async with Session() as s:
             o = await s.get(GiftOrder, order_id)
+            if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
+                o = None
             o.status = "awaiting_admin"
             await s.commit()
         await cb.answer("✅ پرداخت شد")
@@ -12385,6 +12417,8 @@ async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if sent_count < qty and via == "b" and _is_low_stars_err(last_err):
         async with Session() as s:
             oh = await s.get(GiftOrder, order_id)
+            if oh is not None and await _is_foreign(oh, bot):   # PATCH_TENANT_SCOPE_V1
+                oh = None
             oh.status = "awaiting_stars"
             oh.sent_qty = sent_count
             oh.fail_reason = str(last_err)
@@ -12399,6 +12433,8 @@ async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
             s.add(WalletTxn(bot_id=row.id, user_id=b2.id, amount=refund, kind="charge",
                             note="بازگشتِ وجهِ گیفتِ ناموفق"))
             o2 = await s.get(GiftOrder, order_id)
+            if o2 is not None and await _is_foreign(o2, bot):   # PATCH_TENANT_SCOPE_V1
+                o2 = None
             o2.status = "failed" if sent_count == 0 else "sent"
             o2.fail_reason = str(last_err)
             o2.quantity = sent_count
@@ -12416,6 +12452,8 @@ async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
     async with Session() as s:
         o3 = await s.get(GiftOrder, order_id)
+        if o3 is not None and await _is_foreign(o3, bot):   # PATCH_TENANT_SCOPE_V1
+            o3 = None
         o3.status = "sent"
         await s.commit()
     await _notify_gift_order_trust_success(bot, row, order_id)
@@ -12716,6 +12754,8 @@ async def gift_cardpay_approve(cb: CallbackQuery, bot: Bot):
     if (o.gift_id or "").startswith("manual") or manual_mode or o.deliver_via == "support":
         async with Session() as s:
             o3 = await s.get(GiftOrder, order_id)
+            if o3 is not None and await _is_foreign(o3, bot):   # PATCH_TENANT_SCOPE_V1
+                o3 = None
             o3.status = "sent"
             buyer = await s.get(BotUser, o3.buyer_user_id)
             buyer_tg_id = buyer.telegram_id if buyer else None
@@ -12752,6 +12792,8 @@ async def gift_cardpay_approve(cb: CallbackQuery, bot: Bot):
     if sent_count < qty and o.deliver_via == "bot" and _is_low_stars_err(last_err):
         async with Session() as s:
             oh = await s.get(GiftOrder, order_id)
+            if oh is not None and await _is_foreign(oh, bot):   # PATCH_TENANT_SCOPE_V1
+                oh = None
             oh.status = "awaiting_stars"
             oh.sent_qty = sent_count
             oh.fail_reason = str(last_err)
@@ -12774,6 +12816,8 @@ async def gift_cardpay_approve(cb: CallbackQuery, bot: Bot):
     if sent_count < qty:
         async with Session() as s:
             o2 = await s.get(GiftOrder, order_id)
+            if o2 is not None and await _is_foreign(o2, bot):   # PATCH_TENANT_SCOPE_V1
+                o2 = None
             o2.status = "failed" if sent_count == 0 else "sent"
             o2.fail_reason = str(last_err)
             o2.quantity = sent_count
@@ -12794,6 +12838,8 @@ async def gift_cardpay_approve(cb: CallbackQuery, bot: Bot):
         return
     async with Session() as s:
         o3 = await s.get(GiftOrder, order_id)
+        if o3 is not None and await _is_foreign(o3, bot):   # PATCH_TENANT_SCOPE_V1
+            o3 = None
         o3.status = "sent"
         buyer = await s.get(BotUser, o3.buyer_user_id)
         buyer_tg_id = buyer.telegram_id if buyer else None
@@ -12820,7 +12866,7 @@ async def gift_cardpay_reject(cb: CallbackQuery, bot: Bot):
         return
     order_id = int(cb.data.split(":")[2])
     async with Session() as s:
-        o = await s.get(GiftOrder, order_id)
+        o = await s.get(GiftOrder, order_id, with_for_update=True)
         if not o or o.bot_id != row.id:
             await cb.answer("پیدا نشد", show_alert=True)
             return
@@ -12829,7 +12875,7 @@ async def gift_cardpay_reject(cb: CallbackQuery, bot: Bot):
             return
         _was_stars = o.status == "awaiting_stars"
         o.status = "rejected"
-        buyer = await s.get(BotUser, o.buyer_user_id)
+        buyer = await s.get(BotUser, o.buyer_user_id, with_for_update=True)
         buyer_tg_id = buyer.telegram_id if buyer else None
         trk = o.tracking_code
         # === PATCH_WALLET_GIFT_REJECT_REFUND_V1 ===
@@ -14264,7 +14310,7 @@ async def prm_pay(cb: CallbackQuery, bot: Bot):
         row.id, cb.from_user.id, cb.from_user.full_name, cb.from_user.username or "",
         return_created=True)
     async with Session() as s:
-        b = await s.get(BotUser, buyer.id)
+        b = await s.get(BotUser, buyer.id, with_for_update=True)  # قفلِ ردیف: دابل‌کلیک = دو خرید با یک پول
         # === PATCH_FIRST_PURCHASE_DISCOUNT_V1 ===
         _note_extra = ""
         from tenant.gateways.discount_engine import first_purchase_discount
@@ -14302,6 +14348,8 @@ async def prm_pay(cb: CallbackQuery, bot: Bot):
     if await _tgt_premium_on(row.id):
         async with Session() as s:
             o = await s.get(GiftOrder, order_id)
+            if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
+                o = None
             o.status = "awaiting_admin"
             await s.commit()
         await cb.answer("✅ پرداخت شد")
@@ -14323,6 +14371,8 @@ async def prm_pay(cb: CallbackQuery, bot: Bot):
     if manual_mode:
         async with Session() as s:
             o = await s.get(GiftOrder, order_id)
+            if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
+                o = None
             o.status = "awaiting_admin"
             await s.commit()
         await cb.answer("✅ پرداخت شد")
@@ -14350,6 +14400,8 @@ async def prm_pay(cb: CallbackQuery, bot: Bot):
             s.add(WalletTxn(bot_id=row.id, user_id=b2.id, amount=price, kind="charge",
                             note="بازگشتِ وجهِ پرمیومِ ناموفق"))
             o2 = await s.get(GiftOrder, order_id)
+            if o2 is not None and await _is_foreign(o2, bot):   # PATCH_TENANT_SCOPE_V1
+                o2 = None
             o2.status = "failed"
             o2.fail_reason = str(e)
             await s.commit()
@@ -14364,6 +14416,8 @@ async def prm_pay(cb: CallbackQuery, bot: Bot):
 
     async with Session() as s:
         o3 = await s.get(GiftOrder, order_id)
+        if o3 is not None and await _is_foreign(o3, bot):   # PATCH_TENANT_SCOPE_V1
+            o3 = None
         o3.status = "sent"
         await s.commit()
     await _notify_gift_order_trust_success(bot, row, order_id)
@@ -14412,7 +14466,7 @@ async def prm_admin_reject(cb: CallbackQuery, bot: Bot):
         return
     order_id = int(cb.data.split(":")[2])
     async with Session() as s:
-        o = await s.get(GiftOrder, order_id)
+        o = await s.get(GiftOrder, order_id, with_for_update=True)
         if not o or o.bot_id != row.id:
             await cb.answer("پیدا نشد", show_alert=True)
             return
@@ -14420,7 +14474,7 @@ async def prm_admin_reject(cb: CallbackQuery, bot: Bot):
             await cb.answer("این سفارش قبلاً رسیدگی شده.", show_alert=True)
             return
         o.status = "rejected"
-        buyer = await s.get(BotUser, o.buyer_user_id)
+        buyer = await s.get(BotUser, o.buyer_user_id, with_for_update=True)
         buyer_tg_id = buyer.telegram_id if buyer else None
         trk = o.tracking_code
         if buyer:
@@ -15346,7 +15400,7 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext):
         row.id, msg.from_user.id, msg.from_user.full_name, msg.from_user.username or "",
         return_created=True)
     async with Session() as s:
-        b = await s.get(BotUser, buyer.id)
+        b = await s.get(BotUser, buyer.id, with_for_update=True)  # قفلِ ردیف: دابل‌کلیک = دو خرید با یک پول
         # === PATCH_FIRST_PURCHASE_DISCOUNT_V1 ===
         # *قبل* از بررسیِ موجودی، وگرنه کاربری که با تخفیف پولش می‌رسید
         # اشتباهاً «موجودی ناکافی» می‌گیرد.
@@ -15473,7 +15527,7 @@ async def ton_order_refund(cb: CallbackQuery, bot: Bot):
         return
     oid = int(cb.data.split(":")[2])
     async with Session() as s:
-        o = await s.get(GiftOrder, oid)
+        o = await s.get(GiftOrder, oid, with_for_update=True)
         if not o or o.bot_id != row.id or not (o.gift_id or "").startswith("tonsell_"):
             await cb.answer("سفارش یافت نشد.", show_alert=True)
             return
@@ -15481,7 +15535,7 @@ async def ton_order_refund(cb: CallbackQuery, bot: Bot):
             await cb.answer("این سفارش قبلاً رسیدگی شده.", show_alert=True)
             return
         o.status = "refunded"
-        buyer = await s.get(BotUser, o.buyer_user_id)
+        buyer = await s.get(BotUser, o.buyer_user_id, with_for_update=True)
         refunded = int(o.price_toman or 0)
         if buyer:
             buyer.balance = float(buyer.balance or 0) + refunded
@@ -15982,7 +16036,7 @@ async def srx_anon_choice(cb: CallbackQuery, bot: Bot, state: FSMContext):
         row.id, _fu.id, _fu.full_name, _fu.username or "",
         return_created=True)
     async with Session() as s:
-        b = await s.get(BotUser, buyer.id)
+        b = await s.get(BotUser, buyer.id, with_for_update=True)  # قفلِ ردیف: دابل‌کلیک = دو خرید با یک پول
         # === PATCH_FIRST_PURCHASE_DISCOUNT_V1 ===
         # *قبل* از بررسیِ موجودی، وگرنه کاربری که با تخفیف پولش می‌رسید
         # اشتباهاً «موجودی ناکافی» می‌گیرد.
@@ -16072,7 +16126,7 @@ async def srx_admin_reject(cb: CallbackQuery, bot: Bot):
         return
     order_id = int(cb.data.split(":")[2])
     async with Session() as s:
-        o = await s.get(GiftOrder, order_id)
+        o = await s.get(GiftOrder, order_id, with_for_update=True)
         if not o or o.bot_id != row.id:
             await cb.answer("پیدا نشد", show_alert=True)
             return
@@ -16080,7 +16134,7 @@ async def srx_admin_reject(cb: CallbackQuery, bot: Bot):
             await cb.answer("این سفارش قبلاً رسیدگی شده.", show_alert=True)
             return
         o.status = "rejected"
-        buyer = await s.get(BotUser, o.buyer_user_id)
+        buyer = await s.get(BotUser, o.buyer_user_id, with_for_update=True)
         buyer_tg_id = buyer.telegram_id if buyer else None
         trk = o.tracking_code
         if buyer:
@@ -16318,7 +16372,7 @@ async def place_stars_order(bot: Bot, row, *, buyer_tg_id: int, buyer_name: str,
     buyer, _ = await get_or_create_user(
         row.id, buyer_tg_id, buyer_name, buyer_username or "", return_created=True)
     async with Session() as s:
-        b = await s.get(BotUser, buyer.id)
+        b = await s.get(BotUser, buyer.id, with_for_update=True)  # قفلِ ردیف: دابل‌کلیک = دو خرید با یک پول
         if float(b.balance) < price:
             raise StarsOrderError(
                 f"موجودیِ کیف‌پول کافی نیست. کمبود: {price - int(b.balance):,} تومان")
@@ -16591,7 +16645,7 @@ async def star_admin_reject(cb: CallbackQuery, bot: Bot):
         return
     order_id = int(cb.data.split(":")[2])
     async with Session() as s:
-        o = await s.get(GiftOrder, order_id)
+        o = await s.get(GiftOrder, order_id, with_for_update=True)
         if not o or o.bot_id != row.id:
             await cb.answer("پیدا نشد", show_alert=True)
             return
@@ -16599,7 +16653,7 @@ async def star_admin_reject(cb: CallbackQuery, bot: Bot):
             await cb.answer("این سفارش قبلاً رسیدگی شده.", show_alert=True)
             return
         o.status = "rejected"
-        buyer = await s.get(BotUser, o.buyer_user_id)
+        buyer = await s.get(BotUser, o.buyer_user_id, with_for_update=True)
         buyer_tg_id = buyer.telegram_id if buyer else None
         trk = o.tracking_code
         # === PATCH_STARS_REJECT_REFUND_V1 ===
@@ -17129,6 +17183,8 @@ async def gift_tgt_check(cb: CallbackQuery, bot: Bot):
         qty = int(o.quantity or 1)
         async with Session() as s:
             o2 = await s.get(GiftOrder, order_id, with_for_update=True)
+            if o2 is not None and await _is_foreign(o2, bot):   # PATCH_TENANT_SCOPE_V1
+                o2 = None
             o2.sent_qty = int(idx_s) + 1
             await s.commit()
         if int(idx_s) + 1 >= qty:
@@ -17764,6 +17820,8 @@ async def vnum_number_pay(cb: CallbackQuery, bot: Bot):
         await s.commit()
         order_id = o.id
         n2 = await s.get(VnumNumber, num_id)
+        if n2 is not None and await _is_foreign(n2, bot):   # PATCH_TENANT_SCOPE_V1
+            n2 = None
         n2.sold_order_pk = order_id
         n2.sold_at = func.now()
         await s.commit()
@@ -17825,7 +17883,7 @@ async def vnum_manual_buy_pay(cb: CallbackQuery, bot: Bot):
         row.id, cb.from_user.id, cb.from_user.full_name, cb.from_user.username or "",
         return_created=True)
     async with Session() as s:
-        b = await s.get(BotUser, buyer.id)
+        b = await s.get(BotUser, buyer.id, with_for_update=True)  # قفلِ ردیف: دابل‌کلیک = دو خرید با یک پول
         if float(b.balance) < real_price:
             await cb.answer(
                 f"❌ موجودیِ کیف‌پول کافی نیست. کمبود: {real_price - int(b.balance):,} تومان",
@@ -17986,7 +18044,7 @@ async def vnum_admin_manual_reject(cb: CallbackQuery, bot: Bot):
         return
     order_id = int(cb.data.split(":")[2])
     async with Session() as s:
-        o = await s.get(SmmOrder, order_id)
+        o = await s.get(SmmOrder, order_id, with_for_update=True)
         if not o or o.bot_id != row.id:
             await cb.answer("پیدا نشد", show_alert=True)
             return
@@ -17998,7 +18056,7 @@ async def vnum_admin_manual_reject(cb: CallbackQuery, bot: Bot):
         trk = o.tracking_code
         price = float(o.price_toman)
         b = await s.scalar(select(BotUser).where(
-            BotUser.bot_id == row.id, BotUser.telegram_id == buyer_tg_id))
+            BotUser.bot_id == row.id, BotUser.telegram_id == buyer_tg_id).with_for_update())
         if b:
             b.balance = float(b.balance) + price
             s.add(WalletTxn(bot_id=row.id, user_id=b.id, amount=price, kind="charge",
@@ -18176,3 +18234,13 @@ async def vnum_sendcode_save(msg: Message, bot: Bot, state: FSMContext):
 @smm_router.callback_query(F.data.startswith("vnum:unavail:"))
 async def vnum_unavail(cb: CallbackQuery):
     await cb.answer("❌ این کشور فعلاً موجود نیست — بعداً دوباره سر بزن.", show_alert=True)
+
+
+async def _is_foreign(obj, bot) -> bool:
+    """=== PATCH_TENANT_SCOPE_V1 === True اگر رکوردی که با idِ داخلِ
+    callback_data/state خوانده شده مالِ رباتِ جاریِ این آپدیت نباشد."""
+    if bot is None or getattr(obj, "bot_id", None) is None:
+        return False
+    from tenant import get_bot_row as _gbr
+    _r = await _gbr(bot)
+    return bool(_r) and obj.bot_id != _r.id

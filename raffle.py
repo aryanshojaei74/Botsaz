@@ -2148,14 +2148,16 @@ async def _give_prize(bot: Bot, winner_row_id: int, amount: int) -> bool:
     """
     try:
         async with Session() as s:
-            w = await s.get(ChannelRaffleWinner, winner_row_id)
+            # FOR UPDATE: دو فراخوانیِ هم‌زمان جایزه را دوبار نپردازند
+            w = await s.get(ChannelRaffleWinner, winner_row_id, with_for_update=True)
             if not w:
                 return False
             if w.prize_given_at is not None:
                 logger.info("قرعه‌کشی: جایزهٔ برندهٔ #%s قبلاً (%s) پرداخت شده؛ "
                             "دوباره پرداخت نشد.", winner_row_id, w.prize_given_at)
                 return False
-            pu = await s.scalar(select(PlatformUser).where(PlatformUser.telegram_id == w.telegram_id))
+            pu = await s.scalar(select(PlatformUser).where(
+                PlatformUser.telegram_id == w.telegram_id).with_for_update())
             if not pu:
                 pu = PlatformUser(telegram_id=w.telegram_id, full_name=w.full_name)
                 s.add(pu)

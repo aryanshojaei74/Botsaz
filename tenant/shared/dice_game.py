@@ -1117,8 +1117,10 @@ async def _run_play_locked(bot: Bot, chat_id: int, telegram_id: int,
         _win_user = None
         _owner_id = None
         _new_balance = None
+        # FOR UPDATE: بدونِ قفل، خریدِ هم‌زمانِ همین کاربر (که موجودی را کم
+        # می‌کند) با نوشتنِ «موجودیِ قدیم + جایزه» پاک می‌شد (lost update).
         u = await s.scalar(select(BotUser).where(
-            BotUser.bot_id == bot_id, BotUser.telegram_id == telegram_id))
+            BotUser.bot_id == bot_id, BotUser.telegram_id == telegram_id).with_for_update())
         if amount > 0:
             if u:
                 u.balance = float(u.balance or 0) + int(amount)

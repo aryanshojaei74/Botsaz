@@ -2541,6 +2541,43 @@ tenant_router.callback_query.outer_middleware(_cur_uid_mw)
 tenant_router.message.outer_middleware(_cur_uid_mw)
 
 
+# === PATCH_ADMIN_CB_GUARD_V1 ===
+# callback_data را تلگرام اعتبارسنجی نمی‌کند: با یک کلاینتِ MTProto هر کاربری
+# می‌تواند هر رشته‌ای بفرستد، نه فقط دکمه‌هایی که دیده. بخشی از هندلرهایِ
+# مدیریتی (حذف/ویرایشِ محصول در فروشگاه، اسلایدها، نوبت‌دهی، نظرسنجی، تأییدِ
+# نظر، …) خودشان مالک/ادمین بودن را چک نمی‌کردند و چون رکورد را فقط با id
+# می‌خواندند، حتی دادهٔ ربات‌هایِ دیگر را هم تغییر می‌دادند. این گارد برایِ
+# پیشوندهایی که *فقط* در پنلِ مدیریت ساخته می‌شوند، قبل از هر هندلری مالک یا
+# ادمینِ همین ربات بودن را الزامی می‌کند (چکِ سخت‌گیرانه‌ترِ خودِ هندلرها سرِ جایش می‌ماند).
+_ADMIN_ONLY_CB_PREFIXES = (
+    "tadm:", "sadm:", "shopadd:", "badm:", "sla:",
+    "poll:adm:", "poll:toggle:", "poll:del:", "poll:new", "poll:send:", "poll:setgroup",
+    "review:approve:",
+    "cfg:", "cfgf:", "bc:", "adjdeduct:",
+)
+
+
+async def _admin_cb_guard_mw(handler, event, data):
+    cb_data = getattr(event, "data", None) or ""
+    if not cb_data.startswith(_ADMIN_ONLY_CB_PREFIXES):
+        return await handler(event, data)
+    bot = data.get("bot")
+    row = await get_bot_row(bot) if bot is not None else None
+    if row and event.from_user and await is_owner_or_admin(row.id, event.from_user.id, row.owner_id):
+        return await handler(event, data)
+    logger.warning("admin_cb_guard: callbackِ مدیریتی از کاربرِ غیرمجاز رد شد "
+                   "(bot_id=%s user=%s data=%r)", getattr(row, "id", None),
+                   getattr(event.from_user, "id", None), cb_data[:64])
+    try:
+        await event.answer()
+    except Exception:
+        logger.debug("admin_cb_guard: پاسخ به callback ممکن نشد", exc_info=True)
+    return None
+
+
+tenant_router.callback_query.outer_middleware(_admin_cb_guard_mw)
+
+
 # === PATCH_NAV_HISTORY_V1 ===
 # درخواستِ Fadayi: «خیلی جاها بازگشت به منوی قبل نداره (مثلاً انتخابِ دسته → سرویس) و کاربر
 # باید دوباره از اول برگرده». راهِ حل: هر صفحه‌ای که با «ویرایشِ درجا» جایِ صفحهٔ قبل می‌نشیند،
@@ -9410,10 +9447,26 @@ async def pay_method(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return
     bot_id = row.id
 
+    async def _own_order(s, order) -> bool:
+        """=== PATCH_PAY_ORDER_OWNERSHIP_V1 ===
+        قبلاً هیچ‌کدام از مسیرهایِ pay: مالکیتِ سفارش را چک نمی‌کردند: هر
+        کاربری با callbackِ دست‌ساز می‌توانست سفارشِ هر کس (حتی رباتِ دیگر) را
+        لغو کند یا با کیف‌پولِ صاحبش پرداخت کند."""
+        if not order or order.bot_id != bot_id:
+            return False
+        owner = await s.get(BotUser, order.user_id)
+        return bool(owner and owner.telegram_id == cb.from_user.id)
+
     if method == "cancel":
         async with Session() as s:
             o = await s.get(Order, oid)
-            if o:
+            if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
+                o = None
+            if not await _own_order(s, o):
+                await cb.answer("یافت نشد.", show_alert=True)
+                return
+            # فقط سفارشِ هنوز-پرداخت‌نشده؛ سفارشِ در انتظارِ تأییدِ ادمین/پرداخت‌شده دست نمی‌خورد
+            if o.status in ("pending", "awaiting_receipt"):
                 o.status = "rejected"
                 await s.commit()
         try:
@@ -9426,6 +9479,10 @@ async def pay_method(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
     async with Session() as s:
         o = await s.get(Order, oid)
+        if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
+            o = None
+        if o is not None and not await _own_order(s, o):
+            o = None
         if not o or o.status != "pending":
             # سفارش منقضی/لغو/پرداخت‌شده — پیامِ واضح به‌جای «یافت نشد»
             _st = o.status if o else None
@@ -9479,6 +9536,8 @@ async def pay_method(cb: CallbackQuery, bot: Bot, state: FSMContext):
             # حالا با گرفتنِ قفل روی خودِ سفارش، درخواستِ دوم وقتی نوبتش میشه
             # آخرین وضعیتِ commit‌شده (paid) را می‌بیند و متوقف می‌شود.
             o = await s.get(Order, oid, with_for_update=True)
+            if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
+                o = None
             # چکِ مجددِ وضعیت: اگر همین سفارش هم‌زمان پرداخت شده باشد، خارج شو
             if not o or o.status != "pending":
                 err = "این سفارش قبلاً پردازش شده است."
@@ -9813,6 +9872,8 @@ async def manual_cfg_buy(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if mb_id:
         async with Session() as s:
             mb_lookup = await s.get(MainButton, mb_id)
+            if mb_lookup is not None and await _is_foreign(mb_lookup, bot):   # PATCH_TENANT_SCOPE_V1
+                mb_lookup = None
         if mb_lookup and mb_lookup.config:
             try:
                 cfg_lookup = json.loads(mb_lookup.config) or {}
@@ -10194,7 +10255,9 @@ async def chadm_decide(cb: CallbackQuery, bot: Bot, state: FSMContext):
     oid = int(oid)
     async with Session() as s:
         o = await s.get(Order, oid, with_for_update=True)
-        if not o or o.status != "awaiting_admin":
+        # o.bot_id: بدونِ آن ادمینِ رباتِ دیگری با callbackِ دست‌ساز شارژِ
+        # کیف‌پولِ این ربات را تأیید می‌کرد (PATCH_PAY_ORDER_OWNERSHIP_V1).
+        if not o or o.bot_id != row.id or o.status != "awaiting_admin":
             await cb.answer("قبلاً رسیدگی شده.", show_alert=True)
             return
         u = await s.get(BotUser, o.user_id, with_for_update=True)
@@ -10303,6 +10366,8 @@ async def chadm_nodeny(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return
     async with Session() as s:
         o = await s.get(Order, oid, with_for_update=True)
+        if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
+            o = None
         if not o or o.status != "awaiting_admin":
             await cb.answer("قبلاً رسیدگی شده.", show_alert=True)
             return
@@ -10366,6 +10431,8 @@ async def chadm_reason_text(msg: Message, bot: Bot, state: FSMContext):
         return
     async with Session() as s:
         o = await s.get(Order, oid, with_for_update=True)
+        if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
+            o = None
         if not o or o.status != "awaiting_admin":
             await msg.answer("⚠️ این سفارش قبلاً رسیدگی شده.")
             return
@@ -10440,7 +10507,7 @@ async def chadm_revoke(cb: CallbackQuery, bot: Bot):
     oid = int(cb.data.split(":")[1])
     async with Session() as s:
         o = await s.get(Order, oid, with_for_update=True)
-        if not o or o.status != "paid" or o.pay_method != "card_charge":
+        if not o or o.bot_id != row.id or o.status != "paid" or o.pay_method != "card_charge":
             await cb.answer("این سفارش قابلِ لغو نیست (شاید قبلاً لغو شده).", show_alert=True)
             return
         u = await s.get(BotUser, o.user_id)
@@ -19036,6 +19103,8 @@ async def vpn_followup_cant_connect(cb: CallbackQuery, bot: Bot):
         return
     async with Session() as s:
         a = await s.get(PanelAccount, aid)
+        if a is not None and await _is_foreign(a, bot):   # PATCH_TENANT_SCOPE_V1
+            a = None
         u = await s.scalar(select(BotUser).where(
             BotUser.bot_id == row.id, BotUser.telegram_id == cb.from_user.id))
     # آدرس پشتیبانی
@@ -19228,6 +19297,8 @@ async def thb_color_start(cb: CallbackQuery, bot: Bot):
     # رنگ فعلیِ دکمه به‌عنوان انتخابِ پیش‌فرض نشان داده می‌شود
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
+        if mb is not None and await _is_foreign(mb, bot):   # PATCH_TENANT_SCOPE_V1
+            mb = None
     cur = (mb.color if (mb and mb.color) else "")
     note = ""
     if not colored:
@@ -23989,6 +24060,8 @@ async def admin_cfg_edit_field(cb: CallbackQuery, state: FSMContext, bot: Bot):
         cfg_id = data.get("edit_cfg_id")
         async with Session() as s:
             cfg = await s.get(Config, cfg_id)
+            if cfg is not None and await _is_foreign(cfg, bot):   # PATCH_TENANT_SCOPE_V1
+                cfg = None
         if not cfg:
             await cb.answer("کانفیگ یافت نشد.", show_alert=True)
             return
@@ -24081,6 +24154,8 @@ async def admin_cfg_edit_display(cb: CallbackQuery, state: FSMContext, bot: Bot)
         return
     async with Session() as s:
         cfg = await s.get(Config, cfg_id)
+        if cfg is not None and await _is_foreign(cfg, bot):   # PATCH_TENANT_SCOPE_V1
+            cfg = None
         if cfg:
             cfg.display_mode = mode
             await s.commit()
@@ -24107,6 +24182,8 @@ async def admin_cfg_edit_status(cb: CallbackQuery, state: FSMContext, bot: Bot):
     page = data.get("edit_page", 0)
     async with Session() as s:
         cfg = await s.get(Config, cfg_id)
+        if cfg is not None and await _is_foreign(cfg, bot):   # PATCH_TENANT_SCOPE_V1
+            cfg = None
         if not cfg:
             await cb.answer("کانفیگ یافت نشد.", show_alert=True)
             return
@@ -25182,6 +25259,8 @@ async def admin_user_cfg_del_exec(cb: CallbackQuery, bot: Bot):
 
     async with Session() as s:
         a2 = await s.get(PanelAccount, aid)
+        if a2 is not None and await _is_foreign(a2, bot):   # PATCH_TENANT_SCOPE_V1
+            a2 = None
         if a2:
             await s.delete(a2)
             await s.commit()
@@ -25549,6 +25628,8 @@ async def admin_adjust_days(msg: Message, state: FSMContext, bot: Bot):
 
     async with Session() as s:
         a2 = await s.get(PanelAccount, aid)
+        if a2 is not None and await _is_foreign(a2, bot):   # PATCH_TENANT_SCOPE_V1
+            a2 = None
         if a2:
             a2.expiry_notice = None
             # === PATCH_EXPIRY_WARN_QUOTA_V1 === با تمدید، چرخهٔ اخطار از نو
@@ -25683,6 +25764,8 @@ async def admin_adjust_gb(msg: Message, state: FSMContext, bot: Bot):
 
     async with Session() as s:
         a2 = await s.get(PanelAccount, aid)
+        if a2 is not None and await _is_foreign(a2, bot):   # PATCH_TENANT_SCOPE_V1
+            a2 = None
         if a2:
             a2.volume_gb = max(1, (a2.volume_gb or 0) + add_gb)
             # === PATCH_ADMIN_GB_MB_SERVICE_V1 ===
@@ -25783,6 +25866,8 @@ async def admin_svc_off(cb: CallbackQuery, bot: Bot):
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     async with Session() as s:
         a2 = await s.get(PanelAccount, aid)
+        if a2 is not None and await _is_foreign(a2, bot):   # PATCH_TENANT_SCOPE_V1
+            a2 = None
         if a2:
             a2.status = "disabled"
             await s.commit()
@@ -25817,6 +25902,8 @@ async def admin_svc_on(cb: CallbackQuery, bot: Bot):
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     async with Session() as s:
         a2 = await s.get(PanelAccount, aid)
+        if a2 is not None and await _is_foreign(a2, bot):   # PATCH_TENANT_SCOPE_V1
+            a2 = None
         if a2:
             a2.status = "active"
             await s.commit()
@@ -25869,6 +25956,8 @@ async def admin_svc_del(cb: CallbackQuery, bot: Bot):
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     async with Session() as s:
         a2 = await s.get(PanelAccount, aid)
+        if a2 is not None and await _is_foreign(a2, bot):   # PATCH_TENANT_SCOPE_V1
+            a2 = None
         if a2:
             await s.delete(a2)
             await s.commit()
@@ -26791,6 +26880,8 @@ async def bc_send(cb: CallbackQuery, state: FSMContext, bot: Bot):
             # بررسی لغو
             async with Session() as s:
                 bc_row = await s.get(Broadcast, bc_id)
+                if bc_row is not None and await _is_foreign(bc_row, bot):   # PATCH_TENANT_SCOPE_V1
+                    bc_row = None
                 if bc_row and bc_row.status == "cancelled":
                     break
             try:
@@ -26812,6 +26903,8 @@ async def bc_send(cb: CallbackQuery, state: FSMContext, bot: Bot):
             await asyncio.sleep(0.05)
         async with Session() as s:
             bc_row = await s.get(Broadcast, bc_id)
+            if bc_row is not None and await _is_foreign(bc_row, bot):   # PATCH_TENANT_SCOPE_V1
+                bc_row = None
             if bc_row and bc_row.status != "cancelled":
                 bc_row.status = "done"
             if bc_row:
@@ -26853,6 +26946,8 @@ async def bc_stop(cb: CallbackQuery, bot: Bot):
     bc_id = int(cb.data.split(":")[2])
     async with Session() as s:
         bc_row = await s.get(Broadcast, bc_id)
+        if bc_row is not None and await _is_foreign(bc_row, bot):   # PATCH_TENANT_SCOPE_V1
+            bc_row = None
         if bc_row and bc_row.status == "sending":
             bc_row.status = "cancelled"
             await s.commit()
@@ -27578,6 +27673,8 @@ async def disc_edit_menu(cb: CallbackQuery, bot: Bot):
     dc_id = int(cb.data.split(":")[2])
     async with Session() as s:
         dc = await s.get(DiscountCode, dc_id)
+        if dc is not None and await _is_foreign(dc, bot):   # PATCH_TENANT_SCOPE_V1
+            dc = None
     if not dc:
         await cb.answer("کد یافت نشد", show_alert=True)
         return
@@ -30030,6 +30127,8 @@ async def admsup_del(cb: CallbackQuery, bot: Bot):
     aid = int(cb.data.split(":")[2])
     async with Session() as s:
         a = await s.get(AdminSupport, aid)
+        if a is not None and a.bot_id != row.id:   # PATCH_TENANT_SCOPE_V1: رکوردِ رباتِ دیگر
+            a = None
         if a:
             await s.delete(a)
             await s.commit()
@@ -32336,3 +32435,13 @@ async def _refresh_finance_toggle_view(cb: CallbackQuery, row) -> None:
         await cb.message.edit_reply_markup(reply_markup=kb)
     except Exception:
         logger.exception("بازسازی منوی مالی پس از toggle ناموفق بود")
+
+
+async def _is_foreign(obj, bot) -> bool:
+    """=== PATCH_TENANT_SCOPE_V1 === True اگر رکوردی که با idِ داخلِ
+    callback_data/state خوانده شده مالِ رباتِ جاریِ این آپدیت نباشد."""
+    if bot is None or getattr(obj, "bot_id", None) is None:
+        return False
+    from tenant import get_bot_row as _gbr
+    _r = await _gbr(bot)
+    return bool(_r) and obj.bot_id != _r.id

@@ -550,19 +550,23 @@ async def _auto_approve_wallet_charge(bot: Bot, row, oid: int, check, file_id: s
     ادمین می‌فرستد تا در صورتِ فیک بودن با دکمهٔ «لغو» برگردانده شود."""
     from tenant import rial, inline_back_kb, _notify_receipt_admins, _admin_user_block  # === PATCH_RECEIPT_CHANNEL_V1 ===
     # جلوگیری از رسیدِ تکراری (هر ربات scope جدا دارد)
-    from tenant.gateways.auto_receipt import receipt_fingerprint, photo_fingerprint, is_duplicate_receipt, mark_receipt_used
+    from tenant.gateways.auto_receipt import (receipt_fingerprint, photo_fingerprint,
+                                              claim_receipts, release_receipts)
     _dup_scope = f"tenant:{row.id}"
     _dup_fp = receipt_fingerprint(check)
     _photo_fp = photo_fingerprint(file_unique_id)
-    if _photo_fp and await is_duplicate_receipt(_dup_scope, _photo_fp):
-        return False  # همین عکس قبلاً استفاده شده → به تاییدِ دستی سپرده می‌شود
-    if _dup_fp and await is_duplicate_receipt(_dup_scope, _dup_fp):
-        return False  # رسیدِ تکراری → به تاییدِ دستی سپرده می‌شود
+    # PATCH_RECEIPT_CLAIM_ATOMIC_V1: ثبتِ اتمیکِ رسید *قبل* از شارژ (تکراری ⇒ تأییدِ دستی)
+    _fps = [_photo_fp, _dup_fp]
+    if not await claim_receipts(_dup_scope, _fps):
+        return False
     async with Session() as s:
-        o = await s.get(Order, oid)
-        if not o or o.status != "awaiting_admin":
+        # قفلِ سفارش: هم‌زمانیِ تأییدِ خودکار و تأییدِ دستیِ ادمین (chadm_decide هم
+        # FOR UPDATE می‌گیرد) قبلاً می‌توانست کیف پول را دوبار شارژ کند.
+        o = await s.get(Order, oid, with_for_update=True)
+        if not o or o.bot_id != row.id or o.status != "awaiting_admin":
+            await release_receipts(_dup_scope, _fps)
             return False
-        u = await s.get(BotUser, o.user_id)
+        u = await s.get(BotUser, o.user_id, with_for_update=True)
         amount = float(o.amount)
         u.balance = float(u.balance) + amount
         s.add(WalletTxn(bot_id=row.id, user_id=u.id, amount=amount,
@@ -574,10 +578,6 @@ async def _auto_approve_wallet_charge(bot: Bot, row, oid: int, check, file_id: s
     # === PATCH_KYC_GATE_ALL_PATHS_V1 ===
     from tenant.shared.kyc import after_charge as _ac
     await _ac(row.id, _kyc_uid)
-    if _dup_fp:
-        await mark_receipt_used(_dup_scope, _dup_fp, amount=int(amount), user_telegram_id=tg_id)
-    if _photo_fp:
-        await mark_receipt_used(_dup_scope, _photo_fp, amount=int(amount), user_telegram_id=tg_id)
     try:
         from tenant.gateways.wallet_receipt import build_wallet_charge_message_for_bot
         wtext, wkb = await build_wallet_charge_message_for_bot(row.id, amount, u.balance, "card")

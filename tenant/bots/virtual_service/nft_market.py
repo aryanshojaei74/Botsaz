@@ -833,11 +833,13 @@ async def apply_order_action(bot_id: int, order_id: int, action: str) -> tuple[b
     """همان اقدامات، هم از مینی‌اپ و هم از دکمه‌هایِ اینلاینِ ربات صدا زده
     می‌شود — تا منطق دو نسخه نشود."""
     async with Session() as s:
-        o = await s.get(NftOrder, order_id)
+        # FOR UPDATE: دو کلیکِ هم‌زمانِ «رد» (مینی‌اپ + دکمهٔ ربات) قبلاً هر دو
+        # status را pending می‌دیدند و مبلغ دوبار به کیف پول برمی‌گشت.
+        o = await s.get(NftOrder, order_id, with_for_update=True)
         if not o or o.bot_id != bot_id:
             return False, "not_found"
         it = await s.get(NftItem, o.item_id)
-        user = await s.get(BotUser, o.user_id)
+        user = await s.get(BotUser, o.user_id, with_for_update=True)
 
         if action == "delivered":
             if o.status not in ("pending", "paid"):

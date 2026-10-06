@@ -1170,6 +1170,8 @@ async def rpt_set_smm_qty(msg: Message, bot: Bot, state: FSMContext):
     sid = int(data.get("rp_smm_id") or 0)
     async with Session() as s:
         v = await s.get(SmmService, sid)
+        if v is not None and await _is_foreign(v, bot):   # PATCH_TENANT_SCOPE_V1
+            v = None
     if not v:
         await state.clear()
         await msg.answer("سرویس پیدا نشد.")
@@ -1269,3 +1271,13 @@ async def rpt_set_cfgkind(cb: CallbackQuery, bot: Bot):
     await _set(row.id, "refpoint_reward_cfgkind", key)
     await cb.answer(f"✅ «{CFG_KIND_LABELS[key]}» ذخیره شد")
     await _show_panel(cb.message, row.id)
+
+
+async def _is_foreign(obj, bot) -> bool:
+    """=== PATCH_TENANT_SCOPE_V1 === True اگر رکوردی که با idِ داخلِ
+    callback_data/state خوانده شده مالِ رباتِ جاریِ این آپدیت نباشد."""
+    if bot is None or getattr(obj, "bot_id", None) is None:
+        return False
+    from tenant import get_bot_row as _gbr
+    _r = await _gbr(bot)
+    return bool(_r) and obj.bot_id != _r.id

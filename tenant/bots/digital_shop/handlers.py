@@ -590,6 +590,8 @@ async def shop_order_detail(cb: CallbackQuery, bot: Bot):
         return
     async with Session() as s:
         order = await s.get(ProductOrder, oid)
+        if order is not None and await _is_foreign(order, bot):   # PATCH_TENANT_SCOPE_V1
+            order = None
         user = await s.scalar(select(BotUser).where(
             BotUser.bot_id == row.id, BotUser.telegram_id == cb.from_user.id))
         if not order or not user or order.user_id != user.id:
@@ -634,6 +636,8 @@ async def shop_buy_stars(cb: CallbackQuery, bot: Bot, state: FSMContext):
     row = await get_bot_row_by_token(bot.token)
     async with Session() as s:
         p = await s.get(Product, pid)
+    if p is not None and row is not None and p.bot_id != row.id:   # PATCH_SHOP_PRODUCT_SCOPE_V1
+        p = None
     if not row or not p:
         await cb.answer()
         return
@@ -687,6 +691,8 @@ async def shop_buy_wallet(cb: CallbackQuery, bot: Bot, state: FSMContext):
         user = await s.scalar(select(BotUser).where(
             BotUser.bot_id == bot_row.id,
             BotUser.telegram_id == cb.from_user.id))
+    if p is not None and bot_row is not None and p.bot_id != bot_row.id:   # PATCH_SHOP_PRODUCT_SCOPE_V1
+        p = None
     if not p or not bot_row or not user:
         await cb.answer()
         return
@@ -708,6 +714,8 @@ async def shop_buy_wallet(cb: CallbackQuery, bot: Bot, state: FSMContext):
         # === PATCH_WALLET_ROW_LOCK_V1 ===
         u = await s.get(BotUser, user.id, with_for_update=True)
         pr = await s.get(Product, pid)
+        if pr is not None and await _is_foreign(pr, bot):   # PATCH_TENANT_SCOPE_V1
+            pr = None
         if not u or not pr or not pr.is_active:
             err = "❌ محصول در دسترس نیست."
         elif pr.stock == 0:
@@ -855,6 +863,9 @@ async def shop_buy_card(cb: CallbackQuery, bot: Bot, state: FSMContext):
     async with Session() as s:
         p = await s.get(Product, pid)
         bot_row = await s.scalar(select(BotRow).where(BotRow.token == bot.token))
+    # PATCH_SHOP_PRODUCT_SCOPE_V1: محصولِ فروشگاهِ دیگری با pidِ دست‌ساز خریداری نشود
+    if p is not None and bot_row is not None and p.bot_id != bot_row.id:
+        p = None
     if not p or not bot_row:
         await cb.answer()
         return
@@ -915,6 +926,8 @@ async def shop_card_receipt_photo(msg: Message, state: FSMContext, bot: Bot):
     pid = data.get("shop_product_id")
     async with Session() as s:
         p = await s.get(Product, pid)
+        if p is not None and await _is_foreign(p, bot):   # PATCH_TENANT_SCOPE_V1
+            p = None
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ تأیید و ارسال", callback_data="shop:rc:ok")],
         [InlineKeyboardButton(text="✏️ ارسال رسید دیگر", callback_data="shop:rc:edit")],
@@ -945,6 +958,8 @@ async def shop_card_receipt_text(msg: Message, state: FSMContext, bot: Bot):
     pid = data.get("shop_product_id")
     async with Session() as s:
         p = await s.get(Product, pid)
+        if p is not None and await _is_foreign(p, bot):   # PATCH_TENANT_SCOPE_V1
+            p = None
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ تأیید و ارسال", callback_data="shop:rc:ok")],
         [InlineKeyboardButton(text="✏️ ارسال رسید دیگر", callback_data="shop:rc:edit")],
@@ -989,6 +1004,8 @@ async def shop_rc_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot):
 
     async with Session() as s:
         p = await s.get(Product, pid)
+        if p is not None and await _is_foreign(p, bot):   # PATCH_TENANT_SCOPE_V1
+            p = None
         bot_row = await s.scalar(select(BotRow).where(BotRow.token == bot.token))
         user = await s.scalar(select(BotUser).where(
             BotUser.bot_id == bot_row.id,
@@ -1173,6 +1190,8 @@ async def shop_reject_order(cb: CallbackQuery, bot: Bot, state: FSMContext):
     order_id = int(cb.data.split(":")[2])
     async with Session() as s:
         order = await s.get(ProductOrder, order_id)
+        if order is not None and await _is_foreign(order, bot):   # PATCH_TENANT_SCOPE_V1
+            order = None
         if not order or order.status != "awaiting_admin":
             await cb.answer("سفارش قبلاً پردازش شده", show_alert=True)
             return
@@ -1208,6 +1227,8 @@ async def shop_reject_nodeny(cb: CallbackQuery, bot: Bot, state: FSMContext):
     order_id = int(cb.data.split(":")[2])
     async with Session() as s:
         order = await s.get(ProductOrder, order_id)
+        if order is not None and await _is_foreign(order, bot):   # PATCH_TENANT_SCOPE_V1
+            order = None
         if not order:
             await cb.answer()
             return
@@ -1315,6 +1336,8 @@ async def sadm_edit_product(cb: CallbackQuery, bot: Bot):
     pid = int(cb.data.split(":")[2])
     async with Session() as s:
         p = await s.get(Product, pid)
+        if p is not None and await _is_foreign(p, bot):   # PATCH_TENANT_SCOPE_V1
+            p = None
     if not p:
         await cb.answer()
         return
@@ -1386,6 +1409,8 @@ async def sadm_toggle(cb: CallbackQuery, bot: Bot):
     pid = int(cb.data.split(":")[2])
     async with Session() as s:
         p = await s.get(Product, pid)
+        if p is not None and await _is_foreign(p, bot):   # PATCH_TENANT_SCOPE_V1
+            p = None
         if p:
             p.is_active = not p.is_active
             await s.commit()
@@ -1400,6 +1425,8 @@ async def sadm_pinstart_toggle(cb: CallbackQuery, bot: Bot):
     pid = int(cb.data.split(":")[2])
     async with Session() as s:
         p = await s.get(Product, pid)
+        if p is not None and await _is_foreign(p, bot):   # PATCH_TENANT_SCOPE_V1
+            p = None
         if p:
             p.pin_on_start = not bool(getattr(p, "pin_on_start", False))
             new_state = p.pin_on_start
@@ -1417,6 +1444,8 @@ async def sadm_delete(cb: CallbackQuery, bot: Bot):
     pid = int(cb.data.split(":")[2])
     async with Session() as s:
         p = await s.get(Product, pid)
+        if p is not None and await _is_foreign(p, bot):   # PATCH_TENANT_SCOPE_V1
+            p = None
         if p:
             await s.delete(p)
             await s.commit()
@@ -1472,6 +1501,8 @@ async def sadm_ef_clear(cb: CallbackQuery, state: FSMContext, bot: Bot):
         return
     async with Session() as s:
         p = await s.get(Product, pid)
+        if p is not None and await _is_foreign(p, bot):   # PATCH_TENANT_SCOPE_V1
+            p = None
         if p:
             setattr(p, col, None)
             await s.commit()
@@ -1486,6 +1517,8 @@ async def sadm_edit_field_save(msg: Message, state: FSMContext):
     pid, field = data["edit_pid"], data["edit_field"]
     async with Session() as s:
         p = await s.get(Product, pid)
+        if p is not None and await _is_foreign(p, msg.bot):   # PATCH_TENANT_SCOPE_V1
+            p = None
         if not p:
             await state.clear()
             return
@@ -1566,6 +1599,8 @@ async def sadm_giftset_save(msg: Message, state: FSMContext, bot: Bot):
         return
     async with Session() as s:
         p = await s.get(Product, pid)
+        if p is not None and await _is_foreign(p, bot):   # PATCH_TENANT_SCOPE_V1
+            p = None
         if not p:
             await state.clear()
             await msg.answer("محصول یافت نشد.")
@@ -1581,6 +1616,8 @@ async def sadm_giftdel(cb: CallbackQuery, bot: Bot):
     pid = int(cb.data.split(":")[2])
     async with Session() as s:
         p = await s.get(Product, pid)
+        if p is not None and await _is_foreign(p, bot):   # PATCH_TENANT_SCOPE_V1
+            p = None
         if p:
             p.gift_link_url = None
             await s.commit()
@@ -1642,6 +1679,8 @@ async def sadm_linkset_mode(cb: CallbackQuery, state: FSMContext):
         return
     async with Session() as s:
         p = await s.get(Product, pid)
+        if p is not None and await _is_foreign(p, cb.bot):   # PATCH_TENANT_SCOPE_V1
+            p = None
         if not p:
             await cb.answer("محصول یافت نشد.", show_alert=True)
             await state.clear()
@@ -1667,6 +1706,8 @@ async def sadm_linkdel(cb: CallbackQuery, bot: Bot):
     pid = int(cb.data.split(":")[2])
     async with Session() as s:
         p = await s.get(Product, pid)
+        if p is not None and await _is_foreign(p, bot):   # PATCH_TENANT_SCOPE_V1
+            p = None
         if p:
             p.shop_link_url = None
             p.shop_link_mode = None
@@ -1987,6 +2028,8 @@ async def shop_gift_mark_done(cb: CallbackQuery, bot: Bot):
     if order_id:
         async with Session() as s:
             order = await s.get(ProductOrder, order_id)
+            if order is not None and await _is_foreign(order, bot):   # PATCH_TENANT_SCOPE_V1
+                order = None
             if order and order.status != "delivered":
                 order.status = "delivered"
                 await s.commit()
@@ -2328,3 +2371,12 @@ async def sadm_lowstock_edit_save(msg: Message, state: FSMContext, bot: Bot):
     msg_txt = "✅ هشدار اتمام موجودی خاموش شد." if n == 0 else f"✅ آستانه روی {n} تنظیم شد."
     await msg.answer(msg_txt, reply_markup=shop_admin_kb(bot_row.field))
 
+
+async def _is_foreign(obj, bot) -> bool:
+    """=== PATCH_TENANT_SCOPE_V1 === True اگر رکوردی که با idِ داخلِ
+    callback_data/state خوانده شده مالِ رباتِ جاریِ این آپدیت نباشد."""
+    if bot is None or getattr(obj, "bot_id", None) is None:
+        return False
+    from tenant import get_bot_row as _gbr
+    _r = await _gbr(bot)
+    return bool(_r) and obj.bot_id != _r.id

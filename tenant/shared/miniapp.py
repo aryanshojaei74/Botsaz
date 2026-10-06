@@ -1176,7 +1176,7 @@ async def api_mp_buy(bot_id: int, product_id: int, payload: dict = Body(...),
             return JSONResponse({"ok": False, "message": f"«{p.input_label}» را وارد کن."},
                                 status_code=400)
         price = int(p.price or 0)
-        buyer = await s.get(BotUser, u.id)
+        buyer = await s.get(BotUser, u.id, with_for_update=True)  # قفلِ ردیف: دابل‌کلیک = دو خرید با یک پول
         bal = int(float(buyer.balance or 0))
         if bal < price:
             return JSONResponse(
@@ -1362,7 +1362,7 @@ async def api_mp_admin_action(bot_id: int, product_id: int, action: str,
 
     if action == "delete":
         async with Session() as s:
-            p = await s.get(MiniAppProduct, product_id)
+            p = await s.get(MiniAppProduct, product_id, with_for_update=True)
             if not p or p.bot_id != bot_id:
                 raise HTTPException(status_code=404, detail="not_found")
             # سفارش‌هایِ گذشته نگه داشته می‌شوند (عنوان در خودشان ذخیره
@@ -1374,7 +1374,7 @@ async def api_mp_admin_action(bot_id: int, product_id: int, action: str,
     if action in ("deliver", "reject"):
         import datetime as _dt
         async with Session() as s:
-            o = await s.get(MiniAppProductOrder, product_id)
+            o = await s.get(MiniAppProductOrder, product_id, with_for_update=True)
             if not o or o.bot_id != bot_id:
                 raise HTTPException(status_code=404, detail="not_found")
             if o.status != "pending":
@@ -1384,13 +1384,13 @@ async def api_mp_admin_action(bot_id: int, product_id: int, action: str,
                 o.delivered_at = _dt.datetime.utcnow()
             else:
                 o.status = "rejected"
-                buyer = await s.get(BotUser, o.user_id)
+                buyer = await s.get(BotUser, o.user_id, with_for_update=True)
                 if buyer:
                     buyer.balance = int(float(buyer.balance or 0)) + int(float(o.amount))
                     s.add(WalletTxn(bot_id=bot_id, user_id=buyer.id,
                                     amount=int(float(o.amount)), kind="refund",
                                     note=f"عودتِ سفارشِ #{o.id}"))
-                prod = await s.get(MiniAppProduct, o.product_id)
+                prod = await s.get(MiniAppProduct, o.product_id, with_for_update=True)
                 if prod and prod.stock is not None:
                     prod.stock = int(prod.stock) + 1
             await s.commit()

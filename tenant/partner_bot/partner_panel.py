@@ -377,6 +377,11 @@ async def pp_pay_choose(cb: CallbackQuery, bot: Bot, state: FSMContext):
     _row, pb = ok
     parts = cb.data.split(":")
     g, p = int(parts[2]), int(parts[3])
+    # تعداد از callback_data می‌آید؛ مقدارِ منفی (دست‌ساز) جمع را منفی می‌کرد و
+    # «پرداخت» به‌جایِ کسر، کیف‌پولِ پلتفرم را شارژ می‌کرد.
+    if not (0 <= g <= MAX_ORDER_QTY and 0 <= p <= MAX_ORDER_QTY):
+        await cb.answer("تعدادِ نامعتبر", show_alert=True)
+        return
     if g + p == 0:
         await cb.answer("اول تعداد را مشخص کن", show_alert=True)
         return
@@ -420,6 +425,10 @@ async def pp_pay_wallet(cb: CallbackQuery, bot: Bot, state: FSMContext):
                           data.get("pp_total"), data.get("pp_pb"))
     if not pb_id or total is None:
         await cb.answer("سفارش منقضی شده؛ دوباره شروع کن", show_alert=True)
+        return
+    if (not isinstance(g, int) or not isinstance(p, int) or g < 0 or p < 0
+            or g + p == 0 or total <= 0):
+        await cb.answer("سفارش نامعتبر است؛ دوباره شروع کن", show_alert=True)
         return
 
     uid = cb.from_user.id

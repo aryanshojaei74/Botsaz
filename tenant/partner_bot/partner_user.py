@@ -638,7 +638,7 @@ async def _do_plan_purchase(cb: CallbackQuery, bot: Bot, mode: str):
 
     await cb.answer("در حال انجام…")
     async with Session() as s:
-        pbr = await s.get(PartnerBot, pb.id)
+        pbr = await s.get(PartnerBot, pb.id, with_for_update=True)  # موجودیِ انبار: دو خریدِ هم‌زمان آخرین عدد را نبرند
         stock = pbr.stock_growth if want_plan == "growth" else pbr.stock_pro
         if stock <= 0:
             await cb.answer("موجودی این پلن تمام شد.", show_alert=True)
@@ -839,7 +839,7 @@ async def pu_upgrade_do(cb: CallbackQuery, bot: Bot):
     async with Session() as s:
         # همه‌چیز دوباره در همین تراکنش چک می‌شود: بین دیدنِ صفحه و زدنِ
         # دکمه ممکن است موجودیِ انبار یا کیفِ پول عوض شده باشد.
-        pbr = await s.get(PartnerBot, pb.id)
+        pbr = await s.get(PartnerBot, pb.id, with_for_update=True)  # موجودیِ انبار: دو خریدِ هم‌زمان آخرین عدد را نبرند
         if pbr.stock_pro <= 0:
             await cb.answer("موجودی حرفه‌ای تمام شد.", show_alert=True)
             return

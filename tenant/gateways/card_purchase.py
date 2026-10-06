@@ -156,6 +156,8 @@ async def card_order_sender_card4(msg: Message, state: FSMContext):
         return
     async with Session() as s:
         o = await s.get(Order, oid)
+        if o is not None and await _is_foreign(o, msg.bot):   # PATCH_TENANT_SCOPE_V1
+            o = None
         if o and o.status == "awaiting_receipt":
             o.sender_card4 = digits
             o.sender_id_type = id_type
@@ -404,6 +406,13 @@ async def manual_cfg_paycard_cancel(cb: CallbackQuery, bot: Bot):
     oid = int(cb.data.split(":")[2])
     async with Session() as s:
         o = await s.get(Order, oid)
+        if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
+            o = None
+        if o is not None:
+            # فقط صاحبِ سفارش می‌تواند لغوش کند (وگرنه هر کاربر سفارشِ دیگران را لغو می‌کرد)
+            _owner = await s.get(BotUser, o.user_id)
+            if not _owner or _owner.telegram_id != cb.from_user.id:
+                o = None
         if o and o.status == "awaiting_receipt" and o.pay_method == "mcfg_card":
             if o.reserved_config_id:
                 cfg = await s.get(Config, o.reserved_config_id)
@@ -577,6 +586,8 @@ async def receipt_edit(cb: CallbackQuery, bot: Bot):
         return
     async with Session() as s:
         o = await s.get(Order, oid)
+        if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
+            o = None
         if not o or o.status != "awaiting_receipt":
             await cb.answer("سفارش یافت نشد یا قبلاً پردازش شده.", show_alert=True)
             return
@@ -606,6 +617,8 @@ async def receipt_confirm(cb: CallbackQuery, bot: Bot):
         return
     async with Session() as s:
         o = await s.get(Order, oid)
+        if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
+            o = None
         if not o or o.status != "awaiting_receipt":
             await cb.answer("این رسید قبلاً پردازش شده.", show_alert=True)
             return
@@ -669,6 +682,8 @@ async def receipt_confirm(cb: CallbackQuery, bot: Bot):
     await cb.message.answer(user_text, reply_markup=await inline_back_kb(row.id))
     async with Session() as s2:
         o2 = await s2.get(Order, oid)
+        if o2 is not None and await _is_foreign(o2, bot):   # PATCH_TENANT_SCOPE_V1
+            o2 = None
         receipt_text = getattr(o2, "receipt_text", None) if o2 else None
     if receipt_text and not file_id:
         adm_caption += f"\n\n📋 رسید متنی:\n<blockquote>{_html.escape(receipt_text[:500])}</blockquote>"  # PATCH_RECEIPT_TEXT_HTML_ESCAPE_V1
@@ -696,6 +711,8 @@ async def receipt_confirm(cb: CallbackQuery, bot: Bot):
             card_number, sheba_number, account_number = await _rdv(row.id)
             async with Session() as s4:
                 o4 = await s4.get(Order, oid)
+                if o4 is not None and await _is_foreign(o4, bot):   # PATCH_TENANT_SCOPE_V1
+                    o4 = None
                 created_at = o4.created_at if o4 else None
                 sender_card4 = o4.sender_card4 if o4 else None
                 sender_id_type = o4.sender_id_type if o4 else "card"
@@ -750,53 +767,56 @@ async def _auto_approve_config_order(bot: Bot, row, oid: int, check, file_id: st
     ارسال می‌کند و گزارشِ کامل را برای ادمین می‌فرستد تا در صورتِ فیک بودن
     لغو شود."""
     from tenant import rial, inline_back_kb, send_config_to_user, _notify_receipt_admins, _admin_user_block, _purchase_alert  # === PATCH_RECEIPT_CHANNEL_V1 ===
-    from tenant.gateways.auto_receipt import receipt_fingerprint, photo_fingerprint, is_duplicate_receipt, mark_receipt_used
+    from tenant.gateways.auto_receipt import (receipt_fingerprint, photo_fingerprint,
+                                              claim_receipts, release_receipts)
     _dup_scope = f"tenant:{row.id}"
     _dup_fp = receipt_fingerprint(check)
     _photo_fp = photo_fingerprint(file_unique_id)
-    if _photo_fp and await is_duplicate_receipt(_dup_scope, _photo_fp):
+    _fps = [_photo_fp, _dup_fp]
+    if not await claim_receipts(_dup_scope, _fps):
         return False
-    if _dup_fp and await is_duplicate_receipt(_dup_scope, _dup_fp):
-        return False
-    async with Session() as s:
-        # === PATCH_WALLET_ROW_LOCK_V1 + PATCH_CONFIG_STOCK_ROW_LOCK_V1 ===
-        o = await s.get(Order, oid, with_for_update=True)
-        if not o or o.status != "awaiting_admin":
-            return False
-        u = await s.get(BotUser, o.user_id, with_for_update=True)
-        amount = float(o.amount)
-        if o.pay_method == "mcfg_card":
-            cfg = (await s.get(Config, o.reserved_config_id, with_for_update=True)
-                  if o.reserved_config_id else None)
-            if not cfg or cfg.status != "reserved":
+    _receipt_done = False   # PATCH_RECEIPT_CLAIM_ATOMIC_V1
+    try:
+        async with Session() as s:
+            # === PATCH_WALLET_ROW_LOCK_V1 + PATCH_CONFIG_STOCK_ROW_LOCK_V1 ===
+            o = await s.get(Order, oid, with_for_update=True)
+            if not o or o.bot_id != row.id or o.status != "awaiting_admin":
                 return False
-            cfg.status = "sold"
-            cfg.owner_user_id = u.id
-            cfg.custom_label = o.custom_label
-            o.status = "paid"
-            assigned = [cfg]
-        else:
-            cfgs = (await s.scalars(
-                select(Config).where(
-                    Config.bot_id == row.id, Config.status == "in_stock", Config.price == 0,
-                    Config.volume_gb == o.volume_gb, Config.days == o.days
-                ).with_for_update().limit(o.count)
-            )).all()
-            if len(cfgs) < o.count:
-                return False
-            o.status = "paid"
-            assigned = []
-            for cfg in cfgs[:o.count]:
+            u = await s.get(BotUser, o.user_id, with_for_update=True)
+            amount = float(o.amount)
+            if o.pay_method == "mcfg_card":
+                cfg = (await s.get(Config, o.reserved_config_id, with_for_update=True)
+                      if o.reserved_config_id else None)
+                if not cfg or cfg.status != "reserved":
+                    return False
                 cfg.status = "sold"
                 cfg.owner_user_id = u.id
-                assigned.append(cfg)
-        await s.commit()
-        assigned_ids = [c.id for c in assigned]
-        tg_id = u.telegram_id
-    if _dup_fp:
-        await mark_receipt_used(_dup_scope, _dup_fp, amount=int(amount), user_telegram_id=tg_id)
-    if _photo_fp:
-        await mark_receipt_used(_dup_scope, _photo_fp, amount=int(amount), user_telegram_id=tg_id)
+                cfg.custom_label = o.custom_label
+                o.status = "paid"
+                assigned = [cfg]
+            else:
+                cfgs = (await s.scalars(
+                    select(Config).where(
+                        Config.bot_id == row.id, Config.status == "in_stock", Config.price == 0,
+                        Config.volume_gb == o.volume_gb, Config.days == o.days
+                    ).with_for_update().limit(o.count)
+                )).all()
+                if len(cfgs) < o.count:
+                    return False
+                o.status = "paid"
+                assigned = []
+                for cfg in cfgs[:o.count]:
+                    cfg.status = "sold"
+                    cfg.owner_user_id = u.id
+                    assigned.append(cfg)
+            await s.commit()
+            assigned_ids = [c.id for c in assigned]
+            tg_id = u.telegram_id
+        _receipt_done = True
+    finally:
+        if not _receipt_done:
+            await release_receipts(_dup_scope, _fps)
+
     from tenant.shared.extras import handle_referral_purchase
     await handle_referral_purchase(row.id, tg_id, bot, amount=amount)
     async with Session() as s3:
@@ -992,6 +1012,8 @@ async def rcadm_nodeny(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return
     async with Session() as s:
         o = await s.get(Order, oid)
+        if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
+            o = None
         if not o or o.status != "awaiting_admin":
             await cb.answer("قبلاً رسیدگی شده.", show_alert=True)
             return
@@ -1046,6 +1068,8 @@ async def rcadm_reason_text(msg: Message, bot: Bot, state: FSMContext):
         return
     async with Session() as s:
         o = await s.get(Order, oid)
+        if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
+            o = None
         if not o or o.status != "awaiting_admin":
             await msg.answer("⚠️ این سفارش قبلاً رسیدگی شده.")
             return
@@ -1123,6 +1147,8 @@ async def rcadm_revoke(cb: CallbackQuery, bot: Bot):
     oid = int(cb.data.split(":")[1])
     async with Session() as s:
         o = await s.get(Order, oid)
+        if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
+            o = None
         if not o or o.status != "paid" or o.pay_method not in ("card", "mcfg_card"):
             await cb.answer("این سفارش قابلِ لغو نیست (شاید قبلاً لغو شده).", show_alert=True)
             return
@@ -1161,3 +1187,13 @@ async def rcadm_revoke(cb: CallbackQuery, bot: Bot):
             reply_markup=await inline_back_kb(row.id))
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+
+
+async def _is_foreign(obj, bot) -> bool:
+    """=== PATCH_TENANT_SCOPE_V1 === True اگر رکوردی که با idِ داخلِ
+    callback_data/state خوانده شده مالِ رباتِ جاریِ این آپدیت نباشد."""
+    if bot is None or getattr(obj, "bot_id", None) is None:
+        return False
+    from tenant import get_bot_row as _gbr
+    _r = await _gbr(bot)
+    return bool(_r) and obj.bot_id != _r.id

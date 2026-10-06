@@ -119,6 +119,8 @@ async def book_select_slot(cb: CallbackQuery, state: FSMContext, bot: Bot):
     sid = int(cb.data.split(":")[2])
     async with Session() as s:
         sl = await s.get(AppointmentSlot, sid)
+        if sl is not None and await _is_foreign(sl, bot):   # PATCH_TENANT_SCOPE_V1
+            sl = None
     if not sl:
         await cb.answer()
         return
@@ -152,6 +154,8 @@ async def book_save(msg: Message, state: FSMContext, bot: Bot):
     appt_id = None
     async with Session() as s:
         sl = await s.get(AppointmentSlot, data["slot_id"])
+        if sl is not None and await _is_foreign(sl, bot):   # PATCH_TENANT_SCOPE_V1
+            sl = None
         if not sl or not user:
             await state.clear()
             await msg.answer("این اسلات دیگر در دسترس نیست.")
@@ -217,6 +221,8 @@ async def book_confirm(cb: CallbackQuery, bot: Bot):
     aid = int(cb.data.split(":")[2])
     async with Session() as s:
         appt = await s.get(Appointment, aid)
+        if appt is not None and await _is_foreign(appt, bot):   # PATCH_TENANT_SCOPE_V1
+            appt = None
         if not appt:
             await cb.answer()
             return
@@ -237,6 +243,8 @@ async def book_reject(cb: CallbackQuery, bot: Bot):
     aid = int(cb.data.split(":")[2])
     async with Session() as s:
         appt = await s.get(Appointment, aid)
+        if appt is not None and await _is_foreign(appt, bot):   # PATCH_TENANT_SCOPE_V1
+            appt = None
         if not appt:
             await cb.answer()
             return
@@ -381,6 +389,8 @@ async def badm_slot_toggle(cb: CallbackQuery, bot: Bot):
     sid = int(cb.data.split(":")[3])
     async with Session() as s:
         sl = await s.get(AppointmentSlot, sid)
+        if sl is not None and await _is_foreign(sl, bot):   # PATCH_TENANT_SCOPE_V1
+            sl = None
         if sl:
             sl.is_active = not sl.is_active
             await s.commit()
@@ -435,3 +445,13 @@ async def badm_slot_save(msg: Message, state: FSMContext, bot: Bot):
         await s.commit()
     await state.clear()
     await msg.answer(f"✅ اسلات {WEEKDAY_FA[data['slot_wd']]} {data['slot_time']} اضافه شد.")
+
+
+async def _is_foreign(obj, bot) -> bool:
+    """=== PATCH_TENANT_SCOPE_V1 === True اگر رکوردی که با idِ داخلِ
+    callback_data/state خوانده شده مالِ رباتِ جاریِ این آپدیت نباشد."""
+    if bot is None or getattr(obj, "bot_id", None) is None:
+        return False
+    from tenant import get_bot_row as _gbr
+    _r = await _gbr(bot)
+    return bool(_r) and obj.bot_id != _r.id

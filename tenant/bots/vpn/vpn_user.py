@@ -7194,16 +7194,33 @@ async def auto_approve_vpn_card_order(bot: Bot, row, oid: int, check, file_id: s
     from sqlalchemy import update as sa_update
     from tenant import rial, inline_back_kb, _notify_receipt_admins, _admin_user_block, _purchase_alert
     from tenant.gateways.auto_receipt import (receipt_fingerprint, photo_fingerprint,
-                                     is_duplicate_receipt, mark_receipt_used)
+                                     claim_receipts, release_receipts)
 
     bot_id = row.id
     _dup_scope = f"tenant:{bot_id}"
     _dup_fp = receipt_fingerprint(check)
     _photo_fp = photo_fingerprint(file_unique_id)
-    if _photo_fp and await is_duplicate_receipt(_dup_scope, _photo_fp):
+    # PATCH_RECEIPT_CLAIM_ATOMIC_V1: ثبتِ اتمیکِ رسید *پیش* از تحویل (قبلاً بعد از تحویل
+    # ثبت می‌شد و دو سفارشِ هم‌زمان با یک رسید هر دو تحویل می‌گرفتند). هر مسیری که
+    # تحویل را انجام ندهد (False) رسید را آزاد می‌کند تا تأییدِ دستی ممکن بماند.
+    _fps = [_photo_fp, _dup_fp]
+    if not await claim_receipts(_dup_scope, _fps):
         return False
-    if _dup_fp and await is_duplicate_receipt(_dup_scope, _dup_fp):
-        return False
+    ok = False
+    try:
+        ok = await _auto_approve_vpn_card_order_body(
+            bot, row, oid, check, file_id, receipt_text, bot_id, _dup_scope)
+        return ok
+    finally:
+        if not ok:
+            await release_receipts(_dup_scope, _fps)
+
+
+async def _auto_approve_vpn_card_order_body(bot: Bot, row, oid: int, check, file_id, receipt_text,
+                                            bot_id: int, _dup_scope: str) -> bool:
+    from models import Order
+    from sqlalchemy import update as sa_update
+    from tenant import rial, inline_back_kb, _notify_receipt_admins, _admin_user_block, _purchase_alert
 
     # قفلِ اتمیک — دقیقاً مثلِ vcadm_decide، تا رسیدِ همزمان دو بار کانفیگ نسازد.
     async with Session() as s:
@@ -7328,10 +7345,6 @@ async def auto_approve_vpn_card_order(bot: Bot, row, oid: int, check, file_id: s
         logger.warning("auto-approve VPN: ساختِ کانفیگ برایِ سفارش #%s کاملاً ناموفق بود.", oid)
         return False
 
-    if _dup_fp:
-        await mark_receipt_used(_dup_scope, _dup_fp, amount=int(amount), user_telegram_id=buyer_tg_id)
-    if _photo_fp:
-        await mark_receipt_used(_dup_scope, _photo_fp, amount=int(amount), user_telegram_id=buyer_tg_id)
 
     from tenant.shared.extras import handle_referral_purchase
     # PATCH_DELIVERY_NEVER_LOST_V1 — این هم نباید کلِ خرید را بترکاند

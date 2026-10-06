@@ -11126,9 +11126,12 @@ async def _try_auto_approve_platform_charge(bot: Bot, cid: int) -> tuple[bool, s
         return False, check.reason
 
     # جلوگیری از رسیدِ تکراری: اثرِ انگشتِ رسید (شمارهٔ پیگیری یا تاریخ+ساعت+مبلغ)
-    from tenant.gateways.auto_receipt import receipt_fingerprint, is_duplicate_receipt, mark_receipt_used
+    from tenant.gateways.auto_receipt import receipt_fingerprint, claim_receipts, release_receipts
     fp = receipt_fingerprint(check)
-    if fp and await is_duplicate_receipt("platform", fp):
+    # PATCH_RECEIPT_CLAIM_ATOMIC_V1: ثبتِ اتمیک *پیش* از شارژ — قبلاً چک و ثبت جدا بودند و
+    # یک رسید در دو درخواستِ هم‌زمان دو بار کیف‌پولِ پلتفرم را شارژ می‌کرد.
+    if fp and not await claim_receipts("platform", [fp], amount=int(expected_amount),
+                                       user_telegram_id=user_tg):
         return False, ("این رسید قبلاً استفاده و شارژ شده است "
                        + (f"(پیگیری {check.tracking_no})" if check.tracking_no
                           else f"(تاریخ/ساعت {check.date_jalali or ''} {check.time_str or ''})")
@@ -11136,8 +11139,9 @@ async def _try_auto_approve_platform_charge(bot: Bot, cid: int) -> tuple[bool, s
 
     # مطابقتِ کامل → شارژ خودکار
     async with Session() as s:
-        ch = await s.get(WalletCharge, cid)
+        ch = await s.get(WalletCharge, cid, with_for_update=True)
         if not ch or ch.status != "pending":
+            await release_receipts("platform", [fp])
             return False, "درخواست همزمان رسیدگی شد."
         ch.status = "approved"
         u = await get_user(s, user_tg, for_update=True)
@@ -11147,9 +11151,6 @@ async def _try_auto_approve_platform_charge(bot: Bot, cid: int) -> tuple[bool, s
                           kind="charge", note=f"AUTO:شارژ خودکار #{cid}"))
         await s.commit()
 
-    # ثبتِ اثرِ انگشت تا این رسید دیگر قابلِ استفادهٔ مجدد نباشد
-    if fp:
-        await mark_receipt_used("platform", fp, amount=int(expected_amount), user_telegram_id=user_tg)
 
     try:
         await bot.send_message(user_tg, f"✅ کیف پول شما {rial(expected_amount)} شارژ شد.\nموجودی جدید: {rial(new_bal)}")
@@ -11218,7 +11219,7 @@ async def adm_charge_revoke(cb: CallbackQuery, bot: Bot):
         return
     cid = int(cb.data.split(":")[1])
     async with Session() as s:
-        ch = await s.get(WalletCharge, cid)
+        ch = await s.get(WalletCharge, cid, with_for_update=True)   # دوبار کسر نشود
         if not ch or ch.status != "approved":
             await cb.answer("قابلِ لغو نیست (قبلاً رسیدگی شده).", show_alert=True)
             return
@@ -11262,7 +11263,7 @@ async def sms_expired_admin_confirm(cb: CallbackQuery, bot: Bot):
         return
     wc_id = int(cb.data.split(":")[2])
     async with Session() as s:
-        ch = await s.get(WalletCharge, wc_id)
+        ch = await s.get(WalletCharge, wc_id, with_for_update=True)
         if not ch or ch.status != "pending":
             await cb.answer("این درخواست قبلاً رسیدگی شده.", show_alert=True)
             return
@@ -13324,7 +13325,8 @@ async def adm_charge_decide(cb: CallbackQuery, bot: Bot):
         return
     try:
         async with Session() as s:
-            ch = await s.get(WalletCharge, cid_int)
+            # FOR UPDATE: هم‌زمان با تأییدِ خودکار، دوبار شارژ نشود
+            ch = await s.get(WalletCharge, cid_int, with_for_update=True)
             if not ch or ch.status != "pending":
                 await cb.answer("قبلاً رسیدگی شده.", show_alert=True)
                 return

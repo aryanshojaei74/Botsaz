@@ -937,6 +937,8 @@ async def cmty_fw_add_save(msg: Message, state: FSMContext):
         return
     async with Session() as s:
         c = await s.get(CommunityChat, cid)
+        if c is not None and await _is_foreign(c, msg.bot):   # PATCH_TENANT_SCOPE_V1
+            c = None
         if not c:
             await msg.answer("پیدا نشد.")
             return
@@ -1153,6 +1155,8 @@ async def cmty_checkperm(cb: CallbackQuery, bot: Bot):
     cid = int(cb.data.split(":")[2])
     async with Session() as s:
         c = await s.get(CommunityChat, cid)
+        if c is not None and c.bot_id != row.id:   # PATCH_TENANT_SCOPE_V1: رکوردِ رباتِ دیگر
+            c = None
     if not c:
         await cb.answer("پیدا نشد", show_alert=True)
         return
@@ -1248,6 +1252,8 @@ async def cmty_warn_list(cb: CallbackQuery, bot: Bot):
     cid = int(cb.data.split(":")[2])
     async with Session() as s:
         c = await s.get(CommunityChat, cid)
+        if c is not None and c.bot_id != row.id:   # PATCH_TENANT_SCOPE_V1: رکوردِ رباتِ دیگر
+            c = None
         if not c:
             await cb.answer("پیدا نشد", show_alert=True)
             return
@@ -1283,6 +1289,8 @@ async def cmty_warn_detail(cb: CallbackQuery, bot: Bot):
     cid, uid = int(cid), int(uid)
     async with Session() as s:
         c = await s.get(CommunityChat, cid)
+        if c is not None and c.bot_id != row.id:   # PATCH_TENANT_SCOPE_V1: رکوردِ رباتِ دیگر
+            c = None
         w = await s.scalar(select(CommunityWarn).where(
             CommunityWarn.chat_row_id == cid, CommunityWarn.user_id == uid))
     if not c or not w:
@@ -1336,6 +1344,8 @@ async def cmty_stats_reset(cb: CallbackQuery, bot: Bot):
     cid = int(cb.data.split(":")[2])
     async with Session() as s:
         c = await s.get(CommunityChat, cid)
+        if c is not None and c.bot_id != row.id:   # PATCH_TENANT_SCOPE_V1: رکوردِ رباتِ دیگر
+            c = None
         if not c:
             await cb.answer("پیدا نشد", show_alert=True)
             return
@@ -1383,3 +1393,13 @@ async def cmty_stats_all(cb: CallbackQuery, bot: Bot):
     except Exception:
         await cb.message.answer(text, reply_markup=kb)
     await cb.answer()
+
+
+async def _is_foreign(obj, bot) -> bool:
+    """=== PATCH_TENANT_SCOPE_V1 === True اگر رکوردی که با idِ داخلِ
+    callback_data/state خوانده شده مالِ رباتِ جاریِ این آپدیت نباشد."""
+    if bot is None or getattr(obj, "bot_id", None) is None:
+        return False
+    from tenant import get_bot_row as _gbr
+    _r = await _gbr(bot)
+    return bool(_r) and obj.bot_id != _r.id

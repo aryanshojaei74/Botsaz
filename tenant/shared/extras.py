@@ -88,6 +88,8 @@ async def poll_vote(cb: CallbackQuery, bot: Bot):
             await cb.answer()
             return
         poll = await s.get(Poll, poll_id)
+        if poll is not None and await _is_foreign(poll, bot):   # PATCH_TENANT_SCOPE_V1
+            poll = None
         if not poll or not poll.is_active:
             await cb.answer("نظرسنجی بسته است.", show_alert=True)
             return
@@ -209,6 +211,8 @@ async def poll_admin_detail(cb: CallbackQuery, bot: Bot):
     pid = int(cb.data.split(":")[2])
     async with Session() as s:
         poll = await s.get(Poll, pid)
+        if poll is not None and await _is_foreign(poll, bot):   # PATCH_TENANT_SCOPE_V1
+            poll = None
         total = await s.scalar(select(func.count(PollVote.id)).where(PollVote.poll_id == pid))
     if not poll:
         await cb.answer()
@@ -235,6 +239,8 @@ async def poll_toggle(cb: CallbackQuery, bot: Bot):
     pid = int(cb.data.split(":")[2])
     async with Session() as s:
         poll = await s.get(Poll, pid)
+        if poll is not None and await _is_foreign(poll, bot):   # PATCH_TENANT_SCOPE_V1
+            poll = None
         if poll:
             poll.is_active = not poll.is_active
             await s.commit()
@@ -254,6 +260,8 @@ async def poll_delete(cb: CallbackQuery):
     pid = int(cb.data.split(":")[2])
     async with Session() as s:
         poll = await s.get(Poll, pid)
+        if poll is not None and await _is_foreign(poll, cb.bot):   # PATCH_TENANT_SCOPE_V1
+            poll = None
         if poll:
             await s.delete(poll)
             await s.commit()
@@ -340,6 +348,8 @@ async def poll_send_group(cb: CallbackQuery, bot: Bot):
         return
     async with Session() as s:
         poll = await s.get(Poll, poll_id)
+        if poll is not None and await _is_foreign(poll, bot):   # PATCH_TENANT_SCOPE_V1
+            poll = None
     if not poll:
         await cb.answer("نظرسنجی یافت نشد.", show_alert=True)
         return
@@ -1013,3 +1023,13 @@ async def review_list(cb: CallbackQuery, bot: Bot):
         ])
     )
     await cb.answer()
+
+
+async def _is_foreign(obj, bot) -> bool:
+    """=== PATCH_TENANT_SCOPE_V1 === True اگر رکوردی که با idِ داخلِ
+    callback_data/state خوانده شده مالِ رباتِ جاریِ این آپدیت نباشد."""
+    if bot is None or getattr(obj, "bot_id", None) is None:
+        return False
+    from tenant import get_bot_row as _gbr
+    _r = await _gbr(bot)
+    return bool(_r) and obj.bot_id != _r.id
