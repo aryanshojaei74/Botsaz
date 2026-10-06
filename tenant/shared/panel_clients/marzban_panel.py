@@ -1108,9 +1108,17 @@ class MarzbanPanelClient:
         # ۱۰۰۰ کاربرِ اول خوانده می‌شد و پنل‌های بزرگ‌تر بی‌صدا ناقص می‌ماندند
         # (هشدار انقضا برای بقیه نمی‌رفت). حالا با offset صفحه‌بندی می‌کنیم.
         users: list = []
+        # === PATCH_LIST_USERS_LONG_TIMEOUT_V1 ===
+        # error.log: رویِ پنل‌هایِ بزرگ یک صفحهٔ ۱۰۰۰تایی گاهی بیش از ۸ثانیه
+        # (تایم‌اوتِ پیش‌فرضِ کلاینت) طول می‌کشد؛ هر سه تلاش تایم‌اوت می‌شد و
+        # هشدارِ انقضا، پاک‌سازیِ تست و همگام‌سازی برایِ کلِ پنل بی‌صدا رد
+        # می‌شد. این خواندنِ حجیم مالِ حلقه‌هایِ پس‌زمینه است، پس مهلتِ
+        # طولانی‌تری می‌گیرد (درخواست‌هایِ تکیِ کاربر همان ۸ثانیه می‌مانند).
+        _list_timeout = aiohttp.ClientTimeout(total=max(float(self.timeout or 0), 45.0))
         for _page in range(30):
             res = await self._request("GET", "/api/users",
-                                      params={"limit": 1000, "offset": len(users)}) or {}
+                                      params={"limit": 1000, "offset": len(users)},
+                                      timeout=_list_timeout) or {}
             batch = res.get("users", []) if isinstance(res, dict) else []
             users.extend(batch)
             total = res.get("total") if isinstance(res, dict) else None

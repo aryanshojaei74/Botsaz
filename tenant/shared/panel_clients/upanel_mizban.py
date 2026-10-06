@@ -738,8 +738,21 @@ class UPanelMizbanClient:
 
     async def list_clients(self):
         """لیست کاربران با کلیدهای هم‌نام PanelClient (برای vpn_expiry_loop)."""
-        res = await self._request("GET", "/api/users", params={"limit": 1000}) or {}
-        users = res.get("users", []) if isinstance(res, dict) else []
+        # === PATCH_LIST_USERS_LONG_TIMEOUT_V1 ===
+        # قبلاً فقط ۱۰۰۰ کاربرِ اول خوانده می‌شد (پنل‌هایِ بزرگ‌تر بی‌صدا ناقص
+        # می‌ماندند و هشدارِ انقضا برایِ بقیه نمی‌رفت) و با تایم‌اوتِ ۸ثانیه‌ای
+        # رویِ پنل‌هایِ کند شکست می‌خورد. مثلِ مرزبان صفحه‌بندی + مهلتِ بلندتر.
+        _list_timeout = aiohttp.ClientTimeout(total=max(float(self.timeout or 0), 45.0))
+        users: list = []
+        for _page in range(30):
+            res = await self._request("GET", "/api/users",
+                                      params={"limit": 1000, "offset": len(users)},
+                                      timeout=_list_timeout) or {}
+            batch = res.get("users", []) if isinstance(res, dict) else []
+            users.extend(batch)
+            total = res.get("total") if isinstance(res, dict) else None
+            if not batch or len(batch) < 1000 or not isinstance(total, int) or len(users) >= total:
+                break
         out = []
         for u in users:
             used = int(u.get("used_traffic", 0) or 0)

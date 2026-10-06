@@ -291,20 +291,6 @@ class RebeccaPanelClient(MarzbanPanelClient):
             await self.reset_usage(email)
         return obj
 
-    async def list_clients(self):
-        """مثلِ list_clients مرزبانِ پایه، با خواندنِ expire از طریقِ
-        _expire_to_epoch به‌جایِ int خام."""
-        res = await self._request("GET", "/api/users", params={"limit": 1000}) or {}
-        users = res.get("users", []) if isinstance(res, dict) else []
-        out = []
-        for u in users:
-            used = int(u.get("used_traffic", 0) or 0)
-            cap = int(u.get("data_limit", 0) or 0)
-            expiry_epoch = _expire_to_epoch(u.get("expire"))
-            out.append({
-                "email": u.get("username"),
-                "traffic": {"up": 0, "down": used, "total": cap},
-                "totalGB": cap,
-                "expiryTime": expiry_epoch * 1000 if expiry_epoch else 0,
-            })
-        return out
+    # list_clients از MarzbanPanelClient ارث می‌برد: صفحه‌بندی (قبلاً فقط
+    # ۱۰۰۰ کاربرِ اول)، کشِ مشترک و مهلتِ بلندتر؛ _expire_to_epochِ مرزبان هم
+    # حالا ISO-8601 را می‌فهمد.

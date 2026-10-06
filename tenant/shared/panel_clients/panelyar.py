@@ -38,6 +38,8 @@ callbackها: همه با پیشوند pyar: (نگاه کن به references/call
   pyar:miggo:{src}:{dst}:{r|t}   — شروعِ انتقال
 """
 from __future__ import annotations
+
+import contextvars
 from html import escape as _esc_html
 
 import asyncio
@@ -68,6 +70,38 @@ from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
 
 panelyar_router = Router()
+
+# === PATCH_PANELYAR_AUTHZ_V1 ===
+# قبلاً هیچ هندلری در این روتر چک نمی‌کرد کاربر مالک/ادمینِ ربات است، و
+# پنل‌ها فقط با id (بدونِ bot_id) خوانده می‌شدند. یعنی هر کاربرِ هر رباتی با
+# یک callback_dataِ دست‌ساز (مثلاً pyar:del_yes:<id> یا pyar:users:<id>:0)
+# می‌توانست پنلِ رباتِ دیگری را حذف کند یا کاربران/کانفیگ‌هایش را ببیند.
+# حالا: (۱) کلِ روتر فقط برایِ مالک/ادمینِ همین ربات است؛ (۲) هر جستجویِ پنل
+# به رباتِ جاری محدود است.
+_CUR_BOT_ID: contextvars.ContextVar = contextvars.ContextVar("pyar_cur_bot_id", default=None)
+
+
+async def _pyar_admin_only(handler, event, data):
+    from tenant import get_bot_row, is_owner_or_admin
+    bot = data.get("bot")
+    user = getattr(event, "from_user", None)
+    row = await get_bot_row(bot) if bot is not None else None
+    if not row or not user or not await is_owner_or_admin(row.id, user.id, row.owner_id):
+        if isinstance(event, CallbackQuery):
+            try:
+                await event.answer()
+            except Exception:
+                logger.debug("pyar: پاسخ به callbackِ غیرمجاز ممکن نشد", exc_info=True)
+        return None
+    token = _CUR_BOT_ID.set(row.id)
+    try:
+        return await handler(event, data)
+    finally:
+        _CUR_BOT_ID.reset(token)
+
+
+panelyar_router.callback_query.middleware(_pyar_admin_only)
+panelyar_router.message.middleware(_pyar_admin_only)
 
 _USERS_PAGE_SIZE = 10
 
@@ -363,8 +397,13 @@ async def pyar_set_password(msg: Message, state: FSMContext, bot):
 # ═══════════════════════ منویِ مدیریتِ یک پنل ═══════════════════════
 
 async def _panel_by_id(panel_id: int) -> VpnPanel | None:
+    """پنل فقط اگر مالِ رباتِ جاری باشد (PATCH_PANELYAR_AUTHZ_V1)."""
+    bot_id = _CUR_BOT_ID.get()
+    if bot_id is None:
+        return None
     async with Session() as s:
-        return await s.get(VpnPanel, panel_id)
+        panel = await s.get(VpnPanel, panel_id)
+    return panel if panel is not None and panel.bot_id == bot_id else None
 
 
 def _panel_menu_kb(panel: VpnPanel) -> InlineKeyboardMarkup:
@@ -442,7 +481,7 @@ async def pyar_del_yes(cb: CallbackQuery):
     panel_id = int(cb.data.split(":")[2])
     async with Session() as s:
         panel = await s.get(VpnPanel, panel_id)
-        if panel:
+        if panel and panel.bot_id == _CUR_BOT_ID.get():
             await s.delete(panel)
             await s.commit()
     brow = await get_bot_row(cb.bot)
@@ -767,6 +806,8 @@ async def pyar_subedit_save(msg: Message, state: FSMContext):
     await state.clear()
     async with Session() as s:
         panel = await s.get(VpnPanel, panel_id)
+        if panel is not None and panel.bot_id != _CUR_BOT_ID.get():
+            panel = None
         if not panel:
             await msg.bot.edit_message_text("⚠️ این پنل دیگه در دسترس نیست.", chat_id=view_chat, message_id=view_msg)
             return

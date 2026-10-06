@@ -113,9 +113,11 @@ async def _panel_client_map(pf: tuple, bot_id: int) -> dict[str, dict] | None:
     client = _make_client(pf)
     try:
         clients = await client.list_clients()
-    except Exception:
-        logger.warning("trial_cleanup: پنلِ %s (bot_id=%s) پاسخ نداد — این دور رد شد.",
-                       pf[0], bot_id)
+    except Exception as e:
+        # علتِ خطا (تایم‌اوت/لاگین/…) قبلاً ثبت نمی‌شد و نمی‌شد فهمید چرا یک
+        # پنل هر دور رد می‌شود.
+        logger.warning("trial_cleanup: پنلِ %s (bot_id=%s) پاسخ نداد — این دور رد شد: %s",
+                       pf[0], bot_id, (str(e) or type(e).__name__)[:200])
         return None
     finally:
         try:

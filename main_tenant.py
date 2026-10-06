@@ -508,7 +508,12 @@ async def vpn_expiry_loop():
                     panel_key, base, user, pw, sub_base=sub_base, inbound_ids_str=inbound, api_key=api_key)  # PATCH_PANEL_API_KEY_PROPAGATION_V1
                 try:
                     clients = await client.list_clients()
-                except Exception:
+                except Exception as e:
+                    # قبلاً بی‌صدا رد می‌شد؛ پنلی که همیشه شکست بخورد هیچ
+                    # هشدارِ انقضا/حجمی برایِ مشتری‌هایش نمی‌فرستاد و ردی هم نبود.
+                    logger.warning("vpn_expiry_loop: خواندنِ کاربرانِ پنلِ %s (bot_id=%s) ناموفق؛ "
+                                   "این دور رد شد: %s", panel_key, bot_id,
+                                   (str(e) or type(e).__name__)[:200])
                     await client.close()
                     continue
                 by_email = {c.get("email"): c for c in clients if c.get("email")}

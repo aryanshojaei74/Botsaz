@@ -1201,6 +1201,10 @@ async def _send_config_delivery(bot: Bot, tg_id: int, aid: int):
     async def _wg_check() -> bool:
         try:
             return await _wg_check_inner()
+        except (asyncio.TimeoutError, TimeoutError):
+            # پنلِ کند؛ فقط دکمهٔ جانبیِ وایرگارد نمایش داده نمی‌شود — خطا نیست
+            logger.info("چکِ وایرگارد در پیامِ تحویل به تایم‌اوت خورد (aid=%s)", aid)
+            return False
         except Exception:
             logger.exception("خطای نادیده‌گرفته‌شده (چکِ دکمهٔ وایرگارد در پیامِ تحویل)")
             return False
@@ -3898,9 +3902,11 @@ async def vcadm_decide(cb: CallbackQuery, bot: Bot):
         # قفل اتمیک: فقط اگر سفارش هنوز «awaiting_admin» باشد وضعیتش عوض می‌شود.
         # این از پردازش تکراری در اثر دابل‌کلیک ادمین یا ارسال مجدد callback توسط
         # تلگرام جلوگیری می‌کند (باگ ساخت دو کانفیگ برای یک سفارش).
+        # Order.bot_id هم شرط است: بدونِ آن ادمینِ یک ربات با callback_dataِ
+        # دست‌ساز می‌توانست سفارشِ رباتِ دیگری را تأیید/رد کند.
         result = await s.execute(
             sa_update(Order)
-            .where(Order.id == oid, Order.status == "awaiting_admin")
+            .where(Order.id == oid, Order.bot_id == row.id, Order.status == "awaiting_admin")
             .values(status=new_status)
         )
         await s.commit()
@@ -7152,7 +7158,7 @@ async def auto_approve_vpn_card_order(bot: Bot, row, oid: int, check, file_id: s
     async with Session() as s:
         result = await s.execute(
             sa_update(Order)
-            .where(Order.id == oid, Order.status == "awaiting_admin")
+            .where(Order.id == oid, Order.bot_id == bot_id, Order.status == "awaiting_admin")
             .values(status="paid")
         )
         await s.commit()
