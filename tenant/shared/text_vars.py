@@ -71,7 +71,9 @@ VARS: dict[str, tuple[str, str, str]] = {
     "order_id":       ("order", "شمارهٔ سفارش (همان کدِ پیگیری)", "123"),
     "tracking_code":  ("order", "کدِ پیگیری (همان کدی که مشتری برایِ پشتیبانی می‌فرستد)", "SMM-123"),
     "product_name":   ("order", "نامِ محصول/سرویس", "ممبر گروه"),
-    "category":       ("order", "دسته‌بندیِ محصول", "تلگرام"),
+    "category":       ("order", "نامِ دسته‌بندیِ محصول", "ممبر کانال"),
+    # PATCH_ORDER_VARS_PLATFORM_V1 — «نوعِ اپلیکیشن» (پلتفرمِ دسته/سرویس)، جدا از نامِ دسته
+    "platform":       ("order", "نوعِ اپلیکیشن/پلتفرم (تلگرام، اینستاگرام، روبینو…)", "تلگرام"),
     "quantity":       ("order", "تعدادِ سفارش", "1,000"),
     "amount":         ("order", "مبلغِ پرداختی (تومان)", "700"),
     "price_per_1000": ("order", "قیمتِ هر ۱۰۰۰ عدد (تومان)", "700"),
@@ -93,7 +95,8 @@ VARS: dict[str, tuple[str, str, str]] = {
 }
 
 # اسم‌هایِ قدیمی که قبلاً در متنِ خوش‌آمد کار می‌کردند و باید همچنان کار کنند.
-ALIASES: dict[str, str] = {"name": "user_name", "fullname": "full_name", "id": "user_id"}
+ALIASES: dict[str, str] = {"name": "user_name", "fullname": "full_name", "id": "user_id",
+                           "app": "platform"}
 
 # نامِ متغیر می‌تواند رقم هم داشته باشد (مثلاً price_per_1000)، ولی با رقم شروع نمی‌شود.
 _PATTERN = re.compile(r"\{\{\s*([a-z_][a-z0-9_]*)\s*\}\}|\{([a-z_][a-z0-9_]*)\}")
@@ -277,7 +280,27 @@ async def _order_values(names: set[str], bot_id: int | None, order) -> dict[str,
     if "amount" in names:
         v["amount"] = _fmt_int(amount)
     if "price_per_1000" in names:
-        v["price_per_1000"] = _fmt_int(amount / qty * 1000) if qty > 0 else "—"
+        # === PATCH_ORDER_VARS_PLATFORM_V1 ===
+        # گزارشِ فدایی: «قیمت هر ۱۰۰۰ عدد» غلط بود. قبلاً مبلغِ کل ÷ تعداد بود؛ با حداقلِ مبلغِ سفارش
+        # یا گردکردن (مثلاً ۱۰ عدد = ۱۰۰ تومان) عدد بی‌ربط (۱۰٬۰۰۰) می‌شد. حالا نرخِ واقعیِ هر ۱۰۰۰ِ
+        # همان سرویس (همان که در فروشگاه نشان داده می‌شود)؛ فقط اگر سرویس دیگر نیست، از رویِ مبلغ.
+        p1000 = None
+        _spk = getattr(o, "smm_service_pk", None)
+        if _spk and bot_id is not None:
+            try:
+                from config import Session
+                from models import SmmService
+                async with Session() as s:
+                    _svc = await s.get(SmmService, _spk)
+                if _svc is not None:
+                    from tenant.bots.virtual_service.smm import compute_sell_price
+                    p1000 = await compute_sell_price(bot_id, _svc, 1000)
+            except Exception:
+                logger.exception("[text_vars] نرخِ هر ۱۰۰۰ِ سرویس خوانده نشد")
+        if p1000 and p1000 > 0:
+            v["price_per_1000"] = _fmt_int(p1000)
+        else:
+            v["price_per_1000"] = _fmt_int(amount / qty * 1000) if qty > 0 else "—"
     if "link" in names:
         v["link"] = _esc(getattr(o, "link", "") or "—")
     if "service_id" in names:
@@ -363,6 +386,32 @@ async def _order_values(names: set[str], bot_id: int | None, order) -> dict[str,
             except Exception:
                 logger.exception("[text_vars] پیداکردنِ دستهٔ محصولِ سفارش ناموفق بود")
         v["category"] = _esc(cat)
+    if "platform" in names:
+        plat = "—"
+        pk = getattr(o, "smm_service_pk", None)
+        if pk:
+            try:
+                from config import Session
+                from models import SmmCategory, SmmService
+                from tenant.bots.virtual_service import smm_api
+                from tenant.bots.virtual_service.smm import _svc_platform_type
+                async with Session() as s:
+                    svc = await s.get(SmmService, pk)
+                    c = await s.get(SmmCategory, svc.category_pk) if (svc is not None and svc.category_pk) else None
+                if svc is not None:
+                    key = c.platform if (c is not None and c.platform and c.platform != "other") \
+                        else _svc_platform_type(svc)[0]
+                    if key and key != "other":
+                        lbl = smm_api.platform_label(key)
+                        try:
+                            from tenant.bots.virtual_service.smm import platform_label_for_bot
+                            lbl = await platform_label_for_bot(bot_id, key) if bot_id is not None else lbl
+                        except Exception:
+                            logger.exception("[text_vars] نامِ سفارشیِ پلتفرم خوانده نشد (نامِ پیش‌فرض)")
+                        plat = re.sub(r"^[^\w]+", "", lbl).strip() or lbl   # بدونِ ایموجیِ اول
+            except Exception:
+                logger.exception("[text_vars] پیداکردنِ پلتفرمِ سفارش ناموفق بود")
+        v["platform"] = _esc(plat)
     return v
 
 

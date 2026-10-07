@@ -384,10 +384,16 @@ async def api_new_order(body: NewOrderBody, x_api_key: str | None = Header(defau
         _tkey = "sent" if _st == "sent" else ("order_placed_manual" if _st == "awaiting_admin" else None)
         if _st in ("failed", "refunded", "canceled", "rejected"):
             raise _SkipReceipt   # پیامِ خطا/بازگشتِ وجه جدا از _notify_user می‌رود
+        # PATCH_ORDER_VARS_PLATFORM_V1 — نرخِ واقعیِ هر ۱۰۰۰ (نه مبلغِ کل ÷ تعداد که با حداقلِ مبلغ بی‌ربط می‌شد)
+        _p1000 = await compute_sell_price(ctx.bot_id, v, 1000)
+        if discount_pct:
+            _p1000 = round(_p1000 * (100 - discount_pct) / 100)
+        if not _p1000 or _p1000 <= 0:
+            _p1000 = round(price * 1000 / max(1, body.quantity))
         spawn_api_receipt(ctx.bot_id, target_tid, name=v.name, platform=_plat, qty=body.quantity,
                           price=price, link=body.link, order_id=order_pk,
                           tracking=(o.tracking_code if o else None), smm_order_pk=order_pk, text_key=_tkey,
-                          unit_line=f"💸 قیمت هر 1000 عدد: <b>{round(price * 1000 / max(1, body.quantity)):,}</b> تومان")
+                          unit_line=f"💸 قیمت هر 1000 عدد: <b>{_p1000:,}</b> تومان")
     except _SkipReceipt:
         pass
     except Exception:

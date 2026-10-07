@@ -126,3 +126,22 @@ async def test_order_id_var_is_tracking_code(db):
         await s.commit()
     out = await render_text("{{order_id}}|{{tracking_code}}", bot_id=5, user=None, order=o)
     assert out == "2296|2296"
+
+
+@pytest.mark.asyncio
+async def test_price_per_1000_and_platform_vars(db, monkeypatch):
+    """PATCH_ORDER_VARS_PLATFORM_V1 — نرخِ واقعیِ هر ۱۰۰۰ (نه مبلغِ کل ÷ تعداد) و {{platform}} جدا از {{category}}."""
+    from tenant.shared.text_vars import render_text
+
+    async def fake_price(bot_id, svc, qty):
+        return 3800
+    monkeypatch.setattr(smm, "compute_sell_price", fake_price)
+    async with db() as s:
+        s.add(models.SmmCategory(id=7, bot_id=5, platform="telegram", name="ری‌اکشن پرمیوم"))
+        s.add(models.SmmService(id=1, bot_id=5, service_id="1", name="x", category_pk=7, panel_rate=1,
+                                sell_rate=3800, min_qty=10, max_qty=1000, is_active=True))
+        o = await s.get(models.SmmOrder, 1)
+        o.quantity, o.price_toman = 10, 100     # حداقلِ مبلغِ سفارش ۱۰۰ تومان
+        await s.commit()
+    out = await render_text("{{price_per_1000}}|{{category}}|{{platform}}|{{app}}", bot_id=5, order=o)
+    assert out == "3,800|ری‌اکشن پرمیوم|تلگرام|تلگرام"
