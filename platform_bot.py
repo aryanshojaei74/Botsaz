@@ -14225,10 +14225,24 @@ async def adm_user_days_apply(msg: Message, state: FSMContext, bot: Bot):
         # اگر با این افزایش، اعتبار آینده‌دار شد و ربات در بایگانی بود → خودکار فعال شود
         if days > 0 and r.archived_at and r.plan_expires_at > now:
             r.archived_at = None
+            r.archive_reason = None   # PATCH_ADMIN_DAYS_RESTORE_WEBHOOK_V1
             r.status = "active"
             unarchived = True
-        uname, owner, new_exp = r.username, r.owner_id, r.plan_expires_at
+        uname, owner, new_exp, _tok = r.username, r.owner_id, r.plan_expires_at, r.token
         await s.commit()
+    # === PATCH_ADMIN_DAYS_RESTORE_WEBHOOK_V1 ===
+    # هنگامِ بایگانی وب‌هوکِ ربات حذف می‌شود؛ این مسیر (افزودنِ روز توسطِ مدیر) ربات را «فعال» می‌کرد ولی
+    # وب‌هوک را برنمی‌گرداند — ربات در پنل فعال بود ولی به هیچ پیامی جواب نمی‌داد. مثلِ مسیرِ تمدید.
+    if unarchived:
+        try:
+            await set_tenant_webhook(_tok)
+        except Exception:
+            logger.exception("بازگرداندنِ وب‌هوکِ ربات پس از افزودنِ روز ناموفق بود")
+        try:
+            import tenant_status_bus
+            await tenant_status_bus.publish_tenant_invalidate(_tok)
+        except Exception:
+            logger.exception("اعلامِ تغییرِ وضعیتِ مستأجر ناموفق بود")
     verb = "افزوده شد" if days > 0 else "کسر شد"
     extra = "\n♻️ ربات از بایگانی خارج و فعال شد." if unarchived else ""
     await msg.answer(

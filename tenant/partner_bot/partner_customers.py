@@ -457,6 +457,22 @@ async def pcu_bot(cb: CallbackQuery, bot: Bot):
 
 # ── افزایش/کاهشِ روز ──
 
+# === PATCH_PARTNER_NO_CUT_PAID_DAYS_V1 ===
+# تیکت #۸۳۲: مشتریِ همکار رباتش را مستقیم از رباتِ اصلیِ بات‌ساز تمدید کرد (سررسید ۱۴۰۵/۰۷/۲۷)، بعد همکار
+# با «➖ ۷ روز» دو بار ۱۴ روز از همان زمانِ پولی کم کرد و ربات ۱۴۰۵/۰۷/۱۳ بایگانی شد. وقتی مشتری خودش
+# برایِ این ربات به پلتفرم پول داده (PlanOrderِ پولی)، همکار فقط می‌تواند روز **اضافه** کند، نه کم.
+async def _customer_paid_platform(bot_id: int) -> bool:
+    from models import PlanOrder
+    async with Session() as s:
+        return bool(await s.scalar(select(PlanOrder.id).where(
+            PlanOrder.target_bot_id == bot_id, PlanOrder.amount > 0,
+            PlanOrder.status == "paid").limit(1)))
+
+
+_PAID_CUT_MSG = ("⛔ این مشتری تمدیدِ این ربات را مستقیم از بات‌ساز خریده؛ "
+                 "کم‌کردنِ روزهایِ پرداخت‌شده ممکن نیست (فقط می‌توانی روز اضافه کنی).")
+
+
 async def _shift_days(bot_id: int, delta: int) -> int:
     """روزِ اعتبار را جابه‌جا می‌کند و روزِ باقی‌ماندهٔ جدید را برمی‌گرداند.
 
@@ -487,6 +503,9 @@ async def pcu_days(cb: CallbackQuery, bot: Bot):
     bot_id, delta = int(raw_id), int(raw_delta)
     if not await _owned_sale(pb.id, bot_id):
         await cb.answer("دسترسی ندارید", show_alert=True)
+        return
+    if delta < 0 and await _customer_paid_platform(bot_id):   # PATCH_PARTNER_NO_CUT_PAID_DAYS_V1
+        await cb.answer(_PAID_CUT_MSG, show_alert=True)
         return
     left = await _shift_days(bot_id, delta)
     await cb.answer(f"✅ اعتبار {'+' if delta > 0 else ''}{delta} روز شد — "
@@ -534,10 +553,19 @@ async def pcu_days_save(msg: Message, state: FSMContext):
             n = int(raw[1:])
             async with Session() as s:
                 br = await s.get(BotRow, bot_id)
-                br.plan_expires_at = datetime.datetime.now() + datetime.timedelta(days=n)
+                _new = datetime.datetime.now() + datetime.timedelta(days=n)
+                # PATCH_PARTNER_NO_CUT_PAID_DAYS_V1 — «=» هم نباید سررسیدِ پولیِ مشتری را جلو بکشد
+                if (br.plan_expires_at and _new < br.plan_expires_at
+                        and await _customer_paid_platform(bot_id)):
+                    await msg.answer(_PAID_CUT_MSG)
+                    return
+                br.plan_expires_at = _new
                 await s.commit()
             left = n
         else:
+            if int(raw) < 0 and await _customer_paid_platform(bot_id):
+                await msg.answer(_PAID_CUT_MSG)
+                return
             left = await _shift_days(bot_id, int(raw))
     except ValueError:
         await msg.answer("عدد معتبر نیست. مثلاً <code>30</code> یا <code>-15</code> یا <code>=60</code>.")
