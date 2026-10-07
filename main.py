@@ -1252,8 +1252,10 @@ async def on_startup():
     if platform_bot and WEBHOOK_BASE:
         # === PATCH_FAKE_JOIN_GUARD_V1 ===
         from webhook_utils import PLATFORM_ALLOWED_UPDATES
+        from config import platform_webhook_secret
         await platform_bot.set_webhook(
             f"{WEBHOOK_BASE}/webhook/platform", drop_pending_updates=True,
+            secret_token=(platform_webhook_secret() or None),
             allowed_updates=PLATFORM_ALLOWED_UPDATES)
     if platform_bot:
         global _platform_bot_username
@@ -1483,6 +1485,10 @@ async def _process_tenant(bot: Bot, data: dict, token: str):
 
 @app.post("/webhook/platform")
 async def platform_webhook(request: Request):
+    # === PATCH_PLATFORM_WEBHOOK_SECRET_V1 === فقط آپدیت‌هایِ واقعیِ تلگرام
+    from config import platform_webhook_request_ok
+    if not platform_webhook_request_ok(request):
+        return Response(status_code=403)
     if not platform_bot:
         return Response(status_code=503)
     try:

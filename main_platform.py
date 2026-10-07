@@ -49,6 +49,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import func, select  # === PATCH_DUP_ARCHIVED_TWIN_V1 === func
 
 
+from config import platform_webhook_secret
 from config import (PLATFORM_BOT_TOKEN, WEBHOOK_BASE, Session, init_db,
                     ARCHIVE_DAYS, PAID_PLAN_ARCHIVE_DAYS,
                     archive_retention_days, purge_bot, PLATFORM_ADMIN_ID,
@@ -648,7 +649,10 @@ async def zarinpal_platform_reconcile_loop(interval: int = 300):
                         continue
                     new_bal = await _platform_zarinpal_credit(
                         p.user_telegram_id, amount_toman,
-                        f"authority={authority}|ref_id={res}|auto_reconcile=1")
+                        f"authority={authority}|ref_id={res}|auto_reconcile=1",
+                        marker=f"authority={authority}")
+                    if new_bal is None:      # هم‌زمان توسطِ کالبک/دکمه شارژ شد
+                        continue
                     async with Session() as s:
                         p2 = await s.scalar(
                             _select(PlatformTxn).where(
@@ -972,8 +976,38 @@ async def _process_platform(data: dict):
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
 
 
+_PLATFORM_WH_RESET_AT = [0.0]
+
+
+def _schedule_platform_webhook_reset() -> None:
+    import time as _t
+    if not platform_bot or not WEBHOOK_BASE or _t.monotonic() - _PLATFORM_WH_RESET_AT[0] < 300:
+        return
+    _PLATFORM_WH_RESET_AT[0] = _t.monotonic()
+
+    async def _reset():
+        try:
+            from webhook_utils import PLATFORM_ALLOWED_UPDATES
+            await platform_bot.set_webhook(
+                f"{WEBHOOK_BASE}/webhook/platform", drop_pending_updates=False,
+                secret_token=(platform_webhook_secret() or None),
+                allowed_updates=PLATFORM_ALLOWED_UPDATES)
+            logger.warning("وبهوکِ ربات‌ساز با secret_token دوباره ثبت شد")
+        except Exception:
+            logger.exception("ثبتِ دوبارهٔ وبهوکِ ربات‌ساز ناموفق بود")
+    spawn(_reset())
+
+
 @app.post("/webhook/platform")
 async def platform_webhook(request: Request):
+    # === PATCH_PLATFORM_WEBHOOK_SECRET_V1 === فقط آپدیت‌هایِ واقعیِ تلگرام
+    from config import platform_webhook_request_ok
+    if not platform_webhook_request_ok(request):
+        # اگر وبهوک هنوز بدونِ secret ثبت مانده باشد (مثلاً set_webhookِ استارت‌آپ
+        # شکست خورده)، آپدیت‌هایِ واقعی هم رد می‌شوند؛ پس یک ثبتِ دوباره (حداکثر
+        # هر ۵ دقیقه) زمان‌بندی می‌کنیم. تلگرام آپدیتِ ردشده را دوباره می‌فرستد.
+        _schedule_platform_webhook_reset()
+        return Response(status_code=403)
     if not platform_bot:
         return Response(status_code=503)
     try:
@@ -1115,6 +1149,20 @@ async def nowpay_platform_ipn(request: Request):
             return Response(status_code=403)
         if pay_status not in ("finished", "confirmed"):
             return Response()
+        if not ipn_secret:
+            # === PATCH_NOWPAY_IPN_NO_SECRET_V1 ===
+            # بدونِ IPN secret قبلاً هیچ امضایی چک نمی‌شد و هر کسی با یک POST
+            # «payment_status=finished» فاکتورِ پرداخت‌نشدهٔ خودش را شارژ می‌کرد.
+            # حالا وضعیت مستقیماً از خودِ NOWPayments استعلام می‌شود.
+            from tenant.gateways.crypto_pay import get_payment_status
+            _api_key = await get_pset("platform_nowpay_api_key", "")
+            _pid = data.get("payment_id")
+            _real = await get_payment_status(_api_key, _pid) if (_api_key and _pid) else None
+            if (not isinstance(_real, dict)
+                    or str(_real.get("order_id") or "") != order_id
+                    or (_real.get("payment_status") or "").lower() not in ("finished", "confirmed")):
+                logger.warning("platform nowpay IPN بدونِ secret و تأییدنشده از API رد شد: %s", order_id)
+                return Response(status_code=403)
         async with Session() as s:
             pending = await s.scalar(
                 _select(PlatformTxn).where(
@@ -1236,18 +1284,24 @@ async def zarinpal_platform_callback(request: Request):
                 False, "تأیید پرداخت ناموفق", f"جزئیات: {res}\nاگر مبلغ کسر شده، از دکمهٔ «بررسی پرداخت» توی ربات استفاده کن.")
 
         async with Session() as s:
-            u = await get_user(s, tg_id, for_update=True)
-            u.balance = float(u.balance) + amount_toman
-            s.add(PlatformTxn(
-                user_telegram_id=tg_id, amount=float(amount_toman),
-                kind="zarinpal_charge", note=f"authority={authority}|ref_id={res}"))
+            # === PATCH_ZARINPAL_CALLBACK_ONCE_V1 ===
+            # اول ردیفِ pending قفل و مصرف می‌شود، بعد شارژ. قبلاً شارژ بی‌قید انجام
+            # می‌شد؛ دو درخواستِ هم‌زمان (رفرشِ صفحه + دکمهٔ «بررسی پرداخت») هر دو
+            # verify موفق (۱۰۰ و ۱۰۱) می‌گرفتند و کیف پول دوبار شارژ می‌شد.
             p2 = await s.scalar(
                 _select(PlatformTxn).where(
                     PlatformTxn.kind == "zarinpal_pending",
                     PlatformTxn.note.contains(f"authority={authority}"),
                 ).with_for_update())
-            if p2:
-                p2.kind = "zarinpal_pending_done"
+            if not p2:
+                return _zarinpal_result_page(
+                    True, "قبلاً تأیید شده", "این پرداخت قبلاً تأیید و کیف‌پولت شارژ شده. می‌توانی به ربات برگردی.")
+            p2.kind = "zarinpal_pending_done"
+            u = await get_user(s, tg_id, for_update=True)
+            u.balance = float(u.balance) + amount_toman
+            s.add(PlatformTxn(
+                user_telegram_id=tg_id, amount=float(amount_toman),
+                kind="zarinpal_charge", note=f"authority={authority}|ref_id={res}"))
             new_bal = u.balance
             await s.commit()
 
@@ -1319,18 +1373,21 @@ async def idpay_platform_callback(request: Request):
 
         amount_toman = verified_amount or int(float(pending.amount))
         async with Session() as s:
-            u = await get_user(s, tg_id, for_update=True)
-            u.balance = float(u.balance) + amount_toman
-            s.add(PlatformTxn(
-                user_telegram_id=tg_id, amount=float(amount_toman),
-                kind="idpay_charge", note=f"order_id={order_id}|track_id={res}"))
+            # === PATCH_GATEWAY_CREDIT_ONCE_V1 === اول مصرفِ pending (با قفل)، بعد شارژ
             p2 = await s.scalar(
                 _select(PlatformTxn).where(
                     PlatformTxn.kind == "idpay_pending",
                     PlatformTxn.note.contains(f"order_id={order_id}"),
                 ).with_for_update())
-            if p2:
-                p2.kind = "idpay_pending_done"
+            if not p2:
+                return _zarinpal_result_page(
+                    True, "قبلاً تأیید شده", "این پرداخت قبلاً تأیید و کیف‌پولت شارژ شده. می‌توانی به ربات برگردی.")
+            p2.kind = "idpay_pending_done"
+            u = await get_user(s, tg_id, for_update=True)
+            u.balance = float(u.balance) + amount_toman
+            s.add(PlatformTxn(
+                user_telegram_id=tg_id, amount=float(amount_toman),
+                kind="idpay_charge", note=f"order_id={order_id}|track_id={res}"))
             new_bal = u.balance
             await s.commit()
 
@@ -1370,8 +1427,9 @@ async def sms_platform_deposit(secret: str, request: Request):
     می‌شه و متنِ پیامک از رویِ چند اسمِ رایجِ فیلد (text/message/body/sms)
     خونده می‌شه — نه یه فرمتِ سخت‌گیرانه‌یِ واحد."""
     from platform_bot import get_pset, _sms_extract_rial_amounts, _sms_match_and_credit
+    import hmac as _hmac
     expected = await get_pset("platform_sms_secret", "")
-    if not expected or secret != expected:
+    if not expected or not _hmac.compare_digest(secret.encode(), expected.encode()):
         return JSONResponse(status_code=403, content={"ok": False, "error": "invalid secret"})
     if (await get_pset("platform_sms_enabled", "0")) != "1":
         return JSONResponse(status_code=200, content={"ok": False, "error": "disabled"})
@@ -1404,6 +1462,25 @@ async def sms_platform_deposit(secret: str, request: Request):
 
     if not text:
         return JSONResponse(status_code=400, content={"ok": False, "error": "no sms text found in request"})
+
+    # === PATCH_SMS_DEPOSIT_HARDEN_V1 ===
+    # اگر ادمین فهرستِ فرستنده‌هایِ مجاز (شمارهٔ/نامِ پیامکیِ بانک، با کاما) را در
+    # platform_sms_senders گذاشته باشد، پیامکِ هر فرستندهٔ دیگری — مثلاً پیامکِ جعلی
+    # که کسی مستقیم به همان گوشی فرستاده — نادیده گرفته می‌شود.
+    allowed = [x.strip().lower() for x in (await get_pset("platform_sms_senders", "")).split(",") if x.strip()]
+    if allowed:
+        sender = ""
+        for src in (locals().get("body") if isinstance(locals().get("body"), dict) else {},
+                    request.query_params):
+            for k in ("from", "sender", "number", "phone", "address", "originator"):
+                if src.get(k):
+                    sender = str(src.get(k))
+                    break
+            if sender:
+                break
+        if sender.strip().lower().lstrip("+") not in {a.lstrip("+") for a in allowed}:
+            logger.warning("sms deposit: فرستندهٔ غیرمجاز نادیده گرفته شد: %r", sender[:40])
+            return JSONResponse(status_code=200, content={"ok": False, "error": "sender not allowed"})
 
     amounts = _sms_extract_rial_amounts(text)
     matched_any = False
@@ -1626,6 +1703,7 @@ async def on_startup():
             if got_lock:
                 await platform_bot.set_webhook(
                     f"{WEBHOOK_BASE}/webhook/platform", drop_pending_updates=True,
+                    secret_token=(platform_webhook_secret() or None),
                     allowed_updates=PLATFORM_ALLOWED_UPDATES)
         except Exception:
             logger.exception("خطای نادیده‌گرفته‌شده (set_webhook ناموفق بود — استارت‌آپ ادامه پیدا می‌کند)")

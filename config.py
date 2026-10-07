@@ -22,6 +22,27 @@ logger = _get_logger(__name__)
 # توکن خود ربات بات‌ساز (مادر)
 PLATFORM_BOT_TOKEN = os.getenv("PLATFORM_BOT_TOKEN", "")
 
+
+def platform_webhook_secret() -> str:
+    """=== PATCH_PLATFORM_WEBHOOK_SECRET_V1 ===
+    secret_tokenِ وبهوکِ ربات‌ساز. مسیرِ /webhook/platform ثابت و قابلِ حدس است و
+    قبلاً هر کسی می‌توانست آپدیتِ جعلی (مثلاً از طرفِ PLATFORM_ADMIN_ID) به آن
+    بفرستد. تلگرام این مقدار را در هدرِ X-Telegram-Bot-Api-Secret-Token برمی‌گرداند.
+    از خودِ توکن مشتق می‌شود تا تنظیمِ تازه‌ای لازم نباشد (۶۴ کاراکترِ hex)."""
+    import hashlib as _hl
+    import hmac as _hm
+    if not PLATFORM_BOT_TOKEN:
+        return ""
+    return _hm.new(PLATFORM_BOT_TOKEN.encode(), b"botsaz-platform-webhook",
+                   _hl.sha256).hexdigest()
+
+
+def platform_webhook_request_ok(request) -> bool:
+    import hmac as _hm
+    want = platform_webhook_secret()
+    got = request.headers.get("x-telegram-bot-api-secret-token", "")
+    return bool(want) and _hm.compare_digest(got.encode(), want.encode())
+
 # آدرس پایهٔ وبهوک، مثلا https://example.com
 WEBHOOK_BASE = os.getenv("WEBHOOK_BASE", "")
 # === PATCH_FRAGMENT_WALLET_V1 ===

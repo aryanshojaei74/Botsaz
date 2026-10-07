@@ -181,7 +181,9 @@ async def _create_order(bot_id: int, u: BotUser, body: NewOrderBody) -> JSONResp
         v = await s.get(SmmService, body.service_id)
     if not v or v.bot_id != bot_id or not v.is_active:
         raise HTTPException(status_code=404, detail="service_not_found")
-    if body.quantity < v.min_qty or (v.max_qty and body.quantity > v.max_qty):
+    # min_qty ممکن است NULL باشد (قبلاً TypeError → خطای ۵۰۰)؛ تعدادِ صفر/منفی هم رد می‌شود
+    if (body.quantity <= 0 or body.quantity < (v.min_qty or 0)
+            or (v.max_qty and body.quantity > v.max_qty)):
         raise HTTPException(status_code=422, detail=f"quantity_out_of_range min={v.min_qty} max={v.max_qty}")
     if not body.link or len(body.link) > 500:
         raise HTTPException(status_code=422, detail="invalid_link")

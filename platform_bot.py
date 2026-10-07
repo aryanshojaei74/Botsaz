@@ -9256,10 +9256,23 @@ async def idp_delete(cb: CallbackQuery):
     await cb.answer("✅ تنظیمات آیدی‌پی حذف شد.")
 
 
-async def _platform_idpay_credit(tg_id: int, credited: int, note: str) -> float:
-    """اعتبار زدنِ کیف‌پولِ کاربر بعدِ تأییدِ آیدی‌پی (هم از کالبک، هم از دکمهٔ
-    «بررسی پرداخت» صدا زده می‌شود؛ idempotent چون قبلش وضعیتِ pending چک می‌شود)."""
+async def _platform_idpay_credit(tg_id: int, credited: int, note: str,
+                                      marker: str | None = None) -> float | None:
+    """اعتبار زدنِ کیف‌پولِ کاربر بعدِ تأییدِ درگاه.
+
+    === PATCH_GATEWAY_CREDIT_ONCE_V1 === اگر marker (مثلاً «order_id=…» یا
+    «authority=…») داده شود، اول ردیفِ idpay_pendingِ همان فاکتور در *همین* تراکنش
+    قفل و مصرف می‌شود؛ اگر قبلاً مصرف شده بود None برمی‌گردد و شارژ نمی‌شود.
+    قبلاً دو کلیکِ هم‌زمانِ «بررسی پرداخت» (یا کلیک + کالبک) هر دو شارژ می‌کردند."""
+    from sqlalchemy import select as _sel
     async with Session() as s:
+        if marker:
+            _p = await s.scalar(_sel(PlatformTxn).where(
+                PlatformTxn.kind == "idpay_pending",
+                PlatformTxn.note.contains(marker)).with_for_update())
+            if _p is None:
+                return None
+            _p.kind = "idpay_pending_done"
         u = await get_user(s, tg_id, for_update=True)
         u.balance = float(u.balance) + credited
         s.add(PlatformTxn(user_telegram_id=tg_id, amount=float(credited),
@@ -9395,7 +9408,11 @@ async def idp_check_payment(cb: CallbackQuery):
         return
     amount_toman = verified_amount or int(float(pending.amount))
     new_bal = await _platform_idpay_credit(
-        cb.from_user.id, amount_toman, f"order_id={order_id}|track_id={res}")
+        cb.from_user.id, amount_toman, f"order_id={order_id}|track_id={res}",
+        marker=f"order_id={order_id}")
+    if new_bal is None:
+        await cb.message.answer("✅ این فاکتور قبلاً تأیید شده و کیف پولت شارژ شده است.")
+        return
     async with Session() as s:
         p = await s.scalar(
             _select(PlatformTxn).where(
@@ -9439,10 +9456,18 @@ def _sms_extract_rial_amounts(text: str) -> list[int]:
     fa_map = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
     norm = (text or "").translate(fa_map)
     out = []
-    for m in re.finditer(r"([\d,،٬]{4,})\s*ریال", norm):
-        digits = re.sub(r"[,،٬]", "", m.group(1))
-        if digits.isdigit():
-            out.append(int(digits))
+    # === PATCH_SMS_DEPOSIT_HARDEN_V1 ===
+    # خطِ «مانده/موجودی» و «برداشت» واریز نیست؛ قبلاً هر عددِ کنارِ «ریال» (از جمله
+    # مانده‌حساب) کاندید می‌شد و اگر تصادفاً با مبلغِ یک فاکتورِ باز یکی بود، شارژ می‌شد.
+    for line in norm.splitlines() or [norm]:
+        if re.search(r"مانده|موجودی|برداشت|انتقال\s*از|خرید", line):
+            continue
+        for m in re.finditer(r"([\d,،٬]{4,})\s*ریال", line):
+            if line[max(0, m.start() - 2):m.start()].strip().endswith("-"):
+                continue   # مبلغِ منفی = برداشت
+            digits = re.sub(r"[,،٬]", "", m.group(1))
+            if digits.isdigit():
+                out.append(int(digits))
     return out
 
 
@@ -10151,10 +10176,23 @@ async def _sms_match_and_credit(amount_rial: int) -> bool:
     return True
 
 
-async def _platform_zarinpal_credit(tg_id: int, credited: int, note: str) -> float:
-    """اعتبار زدنِ کیف‌پولِ کاربر بعدِ تأییدِ زرین‌پال (هم از کالبک، هم از دکمهٔ
-    «بررسی پرداخت» صدا زده می‌شود؛ idempotent چون قبلش وضعیتِ pending چک می‌شود)."""
+async def _platform_zarinpal_credit(tg_id: int, credited: int, note: str,
+                                         marker: str | None = None) -> float | None:
+    """اعتبار زدنِ کیف‌پولِ کاربر بعدِ تأییدِ درگاه.
+
+    === PATCH_GATEWAY_CREDIT_ONCE_V1 === اگر marker (مثلاً «order_id=…» یا
+    «authority=…») داده شود، اول ردیفِ zarinpal_pendingِ همان فاکتور در *همین* تراکنش
+    قفل و مصرف می‌شود؛ اگر قبلاً مصرف شده بود None برمی‌گردد و شارژ نمی‌شود.
+    قبلاً دو کلیکِ هم‌زمانِ «بررسی پرداخت» (یا کلیک + کالبک) هر دو شارژ می‌کردند."""
+    from sqlalchemy import select as _sel
     async with Session() as s:
+        if marker:
+            _p = await s.scalar(_sel(PlatformTxn).where(
+                PlatformTxn.kind == "zarinpal_pending",
+                PlatformTxn.note.contains(marker)).with_for_update())
+            if _p is None:
+                return None
+            _p.kind = "zarinpal_pending_done"
         u = await get_user(s, tg_id, for_update=True)
         u.balance = float(u.balance) + credited
         s.add(PlatformTxn(user_telegram_id=tg_id, amount=float(credited),
@@ -10284,7 +10322,11 @@ async def zrp_check_payment(cb: CallbackQuery):
             f"جزئیات: {res}")
         return
     new_bal = await _platform_zarinpal_credit(
-        cb.from_user.id, amount_toman, f"authority={authority}|ref_id={res}")
+        cb.from_user.id, amount_toman, f"authority={authority}|ref_id={res}",
+        marker=f"authority={authority}")
+    if new_bal is None:
+        await cb.message.answer("✅ این فاکتور قبلاً تأیید شده و کیف پولت شارژ شده است.")
+        return
     async with Session() as s:
         p = await s.scalar(
             _select(PlatformTxn).where(
@@ -23818,3 +23860,45 @@ async def adm_bot_detach_partner_yes(cb: CallbackQuery, bot: Bot):
     except Exception:
         logger.exception("اطلاعِ جداشدن از همکار به مالک ناموفق بود (نادیده گرفته شد)")
     await _render_bot_detail(cb, bot_id, src, note="✅ ربات به بات‌سازِ اصلی منتقل شد.")
+
+
+# === PATCH_PLATFORM_ADMIN_CB_GUARD_V1 ===
+# callback_data را تلگرام اعتبارسنجی نمی‌کند. چند هندلرِ پنلِ مدیریتِ ربات‌ساز
+# (فهرستِ همهٔ ربات‌ها «adm:bots»، بایگانی، ویرایشِ دکمه‌هایِ کامیونیتی، …) هیچ
+# چکِ ادمینی نداشتند و هر کاربری با callbackِ دست‌ساز فهرستِ ربات‌ها و مالک‌هایشان
+# را می‌دید. پیشوندهایی که فقط در پنلِ مدیریت ساخته می‌شوند، این‌جا قبل از هر هندلری
+# به ادمینِ اصلی یا ادمینِ فرعیِ فعال محدود می‌شوند (چکِ دسترسیِ ریزِ خودِ هندلرها
+# — has_perm — سرِ جایش می‌ماند).
+_PLATFORM_ADMIN_CB_PREFIXES = (
+    "adm:", "admarch:", "admbots:", "admfield", "abot", "usr:", "usr_", "usrdays",
+    "usrmove:", "set:", "cadm:", "pgbset:", "pgmset:", "bcast:", "adfree:", "pf:",
+    "vip", "swadm", "trialrenew:appr:", "trialrenew:rej:", "chgok", "chgrev", "smsexp", "ppsmsexp",
+    "bigreq", "tkswapdecide", "mapall", "pbcast", "psa:", "sszg2:", "sszg3:", "ssfinal:",
+)
+
+
+async def _platform_admin_cb_guard(handler, event, data):
+    cbd = getattr(event, "data", None) or ""
+    if not cbd.startswith(_PLATFORM_ADMIN_CB_PREFIXES):
+        return await handler(event, data)
+    uid = getattr(getattr(event, "from_user", None), "id", None)
+    ok = uid is not None and is_admin(uid)
+    if not ok and uid is not None:
+        try:
+            async with Session() as s:
+                ok = await get_sub_admin(s, uid) is not None
+        except Exception:
+            logger.exception("platform admin guard: خواندنِ ادمینِ فرعی ناموفق بود")
+            ok = False
+    if ok:
+        return await handler(event, data)
+    logger.warning("platform admin guard: callbackِ مدیریتی از کاربرِ غیرمجاز رد شد (user=%s data=%r)",
+                   uid, cbd[:64])
+    try:
+        await event.answer()
+    except Exception:
+        logger.debug("platform admin guard: پاسخ به callback ممکن نشد", exc_info=True)
+    return None
+
+
+router.callback_query.outer_middleware(_platform_admin_cb_guard)
