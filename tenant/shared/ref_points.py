@@ -1094,6 +1094,10 @@ async def rpt_smm_link_in(msg: Message, bot: Bot, rp_pending: str, rp_row) -> No
         from tenant.bots.virtual_service.smm import _panel_order_mode, _place_on_panel
         if (await _panel_order_mode(rp_row.id, v.panel_pk)) == "auto" and not v.is_manual:
             await _place_on_panel(rp_row.id, order_pk)
+        else:
+            # === PATCH_MANUAL_ORDER_CHANNEL_V1 === سفارشِ دستیِ جایزه هم به کانال/ادمین اعلام شود
+            from tenant.bots.virtual_service.smm import announce_manual_smm_order
+            await announce_manual_smm_order(bot, rp_row, order_pk)
     except Exception:
         logger.exception("refpoint smm reward: ثبت رویِ پنل ناموفق (سفارش ثبت شد و دستِ ادمین می‌ماند)")
     await msg.answer(

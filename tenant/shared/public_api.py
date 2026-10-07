@@ -290,11 +290,31 @@ async def api_new_order(body: NewOrderBody, x_api_key: str | None = Header(defau
         order_mode = await _panel_order_mode(ctx.bot_id, v.panel_pk)
         if order_mode == "auto" and not v.is_manual:
             await _place_on_panel(ctx.bot_id, order_pk)
+        else:
+            # === PATCH_MANUAL_ORDER_CHANNEL_V1 === سفارشِ دستیِ API هم به کانال/ادمین اعلام شود
+            await _announce_manual_api_order(ctx.bot_id, order_pk)
     except Exception:
         logger.exception("API: ارسالِ خودکارِ سفارش %s به پنل ناموفق بود (سفارش ثبت شده است)", order_pk)
     async with Session() as s:
         o = await s.get(SmmOrder, order_pk)
     return JSONResponse({"ok": True, "order": _order_payload(o)}, status_code=201)
+
+
+async def _announce_manual_api_order(bot_id: int, order_pk: int) -> None:
+    from aiogram import Bot as _AioBot
+    from aiogram.client.default import DefaultBotProperties
+    from aiogram.enums import ParseMode
+    from models import Bot as _BotRow
+    from tenant.bots.virtual_service.smm import announce_manual_smm_order
+    async with Session() as s:
+        row = await s.get(_BotRow, bot_id)
+    if not row or not row.token:
+        return
+    tbot = _AioBot(token=row.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    try:
+        await announce_manual_smm_order(tbot, row, order_pk)
+    finally:
+        await tbot.session.close()
 
 
 # ═══════════════ APIِ استانداردِ SMM (v2) ═══════════════

@@ -6557,6 +6557,35 @@ async def smm_approve(cb: CallbackQuery, bot: Bot):
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
 
 
+# === PATCH_MANUAL_ORDER_CHANNEL_V1 ===
+async def announce_manual_smm_order(bot, row, oid: int) -> None:
+    """سفارشِ دستیِ SMM که از مسیری غیر از تک‌سفارش ثبت شده (انبوه، API):
+    همان رفتارِ تک‌سفارش — پست در کانالِ سفارشاتِ دستی با دکمهٔ تأیید/رد،
+    وگرنه پیامِ خصوصی به مالک. قبلاً این سفارش‌ها به هیچ‌جا اعلام نمی‌شدند."""
+    try:
+        from tenant.gateways.receipt_channel import post_smm_order
+        async with Session() as s:
+            o = await s.get(SmmOrder, oid)
+            if not o or o.bot_id != row.id:
+                return
+            u = await s.scalar(select(BotUser).where(
+                BotUser.bot_id == row.id, BotUser.telegram_id == o.user_telegram_id))
+        posted = await post_smm_order(
+            bot, row.id, manual=True, service_name=o.service_name or "—", link=o.link,
+            quantity=o.quantity, price=o.price_toman, user=u,
+            order_id=o.tracking_code or f"#{oid}", status="در انتظارِ انجام و تایید",
+            note=f"از دکمه‌هایِ پایین همین پیام تأیید یا رد کن. (#{oid})", pk=oid)
+        if not posted and (await _get_setting(row.id, "smm_alert_manual_order", "1")) != "0":
+            await bot.send_message(
+                row.owner_id,
+                f"🔔 سفارش جدید SMM (#{oid})\n"
+                f"🛰 {o.service_name} × {int(o.quantity or 0):,}\n🔗 {o.link}\n"
+                f"💰 {int(float(o.price_toman or 0)):,} تومان\n\n"
+                f"از «📋 سفارش‌های SMM» تأیید یا رد کن.")
+    except Exception:
+        logger.exception("اعلامِ سفارشِ دستیِ SMM ناموفق بود (order=%s)", oid)
+
+
 # === PATCH_SMM_ORDER_CHANNEL_V1 ===
 async def _post_order_status_to_channel(bot, row, oid: int, manual: bool,
                                         status: str, note: str = "") -> None:
@@ -9767,6 +9796,7 @@ async def _smm_bulk_process_bg(bot: Bot, row, order_ids: list[int], chat_id: int
             ok, note = await _place_on_panel(row.id, oid)
         else:
             ok, note = True, "در انتظارِ تأییدِ ادمین"
+            await announce_manual_smm_order(bot, row, oid)
         ok_count += 1 if ok else 0
         try:
             status_txt = "✅ ثبت شد" if ok else f"❌ ناموفق: {_customer_fail_reason(note)}"   # PATCH_SMM_PANEL_ERROR_TEXT_V1
@@ -12398,7 +12428,7 @@ async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
         # روشِ پرداخت کار می‌کنند و gift_cardpay_reject حالا برایِ سفارش‌هایِ
         # کیف‌پولی وجه را هم برمی‌گرداند.
         admin_kb = await _gift_admin_kb(row.id, order_id, gift_id)   # PATCH_TGTOOLS_GIFT_V1
-        await _notify_admins(
+        await _notify_manual_order(
             bot, row,
             f"💰 سفارشِ گیفت (تحویلِ دستی{' — انتخابِ مشتری: اکانتِ پشتیبانی' if via == 's' else ''}، پرداختِ کیف‌پول) — #{await order_no(GiftOrder, order_id)}\n"
             f"{item_label}{qty_line}\n💰 {price:,} تومان\n🎯 مقصد: {order.dest_label}{link_line}\n"
@@ -12726,7 +12756,7 @@ async def gift_receipt_photo_in(msg: Message, bot: Bot, state: FSMContext):
 
     admin_kb = await _gift_admin_kb(row.id, order_id, gift_id)   # PATCH_TGTOOLS_GIFT_V1
     qty_line = f"🔢 تعداد: {qty}\n" if qty > 1 else ""
-    await _notify_admins(
+    await _notify_manual_order(
         bot, row,
         f"💳 رسیدِ کارت‌به‌کارتِ گیفت — #{await order_no(GiftOrder, order_id)}\n"
         f"{item_line}\n"
@@ -14399,7 +14429,7 @@ async def prm_pay(cb: CallbackQuery, bot: Bot):
             f"🔖 کد پیگیری: <code>{trk}</code>", parse_mode="HTML")
         from tenant import _notify_admins
         admin_kb = await _prm_admin_kb(order_id)   # PATCH_TGTOOLS_PREMIUM_V1 (+ دکمهٔ 🤖 TGTools اگر کلید ثبت است)
-        await _notify_admins(
+        await _notify_manual_order(
             bot, row,
             f"🌟 سفارشِ پرمیوم (تحویلِ دستی) — #{await order_no(GiftOrder, order_id)}\n"
             f"پلن: {months} ماهه ({stars:,} استارز)\n💰 {price:,} تومان\n"
@@ -14586,7 +14616,7 @@ async def _tgt_revert_manual_prm(bot: Bot, row, order_id: int, reason: str, *, w
         gift_id, dest, trk = o.gift_id, o.dest_label, o.tracking_code
         await s.commit()
     months = str(gift_id or "").split("_")[-1]
-    await _notify_admins(
+    await _notify_manual_order(
         bot, row,
         f"{'⚠️' if warn else '🤖'} خریدِ خودکارِ پرمیوم — سفارش #{await order_no(GiftOrder, order_id)}\n\n{reason}\n\n"
         f"پلن: {months} ماهه\n🎯 مقصد: {dest}\n🔖 کد: {trk}\n\n"
@@ -15455,14 +15485,19 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext):
         "✅ پرداختت ثبت شد — سفارشت برایِ ادمین فرستاده شد و به‌زودی تون‌ها به "
         f"آدرست واریز می‌شود.\n🔖 کد پیگیری: <code>{trk}</code>",
         parse_mode="HTML", reply_markup=await _gift_support_kb(trk))
-    await _notify_admins(
+    await _notify_manual_order(
         bot, row,
         f"💎 سفارشِ تون (TON) — #{await order_no(GiftOrder, order_id)}\n"
         f"مقدار: {amount:g} TON\n💰 {price:,} تومان\n"
         f"🎯 آدرسِ کیف‌پول: <code>{wallet}</code>\n"
         f"🔖 کد: {trk}\n\n"
         "این تون را باید خودت واقعاً به آدرسِ بالا بفرستی، بعد در «💎 فروشِ تون ← "
-        "سفارش‌هایِ در انتظار» تأییدش کنی.")
+        "سفارش‌هایِ در انتظار» (یا با دکمه‌هایِ زیر) تأییدش کنی.",
+        InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ ارسال شد", callback_data=f"ton:done:{order_id}",
+                                 style=ButtonStyle.SUCCESS),
+            InlineKeyboardButton(text="↩️ رد و بازگشتِ وجه", callback_data=f"ton:refund:{order_id}",
+                                 style=ButtonStyle.DANGER)]]))
 
 
 # ───────── سفارش‌هایِ در انتظارِ تون (ادمین) ─────────
@@ -16094,7 +16129,7 @@ async def srx_anon_choice(cb: CallbackQuery, bot: Bot, state: FSMContext):
         InlineKeyboardButton(text="❌ رد", callback_data=f"srx:no:{order_id}",
                              style=ButtonStyle.DANGER),
     ]])
-    await _notify_admins(
+    await _notify_manual_order(
         bot, row,
         f"⭐️ سفارشِ ری‌اکشنِ استارزی — #{await order_no(GiftOrder, order_id)}\n"
         f"تعداد: {qty:,} ری‌اکشن\n💰 {price:,} تومان\n"
@@ -16420,7 +16455,7 @@ async def place_stars_order(bot: Bot, row, *, buyer_tg_id: int, buyer_name: str,
         order_id = order.id
 
     await _notify_gift_order_trust_success(bot, row, order_id)
-    await _notify_admins(
+    await _notify_manual_order(
         bot, row,
         f"⭐ سفارشِ استارز (پرداختِ کیف‌پول) — #{await order_no(GiftOrder, order_id)}\n"
         f"تعداد: {qty:,} استارز\n💰 {price:,} تومان\n🎯 مقصد: {dest_label}\n"
@@ -16597,7 +16632,7 @@ async def star_receipt_photo_in(msg: Message, bot: Bot, state: FSMContext):
         f"✅ رسید دریافت شد و برایِ تاییدِ ادمین فرستاده شد.\n"
         f"🔖 کد پیگیری: <code>{trk}</code>", await _gift_support_kb(trk))
     await msg.answer(_rt2, parse_mode="HTML", reply_markup=_rk2)
-    await _notify_admins(
+    await _notify_manual_order(
         bot, row,
         f"💳 رسیدِ کارت‌به‌کارتِ استارز — #{await order_no(GiftOrder, order_id)}\n"
         f"تعداد: {qty:,} استارز\n💰 {price:,} تومان\n"
@@ -16607,9 +16642,39 @@ async def star_receipt_photo_in(msg: Message, bot: Bot, state: FSMContext):
 
 
 # === PATCH_ADMIN_MSG_CLOSE_V1 ===
+async def _notify_manual_order(bot: Bot, row, text: str, kb=None, photo_file_id=None) -> None:
+    """=== PATCH_MANUAL_ORDER_CHANNEL_V1 === سفارشِ دستی → کانالِ سفارشاتِ دستی (یا پیامِ خصوصیِ ادمین)."""
+    from tenant import _notify_manual_order as _f
+    await _f(bot, row, text, kb, photo_file_id=photo_file_id)
+
+
+async def _channel_post_mark_done(cb, text: str) -> None:
+    import html as _h
+    who = cb.from_user.full_name if cb.from_user else ""
+    line = f"\n\n{_h.escape(text)}" + (f" — {_h.escape(who)}" if who else "")
+    try:
+        if cb.message.photo or cb.message.document:
+            await cb.message.edit_caption(
+                caption=((cb.message.html_text or "") + line)[:1024], reply_markup=None, parse_mode="HTML")
+        else:
+            await cb.message.edit_text((cb.message.html_text or "") + line,
+                                       reply_markup=None, parse_mode="HTML")
+    except Exception:
+        logger.info("به‌روزرسانیِ پستِ کانالِ سفارش ممکن نشد؛ فقط دکمه‌ها برداشته می‌شود")
+        try:
+            await cb.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            logger.info("برداشتنِ دکمه‌هایِ پستِ کانال ممکن نشد")
+
+
 async def _admin_msg_close(cb, text: str) -> None:
     """بعد از «انجام شد/رد»، همان پیامِ سفارش در چتِ ادمین پاک می‌شود (نه اینکه پیامِ تازه برسد و قبلی بماند).
-    اگر حذف ممکن نبود (پیامِ قدیمی)، دکمه‌ها برداشته و متنِ نتیجه فرستاده می‌شود."""
+    اگر حذف ممکن نبود (پیامِ قدیمی)، دکمه‌ها برداشته و متنِ نتیجه فرستاده می‌شود.
+    در کانالِ سفارشات پست پاک نمی‌شود: نتیجه زیرش نوشته و دکمه‌ها برداشته می‌شود
+    تا بقیهٔ تیم ببینند رسیدگی شده (PATCH_MANUAL_ORDER_CHANNEL_V1)."""
+    if getattr(getattr(cb.message, "chat", None), "type", None) == "channel":
+        await _channel_post_mark_done(cb, text)
+        return
     try:
         await cb.message.delete()
         return
@@ -16756,7 +16821,7 @@ async def _tgt_revert_manual(bot: Bot, row, order_id: int, reason: str, *, warn:
         qty, dest, trk = o.star_count, o.dest_label, o.tracking_code
         await s.commit()
     head = "⚠️" if warn else "🤖"
-    await _notify_admins(
+    await _notify_manual_order(
         bot, row,
         f"{head} ارسالِ خودکارِ استارز — سفارش #{await order_no(GiftOrder, order_id)}\n\n{reason}\n\n"
         f"تعداد: {qty:,} ⭐\n🎯 مقصد: {dest}\n🔖 کد: {trk}\n\n"

@@ -8927,6 +8927,29 @@ async def _notify_admins(bot: Bot, row: BotRow, text: str,
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
 
 
+# === PATCH_MANUAL_ORDER_CHANNEL_V1 ===
+async def _notify_manual_order(bot: Bot, row: BotRow, text: str,
+                               kb: InlineKeyboardMarkup | None = None,
+                               photo_file_id: str | None = None) -> None:
+    """سفارشِ دستی‌ای که ادمین باید انجام/تأیید کند (گیفت، استارز، پرمیوم، تون،
+    ری‌اکشن — چه کیف‌پول چه کارت‌به‌کارت): اگر «کانالِ سفارشاتِ دستی» وصل و فعال
+    باشد همان‌جا پست می‌شود تا تیم همان‌جا تأیید کند؛ وگرنه (یا اگر ارسال خطا داد)
+    همان رفتارِ قبلی — پیامِ خصوصی به مالک و ادمین‌ها. دکمه‌ها در کانال هم با
+    is_owner_or_admin کنترل می‌شوند."""
+    try:
+        chat = (await get_setting(row.id, "smm_manual_channel_id", "") or "").strip()
+        if chat and await get_setting(row.id, "smm_manual_channel_enabled", "0") == "1":
+            if photo_file_id:
+                await bot.send_photo(chat, photo_file_id, caption=text, reply_markup=kb, parse_mode="HTML")
+            else:
+                await bot.send_message(chat, text, reply_markup=kb, parse_mode="HTML")
+            return
+    except Exception:
+        logger.exception("ارسالِ سفارشِ دستی به کانالِ سفارشات ناموفق بود (bot_id=%s)؛ "
+                         "به پیامِ خصوصیِ ادمین برمی‌گردیم", row.id)
+    await _notify_admins(bot, row, text, kb, photo_file_id=photo_file_id)
+
+
 # === PATCH_RECEIPT_CHANNEL_V1 ===
 async def _notify_receipt_admins(bot: Bot, row: BotRow, text: str,
                                   kb: InlineKeyboardMarkup | None = None,
