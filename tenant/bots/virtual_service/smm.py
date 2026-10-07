@@ -1993,6 +1993,32 @@ async def _show_count(bot_id: int) -> bool:
         return True
 
 
+# === PATCH_SMM_LIST_PAGINATION_V1 ===
+# لاگِ سرور: «Bad Request: reply markup is too long» — نوعی مثلِ «ممبر» با ده‌ها سرویس (نامِ فارسیِ بلند)
+# از سقفِ حجمِ کیبوردِ تلگرام رد می‌شد و مشتری با زدنِ دکمه هیچ چیزی نمی‌دید. سقفِ ۸۰ تایی هم کافی نبود
+# (سقفِ تلگرام حجمِ کل است نه تعداد). حالا همهٔ فهرست‌هایِ سرویس ۳۰تایی صفحه‌بندی می‌شوند.
+_SVC_LIST_PAGE = 30
+
+
+def _page_slice(items: list, page: int) -> tuple[list, int, int]:
+    pages = max(1, (len(items) + _SVC_LIST_PAGE - 1) // _SVC_LIST_PAGE)
+    page = max(1, min(int(page or 1), pages))
+    return items[(page - 1) * _SVC_LIST_PAGE: page * _SVC_LIST_PAGE], page, pages
+
+
+def _page_nav(cb_prefix: str, page: int, pages: int) -> list | None:
+    """ردیفِ «◀️ قبلی | n/m | بعدی ▶️»؛ None اگر فقط یک صفحه است. callback = f"{cb_prefix}:{n}"."""
+    if pages <= 1:
+        return None
+    row = []
+    if page > 1:
+        row.append(InlineKeyboardButton(text="◀️ قبلی", callback_data=f"{cb_prefix}:{page - 1}"))
+    row.append(InlineKeyboardButton(text=f"{page}/{pages}", callback_data="noop"))
+    if page < pages:
+        row.append(InlineKeyboardButton(text="بعدی ▶️", callback_data=f"{cb_prefix}:{page + 1}"))
+    return row
+
+
 def _chunk_rows(buttons: list, cols: int) -> list:
     """فهرستِ تختِ دکمه‌ها را به ردیف‌هایِ cols‌تایی تبدیل می‌کند."""
     if cols <= 1:
@@ -2094,10 +2120,15 @@ async def smm_qlc_nav(cb: CallbackQuery, bot: Bot):
         # عمقِ ۲: مرحلهٔ «نوعِ سرویس» رد می‌شود و خودِ سرویس‌ها می‌آیند.
         _depth = await _get_setting(row.id, "qlc_depth", "3")
         if _depth == "2":
+            _pg = int(parts[5]) if len(parts) > 5 and parts[5].isdigit() else 1
+            _page_items, _pg, _pages = _page_slice(cat_svcs, _pg)   # PATCH_SMM_LIST_PAGINATION_V1
             rows = [[InlineKeyboardButton(
                 text=v.name[:55],
                 callback_data=f"smmu:svcbraw:{v.id}:{mb_id}")]
-                for v in cat_svcs]
+                for v in _page_items]
+            _nav = _page_nav(f"smm:qlc:{mb_id}:cat:{cat_pk}", _pg, _pages)
+            if _nav:
+                rows.append(_nav)
             rows.append([InlineKeyboardButton(
                 text="⬅️ بازگشت", callback_data=f"smm:qlc:{mb_id}:root",
                 style=ButtonStyle.DANGER)])
@@ -2128,12 +2159,17 @@ async def smm_qlc_nav(cb: CallbackQuery, bot: Bot):
         kb = InlineKeyboardMarkup(inline_keyboard=rows)
     else:  # kind == "typ"
         cat_pk, tkey = int(parts[4]), parts[5]
+        _pg = int(parts[6]) if len(parts) > 6 and parts[6].isdigit() else 1
         names = await _qlc_category_names(row.id, [cat_pk])
         cat_name = names.get(cat_pk, "؟")
         items = [v for v in svcs if getattr(v, "category_pk", None) == cat_pk and _svc_platform_type(v)[1] == tkey]
+        items, _pg, _pages = _page_slice(items, _pg)   # PATCH_SMM_LIST_PAGINATION_V1
         breadcrumb = f"{cat_name} › {smm_api.service_type_label(tkey)}"
         rows = [[InlineKeyboardButton(text=v.name[:55], callback_data=f"smmu:svcbraw:{v.id}:{mb_id}")]
-                for v in items[:80]]
+                for v in items]
+        _nav = _page_nav(f"smm:qlc:{mb_id}:typ:{cat_pk}:{tkey}", _pg, _pages)
+        if _nav:
+            rows.append(_nav)
         rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"smm:qlc:{mb_id}:cat:{cat_pk}", style=ButtonStyle.DANGER)])
         text = f"📦 {breadcrumb}\n\nسرویس موردنظر را انتخاب کن:"
         kb = InlineKeyboardMarkup(inline_keyboard=rows)
@@ -2233,13 +2269,18 @@ async def smm_qlu_nav(cb: CallbackQuery, bot: Bot):
         kb = InlineKeyboardMarkup(inline_keyboard=rows)
     else:  # kind == "typ"
         pkey, tkey = parts[4], parts[5]
+        _pg = int(parts[6]) if len(parts) > 6 and parts[6].isdigit() else 1
         items = [v for v in svcs if _svc_platform_type(v) == (pkey, tkey)]
+        items, _pg, _pages = _page_slice(items, _pg)   # PATCH_SMM_LIST_PAGINATION_V1
         # === PATCH_SMM_QUICKLINK_BREADCRUMB_V1 ===
         # درخواستِ ادمین: توی مسیرِ «اتصالِ سریع»، وقتی مشتری تا اینجا
         # (پلتفرم → نوع → سرویس) اومده، صفحهٔ نهاییِ خرید هم مسیرِ کامل
         # (مثلاً «اینستاگرام › ممبر › نامِ سرویس») رو نشون بده، نه فقط
         # اسمِ سرویس تنها.
-        rows = [[InlineKeyboardButton(text=v.name[:55], callback_data=f"smmu:svcb:{v.id}:{pkey}:{tkey}")] for v in items[:80]]
+        rows = [[InlineKeyboardButton(text=v.name[:55], callback_data=f"smmu:svcb:{v.id}:{pkey}:{tkey}")] for v in items]
+        _nav = _page_nav(f"smm:qlu:{mb_id}:typ:{pkey}:{tkey}", _pg, _pages)
+        if _nav:
+            rows.append(_nav)
         # === PATCH_SMM_QUICKLINK_BACKNAV_V1 ===
         rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"smm:qlu:{mb_id}:plat:{pkey}", style=ButtonStyle.DANGER)])
         text = f"{smm_api.platform_label(pkey)} — {smm_api.service_type_label(tkey)}\n\nسرویس موردنظر را انتخاب کن:"
@@ -9240,9 +9281,10 @@ async def smmu_pick_type(cb: CallbackQuery, bot: Bot):
     if not row:
         await cb.answer()
         return
-    # فرمت: smmu:type:<plat>:<type>
+    # فرمت: smmu:type:<plat>:<type>[:<page>]
     parts = cb.data.split(":")
     pkey, tkey = parts[2], parts[3]
+    _pg = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 1   # PATCH_SMM_LIST_PAGINATION_V1
     tree, sid_map = await _user_active_tree(row.id)   # PATCH_SMM_CUSTOMER_TREE_CLASSIFY_V1: نگاشت با pk
     items = tree.get(pkey, {}).get(tkey, [])
     if not items:
@@ -9266,9 +9308,13 @@ async def smmu_pick_type(cb: CallbackQuery, bot: Bot):
     # === PATCH_SMM_SORT_EVERYWHERE_V1 === همان مرتب‌سازِ مشترک (با قیمتِ واقعی)
     _ord = {v.id: i for i, v in enumerate(await _sort_svc_objs(row.id, [e[1] for e in entries], sort_order))}
     entries.sort(key=lambda x: _ord[x[1].id])
+    entries, _pg, _pages = _page_slice(entries, _pg)
     for it, v in entries:
         rows.append([InlineKeyboardButton(
             text=it["name"][:55], callback_data=f"smmu:svc:{v.id}")])
+    _nav = _page_nav(f"smmu:type:{pkey}:{tkey}", _pg, _pages)
+    if _nav:
+        rows.append(_nav)
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"smmu:plat:{pkey}")])
     # === PATCH_SMM_PLATFORM_RENAME_V1 ===
     header = f"{await platform_label_for_bot(row.id, pkey)} — {smm_api.service_type_label(tkey)}"
@@ -10775,7 +10821,7 @@ VS_ACTION_MAP = {
 }
 
 
-async def show_smm_type_to_user(bot: Bot, msg_or_cb, bot_id: int, action: str):
+async def show_smm_type_to_user(bot: Bot, msg_or_cb, bot_id: int, action: str, page: int = 1):
     """با زدن دکمه‌ای مثل «افزایش ممبر»، مستقیم سرویس‌های همان نوع را نشان می‌دهد.
 
     از سرویس‌های فعالِ ادمین استفاده می‌کند و آن‌ها را با تشخیص خودکار فیلتر
@@ -10809,18 +10855,42 @@ async def show_smm_type_to_user(bot: Bot, msg_or_cb, bot_id: int, action: str):
     _pairs = [(it, _objs[it["pk"]]) for it in items if it["pk"] in _objs]
     _order = {v.id: i for i, v in enumerate(await _sort_svc_objs(bot_id, [v for _, v in _pairs], _so))}
     _pairs.sort(key=lambda p: _order[p[1].id])
+    _pairs, page, _pages = _page_slice(_pairs, page)   # PATCH_SMM_LIST_PAGINATION_V1
     rows = []
     for it, _v in _pairs:
         rows.append([InlineKeyboardButton(
             text=it["name"][:55], callback_data=f"smmu:svc:{_v.id}")])
+    _nav = _page_nav(f"smmu:vst:{action}", page, _pages)
+    if _nav:
+        rows.append(_nav)
     from tenant import inline_back_row
     br = await inline_back_row(bot_id)
     if br:
         rows.append(br)
     label = smm_api.service_type_label(tkey) if not fallback else smm_api.platform_label(pkey)
-    await target.answer(
-        f"{label}\n\nسرویس موردنظر را انتخاب کن:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    _txt = f"{label}\n\nسرویس موردنظر را انتخاب کن:"
+    _kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    if isinstance(msg_or_cb, CallbackQuery):   # ورق‌زدن: همان پیام عوض می‌شود
+        try:
+            await msg_or_cb.message.edit_text(_txt, reply_markup=_kb, parse_mode="HTML")
+            return
+        except Exception:
+            logger.debug("[smm] ویرایشِ صفحهٔ سرویس‌ها ممکن نشد؛ پیامِ تازه", exc_info=True)
+    await target.answer(_txt, reply_markup=_kb, parse_mode="HTML")
+
+
+@smm_router.callback_query(F.data.startswith("smmu:vst:"))
+async def smmu_vs_type_page(cb: CallbackQuery, bot: Bot):
+    """PATCH_SMM_LIST_PAGINATION_V1 — صفحهٔ بعد/قبلِ فهرستِ دکمه‌هایی مثلِ «افزایشِ ممبر»."""
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    if not row:
+        return await cb.answer()
+    _, _, action, page = cb.data.split(":", 3)
+    if action not in VS_ACTION_MAP or not page.isdigit():
+        return await cb.answer()
+    await cb.answer()
+    await show_smm_type_to_user(bot, cb, row.id, action, int(page))
 
 
 # ═══════════════════════════════════════════

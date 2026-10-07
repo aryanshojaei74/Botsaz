@@ -440,14 +440,10 @@ _MISSING_CLIENT_LOGGED: dict[int, float] = {}
 
 
 def _missing_client_should_log(account_id: int) -> bool:
-    """هشدارِ «کلاینت رویِ پنل نیست» برایِ هر حساب حداکثر روزی یک‌بار."""
-    import time as _t
-    now = _t.monotonic()
-    last = _MISSING_CLIENT_LOGGED.get(account_id)
-    if last is not None and now - last < 86_400:
-        return False
-    _MISSING_CLIENT_LOGGED[account_id] = now
-    return True
+    """هشدارِ «کلاینت رویِ پنل نیست» برایِ هر حساب حداکثر روزی یک‌بار.
+    PATCH_LOG_THROTTLE_PERSIST_V1: زمان رویِ دیسک می‌ماند تا ری‌استارت/پروسهٔ دیگر دوباره لاگ نکند."""
+    from log_throttle import should_log
+    return should_log(f"vpnmiss:{int(account_id)}", 86_400)
 
 
 async def vpn_expiry_loop():

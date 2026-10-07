@@ -1,4 +1,6 @@
 [Unit]
+StartLimitIntervalSec=60
+StartLimitBurst=5
 Description=Botsaz - Platform (bot-saz) service
 After=network.target postgresql.service
 Wants=postgresql.service
@@ -12,8 +14,6 @@ ExecStart=/opt/botsaz/venv/bin/uvicorn main_platform:app --host 127.0.0.1 --port
 Restart=on-failure
 RestartSec=3
 # اگه پروسه مکرر کرش کرد، تا ابد لوپِ ری‌استارت نره
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target

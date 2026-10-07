@@ -1,4 +1,6 @@
 [Unit]
+StartLimitIntervalSec=60
+StartLimitBurst=5
 Description=Botsaz - Tenant VPN-only worker (PHASE 0 TEST — no nginx wiring yet)
 After=network.target postgresql.service
 Wants=postgresql.service
@@ -14,8 +16,6 @@ Environment=TENANT_BOT_KIND=vpn
 ExecStart=/opt/botsaz/venv/bin/uvicorn main_tenant:app --host 127.0.0.1 --port 8011
 Restart=on-failure
 RestartSec=3
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target

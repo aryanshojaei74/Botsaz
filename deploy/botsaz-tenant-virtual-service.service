@@ -1,9 +1,9 @@
 [Unit]
+StartLimitIntervalSec=60
+StartLimitBurst=5
 Description=Botsaz - Tenant virtual_service (SMM) worker
 After=network.target postgresql.service
 Wants=postgresql.service
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 [Service]
 Type=simple

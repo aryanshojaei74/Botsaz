@@ -35,3 +35,7 @@ tenant_experimental/
 v*.zip
 botsaz.db-*
 fix_backups/
+
+# PATCH_LOG_THROTTLE_PERSIST_V1 — زمانِ آخرین ثبتِ هشدارهایِ تکراری (محلیِ هر سرور)
+.log_throttle.json
+.log_throttle.*

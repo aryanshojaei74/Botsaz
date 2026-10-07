@@ -235,7 +235,17 @@ async def panel_autosync_once() -> None:
             _FAIL_COUNT[pid] = n
             wait = min(3600 * (2 ** (n - 1)), 86400)
             _FAIL_UNTIL[pid] = _t.monotonic() + wait
-            if n == 1:
+            # PATCH_LOG_THROTTLE_PERSIST_V1 — قبلاً «بارِ اول» با traceback ثبت می‌شد و چون شمارنده در
+            # حافظه بود، هر ری‌استارت دوباره «بارِ اول» بود (۷۶ ERROR در یک روز برایِ ۳ پنلِ قطع).
+            # قطعیِ پنل (PanelError) خطایِ کدِ ما نیست → یک WARNINGِ یک‌خطی، حداکثر هر ۶ ساعت.
+            from log_throttle import should_log
+            from tenant.shared.panel_clients.vpn_panel import PanelError as _PE
+            if not should_log(f"pasync:{pid}", 6 * 3600):
+                logger.debug("panel_autosync: پنل %s ناموفق (تکراری، ثبت نشد)", pid)
+            elif isinstance(e, _PE):
+                logger.warning("panel_autosync: همگام‌سازیِ پنل %s ناموفق: %s",
+                               pid, (str(e) or type(e).__name__).splitlines()[0][:200])
+            elif n == 1:
                 logger.exception("panel_autosync: همگام‌سازیِ پنل %s ناموفق", pid)
             else:
                 logger.warning("panel_autosync: پنل %s برایِ %dمین بار ناموفق (%s) — تلاشِ بعدی %d ساعت دیگر",

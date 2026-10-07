@@ -2075,8 +2075,10 @@ async def ozvinoo_price_sync_once() -> int:
                     # خطا ۶ ساعت صبر می‌کنیم و فقط همان یک بار (به‌جایِ هر چرخه) لاگ می‌شود.
                     _last_price_sync[mark] = now + 6 * 3600 - every * 60
                     p["last_error"] = str(msg)[:200]
-                    logger.warning("OzVinoo: استعلامِ خودکارِ قیمت ناموفق "
-                                   "(bot=%s): %s — ۶ ساعتِ بعد دوباره", bot_id, msg)
+                    from log_throttle import should_log   # PATCH_LOG_THROTTLE_PERSIST_V1
+                    if should_log(f"ozvprice:{mark}", 6 * 3600):
+                        logger.warning("OzVinoo: استعلامِ خودکارِ قیمت ناموفق "
+                                       "(bot=%s): %s — ۶ ساعتِ بعد دوباره", bot_id, msg)
             except Exception:
                 logger.exception("OzVinoo: استعلامِ خودکارِ قیمت شکست خورد "
                                  "(bot=%s)", bot_id)
