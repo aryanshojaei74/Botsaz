@@ -8549,7 +8549,8 @@ async def _smm_myorders_paginated_content(bot_id: int, user_id: int, page: int,
                 InlineKeyboardButton(text=label.split()[0], callback_data=cb, style=row_style),
                 InlineKeyboardButton(text=link_short, callback_data=cb, style=row_style),
                 InlineKeyboardButton(text=f"{int(o.price_toman):,}ت", callback_data=cb, style=row_style),
-                InlineKeyboardButton(text=str(o.id), callback_data=cb, style=row_style),
+                # PATCH_ORDER_CODE_UNIFIED_V1 — همان کدِ پیگیریِ لیستِ ادمین (نه شناسهٔ داخلیِ دیتابیس)
+                InlineKeyboardButton(text=str(o.tracking_code or o.id), callback_data=cb, style=row_style),
             ])
     # === PATCH_SMM_DIRECT_ENTRY_HOME_BACK_V1 ===
     # home_cb باید در ورق‌زدنِ صفحه هم حفظ شود، وگرنه صفحهٔ ۲ به بعد

@@ -117,6 +117,17 @@ async def test_api_receipt_uses_admin_text_and_tracking(db, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_my_orders_list_shows_tracking_code(db):
+    """«📦 سفارش‌های من»: ستونِ شناسه همان کدِ پیگیریِ لیستِ ادمین است."""
+    async with db() as s:
+        (await s.get(models.SmmOrder, 1)).tracking_code = "2296"
+        await s.commit()
+    _text, kb = await smm._smm_myorders_paginated_content(5, 777, 1)
+    labels = [b.text for r in kb.inline_keyboard for b in r]
+    assert "2296" in labels and "1" not in labels
+
+
+@pytest.mark.asyncio
 async def test_order_id_var_is_tracking_code(db):
     """PATCH_ORDER_CODE_UNIFIED_V1 — {{order_id}} و {{tracking_code}} یک عدد (همان لیستِ ادمین)."""
     from tenant.shared.text_vars import render_text
