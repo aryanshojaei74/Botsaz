@@ -1551,7 +1551,15 @@ async def ozv_cancel_order(cb: CallbackQuery, bot: Bot):
         await cb.answer("سفارش پیدا نشد.", show_alert=True)
         return
     if order.status != "sent":
-        await cb.answer("این سفارش دیگر قابل لغو نیست.", show_alert=True)
+        # دلیلِ روشن به‌جایِ پیامِ کلی — مشتری بداند پولش کجاست
+        _why = {
+            "refunded": "این سفارش قبلاً لغو شده و وجهش به کیف‌پولت برگشته.",
+            "canceled": "این سفارش قبلاً لغو شده.",
+            "completed": "کدِ این شماره دریافت شده یا ادمین سفارش را تکمیل کرده؛ دیگر قابلِ لغو نیست. "
+                         "اگر کدی نگرفته‌ای، از پشتیبانی پیگیری کن.",
+            "failed": "این سفارش در حالِ بررسیِ ادمین است؛ از پشتیبانی پیگیری کن.",
+        }.get(order.status, "این سفارش دیگر قابل لغو نیست.")
+        await cb.answer(_why[:190], show_alert=True)
         return
     provider, _ = await _service_provider(row.id, svc)
     if not provider:

@@ -10602,6 +10602,13 @@ async def _apply_order_status(bot_id: int, order_pk: int, data: dict) -> None:
         await _notify_user(bot_id, order_pk, (await _smm_txt(bot_id, "completed")))
 
 
+_VNUM_SERVICE_PREFIXES = ("ozv:", "sp:")
+
+
+def _is_vnum_service_id(service_id) -> bool:
+    return str(service_id or "").startswith(_VNUM_SERVICE_PREFIXES)
+
+
 async def smm_status_poll_once():
     """یک‌بار همهٔ سفارش‌های sent را از پنل استعلام و در صورت تکمیل/خطا
     وضعیت را به‌روزرسانی می‌کند (و در خطا، طبقِ سیاستِ ربات، وجه را
@@ -10614,7 +10621,15 @@ async def smm_status_poll_once():
     async with Session() as s:
         orders = (await s.scalars(select(SmmOrder).where(
             SmmOrder.status == "sent").limit(300))).all()
-        rows = [(o.id, o.bot_id, o.panel_order_id, o.panel_pk) for o in orders if o.panel_order_id]
+        # === PATCH_SMM_POLL_SKIP_VNUM_V1 ===
+        # سفارش‌هایِ شمارهٔ مجازیِ خودکار (OzVinoo «ozv:»، SMSPool «sp:») هم در جدولِ
+        # SmmOrder با status=sent و panel_order_id ذخیره می‌شوند ولی panel_pk ندارند؛
+        # قبلاً همین‌جا با پنلِ پیش‌فرضِ SMMِ ربات استعلام می‌شدند — یعنی شمارهٔ سفارشِ
+        # OzVinoo از یک پنلِ بی‌ربط پرسیده می‌شد و جوابِ «سفارشِ دیگری» رویشان اعمال
+        # می‌شد (completed/failed/لغو و بازگشتِ وجه). نتیجه: دکمهٔ «لغو و بازگشتِ وجه»ِ
+        # مشتری می‌گفت «دیگر قابلِ لغو نیست». این سفارش‌ها پیگیرِ اختصاصیِ خودشان را دارند.
+        rows = [(o.id, o.bot_id, o.panel_order_id, o.panel_pk) for o in orders
+                if o.panel_order_id and not _is_vnum_service_id(o.service_id)]
 
     # گروه‌بندی بر اساسِ (bot_id, panel_pk) — چون اعتبارنامه و تنظیمِ bulk
     # مالِ همون پنل مشخصه، نه کلِ سفارش‌ها.
