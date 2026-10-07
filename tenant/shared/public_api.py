@@ -119,6 +119,43 @@ async def _authed(x_api_key: str | None) -> AuthCtx:
     return AuthCtx(bot_id=u.bot_id, user=u, discount_pct=float(u.api_discount_pct or 0), full_access=False)
 
 
+# === PATCH_API_SVC_EXPORT_V1 ===
+# • شمارهٔ مجازی (OzVinoo/TNumber «ozv:»، SMSPool «sp:») سرویسِ SMM نیست و از API فروخته نمی‌شود
+#   (سفارشِ API برایش به پنلِ SMM با شناسهٔ بی‌معنی فرستاده می‌شد).
+# • توضیحات: متنِ ادمین، وگرنه توضیحِ ارائه‌دهنده — قبلاً در v2 اصلاً فرستاده نمی‌شد.
+# • دسته با نامِ پلتفرم («تلگرام - ممبر کانال») تا دسته‌هایِ هم‌نامِ پلتفرم‌هایِ مختلف
+#   (تلگرام/روبیکا) در طرفِ گیرنده یکی نشوند.
+def _api_sellable(v: SmmService) -> bool:
+    sid = str(v.service_id or "")
+    return not (sid.startswith(("ozv:", "sp:")) or (v.type_key or "") == "virtual_number")
+
+
+def _api_desc(v: SmmService) -> str:
+    return ((v.description or "").strip() or (v.provider_desc or "").strip())[:2000]
+
+
+_PLAT_LABELS: dict | None = None
+
+
+def _platform_label(key: str | None) -> str:
+    global _PLAT_LABELS
+    if _PLAT_LABELS is None:
+        try:
+            from tenant.bots.virtual_service.smm_api import PLATFORMS
+            _PLAT_LABELS = {k: lbl.split(" ", 1)[-1].strip() for k, lbl, *_ in PLATFORMS}
+        except Exception:
+            _PLAT_LABELS = {}
+    return _PLAT_LABELS.get((key or "").strip(), "")
+
+
+def _api_category(cat_name: str | None, platform_key: str | None) -> str:
+    name = (cat_name or "").strip() or "General"
+    plat = _platform_label(platform_key)
+    if not plat or plat in name:
+        return name
+    return f"{plat} - {name}"
+
+
 async def _svc_payload(bot_id: int, v: SmmService, discount_pct: float = 0.0,
                        _cats: dict | None = None) -> dict:
     from tenant.bots.virtual_service.smm import compute_sell_price
@@ -137,7 +174,7 @@ async def _svc_payload(bot_id: int, v: SmmService, discount_pct: float = 0.0,
     return {
         "id": v.id,
         "name": v.name,
-        "description": v.description,
+        "description": _api_desc(v) or None,
         "category": cat_name,
         "price_per_1000": price_1000,
         "min_qty": v.min_qty,
@@ -153,6 +190,13 @@ async def _load_cats(bot_id: int) -> dict:
     return {r[0]: r[1] for r in rows}
 
 
+async def _load_cat_platforms(bot_id: int) -> dict:
+    async with Session() as s:
+        rows = (await s.execute(select(SmmCategory.id, SmmCategory.platform).where(
+            SmmCategory.bot_id == bot_id))).all()
+    return {r[0]: r[1] for r in rows}
+
+
 # ═══════════════════ محصولات ═══════════════════
 
 @public_api_router.get("/api/v1/products")
@@ -162,7 +206,7 @@ async def api_products(x_api_key: str | None = Header(default=None)):
         svcs = (await s.scalars(select(SmmService).where(
             SmmService.bot_id == ctx.bot_id, SmmService.is_active == True).order_by(SmmService.id))).all()
     cats = await _load_cats(ctx.bot_id)
-    items = [await _svc_payload(ctx.bot_id, v, ctx.discount_pct, cats) for v in svcs]
+    items = [await _svc_payload(ctx.bot_id, v, ctx.discount_pct, cats) for v in svcs if _api_sellable(v)]
     return JSONResponse({"ok": True, "count": len(items), "items": items})
 
 
@@ -249,7 +293,7 @@ async def api_new_order(body: NewOrderBody, x_api_key: str | None = Header(defau
     from tenant import _gen_tracking
     async with Session() as s:
         v = await s.get(SmmService, body.service_id)
-    if not v or v.bot_id != ctx.bot_id or not v.is_active:
+    if not v or v.bot_id != ctx.bot_id or not v.is_active or not _api_sellable(v):
         raise HTTPException(status_code=404, detail="service_not_found")
     if body.quantity < v.min_qty or (v.max_qty and body.quantity > v.max_qty):
         raise HTTPException(status_code=422, detail=f"quantity_out_of_range min={v.min_qty} max={v.max_qty}")
@@ -435,18 +479,25 @@ async def smm_v2(request: Request):
                 SmmService.is_active == True))).all()  # noqa: E712
         out = []
         _cats = await _load_cats(ctx.bot_id)
+        _plats = await _load_cat_platforms(ctx.bot_id)
         for v in svcs:
+            if not _api_sellable(v):
+                continue
             d = await _svc_payload(ctx.bot_id, v, ctx.discount_pct, _cats)
+            _desc = _api_desc(v)
             out.append({
                 "service": v.id,
                 "name": d["name"],
                 "type": "Default",
-                "category": d["category"] or "General",
+                "category": _api_category(d["category"], _plats.get(v.category_pk) or v.platform_key),
                 "rate": str(d["price_per_1000"]),
                 "min": str(v.min_qty or 1),
                 "max": str(v.max_qty or 0),
                 "refill": False,
                 "cancel": False,
+                # PATCH_API_SVC_EXPORT_V1 — هر دو نامِ رایج تا پنل‌هایِ مختلف بخوانند
+                "desc": _desc,
+                "description": _desc,
             })
         return JSONResponse(out)
 
