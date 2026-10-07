@@ -43,6 +43,7 @@ SKIP_HANDLERS = frozenset({
     "tenant.bots.virtual_service.smm.smm_approve",
     "tenant.bots.virtual_service.smm.smm_balance",
     "tenant.bots.virtual_service.smm.smm_panel_set_toggle",
+    "tenant.bots.virtual_service.smm.sauto_toggle",
     "tenant.bots.virtual_service.smm.smm_qlc_nav",
     "tenant.bots.virtual_service.smm.smm_svc_setcat",
     "tenant.bots.virtual_service.smm.smm_vs_retry",

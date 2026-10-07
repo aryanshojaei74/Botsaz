@@ -63,3 +63,31 @@ def test_admin_buttons_use_bot_topup():
     src = inspect.getsource(smm)
     assert 'افزایشِ موجودیِ استارزِ ربات", callback_data="w:stars"' not in src
     assert src.count('callback_data="w:botstars"') >= 4
+
+
+@pytest.mark.asyncio
+async def test_premium_fragment_price(db, monkeypatch):
+    """PATCH_PREMIUM_FRAGMENT_PRICE_V1 — قیمت = دلارِ فرگمنت × نرخِ دلار × (۱+سود)."""
+    from tenant.gateways import stars_rate
+
+    async def fake_usd():
+        return 100_000.0
+    monkeypatch.setattr(stars_rate, "usd_toman", fake_usd)
+
+    async def no_tgt(*a, **k):
+        return None
+    monkeypatch.setattr(smm, "_tgt_premium_price", no_tgt)
+    await tenant.set_setting(5, "premium_auto", "fragment")
+    await tenant.set_setting(5, "premium_margin_pct", "10")
+    rate, margin = await smm._premium_settings(5)
+    p3, custom = await smm._premium_effective_price(5, 3, 1000, rate, margin)
+    assert (p3, custom) == (round(11.99 * 100_000 * 1.1), False)
+    await tenant.set_setting(5, "premium_frag_usd", '{"3": 12, "6": 16, "12": 29}')
+    assert (await smm._premium_effective_price(5, 12, 2500, rate, margin))[0] == round(29 * 100_000 * 1.1)
+    await tenant.set_setting(5, "stars_usd_toman", "150000")      # نرخِ دستیِ دلار مقدم است
+    assert (await smm._premium_effective_price(5, 3, 1000, rate, margin))[0] == round(12 * 150_000 * 1.1)
+    await tenant.set_setting(5, "premium_custom_price_3", "999")  # قیمتِ شخصی همچنان اولویت دارد
+    assert await smm._premium_effective_price(5, 3, 1000, rate, margin) == (999, True)
+    text, kb = await smm.premium_admin_content(5)
+    cbs = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert "prm:fragusd" in cbs and "فرگمنت" in text

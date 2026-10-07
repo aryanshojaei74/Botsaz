@@ -211,6 +211,7 @@ async def ensure_smm_columns(force: bool = False):
 
 
 class SmmFSM(StatesGroup):
+    premium_frag_usd = State()   # PATCH_PREMIUM_FRAGMENT_PRICE_V1
     api_url = State()
     api_key = State()
     margin_pct = State()
@@ -14132,7 +14133,7 @@ async def _premium_settings(bot_id: int) -> tuple[float, float]:
     rate_s = await _get_setting(bot_id, "premium_toman_rate", "1000")
     # === PATCH_PREMIUM_AUTO_RATE_V1 === (گزارشِ Mike: پرمیوم برخلافِ گیفت/استارز «نرخِ خودکار» نداشت)
     # مثلِ گیفت: نرخِ بازارِ هر ⭐ بدونِ سود؛ سود همان «درصدِ سود»ِ پرمیوم است.
-    if (await _get_setting(bot_id, "premium_auto", "0")) == "1":
+    if (await _premium_auto_mode(bot_id)) == "1":
         try:
             from tenant.gateways.stars_rate import star_toman
             _a = await star_toman(0, bot_id)
@@ -14173,12 +14174,64 @@ async def _premium_get_custom_price(bot_id: int, months: int) -> int | None:
     return val if val > 0 else None
 
 
+# === PATCH_PREMIUM_FRAGMENT_PRICE_V1 ===
+# درخواستِ Mike: «قیمتِ خودکارِ پرمیوم رو بر اساسِ فرگمنت بذار». نرخِ خودکارِ قبلی پرمیوم را به‌اندازهٔ
+# «استارزِ هدیهٔ پرمیوم» (۱۰۰۰/۱۵۰۰/۲۵۰۰ ⭐) حساب می‌کرد که از قیمتِ واقعیِ فرگمنت گران‌تر است. حالتِ
+# «💎 فرگمنت»: قیمتِ دلاریِ هر پلن در فرگمنت × نرخِ دلار (خودکار یا دستیِ «قیمتِ پایه») × (۱+سود).
+# قیمت‌هایِ دلاریِ فرگمنت قابلِ ویرایش‌اند (اگر فرگمنت تغییرشان داد).
+_PREMIUM_FRAG_USD_DEFAULT = {3: 11.99, 6: 15.99, 12: 28.99}
+
+
+async def _premium_auto_mode(bot_id: int) -> str:
+    """"0" خاموش · "1" بر اساسِ استارز · "fragment" بر اساسِ قیمتِ فرگمنت."""
+    v = (await _get_setting(bot_id, "premium_auto", "0") or "0").strip()
+    return v if v in ("0", "1", "fragment") else "0"
+
+
+async def _premium_frag_usd(bot_id: int) -> dict[int, float]:
+    out = dict(_PREMIUM_FRAG_USD_DEFAULT)
+    raw = (await _get_setting(bot_id, "premium_frag_usd", "") or "").strip()
+    if raw:
+        try:
+            for k, v in json.loads(raw).items():
+                if int(k) in out and float(v) > 0:
+                    out[int(k)] = float(v)
+        except Exception:
+            logger.warning("premium_frag_usd نامعتبر است؛ قیمت‌هایِ پیش‌فرضِ فرگمنت", exc_info=True)
+    return out
+
+
+async def _premium_usd_toman(bot_id: int) -> float:
+    try:
+        manual = float(await _get_setting(bot_id, "stars_usd_toman", "0") or 0)
+    except (TypeError, ValueError):
+        manual = 0.0
+    if manual > 0:
+        return manual
+    from tenant.gateways.stars_rate import usd_toman
+    return float(await usd_toman() or 0)
+
+
+async def _premium_frag_price(bot_id: int, months: int, margin_pct: float) -> int | None:
+    usd_price = (await _premium_frag_usd(bot_id)).get(months)
+    if not usd_price:
+        return None
+    usd = await _premium_usd_toman(bot_id)
+    if usd <= 0:
+        return None
+    return max(1, int(round(usd_price * usd * (1 + float(margin_pct) / 100.0))))
+
+
 async def _premium_effective_price(bot_id: int, months: int, stars: int,
                                     rate: float, margin_pct: float) -> tuple[int, bool]:
     """برمی‌گرداند: (قیمتِ نهایی، آیا قیمتِ شخصی است؟)"""
     custom = await _premium_get_custom_price(bot_id, months)
     if custom is not None:
         return custom, True
+    if await _premium_auto_mode(bot_id) == "fragment":   # PATCH_PREMIUM_FRAGMENT_PRICE_V1
+        _fp = await _premium_frag_price(bot_id, months, margin_pct)
+        if _fp:
+            return _fp, False
     # === PATCH_TGTOOLS_PREMIUM_V1 === با روشنِ‌بودنِ «پرمیومِ TGTools»، قیمت از نرخِ TONِ TGTools × نرخِ تومانیِ TON × سود
     _tp = await _tgt_premium_price(bot_id, months, margin_pct)
     if _tp:
@@ -14188,7 +14241,8 @@ async def _premium_effective_price(bot_id: int, months: int, stars: int,
 
 async def premium_admin_content(bot_id: int, bot: "Bot | None" = None) -> tuple[str, InlineKeyboardMarkup]:
     rate, margin = await _premium_settings(bot_id)
-    _pauto = (await _get_setting(bot_id, "premium_auto", "0")) == "1"
+    _pmode = await _premium_auto_mode(bot_id)   # PATCH_PREMIUM_FRAGMENT_PRICE_V1
+    _pauto = _pmode != "0"
     lines = [
         "🌟 <b>فروشِ پرمیومِ رسمیِ تلگرام</b>\n",
         "همیشه فقط همین سه بسته وجود دارد (خودِ تلگرام همین سه عدد را "
@@ -14211,7 +14265,11 @@ async def premium_admin_content(bot_id: int, bot: "Bot | None" = None) -> tuple[
         lines.append(f"• {months} ماهه ({stars:,} استارز) — {price:,} تومان{mark}{custom_tag}")
     if balance is not None:
         lines.append(f"\n⭐ موجودیِ فعلیِ استارزِ ربات: <b>{balance:,}</b>")
-    lines.append(f"\nنرخ: هر ⭐ = <b>{rate:,.0f} تومان</b>  •  سود: <b>{margin:.0f}٪</b>\n")
+    if _pmode == "fragment":   # PATCH_PREMIUM_FRAGMENT_PRICE_V1
+        lines.append(f"\n💎 قیمت بر اساسِ <b>فرگمنت</b> (دلار ≈ {int(await _premium_usd_toman(bot_id)):,} تومان)"
+                     f"  •  سود: <b>{margin:.0f}٪</b>\n")
+    else:
+        lines.append(f"\nنرخ: هر ⭐ = <b>{rate:,.0f} تومان</b>  •  سود: <b>{margin:.0f}٪</b>\n")
     lines.append(
         "🖊️ برایِ هر پلن می‌تونی یه «قیمتِ شخصی» ثابت هم بذاری که جایِ "
         "محاسبه‌یِ خودکار استفاده بشه (برایِ حذفش، عدد 0 بفرست).\n")  # PATCH_PREMIUM_CUSTOM_PRICE_V1
@@ -14245,10 +14303,15 @@ async def premium_admin_content(bot_id: int, bot: "Bot | None" = None) -> tuple[
         [InlineKeyboardButton(text=manual_toggle_text, callback_data="prm:manualdelivery:toggle",
                               style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text=f"💱 نرخ (هر ⭐ = {rate:,.0f} تومان)", callback_data="prm:setrate")],
-        [InlineKeyboardButton(   # PATCH_PREMIUM_AUTO_RATE_V1
-            text=("🔄 نرخ خودکار: روشن ✅" if _pauto else "🔄 نرخ خودکار: خاموش"),
+        [InlineKeyboardButton(   # PATCH_PREMIUM_AUTO_RATE_V1 + PATCH_PREMIUM_FRAGMENT_PRICE_V1
+            text={"0": "🔄 نرخ خودکار: خاموش", "1": "🔄 نرخ خودکار: ⭐ استارز ✅",
+                  "fragment": "🔄 نرخ خودکار: 💎 فرگمنت ✅"}[_pmode],
             callback_data="sauto:premium",
             style=(ButtonStyle.SUCCESS if _pauto else ButtonStyle.PRIMARY))],
+        *([[InlineKeyboardButton(
+            text="💵 قیمتِ دلاریِ فرگمنت (" + " / ".join(
+                f"{_m}م={_u:g}$" for _m, _u in (await _premium_frag_usd(bot_id)).items()) + ")",
+            callback_data="prm:fragusd")]] if _pmode == "fragment" else []),
         [InlineKeyboardButton(text="⚙️ قیمتِ پایهٔ ⭐/نرخِ دلار", callback_data="sauto:base")],
         [InlineKeyboardButton(text=f"📈 درصدِ سود ({margin:.0f}٪)", callback_data="prm:setmargin")],
         *custom_rows,  # === PATCH_PREMIUM_CUSTOM_PRICE_V1 ===
@@ -14336,6 +14399,53 @@ async def prm_manual_delivery_toggle(cb: CallbackQuery, bot: Bot):
         await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
         await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@smm_router.callback_query(F.data == "prm:fragusd")
+async def prm_fragusd_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """PATCH_PREMIUM_FRAGMENT_PRICE_V1 — ویرایشِ قیمتِ دلاریِ پلن‌ها در فرگمنت."""
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    from tenant import smart_cancel_kb
+    cur = await _premium_frag_usd(row.id)
+    await state.set_state(SmmFSM.premium_frag_usd)
+    await cb.message.answer(
+        "💵 قیمتِ دلاریِ پرمیوم در فرگمنت را برایِ ۳، ۶ و ۱۲ ماهه (به همین ترتیب) بفرست، با فاصله:\n"
+        f"مثال: <code>{cur[3]:g} {cur[6]:g} {cur[12]:g}</code>\n\n"
+        "(برایِ برگشت به پیش‌فرض: <code>0</code>)", parse_mode="HTML",
+        reply_markup=await smart_cancel_kb(bot))
+    await cb.answer()
+
+
+@smm_router.message(SmmFSM.premium_frag_usd, F.text)
+async def prm_fragusd_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner(msg, bot)
+    raw = (msg.text or "").strip()
+    t = raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٫,", "0123456789.."))
+    if not row:
+        await state.clear()
+        return
+    if t == "0":
+        await state.clear()
+        await _set_setting(row.id, "premium_frag_usd", "")
+    else:
+        parts = t.replace("/", " ").split()
+        try:
+            vals = [float(x) for x in parts]
+        except ValueError:
+            vals = []
+        if len(vals) != 3 or any(v <= 0 or v > 1000 for v in vals):
+            if not any(ch.isdigit() for ch in t):
+                await state.clear()
+                raise SkipHandler
+            await msg.answer("سه عدد بفرست، مثلاً: <code>11.99 15.99 28.99</code>", parse_mode="HTML")
+            return
+        await state.clear()
+        await _set_setting(row.id, "premium_frag_usd", json.dumps({"3": vals[0], "6": vals[1], "12": vals[2]}))
+    text, kb = await premium_admin_content(row.id, bot)
+    await msg.answer("✅ ذخیره شد.")
+    await msg.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 @smm_router.callback_query(F.data == "prm:setrate")
@@ -15925,6 +16035,32 @@ async def sauto_toggle(cb: CallbackQuery, bot: Bot):
         return
     kind = cb.data.split(":")[1]
     key = {"gift": "gift_auto", "premium": "premium_auto"}.get(kind, "srx_auto")
+    if kind == "premium":   # PATCH_PREMIUM_FRAGMENT_PRICE_V1 — خاموش → ⭐ استارز → 💎 فرگمنت → خاموش
+        nxt = {"0": "1", "1": "fragment", "fragment": "0"}[await _premium_auto_mode(row.id)]
+        if nxt == "1":
+            from tenant.gateways.stars_rate import star_toman
+            v = await star_toman(0, row.id)
+            if v <= 0:
+                nxt = "fragment"
+        if nxt == "fragment":
+            _u = await _premium_usd_toman(row.id)
+            if _u <= 0:
+                await cb.answer("نرخِ دلار در دسترس نیست؛ از «⚙️ قیمتِ پایه» نرخِ دلار را دستی بده.",
+                                show_alert=True)
+                nxt = "0"
+            else:
+                await cb.answer(f"💎 بر اساسِ فرگمنت — دلار ≈ {int(_u):,} تومان (+ درصدِ سود)", show_alert=True)
+        elif nxt == "1":
+            await cb.answer(f"⭐ بر اساسِ استارز — هر ⭐ ≈ {int(v):,} تومان (بدونِ سود)", show_alert=True)
+        else:
+            await cb.answer("خاموش شد؛ نرخِ دستی استفاده می‌شود.")
+        await _set_setting(row.id, key, nxt)
+        text, kb = await premium_admin_content(row.id, bot)
+        try:
+            await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+        return
     cur = (await _get_setting(row.id, key, "0")) == "1"
     if not cur:
         from tenant.gateways.stars_rate import star_toman
