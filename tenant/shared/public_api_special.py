@@ -216,7 +216,7 @@ def _spawn_and_close(tbot, coro) -> None:
             try:
                 await tbot.session.close()
             except Exception:
-                pass
+                logger.debug("API: بستنِ نشستِ ربات بعد از TGTools ممکن نشد", exc_info=True)
     t = asyncio.create_task(_run())
     _smm._tgt_tasks.add(t)
     t.add_done_callback(_smm._tgt_tasks.discard)

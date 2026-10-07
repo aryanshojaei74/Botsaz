@@ -297,10 +297,13 @@ async def _order_values(names: set[str], bot_id: int | None, order) -> dict[str,
                     p1000 = await compute_sell_price(bot_id, _svc, 1000)
             except Exception:
                 logger.exception("[text_vars] نرخِ هر ۱۰۰۰ِ سرویس خوانده نشد")
+        actual = (amount / qty * 1000) if qty > 0 else None
         if p1000 and p1000 > 0:
-            v["price_per_1000"] = _fmt_int(p1000)
+            # مبلغِ واقعی کمتر از نرخِ فهرست یعنی تخفیف (مثلاً تخفیفِ اختصاصیِ API) → همان نرخِ پرداخت‌شده؛
+            # بیشتر بودنش فقط اثرِ حداقلِ مبلغ/گردکردن است → نرخِ فهرست.
+            v["price_per_1000"] = _fmt_int(min(p1000, actual) if actual else p1000)
         else:
-            v["price_per_1000"] = _fmt_int(amount / qty * 1000) if qty > 0 else "—"
+            v["price_per_1000"] = _fmt_int(actual) if actual is not None else "—"
     if "link" in names:
         v["link"] = _esc(getattr(o, "link", "") or "—")
     if "service_id" in names:

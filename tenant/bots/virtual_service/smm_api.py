@@ -701,7 +701,7 @@ def detect_platform(name: str, category: str = "") -> str:
     # === PATCH_SMM_CUSTOMER_TREE_CLASSIFY_V1 ===
     # روبینو/روبیکا/ایتا اول: اسمِ سرویس‌هایشان معمولاً «فالوور روبینو (اینستاگرامی)» یا
     # «Rubika Rubino …» است و قبلاً به‌خاطرِ ترتیب زیرِ اینستاگرام/روبیکا می‌رفتند.
-    for key, _label, kws in sorted(PLATFORMS, key=lambda p: _DETECT_FIRST.index(p[0]) if p[0] in _DETECT_FIRST else 99):
+    for key, _label, kws in _detect_order():
         for kw in kws:
             if kw in text:
                 return key
@@ -709,6 +709,15 @@ def detect_platform(name: str, category: str = "") -> str:
 
 
 _DETECT_FIRST = ("rubino", "rubika", "eita")
+_DETECT_ORDER: list | None = None
+
+
+def _detect_order() -> list:
+    """PLATFORMS با روبینو/روبیکا/ایتا در ابتدا — یک‌بار ساخته می‌شود (detect برایِ هر سرویس صدا زده می‌شود)."""
+    global _DETECT_ORDER
+    if _DETECT_ORDER is None:
+        _DETECT_ORDER = sorted(PLATFORMS, key=lambda p: _DETECT_FIRST.index(p[0]) if p[0] in _DETECT_FIRST else 99)
+    return _DETECT_ORDER
 
 
 def detect_service_type(name: str, category: str = "") -> str:

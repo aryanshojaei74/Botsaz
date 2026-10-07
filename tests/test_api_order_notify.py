@@ -145,3 +145,20 @@ async def test_price_per_1000_and_platform_vars(db, monkeypatch):
         await s.commit()
     out = await render_text("{{price_per_1000}}|{{category}}|{{platform}}|{{app}}", bot_id=5, order=o)
     assert out == "3,800|ری‌اکشن پرمیوم|تلگرام|تلگرام"
+
+
+@pytest.mark.asyncio
+async def test_price_per_1000_discounted_order(db, monkeypatch):
+    """تخفیفِ اختصاصی (مبلغِ کمتر از نرخِ فهرست) → نرخِ پرداخت‌شده، نه نرخِ فهرست."""
+    from tenant.shared.text_vars import render_text
+
+    async def fake_price(bot_id, svc, qty):
+        return 4000
+    monkeypatch.setattr(smm, "compute_sell_price", fake_price)
+    async with db() as s:
+        s.add(models.SmmService(id=1, bot_id=5, service_id="1", name="x", panel_rate=1,
+                                sell_rate=4000, min_qty=10, max_qty=100000, is_active=True))
+        o = await s.get(models.SmmOrder, 1)
+        o.quantity, o.price_toman = 1000, 3600     # ۱۰٪ تخفیف
+        await s.commit()
+    assert await render_text("{{price_per_1000}}", bot_id=5, order=o) == "3,600"
