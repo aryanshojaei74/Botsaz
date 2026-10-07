@@ -102,6 +102,34 @@ if TELEGRAM_PROXY_URL:
 # پیش‌فرض را به ۱۲ ثانیه کاهش می‌دهیم — برای یک تماسِ سالم به تلگرام که
 # طبقِ تست‌های ما همیشه زیرِ نیم‌ثانیه جواب می‌دهد، این کاملاً کافی است؛
 # ولی برای تماسِ گیرکرده، حالا خیلی سریع‌تر fail و retry می‌شود.
+# === PATCH_SHARED_TG_SSL_CONTEXT_V1 ===
+# لاگِ سرور: «event loop blocked ~1s» با پشته‌یِ _warm_one. هر Bot() در aiogram یک SSLContextِ تازه
+# می‌سازد (ssl.create_default_context(cafile=certifi) — بارکردنِ کلِ بستهٔ گواهی‌ها، ~۱۵ms+ CPU)؛ گرم‌کردنِ
+# ده‌ها ربات پشتِ‌سرِهم (هر ۳ دقیقه) رشتهٔ اصلی را تا یک ثانیه قفل می‌کرد. همهٔ نشست‌هایِ تلگرام
+# می‌توانند یک SSLContextِ مشترک داشته باشند (فقط‌خواندنی است)؛ پس یک‌بار ساخته و دوباره استفاده می‌شود.
+try:
+    import ssl as _ssl_mod
+    import aiogram.client.session.aiohttp as _ag_aiohttp_mod
+
+    class _SharedSSL:
+        _ctx_cache: dict = {}
+
+        def __getattr__(self, name):
+            return getattr(_ssl_mod, name)
+
+        def create_default_context(self, *a, **kw):
+            key = (a, tuple(sorted(kw.items())))
+            ctx = self._ctx_cache.get(key)
+            if ctx is None:
+                ctx = _ssl_mod.create_default_context(*a, **kw)
+                self._ctx_cache[key] = ctx
+            return ctx
+
+    if not isinstance(getattr(_ag_aiohttp_mod, "ssl", None), _SharedSSL):
+        _ag_aiohttp_mod.ssl = _SharedSSL()
+except Exception as _ssl_err:
+    print(f"[ssl] SSLContextِ مشترکِ تلگرام نصب نشد (نادیده گرفته شد): {_ssl_err}")
+
 try:
     from aiogram.client.session.aiohttp import AiohttpSession as _AiohttpSessionT
     _orig_aiohttp_init = _AiohttpSessionT.__init__

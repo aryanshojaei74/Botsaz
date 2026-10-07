@@ -567,8 +567,8 @@ class MarzbanPanelClient:
                     if not text:
                         return {}
                     try:
-                        import json as _json
-                        return _json.loads(text)
+                        from tenant.shared.panel_clients.vpn_panel import loads_json_async
+                        return await loads_json_async(text)   # PATCH_PANEL_JSON_OFFLOOP_V1
                     except Exception:
                         return {"raw": text}
             except PanelError:

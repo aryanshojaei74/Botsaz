@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import time
 import os
 
 # === PATCH_ASYNCIO_EXECUTOR_SIZE_V1 ===
@@ -347,7 +348,9 @@ async def _warm_tenant_bots():
     # می‌شوند. این جلویِ ساختِ ۸۷ کانکشنِ زائدِ HTTPS در هر ۳ دقیقه را
     # می‌گیرد.
     already_warm = sum(1 for t in tokens if t in _tenant_bots)
-    to_warm = [t for t in tokens if t not in _tenant_bots]
+    # PATCH_SHARED_TG_SSL_CONTEXT_V1 — توکنی که گرم نشد (باطل/حذف‌شده) یک ساعت دوباره امتحان نمی‌شود
+    _now_w = time.monotonic()
+    to_warm = [t for t in tokens if t not in _tenant_bots and _WARM_FAIL_UNTIL.get(t, 0) <= _now_w]
 
     async def _warm_one(token: str):
         async with sem:
@@ -363,6 +366,7 @@ async def _warm_tenant_bots():
                     except Exception:
                         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
             except Exception:
+                _WARM_FAIL_UNTIL[token] = time.monotonic() + 3600
                 if b is not None:
                     try:
                         await b.session.close()
@@ -373,6 +377,9 @@ async def _warm_tenant_bots():
         await asyncio.gather(*(_warm_one(t) for t in to_warm), return_exceptions=True)
     print(f"warm_tenant_bots: {already_warm} از قبل گرم بودند، {len(to_warm)} تازه گرم شد "
           f"({len(_tenant_bots)}/{len(tokens)} مجموع)")
+
+
+_WARM_FAIL_UNTIL: dict[str, float] = {}
 
 
 async def _warm_tenant_bots_loop():

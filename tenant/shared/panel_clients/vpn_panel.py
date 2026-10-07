@@ -67,6 +67,19 @@ def panel_health() -> list[dict]:
     return sorted(out, key=lambda d: -d["slow_ops"])
 
 
+# === PATCH_PANEL_JSON_OFFLOOP_V1 ===
+# لاگِ سرور: «event loop blocked ~1s» با پشته‌یِ _request_inner — پاسخِ لیستِ inbound/کاربرانِ پنل‌هایِ
+# بزرگ چند مگابایت است و json.loads رویِ همان رشتهٔ اصلیِ asyncio اجرا می‌شد؛ در آن مدت هیچ رباتی به
+# هیچ پیامی جواب نمی‌داد. پاسخِ بزرگ حالا در یک رشتهٔ جدا پارس می‌شود (پاسخِ کوچک مثلِ قبل، بی‌هزینه).
+_JSON_OFFLOOP_BYTES = 200_000
+
+
+async def loads_json_async(text: str):
+    if len(text) >= _JSON_OFFLOOP_BYTES:
+        return await asyncio.to_thread(json.loads, text)
+    return json.loads(text)
+
+
 class PanelError(Exception):
     pass
 
@@ -346,7 +359,7 @@ class PanelClient:
                     if r.status != 200:
                         raise PanelError(f"{method} {path} HTTP {r.status}: {text[:200]}")
                     try:
-                        return json.loads(text)
+                        return await loads_json_async(text)   # PATCH_PANEL_JSON_OFFLOOP_V1
                     except Exception:
                         # پاسخِ غیرِJSON با استاتوس 200 معمولاً یعنی نشستِ لاگین منقضی
                         # شده و پنل به‌جای JSON صفحهٔ HTMLِ ورود را برگردانده —

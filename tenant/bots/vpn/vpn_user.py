@@ -5554,8 +5554,17 @@ async def vpn_service(cb: CallbackQuery, bot: Bot):
         try:
             usage = await client.get_usage(email)
             usage_blk = _usage_block(usage, fallback_expiry)
-        except Exception:
-            logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+        except Exception as _ue:
+            # PATCH_LOG_THROTTLE_PERSIST_V1 — پنلِ قطع/اکانتِ ادمینِ غیرفعال (PanelError) باگِ ما نیست:
+            # یک WARNINGِ یک‌خطی، هر پنل حداکثر ساعتی یک‌بار؛ فقط خطایِ غیرمنتظره traceback می‌گیرد.
+            from tenant.shared.panel_clients.vpn_panel import PanelError as _PE
+            if isinstance(_ue, _PE):
+                from log_throttle import should_log
+                if should_log(f"vpnusage:{getattr(panel, 'id', panel)}", 3600):
+                    logger.warning("vpn_service: مصرفِ سرویس از پنل گرفته نشد: %s",
+                                   (str(_ue) or type(_ue).__name__).splitlines()[0][:200])
+            else:
+                logger.exception("vpn_service: خواندنِ مصرف از پنل ناموفق بود")
         finally:
             try:
                 await client.close()
