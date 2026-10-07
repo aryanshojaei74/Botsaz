@@ -26955,9 +26955,6 @@ async def bc_cancel(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
-# === PATCH_BROADCAST_BACKGROUND_V1 ===
-# مجموعهٔ ارجاع‌هایِ تسک‌هایِ در حالِ اجرا (جلوگیری از جمع‌شدنشان توسطِ GC)
-_BC_TASKS: set = set()
 
 
 @tenant_router.callback_query(AdminFSM.broadcast_confirm, F.data == "bc:send")
@@ -26995,100 +26992,29 @@ async def bc_send(cb: CallbackQuery, state: FSMContext, bot: Bot):
         kb_rows.append([InlineKeyboardButton(text="🆘 پشتیبانی", url=support_link)])
     if kb_rows:
         bc_kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
+    # === PATCH_BROADCAST_DURABLE_V1 ===
+    # کار در دیتابیس ذخیره می‌شود و tenant/shared/broadcast_runner اجرایش می‌کند؛ اگر این پروسه ری‌استارت
+    # شود، ورکر از همان نفری که مانده بود ادامه می‌دهد (قبلاً بی‌صدا قطع می‌شد و برایِ همیشه «sending» می‌ماند).
     async with Session() as s:
-        bc = Broadcast(bot_id=row.id, text=text, status="sending")
+        n_users = int(await s.scalar(select(func.count(BotUser.id)).where(
+            BotUser.bot_id == row.id, BotUser.is_banned == False)) or 0)   # noqa: E712
+    await _bc_safe_edit(cb.message, f"📢 در حال ارسال به {n_users:,} نفر...")
+    async with Session() as s:
+        bc = Broadcast(bot_id=row.id, text=text, status="sending",
+                       media_id=bc_photo or None, media_type=(bc_mtype if bc_photo else None),
+                       kb_json=(bc_kb.model_dump_json(exclude_none=True) if bc_kb else None),
+                       chat_id=cb.message.chat.id, msg_id=cb.message.message_id,
+                       cursor_uid=0, total_count=n_users)
         s.add(bc)
-        await s.flush()
-        bc_id = bc.id
-        users = (await s.scalars(
-            select(BotUser).where(BotUser.bot_id == row.id, BotUser.is_banned == False)
-        )).all()
         await s.commit()
+        bc_id = bc.id
     kb_cancel = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🛑 لغو ارسال", callback_data=f"bc:stop:{bc_id}")]
     ])
-    await _bc_safe_edit(cb.message, f"📢 در حال ارسال به {len(users)} نفر...", reply_markup=kb_cancel)
+    await _bc_safe_edit(cb.message, f"📢 در حال ارسال به {n_users:,} نفر... (#{bc_id})", reply_markup=kb_cancel)
     await cb.answer()
-
-    # === PATCH_BROADCAST_BACKGROUND_V1 ===
-    # در لاگ دیده شد: `slow update (…, 93.3s) → bc:send`.
-    # علتش این بود که حلقهٔ ارسالِ همگانی *داخلِ خودِ هندلر* اجرا می‌شد؛
-    # با ۰٫۰۵ ثانیه مکث بینِ هر نفر، ارسال به ۱۰۰۰ کاربر دستِ‌کم ۵۰ ثانیه
-    # طول می‌کشد و آپدیت تا آخرِ کار باز می‌ماند.
-    #
-    # چرا فقط «کند» نیست و خطرناک است: تلگرام برایِ وبهوک تایم‌اوت دارد و
-    # اگر پاسخ نرسد، همان آپدیت را دوباره می‌فرستد — یعنی احتمالِ
-    # **ارسالِ همگانیِ تکراری** برایِ همهٔ کاربران. با ۹۳ ثانیه، این خطر
-    # واقعی است نه نظری.
-    #
-    # حالا حلقه به یک تسکِ پس‌زمینه منتقل شده: هندلر فوراً برمی‌گردد،
-    # کاربر همان پیامِ «در حال ارسال…» را می‌بیند و پیشرفت روی همان پیام
-    # به‌روز می‌شود. رفتارِ لغو (bc:stop) دست‌نخورده کار می‌کند چون از
-    # طریقِ وضعیتِ ردیفِ Broadcast در دیتابیس خوانده می‌شود.
-    async def _run_broadcast():
-        sent = 0
-        failed = 0
-        for u in users:
-            # بررسی لغو
-            async with Session() as s:
-                bc_row = await s.get(Broadcast, bc_id)
-                if bc_row is not None and await _is_foreign(bc_row, bot):   # PATCH_TENANT_SCOPE_V1
-                    bc_row = None
-                if bc_row and bc_row.status == "cancelled":
-                    break
-            try:
-                # === PATCH_BROADCAST_PHOTO_CAPTION_V1 ===
-                if bc_photo:
-                    await getattr(bot, _BC_MEDIA_SEND.get(bc_mtype, "send_photo"))(
-                        u.telegram_id, bc_photo, caption=text or None, reply_markup=bc_kb)
-                else:
-                    await bot.send_message(u.telegram_id, text, reply_markup=bc_kb)
-                sent += 1
-                if u.is_blocked:          # قبلاً بلاک بوده و حالا جواب داد
-                    await mark_blocked(row.id, u.telegram_id, False)
-            except Exception as e:
-                failed += 1
-                # === PATCH_BLOCKED_USERS_V1 ===
-                # ارسالِ همگانی بهترین فرصت برایِ به‌روزکردنِ لیستِ بلاک‌کننده‌هاست
-                if _is_blocked_error(e):
-                    await mark_blocked(row.id, u.telegram_id, True)
-            await asyncio.sleep(0.05)
-        async with Session() as s:
-            bc_row = await s.get(Broadcast, bc_id)
-            if bc_row is not None and await _is_foreign(bc_row, bot):   # PATCH_TENANT_SCOPE_V1
-                bc_row = None
-            if bc_row and bc_row.status != "cancelled":
-                bc_row.status = "done"
-            if bc_row:
-                bc_row.sent_count = sent
-                bc_row.failed_count = failed
-            await s.commit()
-        await _bc_safe_edit(
-            cb.message,
-            f"✅ ارسال همگانی #{bc_id} تمام شد.\nموفق: {sent} | ناموفق: {failed}",
-            reply_markup=back_inline(),
-        )
-
-    async def _guarded():
-        try:
-            await _run_broadcast()
-        except Exception:
-            logger.exception("ارسالِ همگانی #%s با خطا متوقف شد", bc_id)
-            try:
-                await _bc_safe_edit(
-                    cb.message,
-                    f"❌ ارسالِ همگانی #{bc_id} با خطا متوقف شد. "
-                    "بخشی از پیام‌ها ممکن است ارسال شده باشد.",
-                    reply_markup=back_inline())
-            except Exception:
-                logger.exception("اطلاعِ خطایِ ارسالِ همگانی هم نرسید")
-        finally:
-            _BC_TASKS.discard(_task)
-
-    _task = asyncio.create_task(_guarded())
-    # نگه‌داشتنِ ارجاع الزامی است: بدونِ آن، garbage collector ممکن است
-    # تسک را وسطِ کار جمع کند و ارسال نیمه‌کاره رها شود.
-    _BC_TASKS.add(_task)
+    from tenant.shared.broadcast_runner import spawn as _bc_spawn
+    _bc_spawn(bc_id)
 
 
 @tenant_router.callback_query(F.data.startswith("bc:stop:"))

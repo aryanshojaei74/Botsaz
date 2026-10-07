@@ -34,6 +34,7 @@ import main_tenant as mt
 
 # === PATCH_TRIAL_EXPIRE_CLEANUP_V1 ===
 from tenant.shared.trial_cleanup import trial_cleanup_loop as _trial_cleanup_loop
+from tenant.shared.broadcast_runner import broadcast_loop as _broadcast_loop  # PATCH_BROADCAST_DURABLE_V1
 from tenant.shared.stock_alarm import stock_alarm_loop as _stock_alarm_loop  # PATCH_STOCK_ALARM_V1
 from tenant.bots.virtual_service.smm import vnum_recover_loop as _vnum_recover_loop  # PATCH_VNUM_RECOVER_V1
 
@@ -123,6 +124,8 @@ async def _worker_startup():
         _betting_expiry_loop(),
         # === PATCH_P2P_MARKET_V1 ===
         _p2p_loop(),
+        # === PATCH_BROADCAST_DURABLE_V1 === ادامهٔ ارسال‌هایِ همگانیِ قطع‌شده بعد از ری‌استارت
+        _broadcast_loop(),
     ):
         mt.spawn(_coro)
 

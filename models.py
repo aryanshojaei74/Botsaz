@@ -545,10 +545,22 @@ class Broadcast(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
     text: Mapped[str] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/sending/done/cancelled
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending/sending/done/cancelled/interrupted
     sent_count: Mapped[int] = mapped_column(Integer, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    # === PATCH_BROADCAST_DURABLE_V1 ===
+    # ارسالِ همگانی قبلاً یک تسکِ حافظه‌ایِ داخلِ پروسهٔ وب بود؛ هر ری‌استارت (مثلاً اعمالِ زیپ) بی‌صدا
+    # قطعش می‌کرد و ردیف برایِ همیشه «sending» می‌ماند. حالا کلِ کار این‌جا ذخیره می‌شود و ورکر آن را
+    # از همان نفری که مانده بود ادامه می‌دهد.
+    media_id: Mapped[str | None] = mapped_column(String(300))
+    media_type: Mapped[str | None] = mapped_column(String(16))
+    kb_json: Mapped[str | None] = mapped_column(Text)
+    chat_id: Mapped[int | None] = mapped_column(BigInteger)      # چتِ مدیر برایِ پیامِ پیشرفت
+    msg_id: Mapped[int | None] = mapped_column(BigInteger)       # پیامِ «در حالِ ارسال…»
+    cursor_uid: Mapped[int | None] = mapped_column(Integer)      # آخرین BotUser.id که پردازش شد
+    total_count: Mapped[int | None] = mapped_column(Integer)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime)  # ضربانِ اجرا (برایِ تشخیصِ اجرایِ مرده)
 
 
 class ForceJoin(Base):
