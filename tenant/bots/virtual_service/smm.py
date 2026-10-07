@@ -7078,7 +7078,9 @@ async def _notify_gift_order_trust_success(bot: Bot, row, order_id: int) -> None
             detail = f'🎁 گیفت تلگرام — {o.gift_emoji or "🎁"}'
         await _purchase_alert(
             bot, row, buyer=buyer, section=section, detail=detail,
-            amount=o.price_toman or 0, order_id=o.id,
+            # PATCH_TRUST_GIFT_TOTAL_V1 — price_toman برایِ گیفت قیمتِ «هر عدد» است؛ گزارش باید
+            # مبلغِ کلِ پرداختی را نشان دهد (برایِ بقیهٔ انواع quantity همیشه ۱ است)
+            amount=int(o.price_toman or 0) * max(1, int(o.quantity or 1)), order_id=o.id,
             tracking_code=o.tracking_code, count=_count, public_detail=_pub_detail)
     except Exception:
         logger.exception("ارسال اعلان موفقیت محصول به کانال اعتمادسازی ناموفق بود")
@@ -12396,8 +12398,11 @@ async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
         # می‌کنیم تا همه‌جایِ فروش یک‌دست باشد.
         dest_label = (_self_dest_label(cb.from_user) if dest_id == cb.from_user.id
                      else await _resolve_dest_label(row.id, dest_id))
+        # با تخفیفِ اولین خرید، «هر عدد» واقعاً price/qty پرداخت شده؛ همان ذخیره می‌شود تا
+        # بازگشتِ وجه (price_toman × عددهای ارسال‌نشده) و گزارشِ خرید از پرداختِ واقعی بیشتر نشود
+        _paid_unit = unit_price if price >= unit_price * qty else int(price) // max(1, qty)
         order = GiftOrder(bot_id=row.id, buyer_user_id=b.id, gift_id=gift_id,
-                          gift_emoji=g.emoji, star_count=g.star_count, price_toman=unit_price,
+                          gift_emoji=g.emoji, star_count=g.star_count, price_toman=_paid_unit,
                           quantity=qty, dest_telegram_id=dest_id, dest_label=dest_label,
                           status="pending", pay_method="wallet", tracking_code=trk,
                           deliver_via={"b": "bot", "s": "support"}.get(via, ""),
