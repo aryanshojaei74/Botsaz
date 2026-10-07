@@ -158,7 +158,7 @@ async def test_buttons(db):
     tenant._SETTING_CACHE.clear()
     _, kb = await tenant._pubapi_render(row, await user(maker), CUSTOMER)
     cbs = [b.callback_data for b in _btns(kb) if b.callback_data]
-    assert cbs == ["pubapi:regen", "pubapi:orders", "pubapi:buy", "mbtn:home"]
+    assert cbs == ["pubapi:regen", "pubapi:orders", "pubapi:notif", "pubapi:buy", "mbtn:home"]
     url_btns = [b for b in _btns(kb) if b.url]
     assert [b.url for b in url_btns] == ["https://expresspanel.ir/api/docs"]
     assert "50,000" in next(b.text for b in _btns(kb) if b.callback_data == "pubapi:buy")
