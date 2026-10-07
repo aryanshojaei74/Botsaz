@@ -499,6 +499,9 @@ async def smm_v2(request: Request):
                 "desc": _desc,
                 "description": _desc,
             })
+        # === PATCH_API_SPECIAL_PRODUCTS_V1 === استارز/پرمیوم/ری‌اکشنِ استارزی/گیفت
+        from tenant.shared import public_api_special as _sp
+        out.extend(await _sp.list_services(ctx.bot_id, ctx.discount_pct))
         return JSONResponse(out)
 
     # ─── balance ───
@@ -517,6 +520,31 @@ async def smm_v2(request: Request):
         except ValueError:
             return _v2_err("Incorrect service or quantity")
         link = (p.get("link") or "").strip()
+        # === PATCH_API_SPECIAL_PRODUCTS_V1 ===
+        from tenant.shared import public_api_special as _sp
+        if _sp.is_special_service(service_id):
+            if ctx.full_access:
+                if not p.get("telegram_id"):
+                    return _v2_err("telegram_id_required")
+                try:
+                    buyer_tid = int(p["telegram_id"])
+                except ValueError:
+                    return _v2_err("telegram_id_required")
+                disc = 0.0
+            else:
+                buyer_tid, disc = ctx.user.telegram_id, ctx.discount_pct
+            if quantity <= 0:
+                return _v2_err("Incorrect service or quantity")
+            try:
+                oid = await _sp.place_order(
+                    ctx.bot_id, buyer_tid, service_id, link, quantity, disc,
+                    anonymous=str(p.get("anonymous") or "").strip().lower() in ("1", "true", "yes"))
+            except _sp.SpecialOrderError as e:
+                return _v2_err(str(e))
+            except Exception:
+                logger.exception("API: سفارشِ محصولِ ویژه ناموفق بود")
+                return _v2_err("Order failed")
+            return JSONResponse({"order": oid})
         body = NewOrderBody(service_id=service_id, link=link, quantity=quantity,
                             telegram_id=int(p["telegram_id"]) if p.get("telegram_id") else None)
         try:
@@ -536,8 +564,20 @@ async def smm_v2(request: Request):
         wanted = [i.strip() for i in (ids_raw or single).split(",") if i.strip()][:100]
         # === PATCH_API_STATUS_SQL_V1 === قبلاً «همهٔ» سفارش‌هایِ ربات بارگذاری می‌شد؛ حالا فقط شناسه‌هایِ خواسته‌شده
         # (کدِ پیگیری هم پذیرفته می‌شود).
-        _ints = [int(i) for i in wanted if i.isdigit()]
-        _codes = [i.upper() for i in wanted if not i.isdigit()]
+        # === PATCH_API_SPECIAL_PRODUCTS_V1 === شناسه‌هایِ ≥ ORDER_BASE مالِ استارز/پرمیوم/گیفت/ری‌اکشن‌اند
+        from tenant.shared import public_api_special as _sp
+        _special = {}
+        for i in wanted:
+            if i.isdigit() and _sp.is_special_order(int(i)):
+                _st = await _sp.order_status(
+                    ctx.bot_id, int(i), None if ctx.full_access else ctx.user.telegram_id)
+                _special[i] = _st or {"error": "Incorrect order ID"}
+        wanted_smm = [i for i in wanted if i not in _special]
+        if single and not ids_raw and single in _special:
+            _st = _special[single]
+            return _v2_err("Incorrect order ID") if "error" in _st else JSONResponse(_st)
+        _ints = [int(i) for i in wanted_smm if i.isdigit()]
+        _codes = [i.upper() for i in wanted_smm if not i.isdigit()]
         async with Session() as s:
             from sqlalchemy import or_ as _or
             q = select(SmmOrder).where(SmmOrder.bot_id == ctx.bot_id)
@@ -562,6 +602,9 @@ async def smm_v2(request: Request):
             return JSONResponse(await _v2_order_status_payload(o))
         out = {}
         for oid in wanted:
+            if oid in _special:
+                out[oid] = _special[oid]
+                continue
             o = by_id.get(oid) or by_id.get(oid.upper())
             out[oid] = (await _v2_order_status_payload(o)) if o else {"error": "Incorrect order ID"}
         return JSONResponse(out)
@@ -631,6 +674,15 @@ td,th{{border:1px solid #d0d7de;padding:6px 10px;text-align:right}} .note{{backg
 <p>چند سفارش یک‌جا: <code>orders=19098,19099</code> (حداکثر ۱۰۰).<br>
 وضعیت‌ها: <code>Pending</code> · <code>In progress</code> · <code>Completed</code> · <code>Partial</code> · <code>Canceled</code> · <code>Refunded</code>.
 در <code>Partial</code> مبلغِ بخشِ تحویل‌نشده خودکار به کیف پولت برمی‌گردد و <code>charge</code> مبلغِ نهایی است.</p>
+<h2>استارز، پرمیوم، گیفت و ری‌اکشنِ استارزی</h2>
+<p>این محصولات (اگر در ربات فعال باشند) با دسته‌هایِ «تلگرام - استارز / پرمیوم / گیفت / ری‌اکشن استارزی» در همان لیستِ سرویس‌ها می‌آیند و با همان <code>action=add</code> سفارش داده می‌شوند:</p>
+<table><tr><th>محصول</th><th><code>link</code></th><th><code>quantity</code></th></tr>
+<tr><td>استارز</td><td>یوزرنیمِ گیرنده (<code>@username</code>)</td><td>تعدادِ استارز</td></tr>
+<tr><td>پرمیوم</td><td>یوزرنیمِ گیرنده</td><td>همیشه <code>1</code></td></tr>
+<tr><td>گیفت</td><td>یوزرنیمِ گیرنده</td><td>تعدادِ گیفت</td></tr>
+<tr><td>ری‌اکشنِ استارزی</td><td>لینکِ پستِ کانالِ عمومی (<code>https://t.me/channel/123</code>)</td><td>تعدادِ ری‌اکشن — با <code>anonymous=1</code> ناشناس ثبت می‌شود</td></tr></table>
+<p>مبلغ = <code>rate × quantity ÷ 1000</code> (فیلدِ <code>price</code> قیمتِ یک عدد است). وضعیتِ این سفارش‌ها هم با <code>action=status</code> گرفته می‌شود.
+شمارهٔ مجازی از راهِ API ارائه نمی‌شود.</p>
 <h2>پشتیبانی‌نشده</h2>
 <p class="note">ریفیل (<code>refill</code>)، لغو (<code>cancel</code>) و دریپ‌فید از راهِ API فعال نیستند و پیامِ خطا می‌گیرند.
 برایِ ریفیل از داخلِ ربات، بخشِ «سفارشاتِ گارانتی‌دار» را بزن.</p>

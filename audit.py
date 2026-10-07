@@ -382,7 +382,9 @@ def check_money(files) -> list[str]:
         # نیست و نباید در کانالِ اعتمادسازی پست شود.
         if "PartnerStockOrder(" in s:
             continue
-        if "_purchase_alert" in s or "send_trust_channel_post" in s:
+        # _notify_gift_order_trust_success خودش بعد از تحویل _purchase_alert را صدا می‌زند
+        if ("_purchase_alert" in s or "send_trust_channel_post" in s
+                or "_notify_gift_order_trust_success" in s):
             continue
         out.append(f"{name} — فروش ثبت می‌کند ولی `_purchase_alert` را صدا "
                    f"نمی‌زند؛ کانالِ اعتمادسازی و اطلاعِ خودکارِ خرید برایِ "

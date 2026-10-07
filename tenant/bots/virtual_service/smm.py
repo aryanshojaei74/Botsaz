@@ -16436,8 +16436,12 @@ class StarsOrderError(Exception):
 
 async def place_stars_order(bot: Bot, row, *, buyer_tg_id: int, buyer_name: str,
                             buyer_username: str, dest_id: int, qty: int,
-                            self_user=None, dest_username: str = "") -> dict:
+                            self_user=None, dest_username: str = "",
+                            price_override: int | None = None) -> dict:
     """کسرِ پول، ثبتِ سفارش و اطلاع‌رسانی. هم از ربات و هم از مینی‌اپ.
+
+    price_override (PATCH_API_SPECIAL_PRODUCTS_V1): قیمتِ نهایی برایِ وب‌سرویس
+    (با تخفیفِ اختصاصیِ کلیدِ API)؛ بقیهٔ مسیر دقیقاً همین است.
 
     خروجی: {order_id, tracking, price, dest_label}
     خطا: StarsOrderError با پیامِ فارسیِ قابلِ نمایش.
@@ -16447,7 +16451,7 @@ async def place_stars_order(bot: Bot, row, *, buyer_tg_id: int, buyer_name: str,
     rate, qmin, qmax = await _stars_sell_settings(row.id)
     if qty < qmin or qty > qmax:
         raise StarsOrderError(f"تعداد باید بینِ {qmin:,} تا {qmax:,} باشد.")
-    price = round(qty * rate)
+    price = round(qty * rate) if price_override is None else int(price_override)
 
     buyer, _ = await get_or_create_user(
         row.id, buyer_tg_id, buyer_name, buyer_username or "", return_created=True)
