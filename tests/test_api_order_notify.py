@@ -51,3 +51,34 @@ async def test_api_order_notify_toggle(db):
     assert await smm.api_notify_enabled(5, 777)
     await smm._notify_user(5, 1, "✅ تکمیل شد", bot=bot)
     assert _FakeBot.sent[-1] == (777, "#وبسرویس\n✅ تکمیل شد")
+
+
+@pytest.mark.asyncio
+async def test_api_receipt_only_when_enabled(db, monkeypatch):
+    """PATCH_API_ORDER_RECEIPT_V1"""
+    import aiogram
+    from tenant.shared import public_api as pa
+    monkeypatch.setattr(pa, "Session", db)
+    sent = []
+
+    class _Sess:
+        async def close(self):
+            pass
+
+    class _B:
+        def __init__(self, token, default=None):
+            self.session = _Sess()
+
+        async def send_message(self, chat_id, text, **kw):
+            sent.append((chat_id, text))
+    monkeypatch.setattr(aiogram, "Bot", _B)
+    kw = dict(name="❤️ری اکشن [+🎁 بازدید]", platform="تلگرام", qty=100, price=380,
+              link="https://t.me/x/6", order_id=4194758,
+              unit_line="💸 قیمت هر 1000 عدد: <b>3,800</b> تومان")
+    await pa._send_api_receipt(5, 777, **kw)
+    assert sent == []
+    await smm.set_api_notify(5, 777, True)
+    await pa._send_api_receipt(5, 777, **kw)
+    txt = sent[0][1]
+    assert txt.startswith("🔗 #وبسرویس") and "4194758" in txt and "تلگرام" in txt
+    assert "📍 موجودی جدید: <b>0</b> تومان" in txt and "https://t.me/x/6" in txt

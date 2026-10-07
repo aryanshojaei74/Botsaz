@@ -369,7 +369,78 @@ async def api_new_order(body: NewOrderBody, x_api_key: str | None = Header(defau
         logger.exception("API: ارسالِ خودکارِ سفارش %s به پنل ناموفق بود (سفارش ثبت شده است)", order_pk)
     async with Session() as s:
         o = await s.get(SmmOrder, order_pk)
+    # PATCH_API_ORDER_RECEIPT_V1
+    try:
+        from tenant.bots.virtual_service.smm import _svc_platform_type
+        from tenant.bots.virtual_service.smm_api import platform_label as _pl
+        _cat_plat = None
+        if v.category_pk:
+            async with Session() as s:
+                _c = await s.get(SmmCategory, v.category_pk)
+            _cat_plat = _c.platform if _c and _c.platform != "other" else None
+        _pk = _cat_plat or _svc_platform_type(v)[0]
+        _plat = "" if _pk == "other" else _pl(_pk).split(" ", 1)[-1].strip()
+        spawn_api_receipt(ctx.bot_id, target_tid, name=v.name, platform=_plat, qty=body.quantity,
+                          price=price, link=body.link, order_id=order_pk,
+                          unit_line=f"💸 قیمت هر 1000 عدد: <b>{round(price * 1000 / max(1, body.quantity)):,}</b> تومان")
+    except Exception:
+        logger.exception("API: آماده‌سازیِ رسیدِ سفارش ناموفق بود")
     return JSONResponse({"ok": True, "order": _order_payload(o)}, status_code=201)
+
+
+# === PATCH_API_ORDER_RECEIPT_V1 ===
+# درخواستِ فدایی: وقتی مشتری «🟢 اعلان سفارشات وبسرویس» را روشن کرده، با هر سفارشی که از
+# وب‌سرویس ثبت می‌کند یک رسید (محصول، پلتفرم، تعداد، قیمت، لینک، کدِ سفارش، مبلغ، موجودیِ جدید)
+# در ربات برایش بیاید. ارسال در پس‌زمینه است تا پاسخِ API کند نشود؛ خطایش هرگز سفارش را خراب نمی‌کند.
+_RECEIPT_TASKS: set = set()
+
+
+async def _send_api_receipt(bot_id: int, tg_id: int, *, name: str, platform: str, qty: int,
+                            price: int, link: str, order_id, unit_line: str) -> None:
+    try:
+        from tenant.bots.virtual_service.smm import api_notify_enabled
+        if not await api_notify_enabled(bot_id, tg_id):
+            return
+        from html import escape as _esc
+        from tenant.shared.trust_report import _tehran_now_parts
+        async with Session() as s:
+            row = await s.get(BotRow, bot_id)
+            u = await s.scalar(select(BotUser).where(
+                BotUser.bot_id == bot_id, BotUser.telegram_id == tg_id))
+        if not row or not row.token or not u:
+            return
+        jd, hm, sec = _tehran_now_parts()
+        lines = ["🔗 #وبسرویس", "",
+                 f"📝 نام محصول: <b>{_esc(name or '—')}</b>"]
+        if platform:
+            lines.append(f"🈸 نوع اپلیکیشن: <b>{_esc(platform)}</b>")
+        lines += [f"💎 تعداد سفارش: <b>{int(qty):,}</b>",
+                  unit_line,
+                  "🔗 آدرس انجام سفارش:", _esc(link or "—"),
+                  f"📊 کد سفارش: <code>{order_id}</code>",
+                  f"💰 مبلغ پرداختی: <b>{int(price):,}</b> تومان",
+                  f"📍 موجودی جدید: <b>{int(float(u.balance or 0)):,}</b> تومان",
+                  f"🕰 {hm}:{sec} - {jd}"]
+        from aiogram import Bot as _AioBot
+        from aiogram.client.default import DefaultBotProperties
+        from aiogram.enums import ParseMode
+        tbot = _AioBot(token=row.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        try:
+            await tbot.send_message(tg_id, "\n".join(lines), disable_web_page_preview=True)
+        finally:
+            await tbot.session.close()
+    except Exception:
+        logger.exception("API: ارسالِ رسیدِ سفارشِ وب‌سرویس ناموفق بود")
+
+
+def spawn_api_receipt(bot_id: int, tg_id: int, **kw) -> None:
+    import asyncio
+    try:
+        t = asyncio.get_running_loop().create_task(_send_api_receipt(bot_id, tg_id, **kw))
+    except RuntimeError:
+        return
+    _RECEIPT_TASKS.add(t)
+    t.add_done_callback(_RECEIPT_TASKS.discard)
 
 
 async def _announce_manual_api_order(bot_id: int, order_pk: int) -> None:
@@ -573,6 +644,14 @@ async def smm_v2(request: Request):
             except Exception:
                 logger.exception("API: سفارشِ محصولِ ویژه ناموفق بود")
                 return _v2_err("Order failed")
+            try:   # PATCH_API_ORDER_RECEIPT_V1
+                _ri = await _sp.receipt_info(oid, service_id)
+                if _ri:
+                    spawn_api_receipt(ctx.bot_id, buyer_tid, name=_ri[0], platform="تلگرام", qty=quantity,
+                                      price=_ri[1], link=link, order_id=oid,
+                                      unit_line=f"💸 قیمت هر عدد: <b>{round(_ri[1] / max(1, quantity)):,}</b> تومان")
+            except Exception:
+                logger.exception("API: آماده‌سازیِ رسیدِ سفارشِ ویژه ناموفق بود")
             return JSONResponse({"order": oid})
         body = NewOrderBody(service_id=service_id, link=link, quantity=quantity,
                             telegram_id=int(p["telegram_id"]) if p.get("telegram_id") else None)

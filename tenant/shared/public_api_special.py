@@ -408,3 +408,24 @@ async def order_status(bot_id: int, api_order_id: int, buyer_tid: int | None) ->
             ("starsell_", "srx_")) else qty),
         "currency": "TOMAN",
     }
+
+
+async def receipt_info(api_order_id: int, service_id: int) -> tuple[str, int] | None:
+    """PATCH_API_ORDER_RECEIPT_V1 — (نامِ محصول، مبلغِ پرداختی) برایِ رسیدِ سفارشِ وب‌سرویس."""
+    async with Session() as s:
+        o = await s.get(GiftOrder, api_order_id - ORDER_BASE)
+    if not o:
+        return None
+    gid = str(o.gift_id or "")
+    if service_id == STARS_ID:
+        name = "⭐ استارزِ تلگرام"
+    elif service_id == REACTION_ID:
+        name = "⭐️ ری‌اکشنِ استارزیِ پست"
+    elif gid.startswith("premium_"):
+        name = f"🌟 پرمیومِ تلگرام {gid.split('_')[-1]} ماهه"
+    else:
+        name = f"🎁 گیفتِ {o.gift_emoji or ''} ({o.star_count} استارز)".replace("  ", " ")
+    total = int(o.price_toman or 0)
+    if not gid.startswith(("premium_", "starsell_", "srx_")):
+        total *= int(o.quantity or 1)
+    return name, total
