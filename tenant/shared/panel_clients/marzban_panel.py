@@ -35,7 +35,7 @@ import time
 from datetime import datetime, timezone
 import re
 
-from tenant.shared.panel_clients.username_resolve import resolve_username
+from tenant.shared.panel_clients.username_resolve import name_candidates, remember, resolve_username
 import secrets
 import string
 import asyncio
@@ -950,8 +950,13 @@ class MarzbanPanelClient:
         return await fetch_sub_links(sub_url)
 
     async def get_client(self, email):
-        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
-        res = await self._request("GET", f"/api/user/{username}")
+        # PATCH_PANEL_RAW_USERNAME_V2 — اول نامِ تبدیل‌شده، بعد نامِ دقیقِ پنل (سرویسِ «افزودنِ دستی»)
+        res = None
+        for username in name_candidates(self, email, _safe_username):
+            res = await self._request("GET", f"/api/user/{username}")
+            if res:
+                remember(self, email, username)
+                break
         if not res:
             return None
         res = dict(res)

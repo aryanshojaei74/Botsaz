@@ -31,7 +31,7 @@ from __future__ import annotations
 import time
 import re
 
-from tenant.shared.panel_clients.username_resolve import resolve_username
+from tenant.shared.panel_clients.username_resolve import name_candidates, remember, resolve_username
 import secrets
 import string
 import asyncio
@@ -611,8 +611,13 @@ class UPanelMizbanClient:
         return await fetch_sub_links(sub_url)
 
     async def get_client(self, email):
-        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
-        res = await self._request("GET", f"/api/user/{username}")
+        # PATCH_PANEL_RAW_USERNAME_V2 — اول نامِ تبدیل‌شده، بعد نامِ دقیقِ پنل (سرویسِ «افزودنِ دستی»)
+        res = None
+        for username in name_candidates(self, email, _safe_username):
+            res = await self._request("GET", f"/api/user/{username}")
+            if res:
+                remember(self, email, username)
+                break
         if not res:
             return None
         res = dict(res)
@@ -624,7 +629,8 @@ class UPanelMizbanClient:
     async def get_usage(self, email):
         """آمار مصرف با کلیدهای استاندارد: up, down, total, expiryTime (ms)."""
         # ابتدا از endpoint اختصاصی usage تلاش می‌کنیم
-        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
+        # PATCH_PANEL_RAW_USERNAME_V2 — بدونِ درخواستِ اضافه؛ اگر این نام نبود، get_client پایین نامِ درست را پیدا می‌کند
+        username = name_candidates(self, email, _safe_username)[0]
         # === PATCH_UPANEL_USAGE_FALLBACK_V1 ===
         # این endpoint در بعضی نسخه‌های یوپنل وجود ندارد یا برای بعضی
         # کاربران HTTP 500 می‌دهد. کدِ زیر از اول «fallback» داشت، ولی
