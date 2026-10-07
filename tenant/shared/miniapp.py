@@ -1248,7 +1248,6 @@ async def _mp_notify_admin(bot_id: int, order_id: int) -> None:
         from aiogram import Bot as _AioBot
         from aiogram.client.default import DefaultBotProperties
         from aiogram.enums import ParseMode
-        from tenant import _notify_admins
         async with Session() as s:
             o = await s.get(MiniAppProductOrder, order_id)
             if not o:
@@ -1269,7 +1268,9 @@ async def _mp_notify_admin(bot_id: int, order_id: int) -> None:
             token = brow.token
         tbot = _AioBot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         try:
-            await _notify_admins(tbot, brow, txt)
+            # PATCH_MANUAL_ORDER_CHANNEL_V1 — سفارشِ تحویلِ دستیِ مینی‌اپ هم به کانالِ سفارشاتِ دستی
+            from tenant import _notify_manual_order
+            await _notify_manual_order(tbot, brow, txt)
         finally:
             try:
                 await tbot.session.close()

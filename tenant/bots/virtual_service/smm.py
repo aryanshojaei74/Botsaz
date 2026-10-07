@@ -12535,15 +12535,18 @@ async def _gift_hold_notify(bot: Bot, row, order_id: int, user_msg, sent_count: 
                 reply_markup=await _gift_support_kb(trk))
         except Exception:
             logger.exception("[gift] اطلاعِ مشتری از انتظارِ موجودی ناموفق")
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    # PATCH_MANUAL_ORDER_CHANNEL_V1 — در کانال، دکمهٔ «افزایشِ موجودی» (صفحهٔ مدیریتی) نمی‌آید
+    from tenant import manual_order_channel_active
+    _in_channel = await manual_order_channel_active(row.id)
+    kb = InlineKeyboardMarkup(inline_keyboard=([] if _in_channel else [
         [InlineKeyboardButton(text="💰 افزایشِ موجودیِ استارزِ ربات", callback_data="w:stars",
-                              style=ButtonStyle.SUCCESS)],
+                              style=ButtonStyle.SUCCESS)]]) + [
         [InlineKeyboardButton(text="🔄 ارسال (بعد از شارژ)", callback_data=f"gift:retry:{order_id}",
                               style=ButtonStyle.PRIMARY),
          InlineKeyboardButton(text="❌ رد و بازگشتِ وجه", callback_data=f"gift:cardno:{order_id}",
                               style=ButtonStyle.DANGER)],
     ])
-    await _notify_admins(
+    await _notify_manual_order(
         bot, row,
         f"⚠️ موجودیِ استارزِ ربات برایِ این سفارش کافی نیست — #{await order_no(GiftOrder, order_id)}\n"
         f"{item}\n🎯 مقصد: {dest}\n🔖 کد: {trk}\n"
@@ -12560,17 +12563,20 @@ async def gift_retry_send(cb: CallbackQuery, bot: Bot):
         return
     order_id = int(cb.data.split(":")[2])
     async with Session() as s:
-        o = await s.get(GiftOrder, order_id)
+        # قفل + تصاحب: دو کلیکِ هم‌زمان (مثلاً دو ادمین در کانالِ سفارشات) گیفت را دو بار نفرستند
+        o = await s.get(GiftOrder, order_id, with_for_update=True)
         if not o or o.bot_id != row.id:
             return await cb.answer("پیدا نشد", show_alert=True)
         if o.status != "awaiting_stars":
             return await cb.answer("این سفارش دیگر منتظرِ موجودی نیست.", show_alert=True)
+        o.status = "sending"
         gift_id, dest, qty, done = o.gift_id, o.dest_telegram_id, int(o.quantity or 1), int(o.sent_qty or 0)
         _cm = (o.comment or "")[:128]   # PATCH_GIFT_COMMENT_V1
         _sc = int(o.comment_scope or 0)
         buyer = await s.get(BotUser, o.buyer_user_id)
         buyer_tg = buyer.telegram_id if buyer else None
         trk = o.tracking_code
+        await s.commit()
     await cb.answer("در حالِ ارسال…")
     last_err = None
     sent = done
@@ -12583,11 +12589,12 @@ async def gift_retry_send(cb: CallbackQuery, bot: Bot):
             last_err = e
             break
     async with Session() as s:
-        o = await s.get(GiftOrder, order_id)
+        o = await s.get(GiftOrder, order_id, with_for_update=True)
         o.sent_qty = sent
         if sent >= qty:
             o.status = "sent"
         else:
+            o.status = "awaiting_stars"   # تصاحب آزاد می‌شود تا بعد از شارژ دوباره بشود زد
             o.fail_reason = str(last_err)
         await s.commit()
     if sent >= qty:
@@ -14642,7 +14649,7 @@ async def _tgt_finalize_prm(bot: Bot, row, order_id: int, order: dict) -> str:
             months = o.gift_id.split("_")[-1] if o.gift_id else "?"
             await s.commit()
         await _notify_gift_order_trust_success(bot, row, order_id)
-        await _notify_admins(bot, row, f"✅ پرمیومِ سفارش #{await order_no(GiftOrder, order_id)} با TGTools تحویل داده شد.")
+        await _notify_manual_order(bot, row, f"✅ پرمیومِ سفارش #{await order_no(GiftOrder, order_id)} با TGTools تحویل داده شد.")
         if buyer_tg_id:
             try:
                 await bot.send_message(
@@ -14725,7 +14732,7 @@ async def tgtools_fulfil_premium(bot: Bot, row, order_id: int, *, by_admin: bool
             if await _tgt_finalize_prm(bot, row, order_id, cur) != "pending":
                 return
         from tenant import _notify_admins
-        await _notify_admins(
+        await _notify_manual_order(
             bot, row,
             f"⏳ پرمیومِ سفارش #{await order_no(GiftOrder, order_id)} هنوز در صفِ TGTools است (تراکنش {tx}). "
             "وقتی تحویل شد با دکمهٔ زیر وضعیت را بررسی کن — تا آن موقع دستی نفرست.",
@@ -16847,7 +16854,7 @@ async def _tgt_finalize(bot: Bot, row, order_id: int, order: dict) -> str:
             trk, qty, dest = o.tracking_code, o.star_count, o.dest_label
             await s.commit()
         await _notify_gift_order_trust_success(bot, row, order_id)
-        await _notify_admins(bot, row, f"✅ سفارشِ استارز #{await order_no(GiftOrder, order_id)} با TGTools تحویل داده شد ({qty:,} ⭐).")
+        await _notify_manual_order(bot, row, f"✅ سفارشِ استارز #{await order_no(GiftOrder, order_id)} با TGTools تحویل داده شد ({qty:,} ⭐).")
         if buyer_tg_id:
             try:
                 await bot.send_message(
@@ -16937,7 +16944,7 @@ async def tgtools_fulfil_order(bot: Bot, row, order_id: int, *, by_admin: bool =
             if await _tgt_finalize(bot, row, order_id, cur) != "pending":
                 return
         from tenant import _notify_admins
-        await _notify_admins(
+        await _notify_manual_order(
             bot, row,
             f"⏳ سفارشِ استارز #{await order_no(GiftOrder, order_id)} هنوز در صفِ TGTools است (تراکنش {tx}). "
             "وقتی تحویل شد خودت با دکمهٔ زیر وضعیت را بررسی کن — تا آن موقع دستی نفرست.",
@@ -17061,7 +17068,7 @@ async def _tgt_revert_manual_gift(bot: Bot, row, order_id: int, reason: str, *, 
         qty, done = int(o.quantity or 1), int(o.sent_qty or 0)
         await s.commit()
     part = f"\n📦 تا الان با TGTools {done} از {qty} عدد فرستاده شده؛ فقط «باقی‌مانده» را دستی بفرست." if done else ""
-    await _notify_admins(
+    await _notify_manual_order(
         bot, row,
         f"{'⚠️' if warn else '🤖'} خریدِ خودکارِ گیفت — سفارش #{await order_no(GiftOrder, order_id)}\n\n{reason}{part}\n\n"
         f"🎯 مقصد: {dest}\n🔖 کد: {trk}\n\n"
@@ -17100,7 +17107,7 @@ async def _tgt_gift_finish(bot: Bot, row, order_id: int) -> None:
         trk = o.tracking_code
         await s.commit()
     await _notify_gift_order_trust_success(bot, row, order_id)
-    await _notify_admins(bot, row, f"✅ گیفتِ سفارش #{await order_no(GiftOrder, order_id)} با TGTools تحویل داده شد.")
+    await _notify_manual_order(bot, row, f"✅ گیفتِ سفارش #{await order_no(GiftOrder, order_id)} با TGTools تحویل داده شد.")
     if buyer_tg_id:
         try:
             await bot.send_message(
@@ -17177,7 +17184,7 @@ async def tgtools_fulfil_gift(bot: Bot, row, order_id: int, *, by_admin: bool = 
             await _set_setting(row.id, f"tgtools_gtx_{order_id}", f"{i}:{tx}")
             st, cur = await _tgt_gift_status(key, tx, res)
             if st == "pending":
-                await _notify_admins(
+                await _notify_manual_order(
                     bot, row,
                     f"⏳ گیفتِ سفارش #{await order_no(GiftOrder, order_id)} (عددِ {i + 1} از {qty}) هنوز در صفِ TGTools است "
                     f"(تراکنش {tx}). وقتی تحویل شد با دکمهٔ زیر وضعیت را بررسی کن — تا آن موقع دستی نفرست.",

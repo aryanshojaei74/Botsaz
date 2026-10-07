@@ -8991,6 +8991,11 @@ async def _notify_admins(bot: Bot, row: BotRow, text: str,
 
 
 # === PATCH_MANUAL_ORDER_CHANNEL_V1 ===
+async def manual_order_channel_active(bot_id: int) -> bool:
+    chat = (await get_setting(bot_id, "smm_manual_channel_id", "") or "").strip()
+    return bool(chat) and await get_setting(bot_id, "smm_manual_channel_enabled", "0") == "1"
+
+
 async def _notify_manual_order(bot: Bot, row: BotRow, text: str,
                                kb: InlineKeyboardMarkup | None = None,
                                photo_file_id: str | None = None) -> None:
