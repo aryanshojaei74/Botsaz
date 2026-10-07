@@ -68,7 +68,7 @@ VARS: dict[str, tuple[str, str, str]] = {
     "date":         ("bot", "تاریخِ امروز (شمسی)", "۱۴۰۵/۰۷/۰۶"),
     "time":         ("bot", "ساعتِ فعلی", "۱۴:۳۰"),
     # ── سفارش ──
-    "order_id":       ("order", "شمارهٔ سفارش", "123"),
+    "order_id":       ("order", "شمارهٔ سفارش (همان کدِ پیگیری)", "123"),
     "tracking_code":  ("order", "کدِ پیگیری (همان کدی که مشتری برایِ پشتیبانی می‌فرستد)", "SMM-123"),
     "product_name":   ("order", "نامِ محصول/سرویس", "ممبر گروه"),
     "category":       ("order", "دسته‌بندیِ محصول", "تلگرام"),
@@ -262,8 +262,12 @@ async def _order_values(names: set[str], bot_id: int | None, order) -> dict[str,
     o = order
     qty = int(getattr(o, "quantity", 0) or 0)
     amount = float(getattr(o, "price_toman", 0) or 0)
+    # === PATCH_ORDER_CODE_UNIFIED_V1 ===
+    # گزارشِ فدایی: «کدِ سفارشی که در پیام می‌آید با لیستِ سفارشاتِ پنلِ مدیریت یکی نیست». {{order_id}}
+    # شناسهٔ داخلیِ دیتابیس بود و لیستِ ادمین/«سفارش‌های من» کدِ پیگیری را نشان می‌دهند. حالا هر دو
+    # متغیر یک عدد می‌دهند (کدِ پیگیری؛ فقط برایِ سفارش‌هایِ خیلی قدیمیِ بدونِ کد، همان شناسه).
     if "order_id" in names:
-        v["order_id"] = _esc(o.id)
+        v["order_id"] = _esc(getattr(o, "tracking_code", None) or o.id)
     if "tracking_code" in names:
         v["tracking_code"] = _esc(getattr(o, "tracking_code", None) or f"SMM-{o.id}")
     if "product_name" in names:

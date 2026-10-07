@@ -114,3 +114,15 @@ async def test_api_receipt_uses_admin_text_and_tracking(db, monkeypatch):
     await tenant.set_setting(5, "smm_txt_sent", "سفارش {{tracking_code}} ثبت شد ✅")
     await pa._send_api_receipt(5, 777, **kw)
     assert sent[-1] == "#وبسرویس\nسفارش 4321 ثبت شد ✅"
+
+
+@pytest.mark.asyncio
+async def test_order_id_var_is_tracking_code(db):
+    """PATCH_ORDER_CODE_UNIFIED_V1 — {{order_id}} و {{tracking_code}} یک عدد (همان لیستِ ادمین)."""
+    from tenant.shared.text_vars import render_text
+    async with db() as s:
+        o = await s.get(models.SmmOrder, 1)
+        o.tracking_code = "2296"
+        await s.commit()
+    out = await render_text("{{order_id}}|{{tracking_code}}", bot_id=5, user=None, order=o)
+    assert out == "2296|2296"

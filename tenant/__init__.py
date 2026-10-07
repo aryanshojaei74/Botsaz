@@ -7807,7 +7807,7 @@ async def _pubapi_orders_content(bot_id: int, tg_id: int):
     for o in orders:
         label = _SMM_STATUS_LABEL.get((o.status or "").lower(), o.status or "—")
         name = (o.service_name or "—")[:28]
-        lines.append(f"<code>{o.id}</code> · {label.split()[0]} · {name} × {int(o.quantity or 0):,} · {int(o.price_toman or 0):,}ت")
+        lines.append(f"<code>{o.tracking_code or o.id}</code> · {label.split()[0]} · {name} × {int(o.quantity or 0):,} · {int(o.price_toman or 0):,}ت")
     return "\n".join(lines), kb
 
 

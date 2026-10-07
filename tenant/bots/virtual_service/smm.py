@@ -6577,11 +6577,11 @@ async def announce_manual_smm_order(bot, row, oid: int) -> None:
             bot, row.id, manual=True, service_name=o.service_name or "—", link=o.link,
             quantity=o.quantity, price=o.price_toman, user=u,
             order_id=o.tracking_code or f"#{oid}", status="در انتظارِ انجام و تایید",
-            note=f"از دکمه‌هایِ پایین همین پیام تأیید یا رد کن. (#{oid})", pk=oid)
+            note="از دکمه‌هایِ پایین همین پیام تأیید یا رد کن.", pk=oid)   # PATCH_ORDER_CODE_UNIFIED_V1
         if not posted and (await _get_setting(row.id, "smm_alert_manual_order", "1")) != "0":
             await bot.send_message(
                 row.owner_id,
-                f"🔔 سفارش جدید SMM (#{oid})\n"
+                f"🔔 سفارش جدید SMM (#{o.tracking_code or oid})\n"
                 f"🛰 {o.service_name} × {int(o.quantity or 0):,}\n🔗 {o.link}\n"
                 f"💰 {int(float(o.price_toman or 0)):,} تومان\n\n"
                 f"از «📋 سفارش‌های SMM» تأیید یا رد کن.")
@@ -10481,14 +10481,14 @@ async def smm_place_order(bot: Bot, row, msg, v, link: str, qty: int, price: int
                 bot, row.id, manual=True, service_name=v.name, link=link,
                 quantity=qty, price=price, user=u, order_id=trk,
                 status="در انتظارِ انجام و تایید",
-                note=f"از دکمه‌هایِ پایین همین پیام تأیید یا رد کن. (#{order_pk})",
+                note="از دکمه‌هایِ پایین همین پیام تأیید یا رد کن.",   # PATCH_ORDER_CODE_UNIFIED_V1
                 pk=order_pk)
             # === PATCH_SMM_ADMIN_ALERT_TOGGLES_V1 === کلید: smm_alert_manual_order ("0" = خاموش)
             if not posted and (await _get_setting(row.id, "smm_alert_manual_order", "1")) != "0":
                 try:
                     await bot.send_message(
                         row.owner_id,
-                        f"🔔 سفارش جدید SMM (#{order_pk})\n"
+                        f"🔔 سفارش جدید SMM (#{trk or order_pk})\n"
                         f"🛰 {v.name} × {qty:,}\n🔗 {link}\n💰 {price:,} تومان\n\n"
                         f"از «📋 سفارش‌های SMM» تأیید یا رد کن.")
                 except Exception:
