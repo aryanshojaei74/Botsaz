@@ -698,11 +698,17 @@ SERVICE_TYPES = [
 def detect_platform(name: str, category: str = "") -> str:
     """کلید پلتفرم را از روی نام/دسته تشخیص می‌دهد. پیش‌فرض: other."""
     text = f"{name} {category}".lower()
-    for key, _label, kws in PLATFORMS:
+    # === PATCH_SMM_CUSTOMER_TREE_CLASSIFY_V1 ===
+    # روبینو/روبیکا/ایتا اول: اسمِ سرویس‌هایشان معمولاً «فالوور روبینو (اینستاگرامی)» یا
+    # «Rubika Rubino …» است و قبلاً به‌خاطرِ ترتیب زیرِ اینستاگرام/روبیکا می‌رفتند.
+    for key, _label, kws in sorted(PLATFORMS, key=lambda p: _DETECT_FIRST.index(p[0]) if p[0] in _DETECT_FIRST else 99):
         for kw in kws:
             if kw in text:
                 return key
     return "other"
+
+
+_DETECT_FIRST = ("rubino", "rubika", "eita")
 
 
 def detect_service_type(name: str, category: str = "") -> str:

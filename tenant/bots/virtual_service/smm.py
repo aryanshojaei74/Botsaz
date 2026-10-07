@@ -1461,6 +1461,7 @@ async def _quicklink_cart_rows(bot_id: int, mb_id: int) -> tuple[str, list[list[
 
 
 async def _quicklink_platforms_content(bot_id: int, mb_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    await sync_category_platforms(bot_id)   # PATCH_SMM_CUSTOMER_TREE_CLASSIFY_V1
     # === PATCH_SMM_QUICKLINK_PANEL_FILTER_V1 ===
     filter_raw = await _get_setting(bot_id, f"quicklink_panel_{mb_id}", "")
     active, panel_pk = _quicklink_panel_where(filter_raw)
@@ -1929,6 +1930,7 @@ async def _resolve_direct_product_services_raw(bot_id: int, mb: "MainButton") ->
         if cfg.get("smm_platform_key") and cfg.get("smm_type_key"):
             all_svcs = (await s.scalars(select(SmmService).where(
                 SmmService.bot_id == bot_id, SmmService.is_active == True))).all()
+            await sync_category_platforms(bot_id, all_svcs)   # PATCH_SMM_CUSTOMER_TREE_CLASSIFY_V1
             return [v for v in all_svcs if _svc_platform_type(v) == (cfg["smm_platform_key"], cfg["smm_type_key"])]
         # === PATCH_SMM_QUICKLINK_MANUALCAT_V1 ===
         if cfg.get("smm_category_ids"):
@@ -4470,6 +4472,7 @@ async def _smm_myservices_groups_content(bot_id: int) -> tuple[str, InlineKeyboa
     بعد نوع (بوست/ممبر/ویو/...)، تا هر سرویس زیرِ دسته‌ی خودش جمع بشه.
     گروه‌بندی از رویِ همون پلتفرم/نوعی انجام می‌شه که ادمین موقعِ افزودن
     از پنل واقعاً تأیید کرده (_svc_platform_type) — نه یه حدسِ تازه."""
+    await sync_category_platforms(bot_id)   # PATCH_SMM_CUSTOMER_TREE_CLASSIFY_V1
     async with Session() as s:
         svcs = (await s.scalars(select(SmmService).where(SmmService.bot_id == bot_id))).all()
     if not svcs:
@@ -7855,6 +7858,7 @@ async def smm_svc_setcat(cb: CallbackQuery, bot: Bot):
                 return
         svc.category_pk = cat_pk
         await s.commit()
+    await sync_category_platforms(row.id)   # PATCH_SMM_CUSTOMER_TREE_CLASSIFY_V1
     if origin == "myd" and back_page is not None:
         # === PATCH_SMM_MYSERVICES_REDESIGN_V1 ===
         await cb.answer("✅ ذخیره شد")
@@ -8377,9 +8381,7 @@ async def show_smm_services_to_user(bot: Bot, msg_or_cb, bot_id: int):
     if not svcs:
         await target.answer("🛒 در حال حاضر سرویسی برای فروش موجود نیست.")
         return
-    tree = smm_api.group_services([{
-        "service": v.service_id, "name": v.name, "category": v.category or ""}
-        for v in svcs])
+    tree = await classified_tree(bot_id, svcs)   # PATCH_SMM_CUSTOMER_TREE_CLASSIFY_V1
     # === PATCH_SMM_PLATFORM_RENAME_V1 ===
     _overrides = await _platform_label_overrides(bot_id)
     # تعداد سرویس هر پلتفرم برای نمایش
@@ -9043,18 +9045,75 @@ async def smmu_order_view(cb: CallbackQuery, bot: Bot):
     await cb.answer()
 
 
+# === PATCH_SMM_CUSTOMER_TREE_CLASSIFY_V1 ===
+# گزارشِ فدایی: «دسته‌هایِ روبینو را به دکمه وصل می‌کنم، مشتری می‌زند چیزی وصل نیست.»
+# علت: فروشگاهِ مشتری (و صفحهٔ «اتصال به پلتفرم» و دکمهٔ پلتفرم) پلتفرم را فقط از رویِ «اسمِ»
+# سرویس حدس می‌زد؛ نه دسته‌ای که ادمین سرویس را داخلش گذاشته، نه پلتفرم/نوعِ ذخیره‌شده. سرویسی مثلِ
+# «فالوور ایرانی» داخلِ دستهٔ روبینو زیرِ «سایر»/اینستاگرام می‌رفت و دکمهٔ روبینو خالی می‌ماند.
+# حالا ترتیب: پلتفرمِ دستهٔ ادمین ← پلتفرم/نوعِ ذخیره‌شده ← حدس از اسم (همان _svc_platform_type).
+# اقلام با شناسهٔ خودِ سرویس (pk) نگاشت می‌شوند، نه service_idِ پنل که بینِ دو پنل/سرویسِ دستی تکراری است.
+async def _cat_platform_map(bot_id: int) -> dict:
+    async with Session() as s:
+        rows = (await s.execute(select(SmmCategory.id, SmmCategory.platform).where(
+            SmmCategory.bot_id == bot_id))).all()
+    return {r[0]: r[1] for r in rows}
+
+
+async def sync_category_platforms(bot_id: int, svcs: list | None = None) -> int:
+    """پلتفرمِ هر سرویسِ داخلِ یک دسته = پلتفرمِ همان دسته (انتخابِ صریحِ ادمین)؛ نوعِ خالی یک‌بار
+    از رویِ اسم پر می‌شود. فقط ردیف‌هایِ ناهماهنگ نوشته می‌شوند؛ اشیایِ svcs هم در حافظه به‌روز می‌شوند
+    تا همهٔ مصرف‌کننده‌هایِ _svc_platform_type (فروشگاه، اتصالِ سریع، مینی‌اپ، مدیریتِ محصولات) یکی ببینند."""
+    cat_plats = await _cat_platform_map(bot_id)
+    if not cat_plats:
+        return 0
+    if svcs is None:
+        async with Session() as s:
+            svcs = (await s.scalars(select(SmmService).where(
+                SmmService.bot_id == bot_id, SmmService.category_pk.is_not(None)))).all()
+    changed = []
+    for v in svcs:
+        cp = cat_plats.get(getattr(v, "category_pk", None))
+        if not cp or cp == "other":
+            continue
+        t = v.type_key or smm_api.detect_service_type(v.name or "", v.category or "")
+        if v.platform_key != cp or v.type_key != t:
+            v.platform_key, v.type_key = cp, t
+            changed.append((v.id, cp, t))
+    if changed:
+        from sqlalchemy import update as _upd
+        async with Session() as s:
+            for vid, cp, t in changed:
+                await s.execute(_upd(SmmService).where(SmmService.id == vid).values(
+                    platform_key=cp, type_key=t))
+            await s.commit()
+    return len(changed)
+
+
+async def classified_tree(bot_id: int, svcs: list) -> dict:
+    """{platform: {type: [ {service, pk, name, category, platform, stype} ]}} — ترتیبِ ورودی حفظ می‌شود."""
+    try:
+        await sync_category_platforms(bot_id, svcs)
+    except Exception:
+        logger.exception("[smm] هماهنگ‌سازیِ پلتفرمِ دسته‌ها ناموفق بود")
+    tree: dict[str, dict[str, list]] = {}
+    for v in svcs:
+        p, t = _svc_platform_type(v)
+        tree.setdefault(p, {}).setdefault(t, []).append({
+            "service": v.service_id, "pk": v.id, "name": v.name or "",
+            "category": v.category or "", "platform": p, "stype": t})
+    return tree
+
+
 async def _user_active_tree(bot_id: int):
-    """درخت دسته‌بندی‌شدهٔ سرویس‌های فعال + نگاشت service_id→SmmService."""
+    """درخت دسته‌بندی‌شدهٔ سرویس‌های فعال + نگاشت id→SmmService."""
     await ensure_smm_columns()
     async with Session() as s:
         svcs = (await s.scalars(select(SmmService).where(
             SmmService.bot_id == bot_id, SmmService.is_active == True)
             .order_by(SmmService.id))).all()
-    by_sid = {v.service_id: v for v in svcs}
-    tree = smm_api.group_services([{
-        "service": v.service_id, "name": v.name, "category": v.category or ""}
-        for v in svcs])
-    return tree, by_sid
+    by_pk = {v.id: v for v in svcs}
+    tree = await classified_tree(bot_id, svcs)
+    return tree, by_pk
 
 
 async def _smm_platform_content(bot_id: int, pkey: str,
@@ -9161,15 +9220,11 @@ async def smmu_pick_type(cb: CallbackQuery, bot: Bot):
     # فرمت: smmu:type:<plat>:<type>
     parts = cb.data.split(":")
     pkey, tkey = parts[2], parts[3]
-    tree, _ = await _user_active_tree(row.id)
+    tree, sid_map = await _user_active_tree(row.id)   # PATCH_SMM_CUSTOMER_TREE_CLASSIFY_V1: نگاشت با pk
     items = tree.get(pkey, {}).get(tkey, [])
     if not items:
         await cb.answer("موردی نیست", show_alert=True)
         return
-    async with Session() as s:
-        svcs = (await s.scalars(select(SmmService).where(
-            SmmService.bot_id == row.id, SmmService.is_active == True))).all()
-    sid_map = {v.service_id: v for v in svcs}
     # === PATCH_SMM_SORT_ORDER_V1 ===
     # درخواستِ ادمین: ترتیبِ نمایشِ سرویس‌ها قابلِ‌انتخاب باشه (ارزان/گران/
     # جدید/قدیمی) — دقیقاً چیزی که تو ویدیویِ رقیب دیده بودیم. برایِ سرعت،
@@ -9181,7 +9236,7 @@ async def smmu_pick_type(cb: CallbackQuery, bot: Bot):
     rows = []
     entries = []
     for it in items:
-        v = sid_map.get(it["service"])
+        v = sid_map.get(it["pk"])
         if not v:
             continue
         entries.append((it, v))
@@ -10724,11 +10779,11 @@ async def show_smm_type_to_user(bot: Bot, msg_or_cb, bot_id: int, action: str):
         return
 
     async with Session() as s:
-        _objs = {v.service_id: v for v in (await s.scalars(select(SmmService).where(
+        _objs = {v.id: v for v in (await s.scalars(select(SmmService).where(
             SmmService.bot_id == bot_id, SmmService.is_active == True))).all()}
     # === PATCH_SMM_SORT_EVERYWHERE_V1 ===
     _so = await _get_setting(bot_id, "smm_sort_order", "none")
-    _pairs = [(it, _objs[it["service"]]) for it in items if it["service"] in _objs]
+    _pairs = [(it, _objs[it["pk"]]) for it in items if it["pk"] in _objs]
     _order = {v.id: i for i, v in enumerate(await _sort_svc_objs(bot_id, [v for _, v in _pairs], _so))}
     _pairs.sort(key=lambda p: _order[p[1].id])
     rows = []

@@ -18516,8 +18516,8 @@ async def _thb_smmplat_kb(bot_id: int, mb_id: int, selected: list[str]) -> Inlin
     async with Session() as s:
         svcs = (await s.scalars(select(SmmService).where(
             SmmService.bot_id == bot_id, SmmService.is_active == True))).all()
-    tree = _smm_api.group_services([{
-        "service": v.service_id, "name": v.name, "category": v.category or ""} for v in svcs])
+    from tenant.bots.virtual_service.smm import classified_tree as _ctree
+    tree = await _ctree(bot_id, svcs)   # PATCH_SMM_CUSTOMER_TREE_CLASSIFY_V1
     rows = []
     for pkey in sorted(tree.keys(), key=lambda k: -sum(len(x) for x in tree[k].values())):
         label = await _plat_label(bot_id, pkey)

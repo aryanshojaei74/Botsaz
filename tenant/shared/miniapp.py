@@ -1587,11 +1587,13 @@ async def _smm_scope(bot_id: int, mb_id: int | None):
             async with Session() as s:
                 allv = (await s.scalars(select(SmmService).where(
                     SmmService.bot_id == bot_id, SmmService.is_active == True))).all()   # noqa: E712
+            await _smm.sync_category_platforms(bot_id, allv)   # PATCH_SMM_CUSTOMER_TREE_CLASSIFY_V1
             return [v for v in allv if not pk or _smm._svc_platform_type(v)[0] in pk], "plat"
     async with Session() as s:
         allv = (await s.scalars(select(SmmService).where(
             SmmService.bot_id == bot_id, SmmService.is_active == True)   # noqa: E712
             .order_by(SmmService.id))).all()
+    await _smm.sync_category_platforms(bot_id, allv)   # PATCH_SMM_CUSTOMER_TREE_CLASSIFY_V1
     return allv, "auto"
 
 
