@@ -66,3 +66,27 @@ async def test_services_export(db, monkeypatch):
     assert rows[11]["desc"] == "Refill 30 days"                    # توضیحِ ارائه‌دهنده وقتی ادمین چیزی ننوشته
     assert rows[10]["category"] == "تلگرام - ممبر کانال"
     assert rows[11]["category"] == "روبیکا - ممبر کانال"
+
+
+@pytest.mark.asyncio
+async def test_no_general_and_manual_vnum_hidden(db, monkeypatch):
+    """PATCH_API_NO_GENERAL_V1"""
+    async with db() as s:
+        s.add(models.SmmService(id=13, bot_id=5, service_id="man1788816335", name="📱 شماره آمریکا",
+                                category="شمارهٔ مجازیِ تلگرام", panel_rate=0, sell_rate=90000000,
+                                min_qty=1, max_qty=1, is_active=True, is_manual=True))
+        s.add(models.SmmService(id=14, bot_id=5, service_id="333", name="Instagram Followers HQ",
+                                panel_rate=1000, sell_rate=2000, min_qty=10, max_qty=1000, is_active=True))
+        s.add(models.SmmService(id=15, bot_id=5, service_id="444", name="چیز نامشخص",
+                                panel_rate=1000, sell_rate=2000, min_qty=10, max_qty=1000, is_active=True))
+        await s.commit()
+
+    async def params(_r):
+        return {"key": "BOTKEY", "action": "services"}
+    monkeypatch.setattr(pa, "_v2_params", params)
+    import json
+    rows = {x["service"]: x for x in json.loads((await pa.smm_v2(_Req({}))).body)}
+    assert 13 not in rows
+    assert rows[14]["category"] == "اینستاگرام - فالوور"
+    assert rows[15]["category"] == "سایر"
+    assert all(r["category"] != "General" for r in rows.values())

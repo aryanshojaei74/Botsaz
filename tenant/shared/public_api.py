@@ -125,9 +125,35 @@ async def _authed(x_api_key: str | None) -> AuthCtx:
 # • توضیحات: متنِ ادمین، وگرنه توضیحِ ارائه‌دهنده — قبلاً در v2 اصلاً فرستاده نمی‌شد.
 # • دسته با نامِ پلتفرم («تلگرام - ممبر کانال») تا دسته‌هایِ هم‌نامِ پلتفرم‌هایِ مختلف
 #   (تلگرام/روبیکا) در طرفِ گیرنده یکی نشوند.
+_VNUM_CAT_MARKERS = ("شمارهٔ مجازی", "شماره مجازی", "شماره‌ی مجازی", "virtual number")
+
+
 def _api_sellable(v: SmmService) -> bool:
     sid = str(v.service_id or "")
-    return not (sid.startswith(("ozv:", "sp:")) or (v.type_key or "") == "virtual_number")
+    if sid.startswith(("ozv:", "sp:")) or (v.type_key or "") == "virtual_number":
+        return False
+    # PATCH_API_NO_GENERAL_V1: شمارهٔ مجازیِ دستی (service_id=man…، دستهٔ متنیِ «شمارهٔ مجازیِ تلگرام»)
+    cat = (v.category or "").lower()
+    return not any(m in cat for m in _VNUM_CAT_MARKERS)
+
+
+def _api_fallback_category(v: SmmService) -> tuple[str, str]:
+    """=== PATCH_API_NO_GENERAL_V1 ===
+    سرویسِ بی‌دسته قبلاً در API با دستهٔ «General» می‌رفت (همهٔ سرویس‌هایِ بی‌دسته یک‌جا، بی‌ربط به هم).
+    حالا مثلِ فروشگاهِ ربات: «پلتفرم - نوع» از رویِ همان طبقه‌بندیِ ذخیره‌شده/تشخیصی."""
+    try:
+        from tenant.bots.virtual_service import smm_api as _sa
+        from tenant.bots.virtual_service.smm import _svc_platform_type
+        p, t = _svc_platform_type(v)
+    except Exception:
+        return "سایر", ""
+    plat = _platform_label(p) if p != "other" else ""
+    typ = ""
+    if t and t not in ("other", "__all__"):
+        typ = _sa.service_type_label(t).split(" ", 1)[-1].strip()
+    if plat and typ:
+        return f"{plat} - {typ}", p
+    return (plat or typ or "سایر"), p
 
 
 def _api_desc(v: SmmService) -> str:
@@ -171,6 +197,8 @@ async def _svc_payload(bot_id: int, v: SmmService, discount_pct: float = 0.0,
                 c = await s.get(SmmCategory, v.category_pk)
             if c:
                 cat_name = c.name
+    if not cat_name:
+        cat_name = _api_fallback_category(v)[0]   # PATCH_API_NO_GENERAL_V1
     return {
         "id": v.id,
         "name": v.name,
@@ -489,7 +517,8 @@ async def smm_v2(request: Request):
                 "service": v.id,
                 "name": d["name"],
                 "type": "Default",
-                "category": _api_category(d["category"], _plats.get(v.category_pk) or v.platform_key),
+                "category": _api_category(d["category"], _plats.get(v.category_pk) or v.platform_key
+                                          or _api_fallback_category(v)[1]),
                 "rate": str(d["price_per_1000"]),
                 "min": str(v.min_qty or 1),
                 "max": str(v.max_qty or 0),
