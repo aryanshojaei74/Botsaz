@@ -38,6 +38,7 @@ class Feature(str, Enum):
     # === PATCH_ZIBAL_GATEWAY_V1 === طبقِ خواستهٔ ادمین: فقط پلنِ حرفه‌ای.
     GATEWAY_ZIBAL        = "gateway_zibal"          # درگاهِ زیبال
     GATEWAY_UNIQUEPAY    = "gateway_uniquepay"      # درگاهِ یونیک‌پی
+    GATEWAY_APAY         = "gateway_apay"           # درگاهِ آپی (کارت‌به‌کارتِ آنی)
     # === PATCH_ABANGATEWAY_V1 === طبقِ خواستهٔ مدیر: مثلِ یونیک‌پی، رشد و حرفه‌ای.
     GATEWAY_ABANGATEWAY  = "gateway_abangateway"     # درگاهِ آبان گیت‌وی
     GATEWAY_STARS        = "gateway_stars"          # پرداخت با استارزِ تلگرام
@@ -212,6 +213,7 @@ FEATURE_LABELS = {
     # === PATCH_ZIBAL_GATEWAY_V1 ===
     Feature.GATEWAY_ZIBAL: "🔐 درگاه زیبال",
     Feature.GATEWAY_UNIQUEPAY: "💳 درگاه یونیک‌پی",
+    Feature.GATEWAY_APAY: "💳 درگاه آپی (کارت‌به‌کارت آنی)",
     Feature.GATEWAY_ABANGATEWAY: "💳 درگاه آبان گیت‌وی",
     Feature.GATEWAY_STARS: "⭐ پرداخت با استارز تلگرام",
     Feature.GATEWAY_HESABPAY: "🇦🇫 درگاه حساب‌پی",
@@ -315,7 +317,7 @@ _GROWTH_EXTRA = {
     # === PATCH_FREE_PLAN_SIMPLIFY_V1 ===
     # این‌ها قبلاً هیچ گِیتی نداشتند (یعنی رایگان هم می‌دیدشان). حالا از
     # رشد به بالا — پس رشد و حرفه‌ای دقیقاً همان چیزی را دارند که داشتند.
-    Feature.GATEWAY_ZARINPAL, Feature.GATEWAY_UNIQUEPAY,
+    Feature.GATEWAY_ZARINPAL, Feature.GATEWAY_UNIQUEPAY, Feature.GATEWAY_APAY,
     Feature.GATEWAY_STARS, Feature.GATEWAY_HESABPAY,
     # === PATCH_ABANGATEWAY_V1 === طبقِ خواستهٔ مدیر: رشد و حرفه‌ای.
     Feature.GATEWAY_ABANGATEWAY,
@@ -350,7 +352,7 @@ _PARTNER = {
     # === PATCH_FREE_PLAN_SIMPLIFY_V1 ===
     # همکار قبلاً هم این‌ها را می‌دید (چون هیچ گِیتی نداشتند)؛ صریح شد تا
     # اضافه‌شدنِ گِیت چیزی از پنلِ همکار کم نکند.
-    Feature.GATEWAY_ZARINPAL, Feature.GATEWAY_UNIQUEPAY,
+    Feature.GATEWAY_ZARINPAL, Feature.GATEWAY_UNIQUEPAY, Feature.GATEWAY_APAY,
     Feature.GATEWAY_STARS, Feature.KYC_VERIFY, Feature.TX_LOG_CHANNEL,
     # === PATCH_ABANGATEWAY_V1 ===
     Feature.GATEWAY_ABANGATEWAY,

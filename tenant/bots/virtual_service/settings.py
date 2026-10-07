@@ -98,7 +98,7 @@ register_settings_items(section_key("finance", KIND), [
     SettingsItem(
         label="🛰 متصل‌کردنِ کانالِ انجامِ سفارشات", callback="tadm:smmorderchannel",
         handler=_smm_order_channel,
-        after=("set:abangateway", "set:uniquepay", "set:kyc", "set:txlog", "tadm:receiptchannel"),
+        after=("set:abangateway", "set:uniquepay", "set:apay", "set:kyc", "set:txlog", "tadm:receiptchannel"),
     ),
     SettingsItem(
         label="🇦🇫 درگاه حساب‌پی (پرداخت افغانی)", callback="set:hesabpay",

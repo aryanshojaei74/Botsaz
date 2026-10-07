@@ -1549,6 +1549,25 @@ class UniquePayCharge(Base):
     paid_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
+# === PATCH_APAY_GATEWAY_V1 ===
+class ApayCharge(Base):
+    """شارژ کیف پول با درگاهِ کارت‌به‌کارتِ آنیِ «آپی» (apaygate.shop)."""
+    __tablename__ = "apay_charges"
+    __table_args__ = (UniqueConstraint("order_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    user_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    order_id: Mapped[str] = mapped_column(String(40), index=True)      # شناسهٔ ما (به APay فرستاده می‌شود)
+    payment_id: Mapped[str | None] = mapped_column(String(64), index=True)   # pay_… از APay
+    amount_toman: Mapped[int] = mapped_column(Integer, default=0)      # مبلغی که کیف پول شارژ می‌شود
+    pay_amount_rial: Mapped[int | None] = mapped_column(BigInteger)    # مبلغِ دقیقِ واریز (با رقمِ یکتا)
+    pay_url: Mapped[str | None] = mapped_column(String(300))
+    status: Mapped[str] = mapped_column(String(20), default="waiting")   # waiting/paid/cancelled/expired
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 # === PATCH_ABANGATEWAY_V1 ===
 class AbanGatewayCharge(Base):
     """شارژ کیف پول از درگاه کارت‌به‌کارتِ خودکارِ «آبان گیت‌وی» (abangateway.ir).
@@ -3340,7 +3359,7 @@ TENANT_OWNED_MODELS += [
     Bet, BetLedger,                        # شرط‌بندیِ گروهی
     KycRequest, RefPointWallet,
     SmmPanel, SmmCategory,
-    HesabPayCharge, TonDirectCharge, UniquePayCharge, AbanGatewayCharge,
+    HesabPayCharge, TonDirectCharge, UniquePayCharge, ApayCharge, AbanGatewayCharge,
     CommunityChat, BotCustomDomain, TenantPremiumEmoji,
     TenantGroupBan, TenantGroupWarn, TenantGroupEvent, TenantGroupCaptcha,
     AdminWebSession, ResellerTrialLog, VpnPartner,

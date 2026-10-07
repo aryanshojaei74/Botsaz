@@ -28,6 +28,7 @@ ITEMS: list[tuple[str, str, str, bool]] = [
     ("zarinpal",    "w:zarinpal",    "🔐 زرین‌پال",       True),
     ("zibal",       "w:zibal",       "🔐 زیبال",          False),
     ("uniquepay",   "w:uniquepay",   "💳 یونیک‌پی",       True),
+    ("apay",        "w:apay",        "💳 آپی",            True),
     ("abangateway", "w:abangateway", "💳 آبان گیت‌وی",    True),
     ("tonpays",     "w:tonpays",     "💠 تون‌پیز",        True),
     ("hesabpay",    "w:hesabpay",    "🇦🇫 حساب‌پی",       False),

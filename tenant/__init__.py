@@ -178,6 +178,9 @@ tenant_router.include_router(dice_texts_router)
 # === PATCH_UNIQUEPAY_V1 ===
 from tenant.gateways.uniquepay_admin import uniquepay_router
 tenant_router.include_router(uniquepay_router)
+# === PATCH_APAY_GATEWAY_V1 ===
+from tenant.gateways.apay_admin import apay_router
+tenant_router.include_router(apay_router)
 # === PATCH_WALLET_LIMITS_V1 === حداقل/حداکثرِ واریزِ هر درگاه (بخشِ مالی)
 from tenant.gateways.wallet_limits_admin import wallet_limits_admin_router
 tenant_router.include_router(wallet_limits_admin_router)
@@ -3290,6 +3293,7 @@ GATEWAY_LABELS: dict[str, tuple[str, str]] = {
     "zarinpal":  ("زرین‌پال",         "zarinpal_display_name"),
     "zibal":     ("زیبال",            "zibal_display_name"),
     "uniquepay": ("یونیک‌پی",         "uniquepay_display_name"),
+    "apay":      ("آپی",              "apay_display_name"),
     "swap":      ("سواپ‌ولت",         "swap_display_name"),
     "crypto":    ("ارز دیجیتال",      "crypto_display_name"),
     # این دو ماژولِ خودشان هم get_display_name دارند؛ کلید و پیش‌فرض باید
@@ -3472,6 +3476,17 @@ async def wallet_topup_rows(bot_id: int, colored: bool = False,
     except Exception:
         logger.exception("بررسیِ دسترسیِ یونیک‌پی ناموفق بود")
 
+    # === PATCH_APAY_GATEWAY_V1 ===
+    try:
+        from tenant.gateways.apay import is_available as _ap_ok
+        _ap_show = (not in_purchase) or \
+            await get_setting(bot_id, "apay_show_purchase", "1") == "1"
+        if _ap_show and await _ap_ok(bot_id):
+            rows.append([InlineKeyboardButton(
+                text=await gw_btn(bot_id, 'apay', 'شارژ با', '💳'), callback_data="w:apay", style=succ)])
+    except Exception:
+        logger.exception("بررسیِ دسترسیِ آپی ناموفق بود")
+
     # === PATCH_ABANGATEWAY_V1 ===
     try:
         from tenant.gateways.abangateway import is_available as _ab_ok, get_display_name as _ab_name
@@ -3570,6 +3585,16 @@ async def pay_method_kb_full(bot_id: int, oid: int) -> InlineKeyboardMarkup:
                 text=await gw_btn(bot_id, 'uniquepay', 'پرداخت با', '💳'), callback_data="w:uniquepay")])
     except Exception:
         logger.exception("بررسیِ دسترسیِ یونیک‌پی ناموفق بود")
+
+    # === PATCH_APAY_GATEWAY_V1 ===
+    try:
+        from tenant.gateways.apay import is_available as _ap_ok2
+        if await get_setting(bot_id, "apay_show_purchase", "1") == "1" and \
+                await _ap_ok2(bot_id):
+            rows.append([InlineKeyboardButton(
+                text=await gw_btn(bot_id, 'apay', 'پرداخت با', '💳'), callback_data="w:apay")])
+    except Exception:
+        logger.exception("بررسیِ دسترسیِ آپی ناموفق بود")
 
     # === PATCH_ABANGATEWAY_V1 ===
     # === PATCH_GATEWAY_PAY_FOR_ORDER_V1 ===
@@ -6107,6 +6132,14 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         await _up_menu(_FakeCb(msg), bot, state)
         return
 
+    # === PATCH_APAY_GATEWAY_V1 ===
+    if (msg.text and msg.text.strip().startswith("💳 درگاهِ آپی")
+            and await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id)):
+        from tenant.gateways.apay_admin import ap_menu as _ap_menu
+        await state.clear()
+        await _ap_menu(_FakeCb(msg), bot, state)
+        return
+
     # === PATCH_ABANGATEWAY_KEYBOARD_MODE_V1 ===
     if (msg.text and msg.text.strip().startswith("💳 درگاهِ آبان")
             and await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id)):
@@ -6730,6 +6763,12 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         from tenant.gateways.uniquepay_admin import upu_start
         await upu_start(_FakeCb(msg), bot, state)
         return
+    # === PATCH_APAY_GATEWAY_V1 ===
+    if msg.text and (msg.text == "💳 شارژ کارت‌به‌کارت آنی (آپی)"
+                     or msg.text in await gw_label_set(bot_id, "apay", "💳 شارژ با")):
+        from tenant.gateways.apay_admin import apu_start
+        await apu_start(_FakeCb(msg), bot, state)
+        return
     if msg.text == "⭐ شارژ با استارز تلگرام":
         await wallet_stars_text(msg, bot, state)
         return
@@ -7181,6 +7220,16 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
                             "w:uniquepay", succ))
     except Exception:
         logger.exception("بررسیِ دسترسیِ یونیک‌پی ناموفق بود")
+    # === PATCH_APAY_GATEWAY_V1 ===
+    try:
+        from tenant.gateways.apay import is_available as _ap_ok3
+        if await _ap_ok3(bot_id) and \
+                await get_setting(bot_id, "apay_show_wallet", "1") == "1":
+            from tenant.gateways.gateway_layout import gw_custom_label as _gwcl_ap
+            options.append((await _gwcl_ap(bot_id, "apay", "💳 شارژ کارت‌به‌کارت آنی (آپی)"),
+                            "w:apay", succ))
+    except Exception:
+        logger.exception("بررسیِ دسترسیِ آپی ناموفق بود")
     if await get_setting(bot_id, "zarinpal_enabled", "0") == "1" and \
             bool((await get_setting(bot_id, "zarinpal_merchant_id", "")).strip()):
         from tenant.gateways.gateway_layout import gw_custom_label as _gwcl   # PATCH_GATEWAY_LAYOUT_V1
@@ -11001,6 +11050,11 @@ async def _sec_finance_opts(bot_id: int, plan: str) -> list[tuple[str, str]]:
     if ok(Feature.GATEWAY_UNIQUEPAY):  # PATCH_FREE_PLAN_SIMPLIFY_V1
         opts.append(("💳 درگاهِ یونیک‌پی: " + ("✅ فعال" if _up_on else "❌ خاموش"),
                      "set:uniquepay"))
+    # === PATCH_APAY_GATEWAY_V1 ===
+    _ap_on = await get_setting(bot_id, "apay_enabled", "0") == "1"
+    if ok(Feature.GATEWAY_APAY):
+        opts.append(("💳 درگاهِ آپی (کارت‌به‌کارت آنی): " + ("✅ فعال" if _ap_on else "❌ خاموش"),
+                     "set:apay"))
     # === PATCH_ABANGATEWAY_V1 ===
     _ab_on = await get_setting(bot_id, "abangateway_enabled", "0") == "1"
     if ok(Feature.GATEWAY_ABANGATEWAY):
@@ -20406,7 +20460,7 @@ async def tadm_stats(cb: CallbackQuery, bot: Bot):
                 "charge", "aqp_charge", "swap_charge", "crypto_charge", "nowpay_charge",
                 "tonpays_charge", "zarinpal_charge", "zibal_charge", "idpay_charge",
                 "hesabpay_charge", "abangateway_charge", "abangateway_manual_admin", "abangw_manual",
-                "uniquepay_charge", "ton_direct", "tron_direct", "admin",
+                "uniquepay_charge", "apay_charge", "ton_direct", "tron_direct", "admin",
             ]))) or 0
         # کل تخفیفِ استفاده‌شده (تعداد کاربر یکتا + مجموع مبلغ صرفه‌جویی‌شده)
         discount_users = await s.scalar(
@@ -32609,6 +32663,7 @@ _ADMIN_MODULE_SECTION = {
     "tenant.gateways.stars_admin": "finance",
     "tenant.gateways.swap_admin": "finance",
     "tenant.gateways.uniquepay_admin": "finance",
+    "tenant.gateways.apay_admin": "finance",
     "tenant.gateways.abangateway_admin": "finance",
     "tenant.gateways.wallet_limits_admin": "finance",
     "tenant.gateways.gateway_layout": "finance",

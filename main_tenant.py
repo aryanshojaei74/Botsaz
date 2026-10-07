@@ -1400,6 +1400,21 @@ async def tenant_webhook(token: str, request: Request):
 
 
 
+# === PATCH_APAY_GATEWAY_V1 ===
+@app.post("/apay/webhook/{bot_id}")
+async def apay_webhook(bot_id: int, request: Request):
+    """وب‌هوکِ درگاهِ آپی؛ امضا (اگر کلید ثبت شده) چک می‌شود و تسویه فقط با verify ِ خودِ آپی."""
+    from tenant.gateways.apay import handle_webhook
+    raw = await request.body()
+    try:
+        code = await handle_webhook(bot_id, raw, request.headers.get("X-APay-Timestamp", ""),
+                                    request.headers.get("X-APay-Signature", ""))
+    except Exception:
+        logger.exception("apay webhook error (bot=%s)", bot_id)
+        code = 500
+    return Response(status_code=code)
+
+
 @app.post("/hesabpay/webhook")
 async def hesabpay_webhook(request: Request):
     """دریافت و تأیید webhook حساب‌پی؛ شارژ فقط بعد از verify و به‌صورت idempotent."""

@@ -72,6 +72,11 @@ async def _enabled_uniquepay(bot_id: int) -> bool:
     return bool(await is_available(bot_id))
 
 
+async def _enabled_apay(bot_id: int) -> bool:
+    from tenant.gateways.apay import is_available
+    return bool(await is_available(bot_id))
+
+
 async def _enabled_abangateway(bot_id: int) -> bool:
     from tenant.gateways.abangateway import is_available
     return bool(await is_available(bot_id))
@@ -103,6 +108,8 @@ GATEWAYS: dict[str, Gateway] = {g.key: g for g in (
     # پیش‌فرضِ حداقلِ یونیک‌پی در خودِ درگاه ۵۱٬۰۰۰ است (MIN_AMOUNT)، نه ۱۰٬۰۰۰
     Gateway("uniquepay", "💳 یونیک‌پی", "uniquepay_min_amount", "uniquepay_max_amount", 51_000,
             floor_min=1_000, enabled=_enabled_uniquepay),
+    Gateway("apay", "💳 آپی (کارت‌به‌کارت آنی)", "apay_min_amount", "apay_max_amount", 10_000,
+            floor_min=1_000, note="کفِ فنیِ آپی ۱٬۰۰۰ و سقفش ۱۰۰ میلیون تومان است.", enabled=_enabled_apay),
     Gateway("abangateway", "💳 آبان گیت‌وی", "abangateway_min_amount", "abangateway_max_amount", 10_000,
             floor_min=1_000, enabled=_enabled_abangateway),
     Gateway("swap", "🟦 سواپ‌ولت", "swap_min_toman", "swap_max_toman", 10_000,
