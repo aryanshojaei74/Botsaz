@@ -2554,6 +2554,12 @@ _ADMIN_ONLY_CB_PREFIXES = (
     "poll:adm:", "poll:toggle:", "poll:del:", "poll:new", "poll:send:", "poll:setgroup",
     "review:approve:",
     "cfg:", "cfgf:", "bc:", "adjdeduct:",
+    # تأیید/ردِ سفارش و نوبت توسطِ ادمین — قبلاً هیچ چکی نداشتند: مشتری می‌توانست
+    # سفارشِ کارت‌به‌کارتِ خودش را با callbackِ دست‌ساز «تأیید» کند و محصول را
+    # بدونِ پرداخت بگیرد.
+    "shop:confirm:", "shop:reject", "shop:giftdone:",
+    "book:confirm:", "book:reject:",
+    "set:", "usr:", "cfef:", "chp:",
 )
 
 
@@ -7347,6 +7353,17 @@ async def stars_pre_checkout(pcq: PreCheckoutQuery):
 async def stars_successful_payment(msg: Message, bot: Bot):
     sp = msg.successful_payment
     payload = sp.invoice_payload or ""
+    # === PATCH_STARS_PAYMENT_DEDUPE_V1 ===
+    # اگر تلگرام همان آپدیتِ پرداخت را دوباره بفرستد (retryِ وبهوک)، قبلاً شارژ/سفارش
+    # دوبار ثبت می‌شد. شناسهٔ یکتایِ پرداخت فقط یک‌بار پذیرفته می‌شود.
+    _charge_id = str(getattr(sp, "telegram_payment_charge_id", "") or "")
+    if _charge_id:
+        from tenant.gateways.auto_receipt import claim_receipts
+        if not await claim_receipts("tg_stars", [_charge_id[:120]],
+                                    amount=int(sp.total_amount or 0),
+                                    user_telegram_id=msg.from_user.id):
+            logger.warning("پرداختِ استارزِ تکراری نادیده گرفته شد: %s", _charge_id)
+            return
     if payload.startswith("wallet_stars:"):
         from tenant.gateways.stars_admin import handle_wallet_stars_payment
         await handle_wallet_stars_payment(msg, bot, sp, payload)
@@ -7393,7 +7410,7 @@ async def _handle_shop_stars_payment(msg: Message, bot: Bot, sp, payload: str):
     async with Session() as s:
         u = await s.scalar(select(BotUser).where(
             BotUser.bot_id == row.id, BotUser.telegram_id == msg.from_user.id))
-        p = await s.get(Product, pid)
+        p = await s.get(Product, pid, with_for_update=True)
         if not u or not p:
             return
         if p.stock > 0:
@@ -7410,6 +7427,7 @@ async def _handle_shop_stars_payment(msg: Message, bot: Bot, sp, payload: str):
         if code_id:
             from tenant.gateways.discount_engine import record_usage
             await record_usage(s, code_id=code_id, bot_id=row.id, telegram_id=msg.from_user.id)
+        await s.flush()          # قبلاً order.id قبل از flush خوانده می‌شد و همیشه None بود
         order_id = order.id
         await s.commit()
     kb = await main_kb_or_remove(row.id, row.owner_id, msg.from_user.id)

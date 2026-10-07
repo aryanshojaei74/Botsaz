@@ -33,6 +33,35 @@ booking_router = Router()
 WEEKDAY_FA = ["شنبه", "یک‌شنبه", "دو‌شنبه", "سه‌شنبه", "چهار‌شنبه", "پنج‌شنبه", "جمعه"]
 
 
+def _next_slot_date(weekday_fa_idx: int, time_str: str,
+                    now: "datetime.datetime | None" = None) -> datetime.date:
+    """=== PATCH_BOOKING_SLOT_DATE_V1 ===
+    تاریخِ واقعیِ نزدیک‌ترین نوبتِ این اسلات (به وقتِ ایران). قبلاً همیشه «امروز»
+    ذخیره می‌شد: نوبتِ «دوشنبه ۱۰:۰۰» که جمعه رزرو می‌شد تاریخِ جمعه می‌گرفت و
+    ظرفیتِ اسلات‌هایِ هم‌ساعتِ روزهایِ مختلفِ هفته با هم قاطی می‌شد.
+    WEEKDAY_FA از شنبه شروع می‌شود (۰=شنبه)؛ weekday()ِ پایتون از دوشنبه (۵=شنبه)."""
+    if now is None:   # وقتِ ایران
+        now = datetime.datetime.utcnow() + datetime.timedelta(hours=3, minutes=30)
+    today_fa = (now.weekday() + 2) % 7
+    delta = (int(weekday_fa_idx) - today_fa) % 7
+    if delta == 0:
+        try:
+            hh, mm = (int(x) for x in str(time_str).split(":")[:2])
+            if (now.hour, now.minute) >= (hh, mm):
+                delta = 7          # ساعتِ امروز گذشته → هفتهٔ بعد
+        except (ValueError, TypeError):
+            pass
+    return now.date() + datetime.timedelta(days=delta)
+
+
+def _fa_date(d: datetime.date) -> str:
+    try:
+        import jdatetime as _jd
+        return _jd.date.fromgregorian(date=d).strftime("%Y/%m/%d")
+    except Exception:
+        return d.isoformat()
+
+
 async def get_bot_row_by_token(token: str) -> BotRow | None:
     async with Session() as s:
         return await s.scalar(select(BotRow).where(BotRow.token == token))
@@ -153,20 +182,22 @@ async def book_save(msg: Message, state: FSMContext, bot: Bot):
     capacity_full = False
     appt_id = None
     async with Session() as s:
-        sl = await s.get(AppointmentSlot, data["slot_id"])
+        # FOR UPDATE رویِ اسلات: دو رزروِ هم‌زمان هر دو از چکِ ظرفیت رد نشوند
+        sl = await s.get(AppointmentSlot, data["slot_id"], with_for_update=True)
         if sl is not None and await _is_foreign(sl, bot):   # PATCH_TENANT_SCOPE_V1
             sl = None
-        if not sl or not user:
+        if not sl or not user or not getattr(sl, "is_active", True):
             await state.clear()
             await msg.answer("این اسلات دیگر در دسترس نیست.")
             return
+        appt_date = _next_slot_date(sl.weekday, sl.time_str)   # PATCH_BOOKING_SLOT_DATE_V1
         # ── رعایت ظرفیت: تعداد نوبت‌های فعالِ همین اسلات (همان روز و ساعت) را می‌شماریم
         #    و اگر به ظرفیت رسیده باشد، اجازهٔ رزرو نمی‌دهیم (جلوگیری از over-booking) ──
         taken = await s.scalar(
             select(func.count()).select_from(Appointment).where(
                 Appointment.bot_id == bot_row.id,
                 Appointment.time_str == sl.time_str,
-                Appointment.date_str == str(today),
+                Appointment.date_str == str(appt_date),
                 Appointment.status.in_(("pending", "confirmed")),
             )
         ) or 0
@@ -176,8 +207,8 @@ async def book_save(msg: Message, state: FSMContext, bot: Bot):
             appt = Appointment(
                 bot_id=bot_row.id,
                 user_id=user.id,
-                service_name=f"نوبت {slot_wd} {sl.time_str}",
-                date_str=str(today),
+                service_name=f"نوبت {slot_wd} {_fa_date(appt_date)} ساعت {sl.time_str}"[:120],
+                date_str=str(appt_date),
                 time_str=sl.time_str,
                 note=note,
                 status="pending"
@@ -198,7 +229,7 @@ async def book_save(msg: Message, state: FSMContext, bot: Bot):
     admin_text = (
         f"📅 <b>رزرو جدید #{appt_id}</b>\n"
         f"کاربر: {msg.from_user.full_name} (<code>{msg.from_user.id}</code>)\n"
-        f"زمان: {slot_wd} — {data['slot_time']}\n"
+        f"زمان: {slot_wd} {_fa_date(appt_date)} — {data['slot_time']}\n"
         f"یادداشت: {note or '—'}"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[
@@ -210,7 +241,7 @@ async def book_save(msg: Message, state: FSMContext, bot: Bot):
     from tenant import inline_back_kb
     await msg.answer(
         f"✅ درخواست رزرو ثبت شد!\n"
-        f"زمان: <b>{slot_wd} — {data['slot_time']}</b>\n"
+        f"زمان: <b>{slot_wd} {_fa_date(appt_date)} — {data['slot_time']}</b>\n"
         f"بعد از تایید ادمین اطلاع‌رسانی می‌شود.",
         reply_markup=await inline_back_kb(bot_row.id),
     )
@@ -220,11 +251,11 @@ async def book_save(msg: Message, state: FSMContext, bot: Bot):
 async def book_confirm(cb: CallbackQuery, bot: Bot):
     aid = int(cb.data.split(":")[2])
     async with Session() as s:
-        appt = await s.get(Appointment, aid)
+        appt = await s.get(Appointment, aid, with_for_update=True)
         if appt is not None and await _is_foreign(appt, bot):   # PATCH_TENANT_SCOPE_V1
             appt = None
-        if not appt:
-            await cb.answer()
+        if not appt or appt.status != "pending":
+            await cb.answer("این نوبت قبلاً رسیدگی شده.", show_alert=True)
             return
         user = await s.get(BotUser, appt.user_id)
         appt.status = "confirmed"
@@ -242,11 +273,11 @@ async def book_confirm(cb: CallbackQuery, bot: Bot):
 async def book_reject(cb: CallbackQuery, bot: Bot):
     aid = int(cb.data.split(":")[2])
     async with Session() as s:
-        appt = await s.get(Appointment, aid)
+        appt = await s.get(Appointment, aid, with_for_update=True)
         if appt is not None and await _is_foreign(appt, bot):   # PATCH_TENANT_SCOPE_V1
             appt = None
-        if not appt:
-            await cb.answer()
+        if not appt or appt.status not in ("pending", "confirmed"):
+            await cb.answer("این نوبت قبلاً رسیدگی شده.", show_alert=True)
             return
         user = await s.get(BotUser, appt.user_id)
         appt.status = "cancelled"

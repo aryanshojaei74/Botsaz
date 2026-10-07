@@ -713,7 +713,7 @@ async def shop_buy_wallet(cb: CallbackQuery, bot: Bot, state: FSMContext):
     async with Session() as s:
         # === PATCH_WALLET_ROW_LOCK_V1 ===
         u = await s.get(BotUser, user.id, with_for_update=True)
-        pr = await s.get(Product, pid)
+        pr = await s.get(Product, pid, with_for_update=True)   # موجودیِ محدود: آخرین عدد دوبار فروخته نشود
         if pr is not None and await _is_foreign(pr, bot):   # PATCH_TENANT_SCOPE_V1
             pr = None
         if not u or not pr or not pr.is_active:
@@ -1113,11 +1113,15 @@ async def shop_rc_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot):
 async def shop_confirm_order(cb: CallbackQuery, bot: Bot):
     order_id = int(cb.data.split(":")[2])
     async with Session() as s:
-        order = await s.get(ProductOrder, order_id)
+        # FOR UPDATE + رباتِ جاری: دو ادمین هم‌زمان دوبار تحویل/کسرِ موجودی نکنند و
+        # سفارشِ رباتِ دیگر تأیید نشود.
+        order = await s.get(ProductOrder, order_id, with_for_update=True)
+        if order is not None and await _is_foreign(order, bot):
+            order = None
         if not order or order.status != "awaiting_admin":
             await cb.answer("سفارش قبلاً پردازش شده", show_alert=True)
             return
-        p = await s.get(Product, order.product_id)
+        p = await s.get(Product, order.product_id, with_for_update=True)
         user = await s.get(BotUser, order.user_id)
         bot_row = await s.get(BotRow, order.bot_id)
         if p and p.stock > 0:
@@ -1189,7 +1193,7 @@ async def shop_confirm_order(cb: CallbackQuery, bot: Bot):
 async def shop_reject_order(cb: CallbackQuery, bot: Bot, state: FSMContext):
     order_id = int(cb.data.split(":")[2])
     async with Session() as s:
-        order = await s.get(ProductOrder, order_id)
+        order = await s.get(ProductOrder, order_id, with_for_update=True)
         if order is not None and await _is_foreign(order, bot):   # PATCH_TENANT_SCOPE_V1
             order = None
         if not order or order.status != "awaiting_admin":

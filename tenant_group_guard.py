@@ -246,8 +246,13 @@ async def _set_status_title(bot: Bot, chat_id: int, user_id: int, title: str) ->
         )
         await bot.set_chat_administrator_custom_title(chat_id, user_id, title[:16])
         return True
-    except Exception:
-        logger.exception("tenant group status title set failed chat=%s user=%s", chat_id, user_id)
+    except Exception as e:
+        _m = str(e).lower()
+        if "not enough rights" in _m or "admin_required" in _m or "chat_admin_required" in _m:
+            # ربات در این گروه اجازهٔ «افزودنِ ادمین» ندارد — تنظیماتِ گروه است، نه باگ
+            logger.warning("group status title: ربات در گروهِ %s اجازهٔ افزودنِ ادمین ندارد", chat_id)
+        else:
+            logger.exception("tenant group status title set failed chat=%s user=%s", chat_id, user_id)
         return False
 
 

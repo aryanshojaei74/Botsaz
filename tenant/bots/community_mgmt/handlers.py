@@ -48,6 +48,31 @@ logger = _get_logger(__name__)
 
 community_router = Router()
 
+
+# === PATCH_TENANT_SCOPE_V1 ===
+# همهٔ دکمه‌هایِ مدیریتِ گروه «cmty:…:<chat_row_id>…» هستند و گروه را فقط با id
+# می‌خواندند؛ ادمینِ یک ربات با callbackِ دست‌ساز تنظیماتِ گروهِ رباتِ دیگری
+# (ضداسپم، فیلتر، خوش‌آمد، قطعِ اتصال، …) را عوض می‌کرد. اولین عددِ داخلِ
+# callback همیشه idِ گروه است؛ این‌جا یک‌جا چک می‌شود که مالِ همین ربات باشد.
+async def _cmty_scope_mw(handler, event, data):
+    cbd = getattr(event, "data", None) or ""
+    if not cbd.startswith("cmty:"):
+        return await handler(event, data)
+    cid = next((int(x) for x in cbd.split(":")[1:] if x.isdigit()), None)
+    if cid is None:
+        return await handler(event, data)
+    from tenant import get_bot_row
+    row = await get_bot_row(data.get("bot"))
+    async with Session() as s:
+        c = await s.get(CommunityChat, cid)
+    if not row or not c or c.bot_id != row.id:
+        await event.answer("پیدا نشد", show_alert=True)
+        return None
+    return await handler(event, data)
+
+
+community_router.callback_query.middleware(_cmty_scope_mw)
+
 FIELD_KEY = "community_mgmt"
 
 
