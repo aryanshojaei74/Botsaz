@@ -410,7 +410,7 @@ async def order_status(bot_id: int, api_order_id: int, buyer_tid: int | None) ->
     }
 
 
-async def receipt_info(api_order_id: int, service_id: int) -> tuple[str, int] | None:
+async def receipt_info(api_order_id: int, service_id: int) -> tuple[str, int, str | None] | None:
     """PATCH_API_ORDER_RECEIPT_V1 — (نامِ محصول، مبلغِ پرداختی) برایِ رسیدِ سفارشِ وب‌سرویس."""
     async with Session() as s:
         o = await s.get(GiftOrder, api_order_id - ORDER_BASE)
@@ -428,4 +428,4 @@ async def receipt_info(api_order_id: int, service_id: int) -> tuple[str, int] | 
     total = int(o.price_toman or 0)
     if not gid.startswith(("premium_", "starsell_", "srx_")):
         total *= int(o.quantity or 1)
-    return name, total
+    return name, total, o.tracking_code

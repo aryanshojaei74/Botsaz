@@ -380,9 +380,16 @@ async def api_new_order(body: NewOrderBody, x_api_key: str | None = Header(defau
             _cat_plat = _c.platform if _c and _c.platform != "other" else None
         _pk = _cat_plat or _svc_platform_type(v)[0]
         _plat = "" if _pk == "other" else _pl(_pk).split(" ", 1)[-1].strip()
+        _st = (o.status or "") if o else ""
+        _tkey = "sent" if _st == "sent" else ("order_placed_manual" if _st == "awaiting_admin" else None)
+        if _st in ("failed", "refunded", "canceled", "rejected"):
+            raise _SkipReceipt   # پیامِ خطا/بازگشتِ وجه جدا از _notify_user می‌رود
         spawn_api_receipt(ctx.bot_id, target_tid, name=v.name, platform=_plat, qty=body.quantity,
                           price=price, link=body.link, order_id=order_pk,
+                          tracking=(o.tracking_code if o else None), smm_order_pk=order_pk, text_key=_tkey,
                           unit_line=f"💸 قیمت هر 1000 عدد: <b>{round(price * 1000 / max(1, body.quantity)):,}</b> تومان")
+    except _SkipReceipt:
+        pass
     except Exception:
         logger.exception("API: آماده‌سازیِ رسیدِ سفارش ناموفق بود")
     return JSONResponse({"ok": True, "order": _order_payload(o)}, status_code=201)
@@ -395,8 +402,14 @@ async def api_new_order(body: NewOrderBody, x_api_key: str | None = Header(defau
 _RECEIPT_TASKS: set = set()
 
 
+class _SkipReceipt(Exception):
+    pass
+
+
 async def _send_api_receipt(bot_id: int, tg_id: int, *, name: str, platform: str, qty: int,
-                            price: int, link: str, order_id, unit_line: str) -> None:
+                            price: int, link: str, order_id, unit_line: str,
+                            tracking: str | None = None, smm_order_pk: int | None = None,
+                            text_key: str | None = None) -> None:
     try:
         from tenant.bots.virtual_service.smm import api_notify_enabled
         if not await api_notify_enabled(bot_id, tg_id):
@@ -409,28 +422,57 @@ async def _send_api_receipt(bot_id: int, tg_id: int, *, name: str, platform: str
                 BotUser.bot_id == bot_id, BotUser.telegram_id == tg_id))
         if not row or not row.token or not u:
             return
-        jd, hm, sec = _tehran_now_parts()
-        lines = ["🔗 #وبسرویس", "",
-                 f"📝 نام محصول: <b>{_esc(name or '—')}</b>"]
-        if platform:
-            lines.append(f"🈸 نوع اپلیکیشن: <b>{_esc(platform)}</b>")
-        lines += [f"💎 تعداد سفارش: <b>{int(qty):,}</b>",
-                  unit_line,
-                  "🔗 آدرس انجام سفارش:", _esc(link or "—"),
-                  f"📊 کد سفارش: <code>{order_id}</code>",
-                  f"💰 مبلغ پرداختی: <b>{int(price):,}</b> تومان",
-                  f"📍 موجودی جدید: <b>{int(float(u.balance or 0)):,}</b> تومان",
-                  f"🕰 {hm}:{sec} - {jd}"]
+        text = None
+        # PATCH_API_RECEIPT_CUSTOM_TEXT_V1 — متنِ «ثبت سفارش» که ادمین در «✍️ متن‌هایِ سفارش» گذاشته
+        # (خودکار: «🚀 ثبت روی پنل»، دستی: «⏳ ثبت سفارش») مقدم است؛ رسیدِ پیش‌فرض فقط وقتی تنظیم نشده.
+        if smm_order_pk and text_key:
+            from tenant.bots.virtual_service.smm_texts import get_custom
+            custom = await get_custom(bot_id, text_key)
+            if custom:
+                from tenant.bots.virtual_service.smm import _render_order_text
+                text = "#وبسرویس\n" + await _render_order_text(bot_id, smm_order_pk, custom)
+        if text is None:
+            text = _default_receipt(name=name, platform=platform, qty=qty, price=price, link=link,
+                                    order_id=order_id, unit_line=unit_line, tracking=tracking,
+                                    balance=float(u.balance or 0))
         from aiogram import Bot as _AioBot
         from aiogram.client.default import DefaultBotProperties
         from aiogram.enums import ParseMode
         tbot = _AioBot(token=row.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         try:
-            await tbot.send_message(tg_id, "\n".join(lines), disable_web_page_preview=True)
+            try:
+                await tbot.send_message(tg_id, text, disable_web_page_preview=True)
+            except Exception:
+                # متنِ دلخواهِ ادمین با HTMLِ ناقص → همان متن بدونِ قالب
+                import re as _re
+                await tbot.send_message(tg_id, _re.sub(r"<[^>]+>", "", text),
+                                        parse_mode=None, disable_web_page_preview=True)
         finally:
             await tbot.session.close()
     except Exception:
         logger.exception("API: ارسالِ رسیدِ سفارشِ وب‌سرویس ناموفق بود")
+
+
+def _default_receipt(*, name, platform, qty, price, link, order_id, unit_line, tracking, balance) -> str:
+    from html import escape as _esc
+    from tenant.shared.trust_report import _tehran_now_parts
+    jd, hm, sec = _tehran_now_parts()
+    lines = ["🔗 #وبسرویس", "",
+             f"📝 نام محصول: <b>{_esc(name or '—')}</b>"]
+    if platform:
+        lines.append(f"🈸 نوع اپلیکیشن: <b>{_esc(platform)}</b>")
+    lines += [f"💎 تعداد سفارش: <b>{int(qty):,}</b>",
+              unit_line,
+              "🔗 آدرس انجام سفارش:", _esc(link or "—"),
+              # PATCH_API_RECEIPT_CUSTOM_TEXT_V1 — «کد سفارش» همان کدِ پیگیریِ لیستِ سفارش‌هایِ ادمین؛
+              # شناسه‌ای که API برگردانده (در پنلِ مشتری) جدا نوشته می‌شود.
+              f"📊 کد سفارش: <code>{tracking or order_id}</code>"]
+    if tracking and str(tracking) != str(order_id):
+        lines.append(f"🆔 شناسهٔ وب‌سرویس: <code>{order_id}</code>")
+    lines += [f"💰 مبلغ پرداختی: <b>{int(price):,}</b> تومان",
+              f"📍 موجودی جدید: <b>{int(balance):,}</b> تومان",
+              f"🕰 {hm}:{sec} - {jd}"]
+    return "\n".join(lines)
 
 
 def spawn_api_receipt(bot_id: int, tg_id: int, **kw) -> None:
@@ -648,7 +690,7 @@ async def smm_v2(request: Request):
                 _ri = await _sp.receipt_info(oid, service_id)
                 if _ri:
                     spawn_api_receipt(ctx.bot_id, buyer_tid, name=_ri[0], platform="تلگرام", qty=quantity,
-                                      price=_ri[1], link=link, order_id=oid,
+                                      price=_ri[1], link=link, order_id=oid, tracking=_ri[2],
                                       unit_line=f"💸 قیمت هر عدد: <b>{round(_ri[1] / max(1, quantity)):,}</b> تومان")
             except Exception:
                 logger.exception("API: آماده‌سازیِ رسیدِ سفارشِ ویژه ناموفق بود")

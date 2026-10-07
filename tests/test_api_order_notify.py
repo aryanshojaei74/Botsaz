@@ -82,3 +82,35 @@ async def test_api_receipt_only_when_enabled(db, monkeypatch):
     txt = sent[0][1]
     assert txt.startswith("🔗 #وبسرویس") and "4194758" in txt and "تلگرام" in txt
     assert "📍 موجودی جدید: <b>0</b> تومان" in txt and "https://t.me/x/6" in txt
+
+
+@pytest.mark.asyncio
+async def test_api_receipt_uses_admin_text_and_tracking(db, monkeypatch):
+    """PATCH_API_RECEIPT_CUSTOM_TEXT_V1"""
+    import aiogram
+    from tenant.shared import public_api as pa
+    monkeypatch.setattr(pa, "Session", db)
+    sent = []
+
+    class _Sess:
+        async def close(self):
+            pass
+
+    class _B:
+        def __init__(self, token, default=None):
+            self.session = _Sess()
+
+        async def send_message(self, chat_id, text, **kw):
+            sent.append(text)
+    monkeypatch.setattr(aiogram, "Bot", _B)
+    async with db() as s:
+        (await s.get(models.SmmOrder, 1)).tracking_code = "4321"
+        await s.commit()
+    await smm.set_api_notify(5, 777, True)
+    kw = dict(name="x", platform="تلگرام", qty=10, price=100, link="l", order_id=1,
+              unit_line="u", tracking="4321", smm_order_pk=1, text_key="sent")
+    await pa._send_api_receipt(5, 777, **kw)              # بدونِ متنِ دلخواه → رسیدِ پیش‌فرض
+    assert "📊 کد سفارش: <code>4321</code>" in sent[-1] and "🆔 شناسهٔ وب‌سرویس: <code>1</code>" in sent[-1]
+    await tenant.set_setting(5, "smm_txt_sent", "سفارش {{tracking_code}} ثبت شد ✅")
+    await pa._send_api_receipt(5, 777, **kw)
+    assert sent[-1] == "#وبسرویس\nسفارش 4321 ثبت شد ✅"
