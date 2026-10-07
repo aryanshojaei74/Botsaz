@@ -312,8 +312,21 @@ async def send_trust_channel_post(
             # «دیگر به کانال نمی‌فرستد» بدونِ هیچ سرنخی. شایع‌ترین علت،
             # HTMLِ نامعتبر در متنِ دلخواه است (مثلاً تگِ بازِ <b>)، بعدش
             # ادمین‌نبودنِ ربات در کانال. حالا دلیل را به خودِ مالک می‌گوییم.
-            logger.error("ارسال به کانالِ اعتمادسازی ناموفق بود (bot_id=%s): %s",
-                         bot_id, e)
+            # === PATCH_TRUST_FAIL_THROTTLE_V1 ===
+            # لاگِ سرور: همان خطا (CHAT_RESTRICTED) با هر خرید یک ERROR و یک پیامِ تکراری به مالک —
+            # تنظیمِ کانالِ مشتری است نه باگ. حالا هر نوع خطا برایِ هر ربات حداکثر هر ۶ ساعت یک‌بار
+            # (یک WARNING و یک پیام به مالک)؛ تا وقتی مالک کانال را درست کند، خریدها مثلِ قبل انجام می‌شوند.
+            from log_throttle import should_log
+            import re as _re_t
+            _kind = _re_t.sub(r"[^A-Za-z_]+", "_", str(e))[:60] or type(e).__name__
+            if not should_log(f"trustfail:{bot_id}:{_kind}", 6 * 3600):
+                return
+            logger.warning("ارسال به کانالِ اعتمادسازی ناموفق بود (bot_id=%s): %s", bot_id, e)
+            _hint = ""
+            if "CHAT_RESTRICTED" in str(e) or "CHAT_WRITE_FORBIDDEN" in str(e):
+                _hint = ("• <b>این خطا یعنی کانال محدود شده</b> (توسطِ تلگرام Restricted شده) یا ربات اجازهٔ "
+                         "ارسالِ پیام ندارد. ربات را در کانال ادمین کن و «Post Messages» را روشن کن؛ اگر کانال "
+                         "محدود شده، یک کانالِ دیگر وصل کن.\n")
             try:
                 from config import Session as _S2
                 from models import Bot as _BR
@@ -326,10 +339,12 @@ async def send_trust_channel_post(
                         _owner,
                         "⚠️ <b>ارسال به کانالِ اعتمادسازی انجام نشد.</b>\n\n"
                         f"<code>{_h2.escape(str(e)[:200])}</code>\n\n"
+                        + _hint +
                         "علت‌هایِ رایج:\n"
                         "• متنِ دلخواهت HTMLِ نامعتبر دارد (مثلاً تگِ باز یا "
                         "بسته‌نشده). با /default به متنِ پیش‌فرض برگرد و تست کن.\n"
-                        "• ربات در کانال ادمین نیست یا دسترسیِ ارسال ندارد.")
+                        "• ربات در کانال ادمین نیست یا دسترسیِ ارسال ندارد.\n\n"
+                        "(این پیام حداکثر هر ۶ ساعت یک‌بار تکرار می‌شود.)")
             except Exception:
                 logger.exception("اطلاعِ خطایِ کانالِ اعتمادسازی به مالک ناموفق بود")
     except Exception:
