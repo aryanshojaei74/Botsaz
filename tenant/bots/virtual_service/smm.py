@@ -6840,6 +6840,19 @@ async def _apply_partial(bot_id: int, order_pk: int, remains, *, source: str = "
     return outcome
 
 
+def _api_notify_key(tg_id: int) -> str:
+    return f"api_notify_{int(tg_id)}"
+
+
+async def api_notify_enabled(bot_id: int, tg_id: int) -> bool:
+    """PATCH_API_ORDER_NOTIFY_V1 — آیا مشتری اعلانِ وضعیتِ سفارش‌هایِ وب‌سرویس را روشن کرده؟"""
+    return (await _get_setting(bot_id, _api_notify_key(tg_id), "0")) == "1"
+
+
+async def set_api_notify(bot_id: int, tg_id: int, on: bool) -> None:
+    await _set_setting(bot_id, _api_notify_key(tg_id), "1" if on else "0")
+
+
 async def _notify_user(bot_id: int, order_pk: int, text: str, bot: "Bot | None" = None):
     """پیام را به کاربرِ صاحبِ سفارش می‌فرستد.
 
@@ -6855,9 +6868,18 @@ async def _notify_user(bot_id: int, order_pk: int, text: str, bot: "Bot | None" 
             if not o:
                 return
             tg_id = o.user_telegram_id
+            _is_api = (getattr(o, "source", None) or "") == "api"
             # === PATCH_TEXT_VARS_V1 ===
             _bu = await s.scalar(select(BotUser).where(
                 BotUser.bot_id == bot_id, BotUser.telegram_id == tg_id))
+        # === PATCH_API_ORDER_NOTIFY_V1 ===
+        # درخواستِ فدایی: پیامِ وضعیتِ سفارش‌هایِ وب‌سرویس فقط وقتی برایِ مشتری بیاید که خودش
+        # «🟢 اعلان سفارشات وبسرویس» را در صفحهٔ API روشن کرده باشد (پیش‌فرض خاموش — نماینده‌ها
+        # صدها سفارش دارند)، و با برچسبِ #وبسرویس تا از سفارش‌هایِ داخلِ ربات جدا شود.
+        if _is_api:
+            if not await api_notify_enabled(bot_id, tg_id):
+                return
+            text = "#وبسرویس\n" + text
         # متغیرهایِ متن ({{product_name}}، {{quantity}}، …): یک نقطهٔ رندر برایِ همهٔ
         # متن‌هایِ وضعیتِ سفارش. اگر رندر شکست بخورد، متنِ خام فرستاده می‌شود (خبرِ
         # سفارش به مشتری هیچ‌وقت نباید به‌خاطرِ یک متغیر گم شود).

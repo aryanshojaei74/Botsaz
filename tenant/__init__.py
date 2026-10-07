@@ -7732,6 +7732,14 @@ async def _pubapi_render(row, u, tg_id: int):
     rows = [[InlineKeyboardButton(text="🔄 تغییر کلید", callback_data="pubapi:regen", style=ButtonStyle.DANGER)]
             + ([] if _is_vpn_api else
                [InlineKeyboardButton(text="📋 سفارش‌هایِ API", callback_data="pubapi:orders", style=ButtonStyle.PRIMARY)])]
+    if not _is_vpn_api:
+        # === PATCH_API_ORDER_NOTIFY_V1 === روشن/خاموشِ پیامِ وضعیتِ سفارش‌هایِ وب‌سرویس (با برچسبِ #وبسرویس)
+        from tenant.bots.virtual_service.smm import api_notify_enabled
+        _non = await api_notify_enabled(row.id, tg_id)
+        rows.append([InlineKeyboardButton(
+            text=("🟢 اعلان سفارشات وبسرویس 🟢" if _non else "🔴 اعلان سفارشات وبسرویس 🔴"),
+            callback_data="pubapi:notif",
+            style=(ButtonStyle.SUCCESS if _non else ButtonStyle.DANGER))])
     if docs_url.startswith(("http://", "https://")) and "YOUR" not in docs_url:
         rows.append([InlineKeyboardButton(text="📘 مستندات API", url=docs_url, style=ButtonStyle.PRIMARY)])
     if price > 0 and u.api_expires_at:
@@ -7819,6 +7827,30 @@ async def pubapi_orders(cb: CallbackQuery, bot: Bot):
     text, kb = await _pubapi_orders_content(row.id, cb.from_user.id)
     await edit_or_replace(cb.message, text, reply_markup=kb)
     await cb.answer()
+
+
+@tenant_router.callback_query(F.data == "pubapi:notif")
+async def pubapi_notify_toggle(cb: CallbackQuery, bot: Bot):
+    """PATCH_API_ORDER_NOTIFY_V1"""
+    row = await get_bot_row(bot)
+    if not row or row.field != "virtual_service":
+        await cb.answer()
+        return
+    from tenant.shared.public_api import user_api_allowed
+    from tenant.bots.virtual_service.smm import api_notify_enabled, set_api_notify
+    async with Session() as s:
+        u = await s.scalar(select(BotUser).where(
+            BotUser.bot_id == row.id, BotUser.telegram_id == cb.from_user.id))
+    if not u or not await user_api_allowed(u):
+        await cb.answer("این قابلیت برایِ شما فعال نیست.", show_alert=True)
+        return
+    on = not await api_notify_enabled(row.id, cb.from_user.id)
+    await set_api_notify(row.id, cb.from_user.id, on)
+    res = await _pubapi_render(row, u, cb.from_user.id)
+    if res:
+        await edit_or_replace(cb.message, res[0], reply_markup=res[1])
+    await cb.answer("🟢 از این به بعد وضعیتِ سفارش‌هایِ وب‌سرویس (با #وبسرویس) برات میاد." if on
+                    else "🔴 اعلانِ سفارش‌هایِ وب‌سرویس خاموش شد.", show_alert=True)
 
 
 @tenant_router.callback_query(F.data == "pubapi:regen")
