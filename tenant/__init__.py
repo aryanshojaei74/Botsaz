@@ -1194,7 +1194,69 @@ async def is_owner_or_admin(bot_id: int, tg_id: int, owner_id: int) -> bool:
     async with Session() as s:
         adm = await s.scalar(select(AdminSupport).where(
             AdminSupport.bot_id == bot_id, AdminSupport.telegram_id == tg_id))
+    if adm is None:
+        return False
+    # === PATCH_ADMIN_PANEL_ADD_ONLY_V1 ===
+    # ادمینِ «فقط اتصالِ پنلِ جدید» فقط در همان مراحلِ مجازِ ثبتِ پنل ادمین
+    # حساب می‌شود (میان‌افزارِ _addonly_mw این را برایِ همان آپدیت علامت
+    # می‌زند)؛ در هر جایِ دیگر — هر دکمه، هر متن، هر کال‌بکِ دست‌ساز — مثلِ
+    # کاربرِ عادی است. این‌طوری بدونِ فهرست‌کردنِ تک‌تکِ بخش‌ها، هیچ مسیرِ
+    # مدیریتیِ دیگری (پلن‌ها، قیمت‌ها، پنل‌هایِ قبلی، مالی) برایش باز نیست.
+    if _perms_is_addonly(adm.permissions):
+        return _ADDONLY_ALLOW.get() == (bot_id, tg_id)
+    return True
+
+
+async def is_staff_member(bot_id: int, tg_id: int, owner_id: int) -> bool:
+    """فقط «آیا جزوِ کادرِ این ربات است» (برایِ نمایشِ دکمهٔ پنل مدیریت)؛
+    برخلافِ is_owner_or_admin دسترسی نمی‌دهد."""
+    if tg_id == owner_id:
+        return True
+    async with Session() as s:
+        adm = await s.scalar(select(AdminSupport.id).where(
+            AdminSupport.bot_id == bot_id, AdminSupport.telegram_id == tg_id))
     return adm is not None
+
+
+# === PATCH_ADMIN_PANEL_ADD_ONLY_V1 ===
+import contextvars as _contextvars
+
+ADDONLY_PERM = "panel_add"
+_ADDONLY_ALLOW: "_contextvars.ContextVar[tuple[int, int] | None]" = _contextvars.ContextVar(
+    "addonly_allow", default=None)
+# bot_id -> (زمان, {telegram_id: مجموعهٔ دسترسی‌ها یا None=کامل})
+_STAFF_PERMS_CACHE: dict[int, tuple[float, dict]] = {}
+_STAFF_PERMS_TTL = 20.0
+
+
+def _parse_perms(raw: str | None) -> set | None:
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        return set(json.loads(raw) or [])
+    except Exception:
+        return None
+
+
+def _perms_is_addonly(raw: str | None) -> bool:
+    return _parse_perms(raw) == {ADDONLY_PERM}
+
+
+async def _staff_perms_map(bot_id: int) -> dict:
+    now = time.monotonic()
+    c = _STAFF_PERMS_CACHE.get(bot_id)
+    if c and now - c[0] < _STAFF_PERMS_TTL:
+        return c[1]
+    async with Session() as s:
+        adms = (await s.scalars(select(AdminSupport).where(AdminSupport.bot_id == bot_id))).all()
+    m = {a.telegram_id: _parse_perms(a.permissions) for a in adms}
+    _STAFF_PERMS_CACHE[bot_id] = (now, m)
+    return m
+
+
+def _invalidate_staff_perms(bot_id: int) -> None:
+    _STAFF_PERMS_CACHE.pop(bot_id, None)
 
 
 # === PATCH_ADMIN_GRANULAR_PERMS_V1 ===
@@ -2364,7 +2426,7 @@ async def main_kb(bot_id: int, owner_id: int | None = None,
     # نمی‌دیدند — هرچند خودِ محتوایِ پنل (با /admin) برایشان باز می‌شد.
     # هماهنگ با main_inline_kb که از قبل درست بود.
     is_staff = (owner_id is not None and viewer_id is not None and
-                await is_owner_or_admin(bot_id, viewer_id, owner_id))
+                await is_staff_member(bot_id, viewer_id, owner_id))
     if not btns and not is_staff:
         return None
     colored = bot_row is not None and has_feature(bot_row.plan, Feature.COLORED_BUTTONS)
@@ -2952,7 +3014,7 @@ async def _main_inline_kb_core(bot_id: int, owner_id: int | None = None,
     disabled = await _disabled_btn_ids(bot_id)
     btns = [b for b in btns if b.id not in disabled]
     is_staff = (viewer_id is not None and owner_id is not None and
-                await is_owner_or_admin(bot_id, viewer_id, owner_id))
+                await is_staff_member(bot_id, viewer_id, owner_id))
     if not btns and not is_staff:
         return None
     colored = bot_row is not None and has_feature(bot_row.plan, Feature.COLORED_BUTTONS)
@@ -8916,7 +8978,8 @@ async def _notify_admins(bot: Bot, row: BotRow, text: str,
     targets = [row.owner_id]
     async with Session() as s:
         adms = (await s.scalars(select(AdminSupport).where(AdminSupport.bot_id == row.id))).all()
-        targets += [a.telegram_id for a in adms]
+        # PATCH_ADMIN_PANEL_ADD_ONLY_V1 — ادمینِ «فقط اتصالِ پنل» سفارش/رسید/قیمت نمی‌بیند
+        targets += [a.telegram_id for a in adms if not _perms_is_addonly(a.permissions)]
     for tid in set(targets):
         try:
             if photo_file_id:
@@ -30025,10 +30088,16 @@ async def _admsup_detail_kb(a: "AdminSupport") -> InlineKeyboardMarkup:
         granted = set(json.loads(raw)) if raw else set()
     except Exception:
         granted = set()
+    addonly = granted == {ADDONLY_PERM}
     rows = []
     rows.append([InlineKeyboardButton(
         text=("🟢 دسترسیِ کامل (همهٔ بخش‌ها)" if full else "⚪️ دسترسیِ کامل (همهٔ بخش‌ها)"),
         callback_data=f"admsup:full:{a.id}", style=(ButtonStyle.SUCCESS if full else ButtonStyle.PRIMARY))])
+    # === PATCH_ADMIN_PANEL_ADD_ONLY_V1 ===
+    rows.append([InlineKeyboardButton(
+        text=f"{'✅' if addonly else '❌'} 🔌 فقط اتصالِ پنلِ جدید (VPN)",
+        callback_data=f"admsup:addonly:{a.id}",
+        style=(ButtonStyle.SUCCESS if addonly else ButtonStyle.PRIMARY))])
     for key, label in _ADMIN_SECTIONS.items():
         on = full or (key in granted)
         rows.append([InlineKeyboardButton(
@@ -30044,6 +30113,17 @@ async def _admsup_detail_kb(a: "AdminSupport") -> InlineKeyboardMarkup:
 def _admsup_detail_text(a: "AdminSupport") -> str:
     raw = (a.permissions or "").strip()
     full = not raw
+    if _perms_is_addonly(raw):   # PATCH_ADMIN_PANEL_ADD_ONLY_V1
+        return (
+            f"⚙️ <b>{a.full_name or a.telegram_id}</b>\n\n"
+            "🔌 این ادمین <b>فقط</b> می‌تواند یک پنلِ VPNِ جدید وصل کند.\n"
+            "پنل‌هایِ قبلی (نام/آدرس)، پلن‌ها، قیمت‌ها، سفارش‌ها، مالی و آمار را "
+            "نمی‌بیند — حتی با دکمه‌هایِ قدیمی یا دست‌ساز. پیامِ سفارش و رسید هم "
+            "برایش نمی‌رود.\n\n"
+            "پنلی که وصل کند به‌صورتِ «غیرفعال» ثبت می‌شود؛ فعال‌کردنِ فروش و "
+            "ساختنِ پلن با خودت است.\n\n"
+            "برایِ برداشتنِ این حالت، دوباره رویِ همان دکمه بزن یا یک بخش را تیک بزن."
+        )
     return (
         f"⚙️ <b>{a.full_name or a.telegram_id}</b>\n\n"
         + ("این ادمین الان به همهٔ بخش‌هایِ پنل دسترسی داره.\n\n"
@@ -30085,8 +30165,39 @@ async def admsup_grant_full(cb: CallbackQuery, bot: Bot):
         a.permissions = ""
         await s.commit()
         a2 = a
+    _invalidate_staff_perms(row.id)
     await cb.message.edit_text(_admsup_detail_text(a2), reply_markup=await _admsup_detail_kb(a2))
     await cb.answer("✅ دسترسیِ کامل داده شد")
+
+
+# === PATCH_ADMIN_PANEL_ADD_ONLY_V1 ===
+@tenant_router.callback_query(F.data.startswith("admsup:addonly:"))
+async def admsup_toggle_addonly(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row or cb.from_user.id != row.owner_id:
+        await cb.answer("⛔️ فقط مالکِ ربات می‌تواند این بخش را مدیریت کند.", show_alert=True)
+        return
+    try:
+        aid = int(cb.data.split(":")[2])
+    except (IndexError, ValueError):
+        await cb.answer()
+        return
+    async with Session() as s:
+        a = await s.get(AdminSupport, aid)
+        if not a or a.bot_id != row.id:
+            await cb.answer("پیدا نشد", show_alert=True)
+            return
+        if _perms_is_addonly(a.permissions):
+            a.permissions = "[]"   # خاموش: بدونِ هیچ بخشی — مالک خودش بخش‌ها را تیک می‌زند
+            note = "حالتِ «فقط اتصالِ پنل» برداشته شد؛ حالا بخش‌ها را تیک بزن."
+        else:
+            a.permissions = json.dumps([ADDONLY_PERM])
+            note = "✅ این ادمین حالا فقط می‌تواند پنلِ جدید وصل کند."
+        await s.commit()
+        a2 = a
+    _invalidate_staff_perms(row.id)
+    await cb.message.edit_text(_admsup_detail_text(a2), reply_markup=await _admsup_detail_kb(a2))
+    await cb.answer(note, show_alert=True)
 
 
 @tenant_router.callback_query(F.data.startswith("admsup:perm:"))
@@ -30111,6 +30222,7 @@ async def admsup_toggle_perm(cb: CallbackQuery, bot: Bot):
             granted = set(json.loads(raw)) if raw else set()
         except Exception:
             granted = set()
+        granted.discard(ADDONLY_PERM)   # PATCH_ADMIN_PANEL_ADD_ONLY_V1 — یا بخش‌به‌بخش، یا «فقط پنل»
         if was_full:
             # از حالتِ «کامل» شروع به محدودکردن می‌کنیم: همه رو بذار به‌جز
             # همینی که الان زده شد (چون قبلش همه روشن بودن و این یکی را
@@ -30123,6 +30235,7 @@ async def admsup_toggle_perm(cb: CallbackQuery, bot: Bot):
         a.permissions = json.dumps(sorted(granted), ensure_ascii=False)
         await s.commit()
         a2 = a
+    _invalidate_staff_perms(row.id)
     await cb.message.edit_text(_admsup_detail_text(a2), reply_markup=await _admsup_detail_kb(a2))
     await cb.answer()
 
@@ -32486,3 +32599,249 @@ async def _is_foreign(obj, bot) -> bool:
     from tenant import get_bot_row as _gbr
     _r = await _gbr(bot)
     return bool(_r) and obj.bot_id != _r.id
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# === PATCH_ADMIN_PANEL_ADD_ONLY_V1 ===
+# ادمینِ «فقط اتصالِ پنلِ جدید» + اعمالِ واقعیِ دسترسیِ بخش‌ها.
+#
+# ۱) ادمینِ add-only: is_owner_or_admin برایش فقط وقتی True است که این
+#    میان‌افزار، همین آپدیت را جزوِ مراحلِ مجازِ «ثبتِ پنلِ جدید» تشخیص داده
+#    باشد (و هندلرِ پیداشده هم واقعاً یکی از هندلرهایِ همان مراحل باشد).
+#    یعنی پیش‌فرض «بسته» است و لازم نیست تک‌تکِ بخش‌ها فهرست شوند.
+# ۲) ادمینِ محدودِ بخش‌به‌بخش: قبلاً فقط دکمهٔ ورودِ هر بخش چک می‌شد و با
+#    دکمهٔ قدیمی/دست‌ساز می‌شد واردِ بخش‌هایِ بسته شد. حالا هندلرهایِ
+#    ماژول‌هایِ صرفاً مدیریتی به بخشِ خودشان نگاشت می‌شوند و چک می‌شوند.
+# ═══════════════════════════════════════════════════════════════════════
+
+_ADDONLY_SETUP_HANDLERS = frozenset({
+    "vpn_setup", "vpn_setup_base", "vpn_setup_user", "vpn_setup_pass",
+    "vpn_setup_authmode_pick", "vpn_setup_apikey", "vpn_setup_sub",
+    "vpn_setup_inbounds", "vpn_test",
+})
+_ADDONLY_KEYS_SETTING = "addonly_keys:%s"
+
+# ماژول‌هایی که همهٔ هندلرهایشان مدیریتی‌اند → بخشِ دسترسی
+_ADMIN_MODULE_SECTION = {
+    "tenant.bots.vpn.vpn_admin": "products",
+    "tenant.bots.vpn.vpn_partners": "products",
+    "tenant.shared.panel_clients.panel_tools": "products",
+    "tenant.shared.panel_clients.panelyar": "products",
+    "tenant.shared.panel_clients.panel_relink": "products",
+    "tenant.shared.panel_clients.panel_autosync": "products",
+    "tenant.bots.virtual_service.nft_admin": "products",
+    "tenant.gateways.card_admin": "finance",
+    "tenant.gateways.crypto_admin": "finance",
+    "tenant.gateways.stars_admin": "finance",
+    "tenant.gateways.swap_admin": "finance",
+    "tenant.gateways.uniquepay_admin": "finance",
+    "tenant.gateways.abangateway_admin": "finance",
+    "tenant.gateways.wallet_limits_admin": "finance",
+    "tenant.gateways.gateway_layout": "finance",
+    "tenant.gateways.receipt_ai_key": "finance",
+    "tenant.gateways.receipt_channel": "finance",
+    "tenant.shared.tx_channel_admin": "finance",
+    "tenant.shared.backup_restore": "settings",
+    "tenant.shared.backup_import": "settings",
+    "tenant.shared.premium_emoji_admin": "settings",
+    "tenant.shared.dice_texts_admin": "settings",
+    "tenant.shared.miniapp_admin": "settings",
+    "tenant.bots.virtual_service.smm_texts_admin": "settings",
+}
+
+
+def _addonly_created_keys(raw: str | None) -> set:
+    return {k for k in (raw or "").split(",") if k}
+
+
+async def _addonly_menu_content(row) -> tuple[str, InlineKeyboardMarkup]:
+    if row.field != "vpn_sales" or not has_feature(row.plan, Feature.PANEL_INTEGRATION):
+        return ("🔌 دسترسیِ «اتصالِ پنل» فقط برایِ رباتِ فروشِ VPN با «VPN خودکار» است.",
+                InlineKeyboardMarkup(inline_keyboard=[]))
+    from tenant.bots.vpn.vpn_admin import (_panel_labels_for_plan, get_all_panels,
+                                           next_panel_instance_key)
+    used = {p.panel_key for p in await get_all_panels(row.id)}
+    multi = has_feature(row.plan, Feature.MULTI_PANEL_INSTANCES)
+    rows = []
+    for key, label in _panel_labels_for_plan(row.plan).items():
+        if "#" in key:
+            continue
+        if key not in used:
+            target = key
+        elif multi:
+            target = await next_panel_instance_key(row.id, key)
+        else:
+            continue
+        # نامِ عمومیِ نوعِ پنل — نه نامِ دلخواهی که مالک رویِ پنل‌هایش گذاشته
+        rows.append([InlineKeyboardButton(text=f"➕ اتصالِ {label}",
+                                          callback_data=f"tvpn:setup:{target}",
+                                          style=ButtonStyle.PRIMARY)])
+    text = ("🔌 <b>اتصالِ پنلِ جدید</b>\n\n"
+            "نوعِ پنل را انتخاب کن و اطلاعاتش را مرحله‌به‌مرحله بفرست.\n"
+            "پنل به‌صورتِ «غیرفعال» ثبت می‌شود و مالکِ ربات فروشش را فعال می‌کند.")
+    if not rows:
+        text += "\n\n⚠️ با پلنِ فعلیِ ربات، پنلِ دیگری قابلِ اضافه‌کردن نیست."
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _addonly_show_menu(event, row) -> None:
+    text, kb = await _addonly_menu_content(row)
+    if isinstance(event, CallbackQuery):
+        try:
+            await event.message.edit_text(text, reply_markup=kb)
+        except Exception:
+            await event.message.answer(text, reply_markup=kb)
+        await event.answer()
+    else:
+        await event.answer(text, reply_markup=kb)
+
+
+async def _addonly_route(event, row, uid: int, state) -> tuple[str, str | None]:
+    """('handled'|'allow'|'user', panel_key). 'user' یعنی مثلِ کاربرِ عادی."""
+    from tenant.bots.vpn.vpn_admin import is_panel_key, get_panel, panel_base_key, \
+        _PANEL_EXTRA_FEATURE_GATE
+    created = _addonly_created_keys(await get_setting(row.id, _ADDONLY_KEYS_SETTING % uid, ""))
+    if isinstance(event, CallbackQuery):
+        d = event.data or ""
+        if d in ("mbtn:admin", "tvpn:addonly"):
+            await _addonly_show_menu(event, row)
+            return "handled", None
+        if d == "tvpn:cancel":
+            if state is not None:
+                await state.clear()
+            await _addonly_show_menu(event, row)
+            return "handled", None
+        if d.startswith("tvpn:panel:") and d[len("tvpn:panel:"):] in created:
+            await _addonly_show_menu(event, row)
+            return "handled", None
+        if d.startswith("tvpn:setup:"):
+            key = d[len("tvpn:setup:"):]
+            gate = _PANEL_EXTRA_FEATURE_GATE.get(panel_base_key(key))
+            if (row.field == "vpn_sales" and is_panel_key(key) and not await get_panel(row.id, key)
+                    and not (gate and not has_feature(row.plan, gate))
+                    and ("#" not in key or has_feature(row.plan, Feature.MULTI_PANEL_INSTANCES))):
+                if state is not None:
+                    await state.update_data(pa_addonly_key=key)
+                return "allow", key
+            await event.answer("⛔️ فقط اتصالِ پنلِ جدید برایت مجاز است.", show_alert=True)
+            return "handled", None
+        if d.startswith("tvpn:test:") and d[len("tvpn:test:"):] in created:
+            return "allow", None
+        if d.startswith("tvpn:authmode:") and state is not None:
+            sd = await state.get_data()
+            if sd.get("pa_addonly_key") and sd.get("pa_addonly_key") == sd.get("panel_key"):
+                return "allow", sd.get("panel_key")
+        return "user", None
+    # پیام
+    text = (event.text or "").strip()
+    if text in (BTN_TADMIN, "/admin"):
+        await _addonly_show_menu(event, row)
+        return "handled", None
+    if state is not None:
+        cur = await state.get_state() or ""
+        if cur.startswith("VpnPanelFSM:"):
+            sd = await state.get_data()
+            key = sd.get("pa_addonly_key")
+            if key and key == sd.get("panel_key"):
+                if await get_panel(row.id, key):
+                    # در همین فاصله پنلی با این کلید ساخته شده — رونویسی نکن
+                    await state.clear()
+                    await event.answer("⚠️ این پنل در همین فاصله ثبت شده؛ دوباره از «🛠 پنل مدیریت» شروع کن.")
+                    return "handled", None
+                return "allow", key
+    return "user", None
+
+
+async def _addonly_mw(handler, event, data):
+    bot = data.get("bot")
+    uid = event.from_user.id if getattr(event, "from_user", None) else None
+    if bot is None or uid is None:
+        return await handler(event, data)
+    row = await get_bot_row(bot)
+    if not row or uid == row.owner_id:
+        return await handler(event, data)
+    perms = (await _staff_perms_map(row.id)).get(uid, "missing")
+    if perms != {ADDONLY_PERM}:
+        return await handler(event, data)
+    state = data.get("state")
+    verdict, key = await _addonly_route(event, row, uid, state)
+    if verdict == "handled":
+        return None
+    if verdict != "allow":
+        return await handler(event, data)
+    token = _ADDONLY_ALLOW.set((row.id, uid))
+    try:
+        return await handler(event, data)
+    finally:
+        _ADDONLY_ALLOW.reset(token)
+        if key and not isinstance(event, CallbackQuery):
+            # بعد از مرحلهٔ آخر، پنلِ ساخته‌شده به فهرستِ «پنل‌هایِ خودش» اضافه
+            # می‌شود تا فقط «تست اتصال» همان پنل برایش باز باشد
+            try:
+                from tenant.bots.vpn.vpn_admin import get_panel
+                if await get_panel(row.id, key):
+                    k = _ADDONLY_KEYS_SETTING % uid
+                    keys = _addonly_created_keys(await get_setting(row.id, k, ""))
+                    if key not in keys:
+                        keys.add(key)
+                        await set_setting(row.id, k, ",".join(sorted(keys)))
+                        try:
+                            await bot.send_message(
+                                row.owner_id,
+                                f"🔌 ادمین <code>{uid}</code> یک پنلِ جدید وصل کرد "
+                                f"({key}). فروشش غیرفعال است؛ از «پنل VPN خودکار» "
+                                "بررسی و فعالش کن.")
+                        except Exception:
+                            logger.info("اطلاعِ اتصالِ پنلِ جدید به مالک ممکن نشد")
+            except Exception:
+                logger.exception("ثبتِ پنلِ ساخته‌شده توسطِ ادمینِ add-only ناموفق بود")
+
+
+async def _staff_section_mw(handler, event, data):
+    """میان‌افزارِ داخلی: بعد از پیداشدنِ هندلر، دسترسیِ ادمین‌هایِ محدود را
+    به بخشِ همان هندلر چک می‌کند (مالک و ادمینِ کامل دست‌نخورده)."""
+    h = data.get("handler")
+    cbk = getattr(h, "callback", None)
+    module = getattr(cbk, "__module__", "")
+    name = getattr(cbk, "__name__", "")
+    # ادمینِ add-only: حتی آپدیتِ «مجاز» فقط برایِ هندلرهایِ خودِ مراحلِ ثبتِ پنل
+    if _ADDONLY_ALLOW.get() is not None and not (
+            module == "tenant.bots.vpn.vpn_admin" and name in _ADDONLY_SETUP_HANDLERS):
+        token = _ADDONLY_ALLOW.set(None)
+        try:
+            return await handler(event, data)
+        finally:
+            _ADDONLY_ALLOW.reset(token)
+    section = _ADMIN_MODULE_SECTION.get(module)
+    if section is None:
+        return await handler(event, data)
+    bot = data.get("bot")
+    uid = event.from_user.id if getattr(event, "from_user", None) else None
+    if bot is None or uid is None:
+        return await handler(event, data)
+    row = await get_bot_row(bot)
+    if not row or uid == row.owner_id:
+        return await handler(event, data)
+    perms = (await _staff_perms_map(row.id)).get(uid, "missing")
+    if perms == "missing" or perms is None or perms == {ADDONLY_PERM}:
+        # کاربرِ عادی/ادمینِ کامل: رفتارِ قبلی؛ add-only را is_owner_or_admin می‌بندد
+        return await handler(event, data)
+    if section in perms:
+        return await handler(event, data)
+    logger.info("دسترسیِ بخشِ %s برای ادمینِ محدود %s در ربات %s رد شد (%s.%s)",
+                section, uid, row.id, module, name)
+    try:
+        if isinstance(event, CallbackQuery):
+            await event.answer("⛔️ دسترسی به این بخش برای شما محدود شده.", show_alert=True)
+        else:
+            await event.answer("⛔️ دسترسی به این بخش برای شما محدود شده.")
+    except Exception:
+        logger.debug("پاسخِ ردِ دسترسی ممکن نشد", exc_info=True)
+    return None
+
+
+# add-only باید قبل از بقیهٔ میان‌افزارهایِ بیرونی (مثلِ _admin_cb_guard_mw) اجرا شود
+tenant_router.callback_query.outer_middleware._middlewares.insert(0, _addonly_mw)
+tenant_router.message.outer_middleware._middlewares.insert(0, _addonly_mw)
+tenant_router.callback_query.middleware(_staff_section_mw)
+tenant_router.message.middleware(_staff_section_mw)

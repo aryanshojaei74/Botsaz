@@ -32,7 +32,7 @@ from aiogram.types import (BufferedInputFile, CallbackQuery, Document,
 from sqlalchemy import delete, select
 
 from config import Session
-from models import Bot as BotRow, MainButton, Setting, SmmPanel, SmmCategory, SmmService
+from models import Bot as BotRow, MainButton, Setting, SmmPanel, SmmCategory, SmmService, VpnPanel, VpnPlan
 
 from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
@@ -50,6 +50,11 @@ _SMM_PANEL_FIELDS = ["name", "api_url", "api_key", "is_active", "bulk_status",
 _SMM_CATEGORY_FIELDS = ["platform", "name", "margin_pct", "is_active"]
 _SMM_SERVICE_FIELDS = ["service_id", "name", "category", "panel_rate", "sell_rate",
                        "min_qty", "max_qty", "is_active", "is_manual", "description"]
+# === PATCH_BACKUP_VPN_V1 === پنل‌ها و پلن‌هایِ VPN هم در بک‌آپ (برایِ انتقال به رباتِ جدید)
+_VPN_PANEL_FIELDS = ["panel_key", "base_url", "username", "password", "api_key", "sub_base",
+                     "inbound_ids", "enabled", "auto_sync", "default_limit_ip"]
+_VPN_PLAN_FIELDS = ["panel_key", "audience", "title", "volume_gb", "days", "price",
+                    "limit_ip", "active", "color", "category"]
 
 
 def _json_default(o):
@@ -80,6 +85,8 @@ async def _build_backup(bot_id: int) -> dict:
         panels = (await s.scalars(select(SmmPanel).where(SmmPanel.bot_id == bot_id))).all()
         cats = (await s.scalars(select(SmmCategory).where(SmmCategory.bot_id == bot_id))).all()
         svcs = (await s.scalars(select(SmmService).where(SmmService.bot_id == bot_id))).all()
+        vpanels = (await s.scalars(select(VpnPanel).where(VpnPanel.bot_id == bot_id))).all()
+        vplans = (await s.scalars(select(VpnPlan).where(VpnPlan.bot_id == bot_id))).all()
 
     data = {
         "format": _FORMAT_NAME,
@@ -103,6 +110,8 @@ async def _build_backup(bot_id: int) -> dict:
                     **_row_to_dict(v, _SMM_SERVICE_FIELDS))
                 for v in svcs
             ],
+            "vpn_panels": [_row_to_dict(p, _VPN_PANEL_FIELDS) for p in vpanels],
+            "vpn_plans": [_row_to_dict(p, _VPN_PLAN_FIELDS) for p in vplans],
         },
     }
     return data
@@ -116,6 +125,9 @@ async def _summary_line(data: dict) -> str:
         f"🌐 پنل‌هایِ API: {len(t.get('smm_panels', []))}\n"
         f"📦 دسته‌ها: {len(t.get('smm_categories', []))}\n"
         f"🛰 سرویس‌ها: {len(t.get('smm_services', []))}"
+        + (f"\n🖥 پنل‌هایِ VPN: {len(t.get('vpn_panels', []))}"
+           f"\n🏷 پلن‌هایِ فروشِ VPN: {len(t.get('vpn_plans', []))}"
+           if (t.get('vpn_panels') or t.get('vpn_plans')) else "")
     )
 
 
@@ -125,7 +137,7 @@ async def _summary_line(data: dict) -> str:
 async def backup_export(cb: CallbackQuery, bot: Bot):
     from tenant import get_bot_row, is_owner_or_admin
     row = await get_bot_row(bot)
-    if not row or not await is_owner_or_admin(row.id, cb.from_user.id, row.owner_id):
+    if not row or cb.from_user.id != row.owner_id:  # فایل شاملِ رمز/کلیدِ پنل‌هاست — فقط مالک
         await cb.answer()
         return
     await cb.answer("⏳ در حالِ ساختنِ بک‌آپ...")
@@ -149,7 +161,7 @@ async def backup_export(cb: CallbackQuery, bot: Bot):
 async def backup_import_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from tenant import get_bot_row, is_owner_or_admin
     row = await get_bot_row(bot)
-    if not row or not await is_owner_or_admin(row.id, cb.from_user.id, row.owner_id):
+    if not row or cb.from_user.id != row.owner_id:  # فایل شاملِ رمز/کلیدِ پنل‌هاست — فقط مالک
         await cb.answer()
         return
     await state.set_state(BackupFSM.waiting_file)
@@ -169,7 +181,7 @@ async def backup_import_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
 async def backup_import_file(msg: Message, bot: Bot, state: FSMContext):
     from tenant import get_bot_row, is_owner_or_admin
     row = await get_bot_row(bot)
-    if not row or not await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id):
+    if not row or msg.from_user.id != row.owner_id:  # فقط مالک
         await state.clear()
         return
     doc: Document = msg.document
@@ -227,7 +239,7 @@ async def backup_import_confirm(cb: CallbackQuery, bot: Bot, state: FSMContext):
     row = await get_bot_row(bot)
     data = (await state.get_data()).get("backup_payload")
     await state.clear()
-    if not row or not await is_owner_or_admin(row.id, cb.from_user.id, row.owner_id) or not data:
+    if not row or cb.from_user.id != row.owner_id or not data:  # فقط مالک
         await cb.answer()
         return
     await cb.answer("⏳ در حالِ بازگردانی...")
@@ -251,7 +263,20 @@ async def _restore_backup(bot_id: int, data: dict) -> None:
         await s.execute(delete(SmmPanel).where(SmmPanel.bot_id == bot_id))
         await s.execute(delete(MainButton).where(MainButton.bot_id == bot_id))
         await s.execute(delete(Setting).where(Setting.bot_id == bot_id))
+        # پنل/پلنِ VPN فقط وقتی جایگزین می‌شوند که خودِ بک‌آپ آن‌ها را داشته باشد
+        # (بک‌آپ‌هایِ قدیمی این کلیدها را ندارند و نباید پنل‌هایِ فعلی را پاک کنند)
+        if "vpn_plans" in t:
+            await s.execute(delete(VpnPlan).where(VpnPlan.bot_id == bot_id))
+        if "vpn_panels" in t:
+            await s.execute(delete(VpnPanel).where(VpnPanel.bot_id == bot_id))
         await s.flush()
+
+        for p in t.get("vpn_panels", []):
+            if p.get("panel_key") and p.get("base_url"):
+                s.add(VpnPanel(bot_id=bot_id, **{k: v for k, v in p.items() if k in _VPN_PANEL_FIELDS}))
+        for p in t.get("vpn_plans", []):
+            if p.get("title") is not None:
+                s.add(VpnPlan(bot_id=bot_id, **{k: v for k, v in p.items() if k in _VPN_PLAN_FIELDS}))
 
         # تنظیمات — بدونِ ارجاعِ بین‌جدولی، ساده درج می‌شه
         for st in t.get("settings", []):
@@ -334,7 +359,7 @@ async def _backup_menu_content() -> tuple[str, InlineKeyboardMarkup]:
 async def backup_menu(cb: CallbackQuery, bot: Bot):
     from tenant import get_bot_row, is_owner_or_admin
     row = await get_bot_row(bot)
-    if not row or not await is_owner_or_admin(row.id, cb.from_user.id, row.owner_id):
+    if not row or cb.from_user.id != row.owner_id:  # فایل شاملِ رمز/کلیدِ پنل‌هاست — فقط مالک
         await cb.answer()
         return
     text, kb = await _backup_menu_content()
