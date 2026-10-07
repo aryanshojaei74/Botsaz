@@ -96,6 +96,11 @@ async def _admin_only(cb: CallbackQuery) -> bool:
     return await _can_access(cb.from_user.id)
 
 
+def _self_dealing(uid: int, pb) -> bool:
+    """ادمینِ فرعی نباید کیف‌پول/موجودی/روزِ رباتِ همکارِ *خودش* را عوض کند."""
+    return uid != PLATFORM_ADMIN_ID and pb is not None and pb.owner_id == uid
+
+
 # === PATCH_PARTNER_BACKNAV_V1 ===
 # هر مرحله‌ای که منتظرِ متنِ ادمین می‌ماند باید راهِ بیرون‌آمدن داشته باشد،
 # و آن راه باید دقیقاً «یک صفحه عقب» باشد نه پرش به خانه.
@@ -815,9 +820,12 @@ async def pa_days(cb: CallbackQuery):
     pb_id, delta = int(raw_id), int(raw_delta)
 
     async with Session() as s:
-        pb = await s.get(PartnerBot, pb_id)
+        pb = await s.get(PartnerBot, pb_id, with_for_update=True)
         if not pb:
             await cb.answer("پیدا نشد", show_alert=True)
+            return
+        if _self_dealing(cb.from_user.id, pb):
+            await cb.answer("تغییرِ رباتِ همکارِ خودت مجاز نیست", show_alert=True)
             return
         base = pb.expires_at or datetime.datetime.now()
         pb.expires_at = base + datetime.timedelta(days=delta)
@@ -950,7 +958,14 @@ async def pa_discall_apply(cb: CallbackQuery, state: FSMContext, bot: Bot):
     if not await _admin_only(cb):
         await cb.answer("دسترسی ندارید", show_alert=True)
         return
-    pct = int(cb.data.split(":")[3])
+    try:
+        pct = int(cb.data.split(":")[3])
+    except (IndexError, ValueError):
+        await cb.answer()
+        return
+    if not 0 <= pct <= 90:
+        await cb.answer("درصد باید بینِ ۰ تا ۹۰ باشد", show_alert=True)
+        return
     await state.clear()
     async with Session() as s:
         rows = (await s.scalars(select(PartnerBot))).all()
@@ -1073,6 +1088,9 @@ async def pa_pause(cb: CallbackQuery, bot: Bot):
         except Exception:
             logger.exception("اطلاعِ توقف به همکار ناموفق بود")
     d = await _partner_detail(pb_id)
+    if not d:
+        await cb.answer("پیدا نشد", show_alert=True)
+        return
     await cb.message.edit_text(_detail_text(d, await min_active_sales()), reply_markup=_detail_kb(d))
     await cb.answer("متوقف شد")
 
@@ -1090,6 +1108,9 @@ async def pa_resume(cb: CallbackQuery, bot: Bot):
         except Exception:
             logger.exception("اطلاعِ فعال‌سازی به همکار ناموفق بود")
     d = await _partner_detail(pb_id)
+    if not d:
+        await cb.answer("پیدا نشد", show_alert=True)
+        return
     await cb.message.edit_text(_detail_text(d, await min_active_sales()), reply_markup=_detail_kb(d))
     await cb.answer("فعال شد")
 
@@ -1596,9 +1617,12 @@ async def pa_wallet_set(msg: Message, state: FSMContext, bot: Bot):
         return
     await state.clear()
     async with Session() as s:
-        pb = await s.get(PartnerBot, pb_id)
+        pb = await s.get(PartnerBot, pb_id, with_for_update=True)
         if not pb:
             await msg.answer("همکار پیدا نشد.")
+            return
+        if _self_dealing(msg.from_user.id, pb):
+            await msg.answer("تغییرِ کیف‌پولِ همکاریِ خودت مجاز نیست.")
             return
         owner = pb.owner_id
         u = await s.scalar(select(PlatformUser).where(
@@ -1691,9 +1715,12 @@ async def pa_days_manual_set(msg: Message, state: FSMContext, bot: Bot):
         return
 
     async with Session() as s:
-        pb = await s.get(PartnerBot, pb_id)
+        pb = await s.get(PartnerBot, pb_id, with_for_update=True)
         if not pb:
             await msg.answer("همکار پیدا نشد.")
+            return
+        if _self_dealing(msg.from_user.id, pb):
+            await msg.answer("تغییرِ رباتِ همکارِ خودت مجاز نیست.")
             return
         now = datetime.datetime.now()
         if absolute:
@@ -1823,9 +1850,12 @@ async def pa_stock_set(msg: Message, state: FSMContext, bot: Bot):
         return
 
     async with Session() as s:
-        pb = await s.get(PartnerBot, pb_id)
+        pb = await s.get(PartnerBot, pb_id, with_for_update=True)
         if not pb:
             await msg.answer("همکار پیدا نشد.")
+            return
+        if _self_dealing(msg.from_user.id, pb):
+            await msg.answer("تغییرِ موجودیِ رباتِ همکارِ خودت مجاز نیست.")
             return
         cur = pb.stock_growth if plan_key == "growth" else pb.stock_pro
         new = n if absolute else cur + n

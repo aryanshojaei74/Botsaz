@@ -146,8 +146,8 @@ async def settle_charge(order_id: str) -> tuple[bool, str, int]:
         if claim.rowcount == 0:
             await s.rollback()
             return False, "این فاکتور قبلاً تسویه شده است.", 0
-        u = await s.scalar(select(PlatformUser).where(
-            PlatformUser.telegram_id == payer_tg).with_for_update())
+        from platform_bot import get_user
+        u = await get_user(s, payer_tg, for_update=True)
         if u:
             u.balance = float(u.balance or 0) + credit
             s.add(PlatformTxn(user_telegram_id=payer_tg, amount=credit,
@@ -669,11 +669,17 @@ async def ptonp_cancel(cb: CallbackQuery):
         if not ch or ch.user_telegram_id != cb.from_user.id:
             await cb.answer("این فاکتور پیدا نشد.", show_alert=True)
             return
-        if ch.status == "paid":
+        # لغوِ اتمی: نوشتنِ بی‌شرط می‌توانست وضعیتِ «paid» را که هم‌زمان ثبت
+        # شده بود به «cancelled» برگرداند و فاکتور دوباره قابلِ تسویه می‌شد
+        res = await s.execute(
+            sa_update(PlatformTonPaysCharge)
+            .where(PlatformTonPaysCharge.order_id == order_id,
+                   PlatformTonPaysCharge.status != "paid")
+            .values(status="cancelled"))
+        await s.commit()
+        if res.rowcount == 0:
             await cb.answer("این فاکتور قبلاً پرداخت شده.", show_alert=True)
             return
-        ch.status = "cancelled"
-        await s.commit()
     await cb.answer("فاکتور لغو شد.")
     try:
         await cb.message.edit_reply_markup(reply_markup=None)

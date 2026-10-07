@@ -38,7 +38,7 @@ from sqlalchemy import func, select
 
 from config import PLATFORM_ADMIN_ID, Session
 from models import (
-    HostedApp, MarketProject, MarketPurchase, PlatformUser,
+    HostedApp, MarketProject, MarketPurchase, PlatformTxn, PlatformUser,
 )
 
 from logging_setup import get_logger as _get_logger
@@ -95,6 +95,44 @@ async def _has_bought(tg_id: int, pid: int) -> MarketPurchase | None:
                 MarketPurchase.project_id == pid,
                 MarketPurchase.kind != "trial",
             ).order_by(MarketPurchase.id.desc()))
+
+
+# هر خریدِ پولی فقط یک بار رویِ VPS نصب می‌شود (۳۰ روز میزبانی همراهش است).
+# hosted_app_id=-1 یعنی «در حالِ نصب» — جلویِ دو نصبِ هم‌زمان با یک خرید را می‌گیرد.
+_VPS_CLAIM_PENDING = -1
+
+
+async def _vps_credit_available(tg_id: int, pid: int) -> bool:
+    async with Session() as s:
+        return bool(await s.scalar(select(MarketPurchase.id).where(
+            MarketPurchase.user_telegram_id == tg_id,
+            MarketPurchase.project_id == pid,
+            MarketPurchase.kind != "trial",
+            MarketPurchase.hosted_app_id.is_(None)).limit(1)))
+
+
+async def _claim_vps_credit(tg_id: int, pid: int) -> int | None:
+    async with Session() as s:
+        pu = await s.scalar(select(MarketPurchase).where(
+            MarketPurchase.user_telegram_id == tg_id,
+            MarketPurchase.project_id == pid,
+            MarketPurchase.kind != "trial",
+            MarketPurchase.hosted_app_id.is_(None),
+        ).order_by(MarketPurchase.id).limit(1).with_for_update(skip_locked=True))
+        if not pu:
+            return None
+        pu.hosted_app_id = _VPS_CLAIM_PENDING
+        await s.commit()
+        return pu.id
+
+
+async def _settle_vps_credit(purchase_id: int, app_id: int | None) -> None:
+    """app_id=None یعنی نصب ناموفق بود و اعتبار برمی‌گردد."""
+    async with Session() as s:
+        pu = await s.get(MarketPurchase, purchase_id, with_for_update=True)
+        if pu and pu.hosted_app_id == _VPS_CLAIM_PENDING:
+            pu.hosted_app_id = app_id
+            await s.commit()
 
 
 # ─────────────────────── فروشگاه (کاربر) ───────────────────────
@@ -332,8 +370,15 @@ async def mk_buy_menu(cb: CallbackQuery):
 
 @market_router.callback_query(F.data.startswith("mk:pay:"))
 async def mk_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
-    _, _, kind, pid_raw = cb.data.split(":")
-    pid = int(pid_raw)
+    try:
+        _, _, kind, pid_raw = cb.data.split(":")
+        pid = int(pid_raw)
+    except ValueError:
+        await cb.answer()
+        return
+    if kind not in ("download", "vps"):
+        await cb.answer()
+        return
     p = await _project(pid)
     if not p or not p.is_active:
         await cb.answer("این پروژه دیگر موجود نیست.", show_alert=True)
@@ -354,6 +399,14 @@ async def mk_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
         async with Session() as s:
             u = await get_user(s, cb.from_user.id, cb.from_user.full_name,
                                for_update=True, username=cb.from_user.username)
+            # بازبینی زیرِ قفل: دو کلیکِ هم‌زمان دو بار پول کم نکند
+            dup = await s.scalar(select(MarketPurchase.id).where(
+                MarketPurchase.user_telegram_id == cb.from_user.id,
+                MarketPurchase.project_id == pid,
+                MarketPurchase.kind != "trial").limit(1))
+            if dup:
+                await cb.answer("این پروژه را قبلاً خریده‌ای.", show_alert=True)
+                return
             if _fa_money(u.balance) < price:
                 await cb.answer(
                     f"❌ موجودیِ کیفِ پولت کافی نیست.\n"
@@ -363,6 +416,8 @@ async def mk_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
             u.balance = _fa_money(u.balance) - price
             s.add(MarketPurchase(project_id=pid, user_telegram_id=cb.from_user.id,
                                  kind=kind, price_paid=price))
+            s.add(PlatformTxn(user_telegram_id=cb.from_user.id, amount=-float(price),
+                              kind="purchase", note=f"خریدِ پروژه: {p.title[:60]}"))
             await s.commit()
         await cb.answer("✅ پرداخت انجام شد.")
         try:
@@ -381,6 +436,9 @@ async def mk_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
         await _send_project_file(cb, bot, p)
     else:
         # === PATCH_MARKET_PROVISION_V1 ===
+        if not await _vps_credit_available(cb.from_user.id, pid):
+            await bot.send_message(cb.from_user.id, _VPS_USED_MSG)
+            return
         await _vps_start(cb, p, state, trial=False)
 
 
@@ -445,7 +503,6 @@ async def _vps_start(cb: CallbackQuery, p: MarketProject,
 async def _provision(bot: Bot, user_id: int, p: MarketProject,
                      token: str, admin_id: int, trial: bool) -> None:
     """ساختِ اپ رویِ سرویسِ میزبانی و ثبتِ خرید."""
-    from platform_bot import _vip_api
 
     # نامِ یکتا برایِ اپ: نامِ پروژه + آیدیِ کاربر
     base = re.sub(r"[^a-z0-9]+", "", (p.title or "bot").lower())[:12] or "bot"
@@ -456,6 +513,36 @@ async def _provision(bot: Bot, user_id: int, p: MarketProject,
             "⚠️ فایلِ این پروژه هنوز آپلود نشده. به پشتیبانی پیام بده.")
         return
 
+    claim_id = None
+    if trial:
+        async with Session() as s:
+            if await s.scalar(select(MarketPurchase.id).where(
+                    MarketPurchase.user_telegram_id == user_id,
+                    MarketPurchase.project_id == p.id,
+                    MarketPurchase.kind == "trial").limit(1)):
+                await bot.send_message(user_id, "قبلاً تستِ این پروژه را گرفته‌ای.")
+                return
+    else:
+        claim_id = await _claim_vps_credit(user_id, p.id)
+        if not claim_id:
+            await bot.send_message(user_id, _VPS_USED_MSG)
+            return
+    try:
+        await _provision_body(bot, user_id, p, token, admin_id, trial, name, claim_id)
+    finally:
+        if claim_id:
+            # اگر نصب به هر دلیلی ثبت نشد، اعتبارِ خرید برمی‌گردد
+            await _settle_vps_credit(claim_id, None)
+
+
+_VPS_USED_MSG = ("⚠️ نصبِ رویِ VPS برایِ این خرید قبلاً انجام شده. برایِ تمدید یا "
+                 "مدیریتِ اپ از بخشِ میزبانی استفاده کن یا تیکت بزن.")
+
+
+async def _provision_body(bot: Bot, user_id: int, p: MarketProject, token: str,
+                          admin_id: int, trial: bool, name: str,
+                          claim_id: int | None) -> None:
+    from platform_bot import _vip_api
     await bot.send_message(user_id, "⏳ در حال نصبِ پروژه رویِ سرور… (تا یک دقیقه)")
 
     # دانلودِ zip از تلگرام
@@ -516,15 +603,19 @@ async def _provision(bot: Bot, user_id: int, p: MarketProject,
         return
 
     app_id = (res or {}).get("app_id")
-    async with Session() as s:
-        s.add(MarketPurchase(
-            project_id=p.id, user_telegram_id=user_id,
-            kind="trial" if trial else "vps",
-            price_paid=0 if trial else _fa_money(p.price),
-            hosted_app_id=app_id,
-            trial_expires_at=(datetime.datetime.now() + datetime.timedelta(
-                minutes=p.trial_minutes or 20)) if trial else None))
-        await s.commit()
+    if trial:
+        async with Session() as s:
+            s.add(MarketPurchase(
+                project_id=p.id, user_telegram_id=user_id,
+                kind="trial", price_paid=0,
+                hosted_app_id=app_id,
+                trial_expires_at=datetime.datetime.now() + datetime.timedelta(
+                    minutes=p.trial_minutes or 20)))
+            await s.commit()
+    else:
+        # همان ردیفِ خرید به اپ وصل می‌شود (قبلاً ردیفِ تازه با قیمتِ کامل ثبت
+        # می‌شد و آمارِ فروش را دو برابر نشان می‌داد)
+        await _settle_vps_credit(claim_id, int(app_id) if app_id else 0)
 
 # === PATCH_MARKET_BOTLINK_V1 ===
     # یوزرنیمِ رباتِ کاربر را از خودِ توکن می‌گیریم تا لینکِ مستقیم بدهیم؛
@@ -606,6 +697,9 @@ async def mk_vps_again(cb: CallbackQuery, state: FSMContext):
     if not p or not await _has_bought(cb.from_user.id, p.id):
         await cb.answer("اول باید پروژه را بخری.", show_alert=True)
         return
+    if not await _vps_credit_available(cb.from_user.id, p.id):
+        await cb.answer(_VPS_USED_MSG, show_alert=True)
+        return
     await cb.answer()
     await _vps_start(cb, p, state, trial=False)
 
@@ -615,7 +709,7 @@ async def mk_vps_again(cb: CallbackQuery, state: FSMContext):
 @market_router.callback_query(F.data.startswith("mk:trial:"))
 async def mk_trial(cb: CallbackQuery, bot: Bot, state: FSMContext):
     p = await _project(int(cb.data.split(":")[2]))
-    if not p or not p.trial_minutes:
+    if not p or not p.is_active or not p.trial_minutes:
         await cb.answer("تست برایِ این پروژه فعال نیست.", show_alert=True)
         return
     async with Session() as s:
@@ -1014,6 +1108,18 @@ async def mka_del(cb: CallbackQuery):
     async with Session() as s:
         p = await s.get(MarketProject, pid)
         if p:
+            has_buyers = await s.scalar(select(MarketPurchase.id).where(
+                MarketPurchase.project_id == pid).limit(1))
+            if has_buyers:
+                # خریدها به پروژه ارجاع دارند؛ حذفِ واقعی خطا می‌دهد و سابقهٔ
+                # خریداران را هم از بین می‌برد — پس فقط از فروشگاه برداشته می‌شود
+                p.is_active = False
+                await s.commit()
+                await cb.answer("این پروژه خریدار دارد؛ غیرفعال شد و از فروشگاه برداشته شد.",
+                                show_alert=True)
+                txt, kb = await _admin_hub()
+                await cb.message.edit_text(txt, reply_markup=kb)
+                return
             await s.delete(p)
             await s.commit()
     await cb.answer("حذف شد.")

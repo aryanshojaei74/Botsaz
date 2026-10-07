@@ -233,8 +233,8 @@ async def settle_charge(invoice_id: int) -> tuple[bool, str, int]:
         if claim.rowcount == 0:
             await s.rollback()
             return False, "این فاکتور قبلاً تسویه شده است.", 0
-        u = await s.scalar(select(PlatformUser).where(
-            PlatformUser.telegram_id == payer_tg).with_for_update())
+        from platform_bot import get_user
+        u = await get_user(s, payer_tg, for_update=True)
         if u:
             u.balance = int(u.balance or 0) + credit_toman
             s.add(PlatformTxn(user_telegram_id=payer_tg, amount=credit_toman,
@@ -593,7 +593,14 @@ async def blu_amount_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
             parse_mode="HTML")
         await cb.answer()
         return
-    amount = int(what)
+    try:
+        amount = int(what)
+    except ValueError:
+        await cb.answer()
+        return
+    if amount < MIN_TOMAN:
+        await cb.answer("مبلغ نامعتبر است.", show_alert=True)
+        return
     await state.clear()
     await cb.answer("در حال ساختِ فاکتور…")
     await _make_invoice(cb.message, bot, cb.from_user.id, amount)
@@ -632,6 +639,9 @@ async def _make_invoice(target: Message, bot: Bot, user_id: int, amount: int):
         return
 
     invoice_id = int(inv.get("invoice_id") or 0)
+    if not invoice_id:
+        await msg.answer("❌ ساختِ فاکتور ناموفق بود (شناسهٔ فاکتور برنگشت). دوباره امتحان کن.")
+        return
     final_rial = int(inv.get("final_amount") or amount_rial)
     card = inv.get("card_number") or ""
     mode = inv.get("mode") or "live"
@@ -725,11 +735,16 @@ async def blu_cancel(cb: CallbackQuery):
         if not ch or ch.user_telegram_id != cb.from_user.id:
             await cb.answer("این فاکتور پیدا نشد.", show_alert=True)
             return
-        if ch.status == "PAID":
+        # لغوِ اتمی: نوشتنِ بی‌شرط می‌توانست «PAID»ِ هم‌زمان را بازنویسی کند
+        res = await s.execute(
+            sa_update(PlatformBluCharge)
+            .where(PlatformBluCharge.invoice_id == invoice_id,
+                   PlatformBluCharge.status != "PAID")
+            .values(status="CANCELED"))
+        await s.commit()
+        if res.rowcount == 0:
             await cb.answer("این فاکتور قبلاً پرداخت شده.", show_alert=True)
             return
-        ch.status = "CANCELED"
-        await s.commit()
     await cb.answer("فاکتور لغو شد.")
     try:
         await cb.message.edit_reply_markup(reply_markup=None)

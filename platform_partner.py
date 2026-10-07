@@ -591,7 +591,10 @@ async def partner_approve_start(cb: CallbackQuery, state: FSMContext):
     await state.update_data(
         pnr_req=req_id, pnr_days=30,
         pnr_src_chat=cb.message.chat.id, pnr_src_msg=cb.message.message_id)
-    await cb.message.answer(_approve_text(30, "none", 30), reply_markup=_days_kb(30))
+    menu = await cb.message.answer(_approve_text(30, "none", 30), reply_markup=_days_kb(30))
+    # شناسهٔ همین منو ذخیره می‌شود تا «تایید نهایی» از منویِ قدیمیِ درخواستِ
+    # دیگری، این درخواست را تأیید نکند
+    await state.update_data(pnr_menu_msg=menu.message_id)
     await cb.answer()
 
 
@@ -722,13 +725,18 @@ async def partner_approve_confirm(cb: CallbackQuery, state: FSMContext, bot: Bot
     req_id = data.get("pnr_req")
     src_chat = data.get("pnr_src_chat")
     src_msg = data.get("pnr_src_msg")
+    menu_msg = data.get("pnr_menu_msg")
+    if menu_msg and cb.message and cb.message.message_id != menu_msg:
+        await cb.answer("این منو مالِ درخواستِ دیگری است؛ دوباره «تایید» را "
+                        "رویِ همان درخواست بزن.", show_alert=True)
+        return
     await state.clear()
     if not req_id:
         await cb.answer("درخواست نامعتبر", show_alert=True)
         return
 
     async with Session() as s:
-        r = await s.get(PartnerRequest, req_id)
+        r = await s.get(PartnerRequest, req_id, with_for_update=True)
         if not r or r.status != "pending":
             await cb.answer("این درخواست قبلاً تعیین تکلیف شده", show_alert=True)
             return
@@ -855,7 +863,11 @@ async def partner_eligibility(uid: int) -> tuple[int, int] | None:
             select(func.count(PartnerBot.id)).where(
                 PartnerBot.owner_id == uid,
                 PartnerBot.status != "deleted"))
-    if existing:
+        # همان درخواستِ تأییدشده فقط یک بار ربات می‌سازد؛ اگر رباتِ آن حذف شد
+        # (مثلاً به‌خاطرِ تخلف)، ساختِ دوباره درخواستِ تأییدِ جدید می‌خواهد
+        used = await s.scalar(
+            select(func.count(PartnerBot.id)).where(PartnerBot.request_id == req_id))
+    if existing or used:
         return None
     return req_id, days
 
@@ -910,7 +922,8 @@ async def partner_save_token(msg: Message, state: FSMContext, bot: Bot):
     uid = msg.from_user.id
 
     # بازبینیِ دوباره: بینِ شروعِ فلو و ارسالِ توکن ممکن است شرایط عوض شده باشد
-    if not req_id or not await partner_eligibility(uid):
+    elig = await partner_eligibility(uid)
+    if not req_id or not elig or int(elig[0]) != int(req_id):
         await state.clear()
         await msg.answer(
             "⚠️ این مرحله دیگر معتبر نیست. لطفاً دوباره از منوی اصلی شروع کن.",
@@ -924,6 +937,15 @@ async def partner_save_token(msg: Message, state: FSMContext, bot: Bot):
             await msg.answer(
                 "این توکن همین حالا رویِ یک رباتِ فعال در بات‌ساز ثبت است. "
                 "اگر مالِ خودته اول از «🗂 ربات‌های من» حذفش کن، بعد دوباره بفرست.")
+            return
+
+        # قفلِ درخواست: دو پیامِ توکنِ هم‌زمان از یک تأیید دو ربات نسازند
+        await s.get(PartnerRequest, req_id, with_for_update=True)
+        if await s.scalar(select(func.count(PartnerBot.id)).where(
+                PartnerBot.request_id == req_id)):
+            await state.clear()
+            await msg.answer("رباتِ همکارت قبلاً ساخته شده.",
+                             reply_markup=await smart_home_kb(uid))
             return
 
         expiry = datetime.datetime.now() + datetime.timedelta(days=days)
@@ -1002,10 +1024,11 @@ async def pp_order_auto_approve(order_id: int) -> bool:
     منبعِ صدازدن فرق می‌کنه (پیامکِ بانکی به‌جایِ کلیکِ ادمین)."""
     from models import PartnerStockOrder
     async with Session() as s:
-        o = await s.get(PartnerStockOrder, order_id)
+        # قفلِ ردیف: تأییدِ پیامکی و کلیکِ دستیِ ادمین هم‌زمان دو بار موجودی اضافه نکنند
+        o = await s.get(PartnerStockOrder, order_id, with_for_update=True)
         if not o or o.status != "pending":
             return False
-        pb = await s.get(PartnerBot, o.partner_bot_id)
+        pb = await s.get(PartnerBot, o.partner_bot_id, with_for_update=True)
         if not pb:
             return False
         owner = pb.owner_id
@@ -1134,7 +1157,8 @@ async def partner_stock_order_decide(cb: CallbackQuery, bot: Bot):
     order_id = int(raw_id)
 
     async with Session() as s:
-        o = await s.get(PartnerStockOrder, order_id)
+        # قفلِ ردیف: دو کلیکِ هم‌زمان (یا کلیک + تأییدِ پیامکی) دو بار موجودی اضافه نکند
+        o = await s.get(PartnerStockOrder, order_id, with_for_update=True)
         if not o:
             await cb.answer("سفارش پیدا نشد", show_alert=True)
             return
@@ -1142,7 +1166,7 @@ async def partner_stock_order_decide(cb: CallbackQuery, bot: Bot):
             await cb.answer("این سفارش قبلاً تعیین تکلیف شده", show_alert=True)
             return
 
-        pb = await s.get(PartnerBot, o.partner_bot_id)
+        pb = await s.get(PartnerBot, o.partner_bot_id, with_for_update=True)
         if not pb:
             await cb.answer("ربات همکار پیدا نشد", show_alert=True)
             return

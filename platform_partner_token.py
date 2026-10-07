@@ -114,6 +114,10 @@ async def _token_taken(token: str) -> bool:
 
 @partner_token_router.callback_query(F.data.startswith("pat:cancel:"))
 async def pat_cancel(cb: CallbackQuery, state: FSMContext):
+    # کارتِ همکار (موجودی/درآمد/آیدیِ مالک) فقط برایِ مدیر است
+    if not _admin_only(cb):
+        await cb.answer("دسترسی ندارید", show_alert=True)
+        return
     await state.clear()
     pb_id = int(cb.data.split(":")[2])
     from platform_partner_admin import pa_view_by_id

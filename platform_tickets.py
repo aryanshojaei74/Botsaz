@@ -9,6 +9,7 @@ from __future__ import annotations
 
 
 from aiogram import Bot, F, Router
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.enums import ButtonStyle
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -425,7 +426,9 @@ async def tk_inline_reply_photo(msg: Message, bot: Bot):
         t = await s.scalar(
             select(Ticket).where(Ticket.admin_message_id == reply_msg_id))
         if not t:
-            return  # این reply مربوط به تیکت نیست
+            # این reply مربوط به تیکت نیست — به بقیهٔ هندلرها (محافظِ گروه،
+            # پنل‌ها و…) برسد؛ return خالی آپدیت را «مصرف‌شده» حساب می‌کرد
+            raise SkipHandler
         uid = t.user_telegram_id
         tid = t.id
         t.status = "answered"
@@ -442,7 +445,7 @@ async def tk_inline_reply_photo(msg: Message, bot: Bot):
         await msg.reply(f"❌ ارسال ناموفق: {e}")
 
 
-@ticket_router.message(F.reply_to_message & F.from_user.id.in_([PLATFORM_ADMIN_ID]))
+@ticket_router.message(F.reply_to_message & F.from_user.id.in_([PLATFORM_ADMIN_ID]) & F.text)
 async def tk_inline_reply(msg: Message, bot: Bot):
     """ادمین مستقیم روی پیام تیکت reply کنه → پاسخ به کاربر ارسال شه."""
     reply_msg_id = msg.reply_to_message.message_id
@@ -450,16 +453,18 @@ async def tk_inline_reply(msg: Message, bot: Bot):
         t = await s.scalar(
             select(Ticket).where(Ticket.admin_message_id == reply_msg_id))
         if not t:
-            return  # این reply مربوط به تیکت نیست
+            # این reply مربوط به تیکت نیست — به بقیهٔ هندلرها (محافظِ گروه،
+            # پنل‌ها و…) برسد؛ return خالی آپدیت را «مصرف‌شده» حساب می‌کرد
+            raise SkipHandler
         uid = t.user_telegram_id
         tid = t.id
         t.status = "answered"
-        s.add(TicketReply(ticket_id=tid, sender="admin", text=msg.text or ""))
+        s.add(TicketReply(ticket_id=tid, sender="admin", text=msg.html_text))
         await s.commit()
     try:
         await _send_with_retry(
             bot, uid,
-            f"💬 <b>پاسخ پشتیبانی — تیکت #{tid}</b>\n\n{msg.text}",
+            f"💬 <b>پاسخ پشتیبانی — تیکت #{tid}</b>\n\n{msg.html_text}",
             parse_mode="HTML", reply_markup=_kb_user_reply(tid))  # PATCH_TICKET_TWO_WAY_REPLY_V1
         await msg.reply(f"✅ پاسخ به تیکت #{tid} برای کاربر ارسال شد.")
     except Exception as e:
@@ -540,6 +545,11 @@ async def tk_view(cb: CallbackQuery):
 @ticket_router.callback_query(F.data.startswith("tk:reply:"))
 async def tk_reply(cb: CallbackQuery, state: FSMContext):
     tid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        t = await s.get(Ticket, tid)
+    if not t or t.user_telegram_id != cb.from_user.id:
+        await cb.answer("این تیکت پیدا نشد.", show_alert=True)
+        return
     await state.set_state(TicketFSM.user_reply)
     await state.update_data(tid=tid)
     try:
@@ -567,10 +577,15 @@ async def tk_reply_save(msg: Message, state: FSMContext, bot: Bot):
         text = msg.html_text  # حفظ قالب‌بندی تلگرام
         async with Session() as s:
             t = await s.get(Ticket, tid)
-            if t and t.user_telegram_id == msg.from_user.id:
+            owned = bool(t and t.user_telegram_id == msg.from_user.id)
+            if owned:
                 s.add(TicketReply(ticket_id=tid, sender="user", text=text))
                 t.status = "open"
                 await s.commit()
+        if not owned:
+            # پیام نباید با شمارهٔ تیکتِ کاربرِ دیگری برایِ ادمین برود
+            await msg.answer("این تیکت پیدا نشد.", reply_markup=await smart_home_kb(msg.from_user.id))
+            return
         if PLATFORM_ADMIN_ID:
             try:
                 # PATCH_TICKET_TWO_WAY_REPLY_V1 — بدونِ این دکمه، ادمین

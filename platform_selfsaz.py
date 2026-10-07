@@ -954,7 +954,14 @@ async def selfsaz_buy_confirm(cb: CallbackQuery):
         s.add(PlatformTxn(user_telegram_id=cb.from_user.id, amount=-price, kind="purchase", note="خرید و فعال‌سازی سلف‌ساز"))
         await s.commit()
     activated = await selfsaz_api("POST", f"/v1/accounts/{account_id}/activate", {"days": 30})
-    if not activated or not activated.get("enabled"):
+    ok = bool(activated and activated.get("enabled"))
+    if not ok:
+        # پاسخ نرسید (مثلاً تایم‌اوت) ولی شاید سرویس فعال کرده باشد؛ اگر تاریخِ
+        # انقضا جلو رفته، بازپرداخت نکن — وگرنه ۳۰ روزِ رایگان می‌ماند
+        after = await selfsaz_api("GET", f"/v1/accounts/{cb.from_user.id}")
+        ok = bool(after and after.get("expires_at")
+                  and after.get("expires_at") != account.get("expires_at"))
+    if not ok:
         async with Session() as s:
             user = await get_user(s, cb.from_user.id, cb.from_user.full_name, for_update=True, username=cb.from_user.username)
             user.balance = float(user.balance or 0) + price
@@ -967,6 +974,11 @@ async def selfsaz_buy_confirm(cb: CallbackQuery):
 @router.callback_query(F.data.startswith("pss:toggle:"))
 async def selfsaz_toggle(cb: CallbackQuery):
     account_id = int(cb.data.rsplit(":", 1)[1])
+    # فقط حسابِ خودِ کاربر — قبلاً با شناسهٔ دلخواه، سلفِ دیگران روشن/خاموش می‌شد
+    account = await selfsaz_api("GET", f"/v1/accounts/{cb.from_user.id}")
+    if not account or int(account.get("id", 0) or 0) != account_id:
+        await cb.answer("این حساب مالِ تو نیست.", show_alert=True)
+        return
     result = await selfsaz_api("POST", f"/v1/accounts/{account_id}/toggle")
     await cb.answer("وضعیت تغییر کرد" if result else "سرویس در دسترس نیست", show_alert=not bool(result))
     await show_selfsaz_panel(cb.message, cb.from_user.id, edit=True)

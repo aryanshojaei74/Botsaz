@@ -73,7 +73,8 @@ _FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567
 
 def _fa_int(text: str) -> int | None:
     digits = (text or "").translate(_FA_DIGITS).replace(",", "").replace("،", "").strip()
-    return int(digits) if digits.isdigit() else None
+    # isascii: کاراکترهایی مثلِ «²» در isdigit درست‌اند ولی int() رویشان خطا می‌دهد
+    return int(digits) if digits.isascii() and digits.isdigit() else None
 
 
 async def _get_winners_count() -> int:
@@ -984,9 +985,16 @@ async def raffle_set_correct(cb: CallbackQuery):
     _, _, raffle_id, opt = cb.data.split(":")
     raffle_id, opt = int(raffle_id), int(opt)
     async with Session() as s:
-        raffle = await s.get(ChannelRaffle, raffle_id)
+        raffle = await s.get(ChannelRaffle, raffle_id, with_for_update=True)
         if not raffle or raffle.status != "awaiting_answer":
             await cb.answer("این نظرسنجی دیگر در دسترس نیست.", show_alert=True)
+            return
+        try:
+            _n_opts = len(json.loads(raffle.options_json or "[]"))
+        except ValueError:
+            _n_opts = 0
+        if not 1 <= opt <= _n_opts:
+            await cb.answer("گزینهٔ نامعتبر", show_alert=True)
             return
         raffle.correct_option = opt
         raffle.status = "closed"
@@ -1064,7 +1072,9 @@ async def draw_winners(raffle_id: int, bot: Bot | None = None) -> tuple[str | No
     دوتا None است. اگه bot داده بشه و کانالی وصل باشه، خلاصه‌ی نتایج خودکار
     اونجا هم پست می‌شه."""
     async with Session() as s:
-        raffle = await s.get(ChannelRaffle, raffle_id)
+        # قفلِ ردیف: دو کلیکِ هم‌زمان (یا دو ادمین) دو سری برنده ثبت نکنند —
+        # «پرداخت به همه» به هر ردیفِ برنده جایزه می‌دهد
+        raffle = await s.get(ChannelRaffle, raffle_id, with_for_update=True)
         if not raffle:
             return None, "❌ این دورِ قرعه‌کشی پیدا نشد."
         if raffle.status == "drawn":
@@ -1779,6 +1789,10 @@ async def raffle_manual_add_start(cb: CallbackQuery, state: FSMContext):
         if not r:
             await cb.answer("پیدا نشد", show_alert=True)
             return
+        if r.status == "drawn":
+            await cb.answer("این دور قرعه‌کشی شده؛ دیگر نمی‌شود کسی را اضافه کرد.",
+                            show_alert=True)
+            return
     await state.set_state(RaffleFSM.manual_add_username)
     await state.update_data(raffle_id=raffle_id)
     from platform_bot import smart_cancel_kb
@@ -2124,7 +2138,7 @@ async def raffle_give_amount_recv(msg: Message, state: FSMContext, bot: Bot):
         return
     done, failed = [], []
     for wid in winner_ids:
-        ok = await _give_prize(bot, wid, amount)
+        ok = await _give_prize(bot, wid, amount, payer_uid=msg.from_user.id)
         (done if ok else failed).append(wid)
     summary = f"✅ جایزه‌ی {int(amount):,} تومانی برای {len(done)} نفر واریز شد."
     if failed:
@@ -2132,7 +2146,8 @@ async def raffle_give_amount_recv(msg: Message, state: FSMContext, bot: Bot):
     await msg.answer(summary, reply_markup=await smart_home_kb(msg.from_user.id))
 
 
-async def _give_prize(bot: Bot, winner_row_id: int, amount: int) -> bool:
+async def _give_prize(bot: Bot, winner_row_id: int, amount: int,
+                      payer_uid: int | None = None) -> bool:
     """جایزه رو به کیف‌پولِ پلتفرمیِ برنده اضافه می‌کنه (get-or-create) و
     خبرش می‌ده. True یعنی موفق بود.
 
@@ -2155,6 +2170,12 @@ async def _give_prize(bot: Bot, winner_row_id: int, amount: int) -> bool:
             if w.prize_given_at is not None:
                 logger.info("قرعه‌کشی: جایزهٔ برندهٔ #%s قبلاً (%s) پرداخت شده؛ "
                             "دوباره پرداخت نشد.", winner_row_id, w.prize_given_at)
+                return False
+            # ادمینِ فرعی نمی‌تواند به خودش جایزه بدهد
+            if (payer_uid is not None and payer_uid != PLATFORM_ADMIN_ID
+                    and w.telegram_id == payer_uid):
+                logger.warning("قرعه‌کشی: ادمینِ فرعی %s خواست به خودش جایزه بدهد؛ رد شد",
+                               payer_uid)
                 return False
             pu = await s.scalar(select(PlatformUser).where(
                 PlatformUser.telegram_id == w.telegram_id).with_for_update())

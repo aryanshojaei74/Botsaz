@@ -136,6 +136,20 @@ async def platform_group_noop(cb: CallbackQuery):
     await cb.answer()
 
 
+def _reply_target(msg: Message):
+    """کاربری که واقعاً به او ریپلای شده؛ None برایِ ریپلایِ ضمنیِ تاپیکِ
+    فوروم (پیامِ «ساختِ تاپیک» = سازندهٔ تاپیک)، پستِ خودکارِ کانال (۷۷۷۰۰۰)
+    یا پیامی که «از طرفِ کانال/گروه» فرستاده شده."""
+    r = msg.reply_to_message
+    if not r or not r.from_user:
+        return None
+    if r.forum_topic_created or r.is_automatic_forward or r.sender_chat:
+        return None
+    if r.from_user.id == 777000:
+        return None
+    return r.from_user
+
+
 @platform_group_money_router.message(
     F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}),
     F.func(lambda m: (m.text or "").strip().startswith("انتقال")),
@@ -144,9 +158,11 @@ async def platform_group_transfer(msg: Message):
     if not await _group_allowed(msg.chat.id) or not await _wallet_enabled():
         return
     m = _TRANSFER_RE.match((msg.text or "").strip())
-    if not m or not msg.reply_to_message or not msg.reply_to_message.from_user:
+    if not m or msg.sender_chat:
         return
-    target = msg.reply_to_message.from_user
+    target = _reply_target(msg)
+    if not target:
+        return
     if target.is_bot or target.id == msg.from_user.id:
         await msg.reply("❌ انتقال به خودت یا ربات امکان‌پذیر نیست.")
         return
@@ -236,7 +252,9 @@ def _bet_result_kb(bet: PlatformBet, winner_balance: int, loser_balance: int) ->
 async def platform_create_bet(msg: Message):
     if not await _group_allowed(msg.chat.id) or not await _bet_enabled():
         return
-    target = msg.reply_to_message.from_user if msg.reply_to_message and msg.reply_to_message.from_user else None
+    if msg.sender_chat:
+        return
+    target = _reply_target(msg)
     if target and (target.is_bot or target.id == msg.from_user.id):
         await msg.reply("❌ سازنده نباید خودش یا یک ربات را هدف بگیرد.")
         return

@@ -686,8 +686,9 @@ async def _run_play_locked(bot: Bot, chat_id: int, telegram_id: int, gid: int,
         s.add(PlatformDicePlay(game_id=gid, user_telegram_id=telegram_id,
                                value=value, amount=amount))
         if amount > 0:
-            u = await s.scalar(select(PlatformUser).where(
-                PlatformUser.telegram_id == telegram_id).with_for_update())   # lost update نشود
+            # get-or-create: عضوِ گروهی که هنوز /start نزده هم جایزه‌اش را بگیرد
+            from platform_bot import get_user
+            u = await get_user(s, telegram_id, for_update=True)   # lost update نشود
             if u:
                 u.balance = float(u.balance or 0) + amount
                 s.add(PlatformTxn(user_telegram_id=telegram_id, amount=amount,
@@ -713,10 +714,24 @@ async def _run_play_locked(bot: Bot, chat_id: int, telegram_id: int, gid: int,
 
 @platform_dice_router.callback_query(F.data.startswith("pdg:play:"))
 async def pdg_play(cb: CallbackQuery, bot: Bot):
-    await cb.answer("بریم! 🎲")
+    if not cb.message:
+        await cb.answer()
+        return
+    try:
+        gid = int(cb.data.split(":")[2])
+    except ValueError:
+        await cb.answer()
+        return
     _grp = cb.message.chat.type in ("group", "supergroup")
-    await run_play(bot, cb.message.chat.id, cb.from_user.id,
-                   int(cb.data.split(":")[2]),
+    # همان قیدهایِ مسیرِ متنی: بازیِ مخصوصِ یک گروه، جایِ دیگر اجرا نشود
+    if _grp:
+        async with Session() as s:
+            g = await s.get(PlatformDiceGame, gid)
+        if not g or not g.in_groups or (g.group_chat_id and g.group_chat_id != cb.message.chat.id):
+            await cb.answer("این بازی در این گروه فعال نیست.", show_alert=True)
+            return
+    await cb.answer("بریم! 🎲")
+    await run_play(bot, cb.message.chat.id, cb.from_user.id, gid,
                    player_name=(cb.from_user.full_name if _grp else ""))
 
 

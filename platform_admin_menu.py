@@ -559,11 +559,11 @@ async def selfsaz_admin_balance_save(msg: Message, state: FSMContext):
     try: delta = int(raw)
     except ValueError: await msg.answer("فقط عدد معتبر بفرستید."); return
     async with Session() as s:
-        u = await s.scalar(select(PlatformUser).where(PlatformUser.telegram_id == int((await selfsaz_api('GET', '/v1/admin/accounts') or {}).get('accounts',[{}])[0].get('owner_id',0))))
-        # resolve exact owner from account list
+        # resolve exact owner from account list (خطِ قبلیِ [0] رویِ فهرستِ خالی IndexError می‌داد)
         rows = (await selfsaz_api('GET', '/v1/admin/accounts') or {}).get('accounts', [])
         r = next((x for x in rows if int(x['id']) == int(data['ss_account_id'])), None)
-        u = await s.scalar(select(PlatformUser).where(PlatformUser.telegram_id == int(r['owner_id']))) if r else None
+        u = await s.scalar(select(PlatformUser).where(
+            PlatformUser.telegram_id == int(r['owner_id'])).with_for_update()) if r else None
         if not u: await msg.answer('کاربر کیف پول پیدا نشد.'); return
         u.balance = float(u.balance or 0) + delta
         s.add(PlatformTxn(user_telegram_id=u.telegram_id, amount=delta, kind='admin', note='SelfSaz admin adjustment'))

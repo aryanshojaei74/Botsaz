@@ -16,7 +16,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery, InlineKeyboardMarkup, Message, ReplyKeyboardRemove,
 )
-from sqlalchemy import select
+from sqlalchemy import select, update as sa_update
 
 from config import Session, WEBHOOK_BASE
 from models import Bot as BotRow, OwnerTransferRequest
@@ -342,6 +342,18 @@ async def adm_bot_transfer_new_token(msg: Message, state: FSMContext, bot: Bot):
             return
 
     async with Session() as s:
+        if req_id:
+            # تصاحبِ اتمیِ درخواست: دو پیامِ توکنِ هم‌زمان دو ربات نسازند
+            claim = await s.execute(
+                sa_update(OwnerTransferRequest)
+                .where(OwnerTransferRequest.id == req_id,
+                       OwnerTransferRequest.status == "pending_token")
+                .values(status="processing"))
+            if claim.rowcount == 0:
+                await s.rollback()
+                await state.clear()
+                await msg.answer("این درخواست دیگر معتبر نیست.", reply_markup=ReplyKeyboardRemove())
+                return
         new_row = BotRow(
             owner_id=new_owner_id, token=new_token, username=me.username,
             field=old_field, plan=old_plan, status="active",

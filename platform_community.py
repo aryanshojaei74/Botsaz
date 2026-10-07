@@ -803,6 +803,9 @@ async def cadm_recolor_cancel(cb: CallbackQuery, state: FSMContext):
 @community_router.callback_query(CommunityFSM.btn_color, F.data.startswith("cadm:color:"))
 async def cadm_color_handler(cb: CallbackQuery, state: FSMContext):
     color = cb.data.split(":")[2]
+    if color not in _COMM_COLOR_LABEL:
+        await cb.answer()
+        return
     data = await state.get_data()
     edit_id = data.get("cadm_edit_id")
     edit_mode = data.get("cadm_edit_mode")

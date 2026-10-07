@@ -23877,9 +23877,15 @@ _PLATFORM_ADMIN_CB_PREFIXES = (
 )
 
 
+# دکمه‌هایی که با پیشوندِ مدیریتی شروع می‌شوند ولی مالِ کاربرِ عادی‌اند
+# (هندلرشان مالکیت را خودش چک می‌کند): «ارسالِ توکن» توسطِ مالکِ جدیدِ انتقال
+_PLATFORM_ADMIN_CB_EXEMPT = ("abotxferself:",)
+
+
 async def _platform_admin_cb_guard(handler, event, data):
     cbd = getattr(event, "data", None) or ""
-    if not cbd.startswith(_PLATFORM_ADMIN_CB_PREFIXES):
+    if (not cbd.startswith(_PLATFORM_ADMIN_CB_PREFIXES)
+            or cbd.startswith(_PLATFORM_ADMIN_CB_EXEMPT)):
         return await handler(event, data)
     uid = getattr(getattr(event, "from_user", None), "id", None)
     ok = uid is not None and is_admin(uid)
