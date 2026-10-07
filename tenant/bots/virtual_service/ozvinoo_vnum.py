@@ -67,6 +67,9 @@ def _clean_provider_list(raw: str) -> list[dict]:
         if not isinstance(p, dict) or not p.get("id"):
             continue
         result.append({
+            # کلیدهایِ اضافه (مثلِ cost_adjust) هم حفظ شوند — قبلاً اینجا دور ریخته می‌شدند
+            **p,
+            "kind": str(p.get("kind") or "ozvinoo"),   # PATCH_TNUMBER_PROVIDER_V1: ozvinoo | tnumber
             "id": str(p.get("id")),
             "name": str(p.get("name") or "OzVinoo"),
             "token": str(p.get("token") or "").strip(),
@@ -164,7 +167,8 @@ def _provider_detail(provider: dict) -> tuple[str, InlineKeyboardMarkup]:
     # تغییرش نبود — علتِ اصلیِ شکایتِ «قیمتِ خرید ۱۰ هزار بالاتر از تعرفهٔ
     # پنلِ من است».
     _nr = bool(provider.get("none_report", True))
-    text += ("\n📶 ردهٔ شماره: "
+    if not _is_tnumber(provider):
+      text += ("\n📶 ردهٔ شماره: "
              + ("<b>هر دو رده</b> (کاربر انتخاب می‌کند: بدونِ ریپورت یا ارزان)" if provider.get("tier_both")
                 else "<b>بدونِ ریپورت</b> (کیفیتِ بالاتر، گران‌تر)" if _nr
                 else "<b>معمولی</b> (ارزان‌تر)"))
@@ -182,12 +186,12 @@ def _provider_detail(provider: dict) -> tuple[str, InlineKeyboardMarkup]:
          InlineKeyboardButton(text="📂 دسته‌بندی کشورها", callback_data=f"ozv:cats:{provider['id']}")],
         # === PATCH_OZVINOO_COST_ADJUST_V1 ===
         [InlineKeyboardButton(text="🧾 اصلاحِ قیمتِ خرید", callback_data=f"ozv:costadj:{provider['id']}")],
-        # === PATCH_OZVINOO_NONE_REPORT_TOGGLE_V1 ===
-        [InlineKeyboardButton(
+        # === PATCH_OZVINOO_NONE_REPORT_TOGGLE_V1 === (فقط OzVinoo؛ TNumber رده ندارد)
+        *([] if _is_tnumber(provider) else [[InlineKeyboardButton(
             text=("📶 ردهٔ شماره: هر دو (انتخابِ کاربر)" if provider.get("tier_both")
                   else "📶 ردهٔ شماره: بدونِ ریپورت (گران‌تر)" if provider.get("none_report", True)
                   else "📶 ردهٔ شماره: معمولی (ارزان‌تر)"),
-            callback_data=f"ozv:nonereport:{provider['id']}")],
+            callback_data=f"ozv:nonereport:{provider['id']}")]]),
         # === PATCH_OZVINOO_AUTO_PRICE_SYNC_V1 ===
         [InlineKeyboardButton(text="⏱ استعلامِ خودکارِ قیمت",
                               callback_data=f"ozv:pricesync:{provider['id']}")],
@@ -203,7 +207,7 @@ async def _menu_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     providers = await _providers(bot_id)
     lines = [
         "📱 <b>مدیریت شمارهٔ مجازی خودکار</b>\n",
-        "اتصال به API OzVinoo برای دریافت شمارهٔ تلگرام، دریافت کد و لغو سفارش.",
+        "اتصال به API ارائه‌دهنده (OzVinoo یا TNumber) برای دریافت شمارهٔ تلگرام، دریافت کد و لغو سفارش.",
         "پرداخت مشتری از کیف‌پول داخلی ربات و به تومان انجام می‌شود.",
     ]
     rows = []
@@ -214,6 +218,8 @@ async def _menu_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
         lines.append(f"\n{mark} {html.escape(p['name'])} — {p.get('last_count', 0)} کشور")
         rows.append([InlineKeyboardButton(text=f"{mark} {p['name']}", callback_data=f"ozv:provider:{p['id']}")])
     rows.append([InlineKeyboardButton(text="➕ افزودن سرویس شمارهٔ مجازی خودکار", callback_data="ozv:add", style=ButtonStyle.SUCCESS)])
+    # === PATCH_TNUMBER_PROVIDER_V1 ===
+    rows.append([InlineKeyboardButton(text="➕ افزودن TNumber", callback_data="ozv:addtn", style=ButtonStyle.SUCCESS)])
     rows.append([InlineKeyboardButton(text="📘 راهنمای اتصال OzVinoo", callback_data="ozv:help")])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:products", style=ButtonStyle.DANGER)])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
@@ -242,9 +248,28 @@ async def ozv_add(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if not row or not await _require_access(cb, row):
         return
     await state.set_state(OzVinooFSM.token)
+    await state.update_data(provider_kind="ozvinoo", provider_id=None)
     await cb.message.answer(
         "🔑 <b>کلید API حساب OzVinoo را بفرستید.</b>\n\n"
         "کلید با فرمت Bearer در سمت سرور ذخیره می‌شود و در پیام‌های عمومی نمایش داده نمی‌شود.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ لغو", callback_data="ozv:cancel_input", style=ButtonStyle.DANGER)],
+        ]), parse_mode="HTML")
+    await cb.answer()
+
+
+# === PATCH_TNUMBER_PROVIDER_V1 ===
+@ozvinoo_router.callback_query(F.data == "ozv:addtn")
+async def ozv_add_tnumber(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row or not await _require_access(cb, row):
+        return
+    await state.set_state(OzVinooFSM.token)
+    await state.update_data(provider_kind="tnumber", provider_id=None)
+    await cb.message.answer(
+        "🔑 <b>کلید API حساب TNumber را بفرستید.</b>\n\n"
+        "کلید را از ربات TNumber، بخشِ «پنل API و مستندات» بردارید. "
+        "در پیام‌های عمومی نمایش داده نمی‌شود.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ لغو", callback_data="ozv:cancel_input", style=ButtonStyle.DANGER)],
         ]), parse_mode="HTML")
@@ -284,14 +309,22 @@ async def ozv_token_input(msg: Message, bot: Bot, state: FSMContext):
     data = await state.get_data()
     provider_id = data.get("provider_id")
     providers = await _providers(row.id)
+    kind = "tnumber" if data.get("provider_kind") == "tnumber" else "ozvinoo"   # PATCH_TNUMBER_PROVIDER_V1
     if provider_id:
         p = _provider(providers, provider_id)
     else:
+        _pref = "tn" if kind == "tnumber" else "ozv"
+        _used = {x.get("id") for x in providers}
         idx = len(providers) + 1
-        provider_id = f"ozv{idx}"
+        while f"{_pref}{idx}" in _used:
+            idx += 1
+        provider_id = f"{_pref}{idx}"
         p = None
     if p is None:
-        p = {"id": provider_id, "name": "OzVinoo — شمارهٔ مجازی تلگرام", "active": False,
+        p = {"id": provider_id, "kind": kind,
+             "name": ("TNumber — شمارهٔ مجازی تلگرام" if kind == "tnumber"
+                      else "OzVinoo — شمارهٔ مجازی تلگرام"),
+             "active": False,
              "margin_pct": 30, "none_report": True, "last_sync": None, "last_count": 0, "last_error": ""}
         providers.append(p)
     p["token"] = token
@@ -356,6 +389,198 @@ def _api_data(payload):
     if isinstance(payload, dict):
         return payload.get("data") if "data" in payload else payload
     return payload
+
+
+# ═══════════════════════ TNumber — PATCH_TNUMBER_PROVIDER_V1 ═══════════════════════
+# ارائه‌دهندهٔ دوم کنارِ OzVinoo (https://b.tnumber.site). تفاوت‌هایِ مهم با OzVinoo:
+#  • کلید در هدرِ X-API-Key (نه Bearer).
+#  • خطاها با HTTP 200 و {"success": false, "error", "code"} برمی‌گردند → فقط فیلدِ success ملاک است.
+#  • کشور با کدِ ISO («IR») خریده می‌شود و سفارش با «شمارهٔ تلفن» شناخته می‌شود (نه order_id)؛
+#    پس panel_order_id = همان شماره، و service_id = ozv:{provider}:{ISO}.
+#  • یک کدِ ISO ممکن است چند ردیف با پیش‌شماره/قیمتِ متفاوت داشته باشد (مثلاً دو «US») و
+#    خرید فقط با ISO است → ردیف‌ها یکی و با «بالاترین» قیمت فروخته می‌شوند تا زیرِ قیمت نفروشیم.
+_TN_BASE = "https://b.tnumber.site/api/v1"
+_TN_PHONE_FIELDS = ("phonenumber", "phone_number", "phone", "number", "account", "msisdn", "tel")
+_TN_CODE_FIELDS = ("code", "sms_code", "otp", "login_code", "verify_code", "message", "sms", "text")
+_TN_RAW_LOGGED: set = set()
+
+
+def _is_tnumber(provider: dict | None) -> bool:
+    return bool(provider) and str(provider.get("kind") or "") == "tnumber"
+
+
+async def _tn_request(provider: dict, method: str, path: str, *, params=None):
+    """(ok, data, error_text, error_code). ok فقط وقتی success=true باشد."""
+    token = str(provider.get("token") or "").strip()
+    if not token:
+        return False, None, "کلید API ثبت نشده است", "NO_KEY"
+    base = str(provider.get("base_url") or _TN_BASE).rstrip("/")
+    timeout = aiohttp.ClientTimeout(total=25)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.request(method, base + path, params=params,
+                                       headers={"X-API-Key": token, "Accept": "application/json"}) as r:
+                try:
+                    payload = await r.json(content_type=None)
+                except Exception:
+                    return False, None, f"پاسخِ نامعتبر (HTTP {r.status})", f"HTTP_{r.status}"
+    except Exception as exc:
+        return False, None, f"اتصال ناموفق: {exc}"[:200], "NETWORK"
+    if not isinstance(payload, dict):
+        return False, None, "پاسخِ نامعتبر", "BAD_PAYLOAD"
+    if payload.get("success") is True:
+        return True, payload.get("data", payload), "", ""
+    return False, payload, str(payload.get("error") or payload.get("message") or "خطای نامشخص"), \
+        str(payload.get("code") or "")
+
+
+def _tn_flag(iso: str) -> str:
+    iso = (iso or "").upper()
+    if len(iso) != 2 or not iso.isalpha():
+        return ""
+    return "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in iso)
+
+
+def _tn_find(data, fields):
+    """اولین مقدارِ غیرخالی از فیلدهایِ مشخص — در خودِ data یا یک سطح پایین‌تر."""
+    if isinstance(data, dict):
+        for f in fields:
+            v = data.get(f)
+            if v not in (None, "") and not isinstance(v, (dict, list)):
+                return str(v).strip()
+        for v in data.values():
+            if isinstance(v, dict):
+                got = _tn_find(v, fields)
+                if got:
+                    return got
+    return ""
+
+
+def _tn_phone(raw: str) -> str:
+    d = "".join(ch for ch in _digits(raw) if ch.isdigit())
+    return f"+{d}" if len(d) >= 6 else ""
+
+
+def _tn_extract_code(data) -> str:
+    """کدِ ورود از پاسخ؛ فقط چیزی که واقعاً شبیهِ کد است (۴ تا ۸ رقم) پذیرفته می‌شود."""
+    import re as _re
+    if isinstance(data, (str, int)):
+        cand = str(data)
+    else:
+        cand = _tn_find(data, _TN_CODE_FIELDS)
+    cand = _digits(cand or "")
+    if _re.fullmatch(r"\d{4,8}", cand.strip()):
+        return cand.strip()
+    m = _re.search(r"(?<!\d)(\d{5,6})(?!\d)", cand)
+    return m.group(1) if m else ""
+
+
+async def _tn_countries(provider: dict) -> tuple[bool, str, list[dict]]:
+    ok, data, err, _code = await _tn_request(provider, "GET", "/buy/available-countries")
+    if not ok:
+        return False, err, []
+    if not isinstance(data, list):
+        return False, "پاسخِ فهرستِ کشورها قابلِ خواندن نبود.", []
+    merged: dict[str, dict] = {}
+    for it in data:
+        if not isinstance(it, dict):
+            continue
+        iso = str(it.get("country") or it.get("countrycode") or "").strip().upper()
+        if not iso:
+            continue
+        price = _norm_int(it.get("sellprice"), 0)
+        count = _norm_int(it.get("count"), 0)
+        dial = "+" + "".join(ch for ch in str(it.get("dial_code") or "") if ch.isdigit())
+        name = _strip_flags(str(it.get("name") or "")).strip()
+        name = "".join(ch for ch in name if not ch.isdigit()).strip() or iso
+        m = merged.setdefault(iso, {"iso": iso, "name": name, "price": 0, "count": 0, "dials": []})
+        m["price"] = max(m["price"], price)   # چند ردیف با یک ISO → بالاترین قیمت
+        m["count"] += max(0, count)
+        if dial != "+" and dial not in m["dials"]:
+            m["dials"].append(dial)
+    out = []
+    for m in merged.values():
+        m["name"] = _clean_country_name(m["name"], _tn_flag(m["iso"]))
+        out.append(m)
+    return True, "", out
+
+
+async def _pv_buy(provider: dict, country_ref, svc) -> tuple[bool, str, str, str]:
+    """(ok, پیامِ خطا, شناسهٔ سفارش نزدِ ارائه‌دهنده, شماره)."""
+    if _is_tnumber(provider):
+        ok, data, err, code = await _tn_request(provider, "POST", "/buy/account",
+                                                params={"country": str(country_ref)})
+        if not ok:
+            if code == "INSUFFICIENT_BALANCE":
+                err = "موجودیِ حسابِ ارائه‌دهنده کافی نیست (مالکِ ربات باید شارژ کند)"
+            return False, err, "", ""
+        phone = _tn_phone(_tn_find(data, _TN_PHONE_FIELDS))
+        if not phone:
+            # موفق ولی شماره در پاسخ پیدا نشد — پول از کاربر کم نمی‌شود؛ پاسخِ خام برایِ رسیدگیِ دستی
+            logger.error("TNumber buy: success بدونِ شماره — پاسخِ خام: %s", str(data)[:800])
+            return False, "UNPARSED:" + str(data)[:600], "", ""
+        return True, "", phone, phone
+    status, payload = await _oz_request(provider, "POST", _OZ_NUMBERS, body={
+        "country_id": country_ref, "none_report": _tier_none_report(provider, svc)})
+    data = _api_data(payload)
+    if status < 200 or status >= 300 or (isinstance(payload, dict) and payload.get("status") is False) \
+            or not isinstance(data, dict):
+        return False, _api_message(status, payload), "", ""
+    api_order_id = _norm_int(data.get("order_id") or data.get("id"), 0)
+    phone = str(data.get("number") or data.get("phone") or "").strip()
+    if not api_order_id or not phone:
+        return False, "پاسخ ارائه‌دهنده ناقص بود", "", ""
+    return True, "", str(api_order_id), phone
+
+
+async def _pv_cancel(provider: dict, order_ref) -> tuple[bool, str]:
+    """(پذیرفته شد؟, متنِ پاسخ برایِ لاگ/نمایش)."""
+    if _is_tnumber(provider):
+        ok, data, err, code = await _tn_request(provider, "POST", "/order/cancel",
+                                                params={"phonenumber": str(order_ref)})
+        return ok, ("ok" if ok else f"{err} ({code})")
+    status, payload = await _oz_request(provider, "POST", _OZ_CANCEL,
+                                        body={"order_id": _norm_int(order_ref, 0)})
+    ok = status in (200, 201) or (isinstance(payload, dict) and "cancel" in str(payload.get("message", "")).lower())
+    return ok, (f"http={status} " + str(payload)[:300])
+
+
+async def _pv_fetch_code(provider: dict, order_ref) -> tuple[str, str, str]:
+    """(وضعیت: ok | pending | missing | error, کد, توضیح)."""
+    if _is_tnumber(provider):
+        ok, data, err, code = await _tn_request(provider, "GET", f"/account/code/{order_ref}")
+        if not ok:
+            if code in ("ACCOUNT_NOT_FOUND", "ORDER_NOT_FOUND"):
+                return "missing", "", err
+            if code in ("NETWORK", "NO_KEY", "BAD_PAYLOAD", "UNAUTHORIZED", "INVALID_KEY") \
+                    or code.startswith("HTTP_"):
+                return "error", "", err
+            # هر خطایِ دیگر (مثلاً «هنوز کد نیامده» با کدی که مستندات ننوشته) = در انتظار،
+            # تا لغوِ خودکارِ بعد از چند دقیقه برایش اجرا شود
+            key = f"{order_ref}:{code}"
+            if key not in _TN_RAW_LOGGED:
+                _TN_RAW_LOGGED.add(key)
+                logger.info("TNumber code: %s → در انتظار فرض شد (%s)", code, err)
+            return "pending", "", err
+        got = _tn_extract_code(data)
+        if not got:
+            key = str(order_ref)
+            if key not in _TN_RAW_LOGGED and data not in (None, "", {}, []):
+                _TN_RAW_LOGGED.add(key)
+                logger.warning("TNumber code: پاسخِ موفق بدونِ کدِ قابلِ‌تشخیص (شماره %s): %s",
+                               key, str(data)[:500])
+            return "pending", "", ""
+        return "ok", got, ""
+    status, payload = await _oz_request(provider, "GET", _OZ_SERVICES, body={"order_id": _norm_int(order_ref, 0)})
+    data = _api_data(payload)
+    if status == 202 or (isinstance(payload, dict) and payload.get("status_code") == 202):
+        return "pending", "", ""
+    if status < 200 or status >= 300 or not isinstance(data, dict):
+        if status in (404, 409):
+            return "missing", "", _api_message(status, payload)
+        return "error", "", _api_message(status, payload)
+    code = str(data.get("code") or "").strip()
+    return ("ok", code, "") if code else ("pending", "", "")
 
 
 def _extract_country_id(item: dict):
@@ -458,7 +683,52 @@ def _sync_lock(bot_id: int):
     return lock
 
 
+async def _sync_tnumber_locked(bot_id: int, provider: dict) -> tuple[bool, str, int]:
+    """PATCH_TNUMBER_PROVIDER_V1 — کشورهایِ TNumber همان ردیف‌هایِ SmmService با
+    service_id = ozv:{provider}:{ISO}؛ قیمت‌گذاری مثلِ OzVinoo (سود + اصلاحِ قیمت + قیمتِ دستی)."""
+    ok, err, items = await _tn_countries(provider)
+    if not ok:
+        return False, err, 0
+    seen = set()
+    price_overrides = await _oz_price_overrides(bot_id)
+    disabled_services = await _oz_disabled_services(bot_id)
+    margin = float(provider.get("margin_pct", 30) or 0)
+    adj = float(provider.get("cost_adjust", 0) or 0)
+    async with Session() as s:
+        for it in items:
+            price = max(0.0, float(it["price"]) + adj)
+            if price <= 0:
+                continue
+            service_id = f"ozv:{provider['id']}:{it['iso']}"
+            seen.add(service_id)
+            available = it["count"] > 0
+            sell = price_overrides.get(service_id) or (int(round(price * (1 + margin / 100))) * 1000)
+            active = bool(provider.get("active") and available) and service_id not in disabled_services
+            desc = f"موجودی: {it['count']} | پیش‌شماره: {'، '.join(it['dials']) or '—'}"
+            svc = await s.scalar(select(SmmService).where(
+                SmmService.bot_id == bot_id, SmmService.service_id == service_id))
+            if not svc:
+                s.add(SmmService(bot_id=bot_id, service_id=service_id, name=it["name"],
+                                 category=_OZ_CATEGORY, panel_rate=price, sell_rate=sell,
+                                 min_qty=1, max_qty=1, is_active=active, is_manual=False,
+                                 platform_key="telegram", type_key="virtual_number",
+                                 provider_desc=desc))
+            else:
+                svc.name, svc.category = it["name"], _OZ_CATEGORY
+                svc.panel_rate, svc.sell_rate = price, sell
+                svc.is_active, svc.provider_desc = active, desc
+        existing = (await s.scalars(select(SmmService).where(
+            SmmService.bot_id == bot_id, SmmService.service_id.like(f"ozv:{provider['id']}:%")))).all()
+        for svc in existing:
+            if svc.service_id not in seen:
+                svc.is_active = False
+        await s.commit()
+    return True, f"{len(seen)} کشور همگام شد.", len(seen)
+
+
 async def _sync_provider_locked(bot_id: int, provider: dict) -> tuple[bool, str, int]:
+    if _is_tnumber(provider):
+        return await _sync_tnumber_locked(bot_id, provider)
     # === PATCH_OZVINOO_TIER_BOTH_V1 ===
     # حالتِ «هر دو رده»: هر دو فهرست (بدونِ ریپورت + ارزان) گرفته می‌شود.
     # ردیف‌هایِ بدونِ ریپورت همان service_id قدیمی را دارند؛ ردیف‌هایِ ارزان
@@ -589,6 +859,14 @@ async def ozv_test(cb: CallbackQuery, bot: Bot):
     p = _provider(await _providers(row.id), pid)
     if not p:
         await cb.answer("ارائه‌دهنده پیدا نشد", show_alert=True)
+        return
+    if _is_tnumber(p):   # PATCH_TNUMBER_PROVIDER_V1
+        ok, data, err, _c = await _tn_request(p, "GET", "/account/balance")
+        if ok:
+            bal = _norm_int((data or {}).get("balance") if isinstance(data, dict) else 0, 0)
+            await cb.answer(f"✅ اتصال و کلید معتبر است.\nموجودیِ حساب TNumber: {bal:,} تومان", show_alert=True)
+        else:
+            await cb.answer(("❌ اتصال ناموفق: " + err)[:190], show_alert=True)
         return
     status, payload = await _oz_request(p, "GET", _OZ_NUMBERS, body={"none_report": True})
     if 200 <= status < 300 and not (isinstance(payload, dict) and payload.get("status") is False):
@@ -1233,8 +1511,11 @@ async def _service_provider(bot_id: int, svc: SmmService) -> tuple[dict | None, 
     if len(parts) != 3 or parts[0] != "ozv":
         return None, None
     providers = await _providers(bot_id)
+    prov = _provider(providers, parts[1])
+    if _is_tnumber(prov):   # PATCH_TNUMBER_PROVIDER_V1 — کشور با کدِ ISO (مثلاً «IR»)
+        return prov, parts[2].split(":")[0].upper() or None
     # پسوندِ «:c» = ردهٔ ارزان در حالتِ «هر دو رده» (PATCH_OZVINOO_TIER_BOTH_V1)
-    return _provider(providers, parts[1]), _norm_int(parts[2].split(":")[0], 0)
+    return prov, _norm_int(parts[2].split(":")[0], 0)
 
 
 async def _refund_order(bot: Bot, order_id: int, note: str, text: str | None = None) -> bool:
@@ -1262,17 +1543,11 @@ async def _refund_order(bot: Bot, order_id: int, note: str, text: str | None = N
 
 
 async def _process_code(bot: Bot, order: SmmOrder, provider: dict, api_order_id: int) -> str:
-    status, payload = await _oz_request(provider, "GET", _OZ_SERVICES, body={"order_id": api_order_id})
-    data = _api_data(payload)
-    if status == 202 or (isinstance(payload, dict) and payload.get("status_code") == 202):
-        return "pending"
-    if status < 200 or status >= 300 or not isinstance(data, dict):
-        if status in (404, 409):
-            return "missing"
-        return "error"
-    code = str(data.get("code") or "").strip()
-    if not code:
-        return "pending"
+    # PATCH_TNUMBER_PROVIDER_V1 — TNumber با شماره شناخته می‌شود (panel_order_id = شماره)
+    ref = order.panel_order_id if _is_tnumber(provider) else api_order_id
+    kind, code, _why = await _pv_fetch_code(provider, ref)
+    if kind in ("pending", "missing", "error"):
+        return kind
     async with Session() as s:
         current = await s.get(SmmOrder, order.id, with_for_update=True)
         if not current or current.status in ("refunded", "canceled"):
@@ -1352,15 +1627,12 @@ async def ozv_recode(cb: CallbackQuery, bot: Bot):
     if not provider:
         await cb.answer("ارائه‌دهنده در دسترس نیست؛ به پشتیبانی پیام بدهید.", show_alert=True)
         return
-    status, payload = await _oz_request(provider, "GET", _OZ_SERVICES,
-                                        body={"order_id": _norm_int(order.panel_order_id, 0)})
-    data = _api_data(payload)
-    code = str((data or {}).get("code") or "").strip() if isinstance(data, dict) else ""
-    if status in (404, 409):
+    _kind, code, _why = await _pv_fetch_code(provider, order.panel_order_id)   # PATCH_TNUMBER_PROVIDER_V1
+    if _kind == "missing":
         await cb.answer("❌ ارائه‌دهنده دیگر کدی برای این شماره نگه نمی‌دارد. به پشتیبانی پیام بدهید.",
                         show_alert=True)
         return
-    if not code and not (200 <= status < 300):
+    if not code and _kind == "error":
         await cb.answer("❌ استعلام از ارائه‌دهنده موقتاً ناموفق بود؛ کمی بعد دوباره امتحان کنید.",
                         show_alert=True)
         return
@@ -1436,15 +1708,24 @@ _BUY_INFLIGHT: set = set()
 async def _ozv_buy_locked(cb, bot, row, country, provider, api_country_id, buyer, real_price):
     from tenant import _purchase_alert
     await cb.answer("⏳ در حال رزرو شماره…")
-    status, payload = await _oz_request(provider, "POST", _OZ_NUMBERS, body={"country_id": api_country_id, "none_report": _tier_none_report(provider, country)})
-    data = _api_data(payload)
-    if status < 200 or status >= 300 or (isinstance(payload, dict) and payload.get("status") is False) or not isinstance(data, dict):
-        await cb.message.answer(f"❌ رزرو شماره انجام نشد: {_api_message(status, payload)}\nوجهی از کیف‌پولت کسر نشد.")
-        return
-    api_order_id = _norm_int(data.get("order_id") or data.get("id"), 0)
-    phone = str(data.get("number") or data.get("phone") or "").strip()
-    if not api_order_id or not phone:
-        await cb.message.answer("❌ پاسخ ارائه‌دهنده ناقص بود؛ وجهی از کیف‌پولت کسر نشد.")
+    # PATCH_TNUMBER_PROVIDER_V1 — رزرو از طریقِ لایهٔ مشترک (OzVinoo یا TNumber)
+    _ok, _err, api_order_id, phone = await _pv_buy(provider, api_country_id, country)
+    _pname = "TNumber" if _is_tnumber(provider) else "OzVinoo"
+    if not _ok:
+        if _err.startswith("UNPARSED:"):
+            # ارائه‌دهنده موفق گفت ولی شماره در پاسخش پیدا نشد: پولِ کاربر کم نمی‌شود و
+            # پاسخِ خام برایِ مالک می‌رود تا در پنلِ ارائه‌دهنده لغوش کند.
+            await cb.message.answer("❌ پاسخ ارائه‌دهنده ناقص بود؛ وجهی از کیف‌پولت کسر نشد.")
+            try:
+                await bot.send_message(
+                    row.owner_id,
+                    f"⚠️ <b>{_pname}</b>: خرید موفق اعلام شد ولی شماره در پاسخ پیدا نشد؛ از مشتری "
+                    "پولی کم نشد. لطفاً در پنلِ ارائه‌دهنده بررسی و این شماره را لغو کن.\n\n"
+                    f"<code>{html.escape(_err[9:])}</code>", parse_mode="HTML")
+            except Exception:
+                logger.exception("اطلاعِ پاسخِ ناقصِ خرید به مالک ممکن نشد")
+            return
+        await cb.message.answer(f"❌ رزرو شماره انجام نشد: {_err}\nوجهی از کیف‌پولت کسر نشد.")
         return
     try:
         from models import next_tracking as _next_tracking  # PATCH_SEQ_TRACKING_V1
@@ -1453,7 +1734,7 @@ async def _ozv_buy_locked(cb, bot, row, country, provider, api_country_id, buyer
             b = await s.scalar(select(BotUser).where(
                 BotUser.id == buyer.id, BotUser.bot_id == row.id).with_for_update())
             if not b or float(b.balance) < real_price:
-                await _oz_request(provider, "POST", _OZ_CANCEL, body={"order_id": api_order_id})
+                await _pv_cancel(provider, api_order_id)
                 await cb.message.answer("❌ موجودی در لحظهٔ نهایی کافی نبود؛ سفارش ارائه‌دهنده لغو شد.")
                 return
             b.balance = float(b.balance) - real_price
@@ -1462,10 +1743,10 @@ async def _ozv_buy_locked(cb, bot, row, country, provider, api_country_id, buyer
                              service_name=country.name, link=phone, quantity=1,
                              price_toman=real_price, status="sent",
                              panel_order_id=str(api_order_id), panel_status="pending",
-                             tracking_code=trk, note=f"خرید خودکار شماره از OzVinoo — {country.name}")
+                             tracking_code=trk, note=f"خرید خودکار شماره از {_pname} — {country.name}")
             s.add(order)
             s.add(WalletTxn(bot_id=row.id, user_id=b.id, amount=-real_price,
-                            kind="smm_order", note=f"خرید شمارهٔ مجازی OzVinoo — {country.name}"))
+                            kind="smm_order", note=f"خرید شمارهٔ مجازی {_pname} — {country.name}"))
             await s.commit()
             local_order_id = order.id
     except Exception:
@@ -1473,7 +1754,7 @@ async def _ozv_buy_locked(cb, bot, row, country, provider, api_country_id, buyer
         # پولی هدر نرود و کاربر هم چیزی کسر نشده.
         logger.exception("OzVinoo buy: خطای دیتابیس بعد از رزروِ شماره؛ لغوِ شمارهٔ ارائه‌دهنده")
         try:
-            await _oz_request(provider, "POST", _OZ_CANCEL, body={"order_id": api_order_id})
+            await _pv_cancel(provider, api_order_id)
         except Exception:
             logger.exception("OzVinoo buy: لغوِ شمارهٔ رزروشده هم ناموفق بود")
         await cb.message.answer("❌ خطای موقت؛ وجهی از کیف‌پولت کسر نشد. دوباره امتحان کن.")
@@ -1565,16 +1846,15 @@ async def ozv_cancel_order(cb: CallbackQuery, bot: Bot):
     if not provider:
         await cb.answer("ارائه‌دهنده پیدا نشد.", show_alert=True)
         return
-    status, payload = await _oz_request(provider, "POST", _OZ_CANCEL, body={"order_id": _norm_int(order.panel_order_id, 0)})
+    _cok, _cinfo = await _pv_cancel(provider, order.panel_order_id)   # PATCH_TNUMBER_PROVIDER_V1
     # === PATCH_OZV_CANCEL_LOG_V1 === پاسخِ واقعیِ ارائه‌دهنده ثبت می‌شود تا «لغو شد ولی پول برنگشت»
     # قابلِ بررسی باشد، و دلیلِ رد (اگر داد) به‌جایِ پیامِ کلی به کاربر نشان داده می‌شود.
-    logger.info("[ozv-cancel] order=%s api_order=%s http=%s payload=%s", local_id,
-                order.panel_order_id, status, str(payload)[:300])
-    if status not in (200, 201) and not (isinstance(payload, dict) and "cancel" in str(payload.get("message", "")).lower()):
-        _why = _api_message(status, payload)
-        await cb.answer(("❌ لغو سفارش توسط ارائه‌دهنده پذیرفته نشد.\n" + _why)[:190], show_alert=True)
+    logger.info("[ozv-cancel] order=%s api_order=%s ok=%s %s", local_id,
+                order.panel_order_id, _cok, _cinfo)
+    if not _cok:
+        await cb.answer(("❌ لغو سفارش توسط ارائه‌دهنده پذیرفته نشد.\n" + _cinfo)[:190], show_alert=True)
         return
-    if await _refund_order(bot, local_id, "بازگشت وجه سفارش شمارهٔ مجازی OzVinoo"):
+    if await _refund_order(bot, local_id, "بازگشت وجه سفارش شمارهٔ مجازی"):
         await cb.answer("✅ سفارش لغو و وجه برگشت داده شد")
     else:
         await cb.answer("سفارش قبلاً نهایی شده است.", show_alert=True)
@@ -1652,10 +1932,8 @@ async def _ozv_maybe_autocancel(bot: Bot, order: SmmOrder, provider: dict) -> bo
     if now - _AUTOCANCEL_LAST.get(order.id, 0) < retry_gap:
         return False
     _AUTOCANCEL_LAST[order.id] = now
-    status, payload = await _oz_request(provider, "POST", _OZ_CANCEL,
-                                        body={"order_id": _norm_int(order.panel_order_id, 0)})
-    logger.info("[ozv-autocancel] order=%s age=%.0fs http=%s payload=%s", order.id, age, status, str(payload)[:300])
-    ok = status in (200, 201) or (isinstance(payload, dict) and "cancel" in str(payload.get("message", "")).lower())
+    ok, _cinfo = await _pv_cancel(provider, order.panel_order_id)   # PATCH_TNUMBER_PROVIDER_V1
+    logger.info("[ozv-autocancel] order=%s age=%.0fs ok=%s %s", order.id, age, ok, _cinfo)
     if not ok:
         return False
     refunded = await _refund_order(
@@ -1678,8 +1956,7 @@ async def _ozv_check_one(bot: Bot, order: SmmOrder) -> None:
         await _ozv_maybe_autocancel(bot, order, provider)
         return
     if result == "missing":
-        status, payload = await _oz_request(provider, "POST", _OZ_CANCEL, body={"order_id": _norm_int(order.panel_order_id, 0)})
-        cancel_ok = status in (200, 201) or (isinstance(payload, dict) and "cancel" in str(payload.get("message", "")).lower())
+        cancel_ok, _cinfo = await _pv_cancel(provider, order.panel_order_id)   # PATCH_TNUMBER_PROVIDER_V1
         if cancel_ok:
             await _refund_order(bot, order.id, "لغو خودکار سفارش شمارهٔ مجازی OzVinoo")
 
@@ -1879,5 +2156,8 @@ async def _service_provider(bot_id: int, svc: SmmService) -> tuple[dict | None, 
     if len(parts) != 3 or parts[0] != "ozv":
         return None, None
     providers = await _providers(bot_id)
+    prov = _provider(providers, parts[1])
+    if _is_tnumber(prov):   # PATCH_TNUMBER_PROVIDER_V1 — کشور با کدِ ISO (مثلاً «IR»)
+        return prov, parts[2].split(":")[0].upper() or None
     # پسوندِ «:c» = ردهٔ ارزان در حالتِ «هر دو رده» (PATCH_OZVINOO_TIER_BOTH_V1)
-    return _provider(providers, parts[1]), _norm_int(parts[2].split(":")[0], 0)
+    return prov, _norm_int(parts[2].split(":")[0], 0)
