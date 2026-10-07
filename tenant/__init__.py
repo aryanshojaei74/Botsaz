@@ -25254,10 +25254,18 @@ async def admin_user_receipts(cb: CallbackQuery, bot: Bot):
                     vol = f"{a.volume_mb} مگابایت"
                 else:
                     vol = "نامحدود" if int(a.volume_gb or 0) == 0 else f"{a.volume_gb} گیگ"
+                # === PATCH_ADMIN_USER_CFG_PRICE_V1 === مبلغِ خریدِ همین کانفیگ (بعد از تخفیف)؛
+                # وقتی کاربر چند کانفیگ خریده، بدونِ این نمی‌شد فهمید هرکدام چند خریده شده.
+                _paid = getattr(a, "paid_toman", None)
+                price_line = (f"💰 مبلغِ خرید: {int(_paid):,} تومان\n" if _paid
+                              else "💰 مبلغِ خرید: — (تست/هدیه/امتیاز یا سرویسِ قدیمی)\n")
+                _ca = getattr(a, "created_at", None)
+                date_line = f"🗓 تاریخِ خرید: {_fmt_exp_jalali(_ca)}\n" if _ca else ""
                 detail = (
                     f"📡 {label}\n"
                     f"🛰 منبع/پنل: {src}\n"
                     f"📦 حجم: {vol}  •  ⏳ {a.days} روز\n"
+                    f"{price_line}{date_line}"
                     f"📧 شناسه: {a.email}\n"
                     f"🔗 لینک: {a.sub_link or '—'}"
                 )
