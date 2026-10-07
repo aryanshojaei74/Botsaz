@@ -31,6 +31,12 @@ class ApFSM(StatesGroup):
     max_amount = State()
 
 
+APAY_BOT = "APayGateBot"
+APK_URL = "https://apaygate.shop/download/apay-forwarder.apk"
+# فایلِ آمادهٔ شورتکاتِ آیفون؛ تا وقتی خالی است فقط راهنمایِ ساختِ دستی نشان داده می‌شود
+IOS_SHORTCUT_URL = ""
+
+
 def _mask(v: str) -> str:
     return (v[:6] + "…" + v[-4:]) if v and len(v) > 12 else ("ثبت شده" if v else "—")
 
@@ -57,12 +63,7 @@ async def _menu_content(bot_id: int):
            f"🔼 حداکثرِ مبلغ: <b>{(f'{max_amount:,}' if max_amount else 'بدونِ سقف')}</b>\n"
            f"👛 نمایش در کیف پول: {'✅' if show_wallet else '❌'}\n"
            f"🛒 نمایش موقعِ پرداختِ محصول: {'✅' if show_purchase else '❌'}\n\n"
-           "📋 <b>راه‌اندازی:</b>\n"
-           "۱. در رباتِ آپی ثبت‌نام کن، کارت و فرستندهٔ پیامکِ بانکت را اضافه کن.\n"
-           "۲. اپِ اندرویدِ آپی را روی گوشی‌ای که پیامکِ بانک می‌گیرد نصب کن.\n"
-           "۳. از رباتِ آپی «توکنِ API» (apay_…) بگیر و این‌جا ثبت کن.\n"
-           "۴. (اختیاری، برایِ شارژِ فوری) آدرسِ وب‌هوکِ زیر را در آپی ثبت کن و "
-           "«کلیدِ وب‌هوک» را این‌جا بزن.\n\n"
+           "📖 برایِ راه‌اندازیِ قدم‌به‌قدم و اتصالِ گوشیِ اندروید/آیفون، «📖 راهنما» را بزن.\n\n"
            + (f"🔗 آدرسِ وب‌هوک:\n<code>{hook}</code>\n\n" if hook else "")
            + "💡 کارمزدِ آپی برایِ هر پرداختِ موفق ۱٬۰۰۰ تومان است و از کیف پولِ حسابِ "
            "آپیِ تو کم می‌شود (نه از مشتری)؛ آن کیف پول را شارژ نگه دار.\n"
@@ -92,10 +93,96 @@ async def _menu_content(bot_id: int):
             style=(ButtonStyle.SUCCESS if show_purchase else ButtonStyle.DANGER))],
         [InlineKeyboardButton(text="🧪 تستِ اتصال و موجودی",
                               callback_data="ap:test", style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="🤖 رباتِ آپی", url=f"https://t.me/{APAY_BOT}"),
+         InlineKeyboardButton(text="📖 راهنما", callback_data="ap:guide",
+                              style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="⬅️ بازگشت",
                               callback_data="tadm:sec:finance", style=ButtonStyle.DANGER)],
     ]
     return txt, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# ═════════════════ راهنما ═════════════════
+async def _guide_content(bot_id: int, page: str):
+    hook = await AP.webhook_url(bot_id)
+    back = [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="ap:guide",
+                                 style=ButtonStyle.DANGER)]
+    bot_btn = [InlineKeyboardButton(text="🤖 رباتِ آپی", url=f"https://t.me/{APAY_BOT}")]
+    if page == "android":
+        txt = ("🤖 <b>اتصالِ گوشیِ اندروید</b>\n\n"
+               "گوشی‌ای را انتخاب کن که سیم‌کارتِ پیامکِ بانکت رویِ آن است (اندروید ۷ به بالا).\n\n"
+               "۱. اپِ آپی را با دکمهٔ «📥 دانلودِ اپ اندروید» نصب کن و دسترسیِ پیامک را بده.\n"
+               f"۲. در @{APAY_BOT} از بخشِ «💳 کارت‌ها» کارت را انتخاب کن تا لینکِ اتصال "
+               "(<code>apaygate.shop/pair/…</code>) را بدهد.\n"
+               "۳. لینک را رویِ همان گوشی باز کن و «باز کردن در اپ» را بزن "
+               "(یا آدرسِ وب‌هوکِ گوشی را داخلِ اپ بچسبان).\n"
+               "۴. در اپ، فرستندهٔ پیامکِ بانک را در فیلتر بنویس، «ذخیره» و بعد «تستِ اتصال» را بزن.\n"
+               "۵. ⚠️ بهینه‌سازیِ باتری را برایِ اپ خاموش و «اجرایِ خودکار / auto-start» را روشن کن؛ "
+               "در شیائومی، سامسونگ، هوآوی و… وگرنه گوشی اپ را می‌بندد و پیامک‌ها نمی‌رسند.\n\n"
+               "✅ اگر گوشی خاموش یا بی‌اینترنت باشد، پیامک‌ها در صف می‌مانند و به‌محضِ وصل‌شدن ارسال می‌شوند.")
+        rows = [[InlineKeyboardButton(text="📥 دانلودِ اپ اندروید", url=APK_URL)], bot_btn, back]
+    elif page == "ios":
+        txt = ("🍎 <b>اتصالِ آیفون (شورتکات)</b>\n\n"
+               + ("" if IOS_SHORTCUT_URL else
+                  "⏳ فایلِ آمادهٔ شورتکات به‌زودی همین‌جا گذاشته می‌شود؛ فعلاً شورتکات را دستی بساز:\n\n")
+               + f"۱. در @{APAY_BOT} از بخشِ «گوشی‌ها» یک <b>آیفون</b> اضافه کن و "
+               "<b>کلیدِ گوشی</b> (کدِ اتصال) را کپی کن.\n"
+               "۲. اپِ <b>Shortcuts</b> ← تبِ <b>Automation</b> ← <b>New Automation</b> ← <b>Message</b>.\n"
+               "۳. در <b>Sender</b> فرستندهٔ پیامکِ بانک را انتخاب کن، "
+               "<b>Run Immediately</b> را روشن کن و <b>Next</b> ← <b>New Blank Automation</b>.\n"
+               "۴. اکشنِ <b>Get Contents of URL</b> را اضافه کن و این آدرس را بنویس "
+               "(به‌جایِ KEY کلیدِ گوشی را بگذار):\n"
+               "<code>https://apaygate.shop/hook/sms/KEY</code>\n"
+               "۵. رویِ فلشِ اکشن بزن: <b>Method</b> = <b>POST</b> و <b>Request Body</b> = <b>JSON</b>.\n"
+               "۶. دو فیلد از نوعِ Text اضافه کن:\n"
+               "   • <code>message</code> ← مقدار: <b>Shortcut Input</b> و از رویش <b>Content</b> را انتخاب کن\n"
+               "   • <code>sender</code> ← مقدار: <b>Shortcut Input</b> و از رویش <b>Sender</b> را انتخاب کن\n"
+               "۷. <b>Done</b> را بزن. با یک واریزِ کوچک تست کن؛ گوشی در رباتِ آپی 🟢 می‌شود.\n\n"
+               "⚠️ آیفون پیامک‌هایِ ناموفق را دوباره نمی‌فرستد: اگر هنگامِ رسیدنِ پیامک گوشی خاموش "
+               "یا بی‌اینترنت باشد، آن پرداخت خودکار تأیید نمی‌شود. برایِ فروشِ زیاد گوشیِ اندروید بهتر است.")
+        rows = []
+        if IOS_SHORTCUT_URL:
+            rows.append([InlineKeyboardButton(text="➕ افزودنِ شورتکاتِ آپی", url=IOS_SHORTCUT_URL)])
+        rows += [bot_btn, back]
+    else:
+        txt = ("📖 <b>راهنمایِ درگاهِ آپی</b>\n\n"
+               f"۱. در @{APAY_BOT} استارت بزن و ثبت‌نام کن.\n"
+               "۲. از «💳 کارت‌ها» کارتِ بانکی و <b>فرستندهٔ پیامکِ بانک</b> را اضافه کن.\n"
+               "۳. گوشی‌ای را که پیامکِ بانک رویش می‌آید وصل کن — دکمهٔ «🤖 اندروید» یا «🍎 آیفون» پایین.\n"
+               "۴. از «🔑 توکن API» توکن (<code>apay_…</code>) بگیر و در همین ربات «🔑 ثبت / تغییرِ توکن» را بزن.\n"
+               "۵. «💰 شارژ کیف پول» در رباتِ آپی را برایِ کارمزد (هر پرداخت ۱٬۰۰۰ تومان) شارژ کن.\n"
+               "۶. «✅ فعال‌کردن» را بزن و با «🧪 تستِ اتصال و موجودی» چک کن.\n\n"
+               "⚡️ <b>اختیاری (شارژِ فوری):</b> در رباتِ آپی از «👤 پروفایل» webhook secret را بردار و "
+               "اینجا «🔐 کلیدِ وب‌هوک» را بزن"
+               + (f"؛ آدرسِ وب‌هوک:\n<code>{hook}</code>" if hook else ".")
+               + "\nبدونِ این مرحله هم ربات هر دقیقه خودش پرداخت‌ها را استعلام می‌کند.")
+        rows = [
+            [InlineKeyboardButton(text="🤖 اتصالِ اندروید", callback_data="ap:guide:android",
+                                  style=ButtonStyle.SUCCESS),
+             InlineKeyboardButton(text="🍎 اتصالِ آیفون", callback_data="ap:guide:ios",
+                                  style=ButtonStyle.PRIMARY)],
+            bot_btn,
+            [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="ap:menu",
+                                  style=ButtonStyle.DANGER)],
+        ]
+    return txt, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@apay_router.callback_query(F.data.startswith("ap:guide"))
+async def ap_guide(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    page = cb.data.split(":", 2)[2] if cb.data.count(":") == 2 else ""
+    txt, kb = await _guide_content(row.id, page)
+    try:
+        await cb.message.edit_text(txt, reply_markup=kb, parse_mode="HTML",
+                                   disable_web_page_preview=True)
+    except Exception:
+        await cb.message.answer(txt, reply_markup=kb, parse_mode="HTML",
+                                disable_web_page_preview=True)
+    await cb.answer()
 
 
 async def _show(target, bot_id):

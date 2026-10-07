@@ -185,3 +185,21 @@ async def test_poll_expires_old(db, monkeypatch):
 def test_err_text():
     assert "کارت" in AP.err_text(409, {"error": {"code": "no_device", "message": "x"}})
     assert AP.err_text(500, {"error": {"code": "weird", "message": "boom"}}) == "boom"
+
+
+@pytest.mark.asyncio
+async def test_guide_pages(db, monkeypatch):
+    import tenant.gateways.custom_domain as cd
+    monkeypatch.setattr(cd, "Session", db[0])
+    from tenant.gateways import apay_admin as AA
+    _t, kb = await AA._menu_content(5)
+    flat = [b for r in kb.inline_keyboard for b in r]
+    assert any(b.url == "https://t.me/APayGateBot" for b in flat)
+    assert any(b.callback_data == "ap:guide" for b in flat)
+    _t, kb = await AA._guide_content(5, "")
+    cbs = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert "ap:guide:android" in cbs and "ap:guide:ios" in cbs
+    t, kb = await AA._guide_content(5, "android")
+    assert any(b.url == AA.APK_URL for r in kb.inline_keyboard for b in r)
+    t, _kb = await AA._guide_content(5, "ios")
+    assert "hook/sms/KEY" in t and "Shortcuts" in t
