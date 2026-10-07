@@ -3133,6 +3133,14 @@ async def vget_sub(cb: CallbackQuery, bot: Bot):
             client = _client_from_panel(panel)
             info = await client.get_client(email)
             sub_link = (info or {}).get("sub_link") or ""
+            if sub_link:
+                # PATCH_PANEL_RAW_USERNAME_V1 — سرویسِ «افزودنِ دستی» که قبلاً بی‌ساب‌لینک ثبت شده بود
+                # حالا یک‌بار از پنل گرفته و ذخیره می‌شود
+                async with Session() as _s1:
+                    _a1 = await _s1.get(PanelAccount, aid)
+                    if _a1 and not _a1.sub_link:
+                        _a1.sub_link = sub_link
+                        await _s1.commit()
             # === PATCH_SUB_BASE_DISCOVER_V1 === آدرسِ ساب در تنظیماتِ پنل خالی بود → از خودِ پنل پیدا کن
             if not sub_link and hasattr(client, "discover_sub_base"):
                 _sid = _sub_id or (info or {}).get("subId") or ""

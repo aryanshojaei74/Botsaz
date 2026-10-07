@@ -34,6 +34,8 @@ from __future__ import annotations
 import time
 from datetime import datetime, timezone
 import re
+
+from tenant.shared.panel_clients.username_resolve import resolve_username
 import secrets
 import string
 import asyncio
@@ -948,7 +950,7 @@ class MarzbanPanelClient:
         return await fetch_sub_links(sub_url)
 
     async def get_client(self, email):
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("GET", f"/api/user/{username}")
         if not res:
             return None
@@ -996,7 +998,7 @@ class MarzbanPanelClient:
 
     # ───────── تمدید/ترافیک ─────────
     async def _modify(self, email, **fields):
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("PUT", f"/api/user/{username}", json=fields)
         if res is None:
             raise PanelError("کاربر روی پنل مرزبان پیدا نشد.")
@@ -1046,14 +1048,14 @@ class MarzbanPanelClient:
         return obj
 
     async def reset_usage(self, email):
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("POST", f"/api/user/{username}/reset", json={})
         return res is not None
 
     async def reset_sub(self, email, new_sub_id=None):
         """در مرزبان معادل «ریست لینک ساب» اندپوینت revoke_sub است که یک
         subscription_url جدید صادر می‌کند (لینک قبلی را باطل می‌کند)."""
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("POST", f"/api/user/{username}/revoke_sub", json={})
         if res is None:
             raise PanelError("ریست لینک ناموفق: کاربر پیدا نشد.")
@@ -1076,7 +1078,7 @@ class MarzbanPanelClient:
         return True
 
     async def delete_account(self, email, keep_traffic=False):
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("DELETE", f"/api/user/{username}")
         return res is not None or True  # حذف معمولاً body خالی برمی‌گرداند
 

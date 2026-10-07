@@ -42,6 +42,8 @@ pypi.org/project/marzneshin — که مستقیماً endpointها و مدل‌�
 from __future__ import annotations
 
 import re
+
+from tenant.shared.panel_clients.username_resolve import resolve_username
 import secrets
 import string
 import asyncio
@@ -475,7 +477,7 @@ class MarzneshinPanelClient:
 
     # ───────── خواندن ─────────
     async def get_client(self, email):
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/users/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("GET", f"/api/users/{username}")
         if not res:
             return None
@@ -501,7 +503,7 @@ class MarzneshinPanelClient:
 
     # ───────── تمدید/ترافیک ─────────
     async def _modify(self, email, **fields):
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/users/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         cur = await self.get_client(email)
         if not cur:
             raise PanelError("کاربر روی پنل مرزنشین پیدا نشد.")
@@ -575,13 +577,13 @@ class MarzneshinPanelClient:
         return obj
 
     async def reset_usage(self, email):
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/users/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("POST", f"/api/users/{username}/reset", json={})
         return res is not None
 
     async def reset_sub(self, email, new_sub_id=None):
         """در مرزنشین معادل «ریست لینک ساب» اندپوینت revoke_sub است."""
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/users/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("POST", f"/api/users/{username}/revoke_sub", json={})
         if res is None:
             raise PanelError("ریست لینک ناموفق: کاربر پیدا نشد.")
@@ -598,7 +600,7 @@ class MarzneshinPanelClient:
     async def set_enabled(self, email, enabled: bool):
         """فعال/غیرفعال‌کردن سریعِ کاربر — در مرزنشین با endpoint جداگانه
         (نه فیلدِ بدنه)."""
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/users/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         path = f"/api/users/{username}/{'enable' if enabled else 'disable'}"
         res = await self._request("POST", path, json={})
         if res is None:
@@ -606,7 +608,7 @@ class MarzneshinPanelClient:
         return True
 
     async def delete_account(self, email, keep_traffic=False):
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/users/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("DELETE", f"/api/users/{username}")
         return res is not None or True  # حذف معمولاً body خالی برمی‌گرداند
 

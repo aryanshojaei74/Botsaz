@@ -30,6 +30,8 @@ from __future__ import annotations
 
 import time
 import re
+
+from tenant.shared.panel_clients.username_resolve import resolve_username
 import secrets
 import string
 import asyncio
@@ -609,7 +611,7 @@ class UPanelMizbanClient:
         return await fetch_sub_links(sub_url)
 
     async def get_client(self, email):
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("GET", f"/api/user/{username}")
         if not res:
             return None
@@ -622,7 +624,7 @@ class UPanelMizbanClient:
     async def get_usage(self, email):
         """آمار مصرف با کلیدهای استاندارد: up, down, total, expiryTime (ms)."""
         # ابتدا از endpoint اختصاصی usage تلاش می‌کنیم
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         # === PATCH_UPANEL_USAGE_FALLBACK_V1 ===
         # این endpoint در بعضی نسخه‌های یوپنل وجود ندارد یا برای بعضی
         # کاربران HTTP 500 می‌دهد. کدِ زیر از اول «fallback» داشت، ولی
@@ -662,7 +664,7 @@ class UPanelMizbanClient:
     # ───────────────────────── تمدید / ترافیک ─────────────────────────
 
     async def _modify(self, email, **fields):
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("PUT", f"/api/user/{username}", json=fields)
         if res is None:
             raise PanelError("کاربر روی پنل یوپنل پیدا نشد.")
@@ -701,18 +703,18 @@ class UPanelMizbanClient:
     async def activate_next_period(self, email):
         """فعال‌سازی دوره بعدی اشتراک — endpoint اختصاصی یوپنل مرزبان.
         پس از منقضی شدن، به‌جای تمدید دستی، این متد دوره جدید را فعال می‌کند."""
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("POST", f"/api/user/{username}/active-next", json={})
         return res is not None
 
     async def reset_usage(self, email):
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("POST", f"/api/user/{username}/reset", json={})
         return res is not None
 
     async def reset_sub(self, email, new_sub_id=None):
         """ریست لینک اشتراک — ساب‌لینک قدیمی باطل و لینک جدید صادر می‌شود."""
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("POST", f"/api/user/{username}/revoke_sub", json={})
         if res is None:
             raise PanelError("ریست لینک ناموفق: کاربر پیدا نشد.")
@@ -730,7 +732,7 @@ class UPanelMizbanClient:
         return True
 
     async def delete_account(self, email, keep_traffic=False):
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("DELETE", f"/api/user/{username}")
         return res is not None or True
 
@@ -782,7 +784,7 @@ class UPanelMizbanClient:
 
     async def get_connection_logs(self, email, limit: int = 50):
         """گزارش اتصالات یک کاربر (لاگ ISP) — اختصاصی یوپنل مرزبان."""
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request(
             "GET", f"/api/isp/user/{username}/connection-logs",
             params={"limit": limit})
@@ -795,13 +797,13 @@ class UPanelMizbanClient:
 
     async def get_user_timeline(self, email):
         """تایم‌لاین فعالیت یک کاربر — اختصاصی یوپنل مرزبان."""
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("GET", f"/api/isp/user/{username}/timeline")
         return res or {}
 
     async def kick_user_sessions(self, email):
         """قطع همهٔ سشن‌های فعال یک کاربر — اختصاصی یوپنل مرزبان."""
-        username = _safe_username(email)
+        username = await resolve_username(self, email, _safe_username, "/api/user/{}")  # PATCH_PANEL_RAW_USERNAME_V1
         res = await self._request("POST", f"/api/isp/user/{username}/sessions/kick", json={})
         return res is not None
 
