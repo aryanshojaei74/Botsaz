@@ -7431,6 +7431,9 @@ async def stars_successful_payment(msg: Message, bot: Bot):
         await handle_wallet_stars_payment(msg, bot, sp, payload)
     elif payload.startswith("shop_stars:") or payload.startswith("shop_stars2:"):
         await _handle_shop_stars_payment(msg, bot, sp, payload)
+    elif payload.startswith("bot_stars:"):   # === PATCH_BOT_STARS_TOPUP_V1 ===
+        from tenant.gateways.stars_admin import handle_bot_stars_payment
+        await handle_bot_stars_payment(msg, bot, sp, payload)
     elif payload.startswith("p2pfee:"):   # === PATCH_P2P_MARKET_V1 ===
         from tenant.bots.virtual_service.nft_p2p import handle_p2p_fee_payment
         await handle_p2p_fee_payment(msg, bot, sp, payload)

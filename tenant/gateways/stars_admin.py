@@ -33,6 +33,7 @@ stars_admin_router = Router()
 class StarsFSM(StatesGroup):
     amount = State()        # شارژ کاربر: انتظارِ مبلغ به تومان
     rate_edit = State()      # تنظیم ادمین: ویرایش نرخ تومان به ازای هر استارز
+    bot_topup = State()      # PATCH_BOT_STARS_TOPUP_V1: تعدادِ استارز برایِ شارژِ موجودیِ خودِ ربات
     cut_edit = State()       # تنظیم ادمین: درصدِ کسر از نرخِ خودکار
 
 
@@ -369,3 +370,121 @@ async def stars_rate_save(msg: Message, bot: Bot, state: FSMContext):
     await state.clear()
     text, kb = await _stars_admin_content(row.id)
     await msg.answer("✅ نرخ ذخیره شد.\n\n" + text, reply_markup=kb)
+
+
+# ═══════════════════════ شارژِ موجودیِ استارزِ خودِ ربات (ادمین) ═══════════════════════
+# === PATCH_BOT_STARS_TOPUP_V1 ===
+# گزارشِ Mike: دکمهٔ «💰 افزایشِ موجودیِ استارزِ ربات» (گیفت/پرمیوم) پیامِ «پرداخت با استارز هنوز توسطِ مدیر
+# فعال نشده» می‌داد. آن دکمه به «شارژِ کیف‌پولِ مشتری با استارز» (w:stars) وصل بود که به درگاهِ استارزِ
+# مشتری‌ها (stars_enabled) وابسته است و در عوض کیف‌پولِ تومانیِ ادمین را هم شارژ می‌کرد. حالا مسیرِ جدا:
+# ادمین تعدادِ استارز را انتخاب می‌کند، فاکتورِ XTR می‌آید و پرداخت مستقیم به موجودیِ استارزِ ربات اضافه
+# می‌شود (همان موجودی که sendGift / پرمیوم از آن خرج می‌کنند) — بدونِ هیچ شارژِ کیف‌پول.
+_BOT_TOPUP_PRESETS = (100, 250, 500, 1000, 2500, 5000)
+
+
+async def _is_staff(row, tg_id: int) -> bool:
+    from tenant import is_owner_or_admin
+    try:
+        return await is_owner_or_admin(row.id, tg_id, row.owner_id)
+    except Exception:
+        return tg_id == row.owner_id
+
+
+async def _send_bot_topup_invoice(bot: Bot, chat_id: int, row, stars: int) -> None:
+    await bot.send_invoice(
+        chat_id=chat_id,
+        title="شارژِ موجودیِ استارزِ ربات",
+        description=f"افزودنِ {stars:,} ⭐ به موجودیِ ربات (برایِ ارسالِ گیفت/پرمیوم)",
+        payload=f"bot_stars:{row.id}:{stars}",
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice(label="موجودیِ استارزِ ربات", amount=stars)],
+    )
+
+
+@stars_admin_router.callback_query(F.data == "w:botstars")
+async def bot_stars_topup_menu(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    if not row or not await _is_staff(row, cb.from_user.id):
+        await cb.answer("فقط مدیرِ ربات.", show_alert=True)
+        return
+    bal = None
+    try:
+        bal = (await bot.get_my_star_balance()).amount
+    except Exception:
+        logger.debug("خواندنِ موجودیِ استارزِ ربات ممکن نشد")
+    btns = [InlineKeyboardButton(text=f"{n:,} ⭐", callback_data=f"w:botstars:{n}") for n in _BOT_TOPUP_PRESETS]
+    rows = [btns[i:i + 3] for i in range(0, len(btns), 3)]
+    rows.append([InlineKeyboardButton(text="✍️ تعدادِ دلخواه", callback_data="w:botstars:custom",
+                                      style=ButtonStyle.PRIMARY)])
+    await state.clear()
+    await cb.answer()
+    await cb.message.answer(
+        "💰 <b>شارژِ موجودیِ استارزِ ربات</b>\n\n"
+        + (f"موجودیِ فعلیِ ربات: <b>{int(bal):,} ⭐</b>\n\n" if bal is not None else "")
+        + "تعدادِ استارز را انتخاب کن؛ فاکتور برایت می‌آید و بعد از پرداخت، استارزها مستقیم به موجودیِ "
+          "ربات اضافه می‌شوند (برایِ ارسالِ خودکارِ گیفت و پرمیوم). کیف‌پولِ تومانی شارژ نمی‌شود.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+
+
+@stars_admin_router.callback_query(F.data.startswith("w:botstars:"))
+async def bot_stars_topup_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import get_bot_row, smart_cancel_kb
+    row = await get_bot_row(bot)
+    if not row or not await _is_staff(row, cb.from_user.id):
+        await cb.answer("فقط مدیرِ ربات.", show_alert=True)
+        return
+    arg = cb.data.split(":", 2)[2]
+    await cb.answer()
+    if arg == "custom":
+        await state.set_state(StarsFSM.bot_topup)
+        await cb.message.answer("تعدادِ استارز را بفرست (۱ تا ۱۰۰٬۰۰۰):", reply_markup=await smart_cancel_kb(bot))
+        return
+    try:
+        n = int(arg)
+    except ValueError:
+        return
+    try:
+        await _send_bot_topup_invoice(bot, cb.message.chat.id, row, n)
+    except Exception as e:
+        await cb.message.answer(f"❌ ارسالِ فاکتور ناموفق بود:\n{e}")
+
+
+@stars_admin_router.message(StarsFSM.bot_topup, F.text)
+async def bot_stars_topup_custom(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import get_bot_row, fa_to_int
+    row = await get_bot_row(bot)
+    raw = (msg.text or "").strip()
+    if not row or raw in ("❌ لغو", "❌ لغو / بازگشت"):
+        await state.clear()
+        await msg.answer("لغو شد.")
+        return
+    n = fa_to_int(raw)
+    if not n:
+        if raw and not any(ch.isdigit() for ch in raw):
+            await state.clear()
+            raise SkipHandler
+        await msg.answer("یک عدد بفرست (مثلاً 300):")
+        return
+    if n < 1 or n > 100_000:
+        await msg.answer("بینِ ۱ تا ۱۰۰٬۰۰۰ بفرست:")
+        return
+    await state.clear()
+    try:
+        await _send_bot_topup_invoice(bot, msg.chat.id, row, n)
+    except Exception as e:
+        await msg.answer(f"❌ ارسالِ فاکتور ناموفق بود:\n{e}")
+
+
+async def handle_bot_stars_payment(msg: Message, bot: Bot, sp, payload: str):
+    """پرداختِ موفقِ «bot_stars:» — استارز همین حالا در موجودیِ ربات است؛ فقط اطلاع می‌دهیم."""
+    stars = int(sp.total_amount or 0)
+    bal_line = ""
+    try:
+        bal_line = f"\nموجودیِ فعلیِ ربات: <b>{(await bot.get_my_star_balance()).amount:,} ⭐</b>"
+    except Exception:
+        logger.debug("خواندنِ موجودیِ استارزِ ربات بعد از شارژ ممکن نشد")
+    await msg.answer(f"✅ {stars:,} ⭐ به موجودیِ استارزِ ربات اضافه شد.{bal_line}\n\n"
+                     "اگر سفارشی منتظرِ موجودی است، از پیامِ همان سفارش «🔄 ارسال» را بزن.",
+                     parse_mode="HTML")

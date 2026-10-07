@@ -11347,7 +11347,7 @@ async def gift_admin_content(bot_id: int, bot: "Bot | None" = None) -> tuple[str
         # قبل انجام می‌دهد (مشتری/ادمین استارز می‌دهد، استارزِ واقعی وارد
         # حسابِ ربات می‌شود، در ازایش کیف‌پولِ تومانی شارژ می‌شود). به‌جایِ
         # ساختنِ یک راهِ تازه، همان دکمه را مستقیم اینجا هم می‌گذاریم.
-        [InlineKeyboardButton(text="💰 افزایشِ موجودیِ استارزِ ربات", callback_data="w:stars",
+        [InlineKeyboardButton(text="💰 افزایشِ موجودیِ استارزِ ربات", callback_data="w:botstars",
                               style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(
             text=("🙋 انتخابِ روشِ ارسال توسطِ مشتری: روشن ✅" if _gchoice else "🙋 انتخابِ روشِ ارسال توسطِ مشتری: خاموش"),
@@ -11710,7 +11710,7 @@ async def gift_orders(cb: CallbackQuery, bot: Bot):
                      InlineKeyboardButton(text=f"❌ لغو {_wc}", callback_data=f"gift:lc:{_w.id}:{page}",
                                           style=ButtonStyle.DANGER)])
     if waiting:
-        rows.append([InlineKeyboardButton(text="💰 افزایشِ موجودیِ استارزِ ربات", callback_data="w:stars",
+        rows.append([InlineKeyboardButton(text="💰 افزایشِ موجودیِ استارزِ ربات", callback_data="w:botstars",
                                           style=ButtonStyle.SUCCESS)])
     nav = []
     if page > 0:
@@ -12636,7 +12636,7 @@ async def _gift_hold_notify(bot: Bot, row, order_id: int, user_msg, sent_count: 
     from tenant import manual_order_channel_active
     _in_channel = await manual_order_channel_active(row.id)
     kb = InlineKeyboardMarkup(inline_keyboard=([] if _in_channel else [
-        [InlineKeyboardButton(text="💰 افزایشِ موجودیِ استارزِ ربات", callback_data="w:stars",
+        [InlineKeyboardButton(text="💰 افزایشِ موجودیِ استارزِ ربات", callback_data="w:botstars",
                               style=ButtonStyle.SUCCESS)]]) + [
         [InlineKeyboardButton(text="🔄 ارسال (بعد از شارژ)", callback_data=f"gift:retry:{order_id}",
                               style=ButtonStyle.PRIMARY),
@@ -14059,6 +14059,16 @@ _PREMIUM_TIERS = [(3, 1000), (6, 1500), (12, 2500)]  # (ماه, استارز)
 
 async def _premium_settings(bot_id: int) -> tuple[float, float]:
     rate_s = await _get_setting(bot_id, "premium_toman_rate", "1000")
+    # === PATCH_PREMIUM_AUTO_RATE_V1 === (گزارشِ Mike: پرمیوم برخلافِ گیفت/استارز «نرخِ خودکار» نداشت)
+    # مثلِ گیفت: نرخِ بازارِ هر ⭐ بدونِ سود؛ سود همان «درصدِ سود»ِ پرمیوم است.
+    if (await _get_setting(bot_id, "premium_auto", "0")) == "1":
+        try:
+            from tenant.gateways.stars_rate import star_toman
+            _a = await star_toman(0, bot_id)
+            if _a > 0:
+                rate_s = str(_a)
+        except Exception:
+            logger.exception("نرخِ خودکارِ پرمیوم")
     margin_s = await _get_setting(bot_id, "premium_margin_pct", "20")
     try:
         rate = float(rate_s)
@@ -14107,6 +14117,7 @@ async def _premium_effective_price(bot_id: int, months: int, stars: int,
 
 async def premium_admin_content(bot_id: int, bot: "Bot | None" = None) -> tuple[str, InlineKeyboardMarkup]:
     rate, margin = await _premium_settings(bot_id)
+    _pauto = (await _get_setting(bot_id, "premium_auto", "0")) == "1"
     lines = [
         "🌟 <b>فروشِ پرمیومِ رسمیِ تلگرام</b>\n",
         "همیشه فقط همین سه بسته وجود دارد (خودِ تلگرام همین سه عدد را "
@@ -14157,12 +14168,17 @@ async def premium_admin_content(bot_id: int, bot: "Bot | None" = None) -> tuple[
                 callback_data=f"prm:setcustom:{_cm}")])
     rows = [
         # === PATCH_BOT_STAR_CHARGE_BUTTON_V1 ===
-        [InlineKeyboardButton(text="💰 افزایشِ موجودیِ استارزِ ربات", callback_data="w:stars",
+        [InlineKeyboardButton(text="💰 افزایشِ موجودیِ استارزِ ربات", callback_data="w:botstars",
                               style=ButtonStyle.SUCCESS)],
         # === PATCH_PREMIUM_MANUAL_DELIVERY_V1 ===
         [InlineKeyboardButton(text=manual_toggle_text, callback_data="prm:manualdelivery:toggle",
                               style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text=f"💱 نرخ (هر ⭐ = {rate:,.0f} تومان)", callback_data="prm:setrate")],
+        [InlineKeyboardButton(   # PATCH_PREMIUM_AUTO_RATE_V1
+            text=("🔄 نرخ خودکار: روشن ✅" if _pauto else "🔄 نرخ خودکار: خاموش"),
+            callback_data="sauto:premium",
+            style=(ButtonStyle.SUCCESS if _pauto else ButtonStyle.PRIMARY))],
+        [InlineKeyboardButton(text="⚙️ قیمتِ پایهٔ ⭐/نرخِ دلار", callback_data="sauto:base")],
         [InlineKeyboardButton(text=f"📈 درصدِ سود ({margin:.0f}٪)", callback_data="prm:setmargin")],
         *custom_rows,  # === PATCH_PREMIUM_CUSTOM_PRICE_V1 ===
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="smm:manlist", style=ButtonStyle.DANGER)],
@@ -15831,13 +15847,13 @@ async def srx_setrate_save(msg: Message, bot: Bot, state: FSMContext):
 
 
 # === PATCH_AUTO_RATE_V2 — نرخِ خودکارِ گیفت و ری‌اکشنِ استارزی + قیمتِ پایه ===
-@smm_router.callback_query(F.data.in_({"sauto:gift", "sauto:srx"}))
+@smm_router.callback_query(F.data.in_({"sauto:gift", "sauto:srx", "sauto:premium"}))
 async def sauto_toggle(cb: CallbackQuery, bot: Bot):
     row = await _owner(cb, bot)
     if not row:
         return
     kind = cb.data.split(":")[1]
-    key = "gift_auto" if kind == "gift" else "srx_auto"
+    key = {"gift": "gift_auto", "premium": "premium_auto"}.get(kind, "srx_auto")
     cur = (await _get_setting(row.id, key, "0")) == "1"
     if not cur:
         from tenant.gateways.stars_rate import star_toman
@@ -15853,6 +15869,8 @@ async def sauto_toggle(cb: CallbackQuery, bot: Bot):
         await cb.answer("خاموش شد؛ نرخِ دستی استفاده می‌شود.")
     if kind == "gift":
         text, kb = await gift_admin_content(row.id, bot)
+    elif kind == "premium":
+        text, kb = await premium_admin_content(row.id, bot)
     else:
         text, kb = await srx_admin_content(row.id)
     try:

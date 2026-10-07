@@ -93,7 +93,7 @@ async def test_list_shows_waiting_order_with_retry_and_cancel_buttons(env):
     await env["dp"].feed_update(env["bot"], cb("gift:orders:0"))
     o = await order(env)
     d = datas(last_markup(env["cap"]))
-    assert f"gift:lr:{o.id}:0" in d and f"gift:lc:{o.id}:0" in d and "w:stars" in d
+    assert f"gift:lr:{o.id}:0" in d and f"gift:lc:{o.id}:0" in d and "w:botstars" in d
     txt = [m.text for m in env["cap"].calls if type(m).__name__ == "EditMessageText"][-1]
     assert "منتظرِ موجودیِ استارزِ ربات: 1 سفارش" in txt and "T77" in txt
 
