@@ -346,6 +346,7 @@ async def _apikey_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
         if is_smm:
             base_line += (
                 f"🤝 آدرسِ استانداردِ SMM (v2): <code>https://{d.domain}/api/v2</code>\n"
+                f"📘 مستندات: <code>https://{d.domain}/api/docs</code>\n"   # PATCH_API_DOCS_LINK_SMM_V1
                 "   (برایِ ابزارها/پنل‌هایی که فرمتِ استانداردِ SMM را می‌فهمند — "
                 "پارامترهایِ <code>key</code> و <code>action</code>، نه هدرِ X-API-Key)\n"
             )

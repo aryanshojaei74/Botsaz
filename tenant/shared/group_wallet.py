@@ -78,11 +78,16 @@ def _transfer_person(user, fallback: str = "کاربر") -> str:
 
 def _transfer_result_text(sender, receiver, amount: int, fee_amount: int,
                           fee_pct: float, receive_amount: int,
-                          sender_balance: float, receiver_balance: float) -> str:
+                          sender_balance: float, receiver_balance: float,
+                          fee_by_sender: bool = False) -> str:
     sender_name = _transfer_person(sender, "فرستنده")
     receiver_name = _transfer_person(receiver, "گیرنده")
-    fee_line = (f"💸 کارمزد انتقال: <b>{_rial(fee_amount)}</b> ({fee_pct:g}٪)\n"
-                if fee_amount > 0 else "💸 کارمزد انتقال: <b>غیرفعال</b>\n")
+    if fee_amount > 0 and fee_by_sender:   # PATCH_GROUP_FEE_PAYER_V1
+        fee_line = (f"💸 کارمزد انتقال: <b>{_rial(fee_amount)}</b> ({fee_pct:g}٪) — از حسابِ فرستنده\n"
+                    f"💳 کسرشده از فرستنده: <b>{_rial(amount + fee_amount)}</b>\n")
+    else:
+        fee_line = (f"💸 کارمزد انتقال: <b>{_rial(fee_amount)}</b> ({fee_pct:g}٪)\n"
+                    if fee_amount > 0 else "💸 کارمزد انتقال: <b>غیرفعال</b>\n")
     return (
         "💸 <b>انتقال موجودی با موفقیت انجام شد</b> ✅\n\n"
         f"👤 فرستنده: <b>{sender_name}</b>\n"
@@ -176,10 +181,14 @@ async def group_transfer_balance(msg: Message, bot: Bot):
     if max_amt and amount > max_amt:
         await msg.reply(f"❌ حداکثرِ مبلغِ قابلِ‌انتقال {_rial(max_amt)} است.")
         return
-    if not msg.reply_to_message or not msg.reply_to_message.from_user:
+    # ریپلایِ ضمنیِ تاپیکِ فوروم (= سازندهٔ تاپیک)، پستِ خودکارِ کانال (۷۷۷۰۰۰) یا پیامِ «از طرفِ
+    # کانال» گیرندهٔ واقعی نیستند — قبلاً پول بی‌صدا به سازندهٔ تاپیک یا یک حسابِ بی‌صاحب می‌رفت
+    _r = msg.reply_to_message
+    if (msg.sender_chat or not _r or not _r.from_user or _r.forum_topic_created
+            or _r.is_automatic_forward or _r.sender_chat or _r.from_user.id == 777000):
         await msg.reply("❌ برایِ انتقالِ موجودی، رویِ پیامِ همون کاربر ریپلای کن و بنویس «انتقال [مبلغ]».")
         return
-    target = msg.reply_to_message.from_user
+    target = _r.from_user
     if target.is_bot:
         await msg.reply("❌ نمی‌شه به یه ربات موجودی انتقال داد.")
         return
@@ -194,7 +203,11 @@ async def group_transfer_balance(msg: Message, bot: Bot):
     fee_enabled = (await _gset(row.id, "group_transfer_fee_enabled", "0")) == "1"
     fee_pct = float(await _gset(row.id, "group_transfer_fee_pct", "0") or 0) if fee_enabled else 0.0
     fee_amount = int(round(amount * fee_pct / 100)) if fee_pct > 0 else 0
-    receive_amount = amount - fee_amount
+    # === PATCH_GROUP_FEE_PAYER_V1 === «از فرستنده»: گیرنده کلِ مبلغ را می‌گیرد و کارمزد
+    # جدا از حسابِ فرستنده کم می‌شود؛ «از مبلغ» (پیش‌فرض، رفتارِ قبلی): از مبلغ کم می‌شود.
+    fee_by_sender = fee_amount > 0 and (await _gset(row.id, "group_transfer_fee_payer", "amount")) == "sender"
+    receive_amount = amount if fee_by_sender else amount - fee_amount
+    debit = amount + fee_amount if fee_by_sender else amount
 
     async with _get_lock(row.id, msg.from_user.id):
         sender = await get_or_create_user(row.id, msg.from_user.id, msg.from_user.full_name or "",
@@ -203,19 +216,22 @@ async def group_transfer_balance(msg: Message, bot: Bot):
                                             target.username or "")
         async with Session() as s:
             su = await s.get(BotUser, sender.id, with_for_update=True)
-            if not su or float(su.balance) < amount:
+            if not su or float(su.balance) < debit:
                 bal = float(su.balance) if su else 0
-                await msg.reply(f"❌ موجودیِ کافی نداری.\nموجودیِ تو: {_rial(bal)}")
+                _need = (f"\nلازم: {_rial(debit)} (مبلغ + کارمزد)" if fee_by_sender else "")
+                await msg.reply(f"❌ موجودیِ کافی نداری.\nموجودیِ تو: {_rial(bal)}{_need}")
                 return
             ru = await s.get(BotUser, receiver.id, with_for_update=True)
             if not ru:
                 await msg.reply("❌ گیرنده پیدا نشد.")
                 return
-            su.balance = float(su.balance) - amount
+            su.balance = float(su.balance) - debit
             ru.balance = float(ru.balance) + receive_amount
             new_receiver_bal = float(ru.balance)
             note = f"انتقالِ موجودی در گروه؛ به {target.id}"
-            s.add(WalletTxn(bot_id=row.id, user_id=su.id, amount=-amount,
+            if fee_by_sender:
+                note += f" (+ کارمزد {fee_amount:,})"
+            s.add(WalletTxn(bot_id=row.id, user_id=su.id, amount=-debit,
                             kind="group_transfer_out", note=note[:200]))
             s.add(WalletTxn(bot_id=row.id, user_id=ru.id, amount=receive_amount,
                             kind="group_transfer_in", note=f"انتقالِ موجودی در گروه؛ از {msg.from_user.id}"[:200]))
@@ -234,7 +250,7 @@ async def group_transfer_balance(msg: Message, bot: Bot):
         logger.exception("ثبت لاگ انتقال گروهی ناموفق بود")
     result_text = _transfer_result_text(
         msg.from_user, target, amount, fee_amount, fee_pct, receive_amount,
-        new_sender_bal, new_receiver_bal)
+        new_sender_bal, new_receiver_bal, fee_by_sender=fee_by_sender)
     await msg.reply(
         result_text,
         reply_markup=_transfer_result_keyboard(amount, new_sender_bal, new_receiver_bal),
@@ -284,6 +300,10 @@ async def _group_settings_content(bot_id: int) -> tuple[str, InlineKeyboardMarku
     ai_line = (f"✅ فعال — اسم: «{ai_group_name or '—'}» — گروه: {('✅ «' + ai_group_title + '»') if ai_group_id else '⚠️ وصل نشده'}"
               if ai_enabled else "❌ غیرفعال (از «🤖 دستیارِ هوشِ مصنوعیِ مشتری» فعالش کن)")
     fee_line = f"✅ فعال ({fee_pct:g}٪)" if (fee_enabled and fee_pct > 0) else "❌ غیرفعال"
+    fee_by_sender = (await _gset(bot_id, "group_transfer_fee_payer", "amount")) == "sender"   # PATCH_GROUP_FEE_PAYER_V1
+    if fee_enabled and fee_pct > 0:
+        fee_line += (" — از حسابِ فرستنده (گیرنده کلِ مبلغ را می‌گیرد)" if fee_by_sender
+                     else " — از خودِ مبلغ (گیرنده مبلغ منهایِ کارمزد را می‌گیرد)")
 
     text = (
         "⚙️ <b>تنظیماتِ گروه</b>\n\n"
@@ -323,6 +343,10 @@ async def _group_settings_content(bot_id: int) -> tuple[str, InlineKeyboardMarku
     # نمی‌تونست از منو درصد رو تنظیم کنه (همون چیزی که تو اسکرین‌شات دیده
     # می‌شد: پیامِ «اول درصد رو تنظیم کن» ولی هیچ دکمه‌ای برایِ تنظیمش نبود).
     rows.append([InlineKeyboardButton(text=f"✏️ درصدِ کارمزد ({fee_pct:g}٪)", callback_data="gset:feepct")])
+    rows.append([InlineKeyboardButton(   # PATCH_GROUP_FEE_PAYER_V1
+        text=("👤 کارمزد از: حسابِ فرستنده (زدن = از خودِ مبلغ)" if fee_by_sender
+              else "👤 کارمزد از: خودِ مبلغ (زدن = از حسابِ فرستنده)"),
+        callback_data="gset:feepayer")])
     rows.append([
         InlineKeyboardButton(text="🔢 حداقلِ انتقال", callback_data="gset:minamt"),
         InlineKeyboardButton(text="🔢 حداکثرِ انتقال", callback_data="gset:maxamt"),
@@ -361,6 +385,25 @@ async def gset_fee_toggle(cb: CallbackQuery, bot: Bot):
             return
     await _gset_set(row.id, "group_transfer_fee_enabled", "0" if cur else "1")
     await cb.answer("✅ ذخیره شد")
+    text, kb = await _group_settings_content(row.id)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+# === PATCH_GROUP_FEE_PAYER_V1 ===
+@group_wallet_router.callback_query(F.data == "gset:feepayer")
+async def gset_fee_payer_toggle(cb: CallbackQuery, bot: Bot):
+    from tenant import get_bot_row, is_owner_or_admin
+    row = await get_bot_row(bot)
+    if not row or not await is_owner_or_admin(row.id, cb.from_user.id, row.owner_id):
+        await cb.answer()
+        return
+    cur = (await _gset(row.id, "group_transfer_fee_payer", "amount")) == "sender"
+    await _gset_set(row.id, "group_transfer_fee_payer", "amount" if cur else "sender")
+    await cb.answer("کارمزد از خودِ مبلغ کم می‌شود" if cur else "کارمزد از حسابِ فرستنده کم می‌شود",
+                    show_alert=True)
     text, kb = await _group_settings_content(row.id)
     try:
         await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
