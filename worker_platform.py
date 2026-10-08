@@ -78,6 +78,7 @@ async def _worker_startup():
         mp.tonpays_platform_poll_loop(),
         pton_direct_platform_loop(),  # === PATCH_TON_DIRECT_PLATFORM_V1 ===
         mp.blu_poll_loop(),
+        mp.apay_platform_poll_loop(),   # === PATCH_PLATFORM_APAY_V1 ===
         partner_rules_loop(platform_bot=mp.platform_bot),
         # === PATCH_BOT_SELFHEAL_V1 ===
         bot_selfheal_loop(platform_bot=mp.platform_bot),

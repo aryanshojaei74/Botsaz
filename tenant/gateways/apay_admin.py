@@ -29,6 +29,7 @@ class ApFSM(StatesGroup):
     amount = State()
     min_amount = State()
     max_amount = State()
+    display_name = State()   # === PATCH_APAY_DISPLAY_NAME_V1 ===
 
 
 APAY_BOT = "APayGateBot"
@@ -36,6 +37,15 @@ APK_URL = "https://apaygate.shop/download/apay-forwarder.apk"
 # لینکِ شورتکاتِ امضاشدهٔ آیفون از /config.js ِ سایتِ آپی خوانده می‌شود (AP.site_links)؛
 # این فقط برایِ جایگزینیِ دستی است اگر روزی لازم شد.
 IOS_SHORTCUT_URL = ""
+
+
+DEFAULT_DISPLAY_NAME = "آپی"
+
+
+async def get_display_name(bot_id: int) -> str:
+    """اسمی که کاربر برایِ این درگاه می‌بیند (کیف پول، پرداختِ محصول، فاکتور)."""
+    v = ((await AP._get(bot_id, "apay_display_name", "")) or "").strip()
+    return v[:40] if v else DEFAULT_DISPLAY_NAME
 
 
 def _mask(v: str) -> str:
@@ -52,6 +62,7 @@ async def _menu_content(bot_id: int):
     min_amount = await AP.get_min_amount(bot_id)
     max_amount = await AP.get_max_amount(bot_id)
     hook = await AP.webhook_url(bot_id)
+    disp = await get_display_name(bot_id)
 
     txt = ("💳 <b>درگاهِ آپی (کارت‌به‌کارتِ آنی)</b>\n\n"
            "کاربر مبلغ را وارد می‌کند، در صفحهٔ پرداختِ آپی شمارهٔ کارتِ تو را می‌بیند و "
@@ -59,6 +70,7 @@ async def _menu_content(bot_id: int):
            "<b>خودکار</b> شارژ می‌شود. پول مستقیم به کارتِ خودت می‌آید.\n\n"
            f"وضعیت: {'✅ فعال' if on else '❌ غیرفعال'}\n"
            f"🔑 توکنِ API: <code>{_mask(tok)}</code>\n"
+           f"🏷 اسمِ نمایشی برایِ کاربر: <b>{disp}</b>\n"
            f"🔐 کلیدِ وب‌هوک: {'✅ ثبت شده' if sec else '— (اختیاری؛ بدونِ آن هم با استعلام کار می‌کند)'}\n"
            f"🔽 حداقلِ مبلغ: <b>{min_amount:,}</b> تومان\n"
            f"🔼 حداکثرِ مبلغ: <b>{(f'{max_amount:,}' if max_amount else 'بدونِ سقف')}</b>\n"
@@ -80,6 +92,8 @@ async def _menu_content(bot_id: int):
                               callback_data="ap:setkey", style=ButtonStyle.PRIMARY),
          InlineKeyboardButton(text="🔐 کلیدِ وب‌هوک",
                               callback_data="ap:setsecret", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text=f"🏷 اسمِ نمایشی: {disp}",
+                              callback_data="ap:setname", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text=f"🔽 حداقل: {min_amount:,}",
                               callback_data="ap:setmin", style=ButtonStyle.PRIMARY),
          InlineKeyboardButton(text=f"🔼 حداکثر: {max_amount:,}" if max_amount else "🔼 حداکثر: بدونِ سقف",
@@ -105,8 +119,12 @@ async def _menu_content(bot_id: int):
 
 # ═════════════════ راهنما ═════════════════
 async def _guide_content(bot_id: int, page: str):
-    hook = await AP.webhook_url(bot_id)
-    back = [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="ap:guide",
+    return await guide_content(page, await AP.webhook_url(bot_id), "ap")
+
+
+async def guide_content(page: str, hook: str, cb_prefix: str):
+    """صفحه‌هایِ راهنما؛ مشترک بینِ رباتِ مستأجر (cb_prefix="ap") و بات‌سازِ اصلی ("papay")."""
+    back = [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"{cb_prefix}:guide",
                                  style=ButtonStyle.DANGER)]
     bot_btn = [InlineKeyboardButton(text="🤖 رباتِ آپی", url=f"https://t.me/{APAY_BOT}")]
     links = await AP.site_links() if page in ("android", "ios") else {}
@@ -175,12 +193,12 @@ async def _guide_content(bot_id: int, page: str):
                + (f"؛ آدرسِ وب‌هوک:\n<code>{hook}</code>" if hook else ".")
                + "\nبدونِ این مرحله هم ربات هر دقیقه خودش پرداخت‌ها را استعلام می‌کند.")
         rows = [
-            [InlineKeyboardButton(text="🤖 اتصالِ اندروید", callback_data="ap:guide:android",
+            [InlineKeyboardButton(text="🤖 اتصالِ اندروید", callback_data=f"{cb_prefix}:guide:android",
                                   style=ButtonStyle.SUCCESS),
-             InlineKeyboardButton(text="🍎 اتصالِ آیفون", callback_data="ap:guide:ios",
+             InlineKeyboardButton(text="🍎 اتصالِ آیفون", callback_data=f"{cb_prefix}:guide:ios",
                                   style=ButtonStyle.PRIMARY)],
             bot_btn,
-            [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="ap:menu",
+            [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"{cb_prefix}:menu",
                                   style=ButtonStyle.DANGER)],
         ]
     return txt, InlineKeyboardMarkup(inline_keyboard=rows)
@@ -297,6 +315,45 @@ async def ap_setmax_save(msg: Message, bot: Bot, state: FSMContext):
         return await msg.answer("عددِ نامعتبر. دوباره امتحان کن.")
     await AP._set(row.id, "apay_max_amount", str(int(n)))
     await msg.answer("✅ حداکثرِ مبلغ " + ("برداشته شد." if int(n) == 0 else f"روی {int(n):,} تومان تنظیم شد."))
+    await _show(msg, row.id)
+
+
+# === PATCH_APAY_DISPLAY_NAME_V1 ===
+@apay_router.callback_query(F.data == "ap:setname")
+async def ap_setname(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """فقط برچسبِ نمایشی برایِ کاربر عوض می‌شود؛ اتصال همان apaygate.shop است."""
+    from tenant import _owner_ok, smart_cancel_kb
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cur = await get_display_name(row.id)
+    await state.set_state(ApFSM.display_name)
+    await cb.message.answer(
+        f"🏷 اسمی که می‌خواهی به‌جایِ «{DEFAULT_DISPLAY_NAME}» به کاربر نشان داده شود را بفرست "
+        f"(فعلاً: <b>{cur}</b>؛ حداکثر ۴۰ حرف). این اسم عیناً رویِ دکمهٔ کیف پول و پرداختِ محصول "
+        "می‌نشیند؛ مثلاً <code>💳 کارت به کارت آنی</code>.\n\n"
+        "برایِ بازگشت به اسمِ پیش‌فرض، کلمهٔ <code>پیش‌فرض</code> را بفرست.",
+        reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
+    await cb.answer()
+
+
+@apay_router.message(ApFSM.display_name, F.text)
+async def ap_setname_save(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok
+    row = await _owner_ok(msg, bot)
+    await state.clear()
+    if not row:
+        return
+    name = (msg.text or "").strip()
+    if name in ("پیش‌فرض", "پیشفرض", "default", "-"):
+        await AP._set(row.id, "apay_display_name", "")
+        await msg.answer(f"✅ اسمِ نمایشی به پیش‌فرض (<b>{DEFAULT_DISPLAY_NAME}</b>) برگشت.",
+                         parse_mode="HTML")
+    elif not name:
+        return await msg.answer("اسمِ نامعتبر. دوباره امتحان کن.")
+    else:
+        await AP._set(row.id, "apay_display_name", name[:40])
+        await msg.answer(f"✅ اسمِ نمایشی رویِ «{name[:40]}» تنظیم شد.")
     await _show(msg, row.id)
 
 
@@ -480,7 +537,7 @@ async def apu_amount(msg: Message, bot: Bot, state: FSMContext):
                               style=ButtonStyle.DANGER)],
     ])
     await msg.answer(
-        "🧾 <b>فاکتورِ شارژِ کیف پول</b>\n"
+        f"🧾 <b>فاکتورِ شارژِ کیف پول — {await get_display_name(row.id)}</b>\n"
         "➖➖➖➖➖➖➖➖➖➖\n\n"
         f"💵 مبلغِ شارژ: <b>{amount:,}</b> تومان\n"
         f"{pay_line}"

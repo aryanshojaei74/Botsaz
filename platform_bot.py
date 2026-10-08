@@ -150,6 +150,9 @@ router.include_router(platform_ton_direct_router)
 # === PATCH_BLU_PLATFORM_V1 ===
 from platform_blu import blu_router
 router.include_router(blu_router)
+# === PATCH_PLATFORM_APAY_V1 ===
+from platform_apay import papay_router
+router.include_router(papay_router)
 
 # === PATCH_DICE_GAME_V1 ===
 # آخر از همه ثبت می‌شود تا هندلرِ «نوشتنِ نامِ بازی» فقط وقتی به آن
@@ -7957,6 +7960,11 @@ async def _insufficient_balance(cb: CallbackQuery, need: int, note: str = "") ->
     """
     from platform_blu import is_available as _blu_ok, USER_LABEL as _BLU_LABEL
     rows = []
+    # === PATCH_PLATFORM_APAY_V1 ===
+    from platform_apay import is_available as _papay_ok, display_name as _papay_name
+    if await _papay_ok("purchase"):
+        rows.append([hx_button(await _papay_name() + " (شارژ کیف پول)",
+                               callback_data="charge_papay_buy", style=ButtonStyle.SUCCESS)])
     if await _blu_ok("purchase"):
         rows.append([hx_button(_BLU_LABEL + " (شارژ کیف پول)",
                                callback_data="charge_blu_buy",
@@ -8000,6 +8008,11 @@ async def _platform_wallet_kb() -> InlineKeyboardMarkup:
         rows.append([hx_button("🏧 شارژ با درگاه آیدی‌پی", callback_data="charge_idpay",
                                           style=ButtonStyle.PRIMARY)])
     # === PATCH_PLATFORM_SMS_AUTOCHARGE_V1 ===
+    # === PATCH_PLATFORM_APAY_V1 ===
+    from platform_apay import is_available as _papay_ok, display_name as _papay_name
+    if await _papay_ok("wallet"):
+        rows.append([hx_button(await _papay_name(), callback_data="charge_papay",
+                               style=ButtonStyle.SUCCESS)])
     sms_on = (await get_pset("platform_sms_enabled", "0")) == "1" and bool(await get_pset("platform_sms_secret", ""))
     if sms_on:
         rows.append([hx_button("📲 شارژِ خودکار کارت‌به‌کارت (تأییدِ آنی)", callback_data="charge_sms",
@@ -20699,6 +20712,12 @@ async def _pay_hub_kb() -> InlineKeyboardMarkup:
         [hx_button("💎 پرداخت مستقیم TON (بدونِ درگاه)", callback_data="set:pton_direct")],
         # === PATCH_BLU_PLATFORM_V1 ===
         [hx_button("🔵 درگاه بلو (blupal)", callback_data="set:blu")],
+        # === PATCH_PLATFORM_APAY_V1 ===
+        [hx_button(("💳 درگاه آپی (کارت‌به‌کارت آنی): ✅ فعال"
+                    if (await get_pset("papay_enabled", "0")) == "1"
+                    else "💳 درگاه آپی (کارت‌به‌کارت آنی)"),
+                   callback_data="set:papay",
+                   style=(ButtonStyle.SUCCESS if (await get_pset("papay_enabled", "0")) == "1" else None))],
         # === PATCH_MENU_MOVE_V1 ===  # صفحه از «آمار و مالی» باز می‌شود، نه تنظیمات
         [hx_button("⬅️ بازگشت", callback_data="adm:back",
                               style=ButtonStyle.DANGER)],

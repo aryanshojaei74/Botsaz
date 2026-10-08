@@ -346,9 +346,12 @@ async def poll_pending() -> int:
     now = datetime.utcnow()
     async with Session() as s:
         rows = (await s.scalars(select(ApayCharge).where(
-            ApayCharge.status == "waiting",
+            ApayCharge.status.in_(("waiting", "cancelled")),
             ApayCharge.created_at >= now - timedelta(hours=6)))).all()
-        items = [(r.bot_id, r.order_id, r.created_at) for r in rows]
+        # لغوشده‌ها هم تا ۳۰ دقیقه چک می‌شوند (شاید کاربر بعد از «لغو» واریز کرده باشد)
+        items = [(r.bot_id, r.order_id, r.created_at) for r in rows
+                 if r.status == "waiting" or (r.created_at and
+                                              r.created_at > now - timedelta(minutes=POLL_FOR_MINUTES))]
     n = 0
     for bid, oid, created in items:
         try:

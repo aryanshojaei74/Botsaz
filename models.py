@@ -2440,6 +2440,26 @@ class PlatformTonDirectCharge(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
 
 
+class PlatformApayCharge(Base):
+    """=== PATCH_PLATFORM_APAY_V1 === شارژِ کیف پولِ بات‌ساز با درگاهِ آپی (apaygate.shop).
+    مبلغ‌ها: amount_toman آنچه شارژ می‌شود؛ pay_amount_rial مبلغِ دقیقِ یکتایِ واریز."""
+    __tablename__ = "platform_apay_charges"
+    __table_args__ = (UniqueConstraint("order_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    order_id: Mapped[str] = mapped_column(String(40), index=True)
+    payment_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    amount_toman: Mapped[int] = mapped_column(Integer, default=0)
+    pay_amount_rial: Mapped[int | None] = mapped_column(BigInteger)
+    pay_url: Mapped[str | None] = mapped_column(String(300))
+    chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    msg_id: Mapped[int | None] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(String(20), default="waiting")  # waiting/paid/cancelled/expired
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 class PlatformBluCharge(Base):
     """شارژ کیف پولِ بات‌ساز از طریق درگاه بلوپال (blupal.net).
 

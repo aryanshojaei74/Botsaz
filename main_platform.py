@@ -957,6 +957,19 @@ async def blu_poll_loop(interval_sec: int = 60):
         await asyncio.sleep(interval_sec)
 
 
+# === PATCH_PLATFORM_APAY_V1 ===
+async def apay_platform_poll_loop(interval_sec: int = 60):
+    """هر دقیقه فاکتورهایِ بازِ آپیِ بات‌ساز را استعلام و تسویه می‌کند (پشتیبانِ وب‌هوک)."""
+    from platform_apay import poll_pending_once
+    await asyncio.sleep(55)
+    while True:
+        try:
+            await poll_pending_once()
+        except Exception:
+            logger.exception("apay_platform_poll_loop error")
+        await asyncio.sleep(interval_sec)
+
+
 async def crypto_poll_loop_platform():
     from tenant.gateways.payment_page import crypto_poll_loop as _cpl
     await _cpl(kind="platform")
@@ -1017,6 +1030,21 @@ async def platform_webhook(request: Request):
         import traceback
         print("platform webhook parse error:\n" + traceback.format_exc())
     return Response()
+
+
+# === PATCH_PLATFORM_APAY_V1 ===
+@app.post("/apay/platform/webhook")
+async def apay_platform_webhook(request: Request):
+    """وب‌هوکِ آپی برایِ کیف پولِ بات‌ساز؛ تسویه فقط با verify ِ خودِ آپی."""
+    from platform_apay import handle_webhook
+    raw = await request.body()
+    try:
+        code = await handle_webhook(raw, request.headers.get("X-APay-Timestamp", ""),
+                                    request.headers.get("X-APay-Signature", ""))
+    except Exception:
+        logger.exception("platform apay webhook error")
+        code = 500
+    return Response(status_code=code)
 
 
 @app.post("/blu/callback")
