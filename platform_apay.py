@@ -555,6 +555,14 @@ async def _make_invoice(msg: Message, tg_id: int, amount: int) -> None:
         await s.execute(sa_update(PlatformApayCharge).where(PlatformApayCharge.order_id == oid)
                         .values(chat_id=sent.chat.id, msg_id=sent.message_id))
         await s.commit()
+    # === PATCH_APAY_FAST_WATCH_V1 === هر ۵ ثانیه وضعیت؛ با «paid» تسویه، پیام و حذفِ فاکتور
+    AP.spawn_watch(str(res.get("id") or ""), lambda: _is_open(oid), lambda: settle_charge(oid))
+
+
+async def _is_open(order_id: str) -> bool:
+    async with Session() as s:
+        st = await s.scalar(select(PlatformApayCharge.status).where(PlatformApayCharge.order_id == order_id))
+    return st in ("waiting", "cancelled")
 
 
 @papay_router.callback_query(F.data.startswith("papay:check:"))

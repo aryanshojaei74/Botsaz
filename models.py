@@ -1568,6 +1568,8 @@ class ApayCharge(Base):
     amount_toman: Mapped[int] = mapped_column(Integer, default=0)      # مبلغی که کیف پول شارژ می‌شود
     pay_amount_rial: Mapped[int | None] = mapped_column(BigInteger)    # مبلغِ دقیقِ واریز (با رقمِ یکتا)
     pay_url: Mapped[str | None] = mapped_column(String(300))
+    chat_id: Mapped[int | None] = mapped_column(BigInteger)   # پیامِ فاکتور؛ بعد از پرداخت پاک می‌شود
+    msg_id: Mapped[int | None] = mapped_column(BigInteger)
     status: Mapped[str] = mapped_column(String(20), default="waiting")   # waiting/paid/cancelled/expired
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     paid_at: Mapped[datetime | None] = mapped_column(DateTime)

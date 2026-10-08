@@ -332,6 +332,7 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
         if not ch.payment_id:
             return False, "این فاکتور شناسهٔ پرداخت ندارد.", 0
         payment_id, credit = ch.payment_id, int(ch.amount_toman or 0)
+        inv_chat, inv_msg = ch.chat_id, ch.msg_id
 
     code, res = await verify_payment(token, payment_id)
     if code != 200 or not isinstance(res, dict):
@@ -370,7 +371,7 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
             logger.exception("apay: after_charge (KYC) ناموفق بود")
     if uid:
         try:
-            await _notify_paid(bot_id, uid, credit, bal)
+            await _notify_paid(bot_id, uid, credit, bal, inv_chat, inv_msg)
         except Exception:
             logger.exception("apay: اطلاع به کاربر ناموفق بود")
         try:
@@ -381,7 +382,8 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
     return True, "پرداخت تأیید و کیف پول شارژ شد.", credit
 
 
-async def _notify_paid(bot_id: int, tg_id: int, amount: int, new_balance: float) -> None:
+async def _notify_paid(bot_id: int, tg_id: int, amount: int, new_balance: float,
+                       inv_chat: int | None = None, inv_msg: int | None = None) -> None:
     from aiogram import Bot
     from aiogram.client.default import DefaultBotProperties
     from aiogram.enums import ParseMode
@@ -397,8 +399,76 @@ async def _notify_paid(bot_id: int, tg_id: int, amount: int, new_balance: float)
             await tbot.send_message(tg_id, text, reply_markup=kb)
         except Exception:
             await tbot.send_message(tg_id, f"✅ {int(amount):,} تومان به کیفِ پولت اضافه شد.")
+        if inv_chat and inv_msg:     # PATCH_APAY_FAST_WATCH_V1 — فاکتورِ پرداخت‌شده پاک می‌شود
+            try:
+                await tbot.delete_message(chat_id=inv_chat, message_id=inv_msg)
+            except Exception:
+                logger.info("apay: حذفِ پیامِ فاکتور ممکن نشد")
     finally:
         await tbot.session.close()
+
+
+# ─────────────── پایشِ سریعِ هر فاکتور ───────────────
+# === PATCH_APAY_FAST_WATCH_V1 ===
+# حلقهٔ دقیقه‌ایِ worker و وب‌هوک کافی نبود («پرداخت کردم ولی ربات خودش چک نکرد»). بعد از
+# ساختِ هر فاکتور، هر ۵ ثانیه وضعیت از endpointِ عمومیِ آپی (بدونِ توکن، همان که صفحهٔ
+# پرداخت می‌خواند) خوانده می‌شود و فقط وقتی «paid» شد، تسویهٔ امن (verify + تطبیق) اجرا می‌شود.
+WATCH_EVERY = 5
+WATCH_FOR = 26 * 60          # ۱۵ دقیقه اعتبار + ۱۰ دقیقه پیامکِ دیرهنگام + حاشیه
+_WATCH_TASKS: set = set()
+
+
+async def public_status(payment_id: str) -> str:
+    if aiohttp is None or not payment_id:
+        return ""
+    try:
+        t = aiohttp.ClientTimeout(total=6)
+        async with aiohttp.ClientSession(timeout=t) as s:
+            async with s.get(f"{BASE_URL}/api/v1/public/payments/{payment_id}") as r:
+                d = await r.json(content_type=None) if r.status == 200 else None
+        if isinstance(d, dict):
+            d = d.get("payment") if isinstance(d.get("payment"), dict) else d
+            return str(d.get("status") or "")
+    except Exception as e:
+        logger.debug("apay: وضعیتِ عمومیِ %s خوانده نشد: %s", payment_id, e)
+    return ""
+
+
+def spawn_watch(payment_id: str, is_open, settle) -> None:
+    """is_open(): آیا فاکتور هنوز باز است (waiting/cancelled)؛ settle(): تسویهٔ امن."""
+    import asyncio
+
+    async def _run():
+        waited = 0
+        while waited < WATCH_FOR:
+            await asyncio.sleep(WATCH_EVERY)
+            waited += WATCH_EVERY
+            try:
+                if not await is_open():
+                    return
+                st = await public_status(payment_id)
+                if st == "paid":
+                    await settle()
+                    return
+                if st == "expired" and waited > 25 * 60:
+                    return
+            except Exception:
+                logger.exception("apay: پایشِ فاکتورِ %s خطا داد", payment_id)
+    task = asyncio.ensure_future(_run())
+    _WATCH_TASKS.add(task)
+    task.add_done_callback(_WATCH_TASKS.discard)
+
+
+def watch_tenant_charge(bot_id: int, order_id: str, payment_id: str) -> None:
+    async def is_open():
+        async with Session() as s:
+            st = await s.scalar(select(ApayCharge.status).where(
+                ApayCharge.bot_id == bot_id, ApayCharge.order_id == order_id))
+        return st in ("waiting", "cancelled")
+
+    async def settle():
+        await settle_charge(bot_id, order_id)
+    spawn_watch(payment_id, is_open, settle)
 
 
 # ─────────────── وب‌هوک ───────────────

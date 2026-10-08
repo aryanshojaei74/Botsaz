@@ -532,7 +532,18 @@ async def apu_amount(msg: Message, bot: Bot, state: FSMContext):
         title=await get_display_name(row.id), pay_rial=pay_rial, card=card, holder=holder,
         order_id=oid, pay_url=str(res["pay_url"]), check_cb=f"apu:check:{oid}",
         cancel_cb=f"apu:cancel:{oid}")
-    await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+    sent = await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+    # === PATCH_APAY_FAST_WATCH_V1 ===
+    try:
+        async with Session() as s:
+            ch = await s.scalar(select(ApayCharge).where(
+                ApayCharge.bot_id == row.id, ApayCharge.order_id == oid))
+            if ch:
+                ch.chat_id, ch.msg_id = sent.chat.id, sent.message_id
+                await s.commit()
+    except Exception:
+        logger.exception("apay: ذخیرهٔ شناسهٔ پیامِ فاکتور ناموفق بود")
+    AP.watch_tenant_charge(row.id, oid, str(res.get("id") or ""))
 
 
 @apay_router.callback_query(F.data.startswith("apu:check:"))

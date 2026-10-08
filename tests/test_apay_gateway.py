@@ -37,7 +37,7 @@ async def db(monkeypatch):
     await tenant.set_setting(5, "apay_enabled", "1")
     notified = []
 
-    async def _np(bot_id, tg, amount, bal):
+    async def _np(bot_id, tg, amount, bal, *a):
         notified.append((tg, amount, bal))
 
     async def _noop(*a, **k):
@@ -296,3 +296,27 @@ async def test_card_for_reads_public_endpoint(monkeypatch):
     api_res = {"id": "pay_x", "amount": 100000, "pay_amount": 100590, "pay_url": "u", "status": "pending"}
     assert await AP.card_for("tok", api_res) == ("5047061135056063", "آریان شجاعی")
     assert calls == ["https://apaygate.shop/api/v1/public/payments/pay_x"]
+
+
+@pytest.mark.asyncio
+async def test_fast_watch_settles_when_public_status_paid(db, monkeypatch):
+    """PATCH_APAY_FAST_WATCH_V1 — پایشِ ۵ثانیه‌ای: با «paid» تسویه و توقف؛ با بسته‌شدنِ فاکتور توقف."""
+    import asyncio
+    maker, notified = db
+    monkeypatch.setattr(AP, "WATCH_EVERY", 0.01)
+    seq = iter(["pending", "pending", "paid"])
+
+    async def ps(pid):
+        return next(seq, "paid")
+
+    async def v(token, pid):
+        return _verify_resp()
+    monkeypatch.setattr(AP, "public_status", ps)
+    monkeypatch.setattr(AP, "verify_payment", v)
+    AP.watch_tenant_charge(5, "bsabc", "pay_1")
+    for _ in range(100):
+        await asyncio.sleep(0.02)
+        if not AP._WATCH_TASKS:
+            break
+    assert (await _balance(maker))[:2] == (50_000, "paid")
+    assert notified == [(777, 50_000, 50_000)]
