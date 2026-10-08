@@ -113,6 +113,53 @@ async def _set_panel_discount(partner_id: int, panel_key: str, pct: int | None) 
         await s.commit()
 
 
+# === PATCH_PARTNER_PANEL_GB_PRICE_V1 ===
+def _panel_gb_prices(p: VpnPartner) -> dict:
+    raw = getattr(p, "panel_gb_prices", None)
+    if not raw:
+        return {}
+    try:
+        import json as _json
+        return {str(k): int(v) for k, v in (_json.loads(raw) or {}).items() if int(v) > 0}
+    except Exception:
+        logger.exception("خواندنِ قیمتِ گیگیِ همکار ناموفق بود؛ درصد اعمال شد")
+        return {}
+
+
+async def _set_panel_gb_price(partner_id: int, panel_key: str, price: int | None) -> None:
+    """قیمتِ هر گیگِ یک پنل را ثبت یا (با None) حذف می‌کند."""
+    import json as _json
+    async with Session() as s:
+        p = await s.get(VpnPartner, partner_id)
+        if not p:
+            return
+        d = _panel_gb_prices(p)
+        if price is None or price <= 0:
+            d.pop(panel_key, None)
+        else:
+            d[panel_key] = int(price)
+        p.panel_gb_prices = _json.dumps(d, ensure_ascii=False) if d else None
+        await s.commit()
+
+
+async def partner_gb_price(bot_id: int, telegram_id: int, panel_key: str, scope: str) -> int:
+    """قیمتِ هر گیگِ اختصاصیِ همکارِ دستی برایِ این پنل/نوعِ خرید؛ ۰ یعنی ندارد
+    (همان قواعدِ پنل/محدودهٔ درصدِ دستی)."""
+    if not panel_key:
+        return 0
+    p = await get_partner(bot_id, telegram_id)
+    if not p:
+        return 0
+    if not getattr(p, "apply_all", False):
+        if scope == "plans" and not p.apply_plans:
+            return 0
+        if scope == "custom" and not p.apply_custom:
+            return 0
+        if panel_key not in _partner_panels(p):
+            return 0
+    return int(_panel_gb_prices(p).get(panel_key) or 0)
+
+
 def _partner_panels(partner: VpnPartner) -> set[str]:
     if not partner.panel_keys:
         return set()
@@ -182,7 +229,8 @@ async def partner_discount_percent(bot_id: int, telegram_id: int, panel_key: str
 
 
 async def partner_discount(*, bot_id: int, telegram_id: int, price, panel_key: str,
-                            scope: str = "plans", include_auto_reseller: bool = True) -> DiscountResult:
+                            scope: str = "plans", include_auto_reseller: bool = True,
+                            gb: float | None = None) -> DiscountResult:
     """مثلِ referral_discount در discount_engine ولی مبنایش تخفیفِ همکاری است.
     چیزی در دیتابیس ثبت نمی‌کند؛ فقط محاسبه می‌کند.
 
@@ -190,6 +238,20 @@ async def partner_discount(*, bot_id: int, telegram_id: int, price, panel_key: s
     include_auto_reseller=False یعنی فقط تخفیفِ دستیِ همکاری حساب شود، نه
     پلهٔ خودکارِ نمایندگی — برایِ نقاطِ خریدِ عادیِ ربات."""
     price = int(round(float(price)))
+    # === PATCH_PARTNER_PANEL_GB_PRICE_V1 === قیمتِ گیگیِ اختصاصی به‌جایِ درصد (پلن‌هایِ حجمی)
+    try:
+        _gbp = await partner_gb_price(bot_id, telegram_id, panel_key, scope)
+        _gb = float(gb or 0)
+    except Exception:
+        logger.exception("قیمتِ گیگیِ همکار خوانده نشد؛ درصد اعمال شد")
+        _gbp, _gb = 0, 0.0
+    if _gbp > 0 and _gb > 0:
+        final = min(price, int(round(_gb * _gbp)))
+        if final >= price:
+            return DiscountResult(ok=False, final_price=price,
+                                  reason="قیمتِ گیگیِ همکار از قیمتِ عادی کمتر نیست")
+        return DiscountResult(ok=True, discount=price - final, final_price=final,
+                              code=None, disc_type="amount")
     pct = await partner_discount_percent(bot_id, telegram_id, panel_key, scope,
                                          include_auto_reseller=include_auto_reseller)
     if pct <= 0:
@@ -294,6 +356,7 @@ async def _partner_kb(p: VpnPartner, connected: list, origin: str = "vpn") -> In
                 style=ButtonStyle.SUCCESS)])
         # === PATCH_PARTNER_PER_PANEL_DISCOUNT_V1 ===
         per = _panel_discounts(p)
+        gbp_map = _panel_gb_prices(p)
         for c in connected:
             key = c.panel_key
             label = await panel_label(p.bot_id, key)
@@ -302,8 +365,10 @@ async def _partner_kb(p: VpnPartner, connected: list, origin: str = "vpn") -> In
                 text=f"{mark} {label}", callback_data=f"vprt:panel:{p.id}:{key}")]
             if key in panels:
                 _pct = per.get(key)
+                _gbp = gbp_map.get(key)
                 btns.append(InlineKeyboardButton(
-                    text=(f"🏷 {_pct}٪" if _pct is not None
+                    text=(f"🏷 {_gbp:,}ت/گیگ" if _gbp else
+                          f"🏷 {_pct}٪" if _pct is not None
                           else f"🏷 {int(p.discount_percent or 0)}٪ (کلی)"),
                     callback_data=f"vprt:pctpanel:{p.id}:{key}"))
             rows.append(btns)
@@ -740,6 +805,7 @@ async def vprt_panel_pct_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
         await cb.answer("یافت نشد", show_alert=True)
         return
     cur = _panel_discounts(p).get(key)
+    _cur_gbp = _panel_gb_prices(p).get(key)
     label = await panel_label(row.id, key)
     await state.set_state(VpnPartnerFSM.panel_pct)
     await state.update_data(vprt_pct_pid=pid, vprt_pct_key=key)
@@ -749,8 +815,14 @@ async def vprt_panel_pct_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
         f"درصدِ فعلیِ این پنل: <b>{cur if cur is not None else int(p.discount_percent or 0)}٪</b>"
         + ("" if cur is not None else "  (از درصدِ کلی می‌آید)") + "\n"
         f"درصدِ کلیِ این همکار: <b>{int(p.discount_percent or 0)}٪</b>\n\n"
-        "عددِ تازه را بفرست (۰ تا ۱۰۰).\n\n"
-        "برایِ برداشتنِ عددِ اختصاصی و برگشت به درصدِ کلی، کلمهٔ "
+        + (f"قیمتِ گیگیِ فعلی: <b>{_cur_gbp:,} تومان/گیگ</b> (به‌جایِ درصد)\n" if _cur_gbp else "")
+        + "\n"
+        "• <b>درصد</b>: عددِ ۰ تا ۱۰۰ بفرست (مثلاً <code>20</code>).\n"
+        "• <b>قیمتِ هر گیگ</b>: عدد را با «ت» بفرست (مثلاً <code>1000ت</code>)؛ "
+        "عددِ بالایِ ۱۰۰ هم قیمتِ گیگ حساب می‌شود. پلن‌هایِ این پنل برایِ همکار "
+        "«حجم × این قیمت» حساب می‌شوند (هیچ‌وقت گران‌تر از قیمتِ عادی نمی‌شود) و در فروشِ دلخواه "
+        "همین قیمتِ گیگ است.\n\n"
+        "برایِ برداشتنِ عددِ اختصاصی (درصد و قیمتِ گیگ) و برگشت به درصدِ کلی، کلمهٔ "
         "<code>حذف</code> را بفرست.",
         reply_markup=cancel_kb())
 
@@ -771,14 +843,27 @@ async def vprt_panel_pct_save(msg: Message, bot: Bot, state: FSMContext):
     if raw in ("حذف", "-"):
         await state.clear()
         await _set_panel_discount(pid, key, None)
+        await _set_panel_gb_price(pid, key, None)
         await msg.answer("✅ عددِ اختصاصیِ این پنل برداشته شد؛ از این پس "
                          "درصدِ کلیِ همکار اعمال می‌شود.")
         return
     raw = raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
-    if not raw.isdigit() or int(raw) > 100:
-        await msg.answer("عددی بین ۰ تا ۱۰۰ بفرست (یا <code>حذف</code>):")
+    # === PATCH_PARTNER_PANEL_GB_PRICE_V1 === «1000ت» / «گیگی 1000» / عددِ بالایِ ۱۰۰ = قیمتِ هر گیگ
+    is_gb = any(t in raw for t in ("ت", "گیگ", "تومان"))
+    num = "".join(ch for ch in raw if ch.isdigit())
+    if not num:
+        await msg.answer("درصد (۰ تا ۱۰۰) یا قیمتِ هر گیگ با «ت» (مثلاً <code>1000ت</code>) بفرست:")
         return
+    if is_gb or int(num) > 100:
+        await state.clear()
+        await _set_panel_gb_price(pid, key, int(num))
+        label = await panel_label(row.id, key)
+        await msg.answer(f"✅ رویِ <b>{label}</b> برایِ این همکار هر گیگ <b>{int(num):,}</b> تومان حساب می‌شود "
+                         "(به‌جایِ درصد). پلن‌هایِ نامحدود همچنان با درصد حساب می‌شوند.")
+        return
+    raw = num
     await state.clear()
+    await _set_panel_gb_price(pid, key, None)
     await _set_panel_discount(pid, key, int(raw))
     label = await panel_label(row.id, key)
     await msg.answer(f"✅ تخفیفِ <b>{label}</b> برایِ این همکار روی "

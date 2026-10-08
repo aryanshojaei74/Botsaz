@@ -406,7 +406,13 @@ async def _vc_all_for_user(bot_id: int, telegram_id: int, panel_key: str = "",
         # === PATCH_RESELLER_PANEL_ONLY_V1 ===
         pct = await partner_discount_percent(bot_id, telegram_id, panel_key, "custom",
                                              include_auto_reseller=False)
-        if pct > 0:
+        # === PATCH_PARTNER_PANEL_GB_PRICE_V1 === قیمتِ گیگیِ اختصاصیِ همکار به‌جایِ درصد
+        from tenant.bots.vpn.vpn_partners import partner_gb_price
+        _gbp = await partner_gb_price(bot_id, telegram_id, panel_key, "custom")
+        if _gbp > 0:
+            eff_pg, eff_pd = min(base_pg, _gbp) if base_pg else _gbp, base_pd
+            pct = max(pct, 1)    # تعرفهٔ سراسریِ نمایندگی رویِ قیمتِ اختصاصی ننشیند
+        elif pct > 0:
             eff_pg = max(0, round(base_pg * (100 - pct) / 100))
             eff_pd = max(0, round(base_pd * (100 - pct) / 100))
     except Exception:
@@ -1711,7 +1717,7 @@ async def show_vpn_plans(bot: Bot, msg: Message, bot_id: int, state=None, panel_
                 _pd = await partner_discount(
                     bot_id=bot_id, telegram_id=msg.from_user.id, price=int(p.price or 0),
                     panel_key=(p.panel_key or cur_panel_key), scope="plans",
-                    include_auto_reseller=False)
+                    include_auto_reseller=False, gb=p.volume_gb)
                 if _pd.ok and _pd.discount > 0:
                     _price_txt = (f"{fa_digits(rial(_pd.final_price))} "
                                   f"(به‌جای {fa_digits(rial(p.price))})")
@@ -2390,7 +2396,8 @@ async def _build_buy_summary(bot: Bot, bot_id: int, plan_id: int,
         # === PATCH_RESELLER_PANEL_ONLY_V1 ===
         pd_ = await partner_discount(
             bot_id=bot_id, telegram_id=telegram_id, price=base_price,
-            panel_key=p_panel, scope="plans", include_auto_reseller=False)
+            panel_key=p_panel, scope="plans", include_auto_reseller=False,
+            gb=plan.volume_gb)
         if pd_.ok and pd_.discount > 0:
             ref_disc = pd_
             ref_disc_kind = "partner"
@@ -2880,7 +2887,8 @@ async def _vpn_pay_impl(cb: CallbackQuery, bot: Bot, state: FSMContext, plan_id:
             # === PATCH_RESELLER_PANEL_ONLY_V1 ===
             pd_ = await partner_discount(
                 bot_id=bot_id, telegram_id=cb.from_user.id, price=int(base_price),
-                panel_key=plan.panel_key, scope="plans", include_auto_reseller=False)
+                panel_key=plan.panel_key, scope="plans", include_auto_reseller=False,
+                gb=plan.volume_gb)
             if pd_.ok and pd_.discount > 0:
                 price = float(pd_.final_price)
                 ref_discount_amt = pd_.discount

@@ -1291,6 +1291,11 @@ class VpnPartner(Base):
     # نتیجه: ادمین درصد را ثبت می‌کرد، پیامِ «✅ تنظیم شد» می‌گرفت، ولی عدد
     # هیچ‌وقت ذخیره نمی‌شد و دوباره صفر/کلی نشان داده می‌شد.
     panel_discounts: Mapped[str | None] = mapped_column(Text)
+    # === PATCH_PARTNER_PANEL_GB_PRICE_V1 ===
+    # قیمتِ هر گیگِ این همکار رویِ هر پنل (تومان)، JSON: {"pasargad#2": 1000}.
+    # اگر برایِ پنلی ثبت شده باشد، *به‌جایِ* درصدِ همان پنل می‌نشیند:
+    # پلنِ آماده = حجمِ پلن × این قیمت (حداکثر همان قیمتِ عادی)، فروشِ دلخواه = قیمتِ گیگ.
+    panel_gb_prices: Mapped[str | None] = mapped_column(Text)
     apply_plans: Mapped[bool] = mapped_column(Boolean, default=True)    # پلن‌های آمادهٔ فروش
     apply_custom: Mapped[bool] = mapped_column(Boolean, default=False)  # فروش آنلاین دلخواه (حجم/روز آزاد)
     # === PATCH_RESELLER_MERGE_V1 ===
