@@ -86,6 +86,8 @@ PANEL_LABELS = _PanelLabels({
     "nodex":          "🔷 پنل نودکس",
     # === PATCH_DEGERIS_PANEL_V1 === فقط پلنِ حرفه‌ای
     "degeris":        "🟣 پنل DEGERIS (ثنایی جدید)",
+    # === PATCH_EYLAN_PANEL_V1 === فقط پلنِ حرفه‌ای
+    "eylan":          "🟠 پنل ایلان (EylanPanel)",
 })
 PANEL_KEYS = list(PANEL_LABELS.keys())
 
@@ -94,7 +96,8 @@ PANEL_KEYS = list(PANEL_LABELS.keys())
 # دیگر هم لازم دارند تا در لیستِ انتخاب نشان داده شوند. فعلاً فقط نودکس
 # (پلنِ حرفه‌ای). برایِ پنلِ بعدی که بخواهد فقط حرفه‌ای باشد، همین‌جا
 # یک ردیفِ دیگر اضافه کن.
-_PANEL_EXTRA_FEATURE_GATE = {"nodex": Feature.NODEX_PANEL, "degeris": Feature.DEGERIS_PANEL}
+_PANEL_EXTRA_FEATURE_GATE = {"nodex": Feature.NODEX_PANEL, "degeris": Feature.DEGERIS_PANEL,
+                             "eylan": Feature.EYLAN_PANEL}
 
 
 def _panel_labels_for_plan(plan) -> dict:
@@ -1250,6 +1253,13 @@ async def vpn_setup(cb: CallbackQuery, bot: Bot, state: FSMContext):
             "در انتها)، مثل:\n"
             "<code>https://panel.example.com:2053</code>"
         )
+    elif _bk(key) == "eylan":      # === PATCH_EYLAN_PANEL_V1 ===
+        step1_body = (
+            "۱/۵ — آدرسِ پنلِ ایلان را با https و پورت (همان دامنه/آی‌پی که API رویش است، "
+            "بدونِ /api در انتها) بفرست، مثل:\n"
+            "<code>https://panel.example.com:2053</code>\n\n"
+            "⚠️ این پنل با «کلیدِ API» کار می‌کند نه یوزرنیم/رمز؛ در مرحلهٔ بعد توضیح می‌دهم."
+        )
     elif _bk(key) == "shahan":
         step1_body = (
             "۱/۵ — آدرس پایهٔ پنل شاهان را با https و همراه با پورت (بدون مسیرِ "
@@ -1282,6 +1292,12 @@ async def vpn_setup_base(msg: Message, bot: Bot, state: FSMContext):
     await state.update_data(base_url=url.rstrip("/"))
     await state.set_state(VpnPanelFSM.username)
     data = await state.get_data()
+    if data.get("panel_key") == "eylan":      # === PATCH_EYLAN_PANEL_V1 ===
+        await msg.answer(
+            "۲/۵ — پنلِ ایلان یوزرنیم/رمز ندارد و فقط با «کلیدِ API» وصل می‌شود؛ "
+            "این مرحله استفاده نمی‌شود. فقط «-» بفرست:",
+            reply_markup=cancel_kb())
+        return
     if data.get("panel_key") == "shahan":
         await msg.answer(
             "۲/۵ — پنل شاهان یوزرنیم/رمزِ جدا ندارد (فقط توکن). این مرحله "
@@ -1319,6 +1335,12 @@ async def vpn_setup_user(msg: Message, bot: Bot, state: FSMContext):
     await state.update_data(username=msg.text.strip())
     await state.set_state(VpnPanelFSM.password)
     data = await state.get_data()
+    if data.get("panel_key") == "eylan":      # === PATCH_EYLAN_PANEL_V1 ===
+        await msg.answer(
+            "۳/۵ — <b>کلیدِ API</b> پنلِ ایلان را بفرست (X-API-KEY؛ از پنل، بخشِ تنظیماتِ API "
+            "ادمینِ اصلی یا نماینده). کلیدِ نماینده فقط کاربرانِ همان نماینده را می‌بیند:",
+            reply_markup=cancel_kb(), parse_mode="HTML")
+        return
     if data.get("panel_key") == "shahan":
         await msg.answer(
             "۳/۵ — توکنِ API پنل شاهان را بفرست (از پنلِ ادمینِ شاهان می‌گیری):",
@@ -1351,7 +1373,7 @@ async def vpn_setup_user(msg: Message, bot: Bot, state: FSMContext):
 #   • هیدیفای → این فیلد proxy_path است، معنیِ واقعی دارد؛ می‌ماند.
 _SUB_BASE_AUTO = frozenset({
     "marzban", "rebecca", "pasargad", "pasarguard",
-    "upanel_mizban", "marzneshin", "shahan",
+    "upanel_mizban", "marzneshin", "shahan", "eylan",
 })
 
 
@@ -1487,6 +1509,16 @@ async def _vpn_setup_step5_prompt(msg: Message, key: str) -> None:
             "مستقیم به inbound). اگر می‌خواهی روی همهٔ سرویس‌های موجود ساخته "
             "شود «همه» بفرست:",
             reply_markup=cancel_kb())
+    elif _bk(key) == "eylan":      # === PATCH_EYLAN_PANEL_V1 ===
+        await msg.answer(
+            "۵/۵ — پروتکل‌هایی که کاربرِ خریدار بگیرد را با کاما بفرست:\n"
+            "• <code>openvpn</code>، <code>l2tp</code>، <code>cisco</code>، <code>wg1</code> (وایرگاردِ پیش‌فرض)\n"
+            "• نامِ وایرگاردهایِ اضافه (مثلِ <code>wg2</code>)\n"
+            "• تگِ اینباندهایِ سینگ‌باکس (مثلِ <code>reality-main</code>)\n"
+            "• <code>node:1</code> برایِ محدودکردن به یک نود\n"
+            "مثال: <code>openvpn,wg1,reality-main</code>\n\n"
+            "برایِ پیش‌فرض (OpenVPN + همهٔ وایرگارد و سینگ‌باکس‌هایی که کلید اجازه دارد) «همه» بفرست:",
+            reply_markup=cancel_kb(), parse_mode="HTML")
     elif _bk(key) == "shahan":
         await msg.answer(
             "۵/۵ — پنل شاهان مفهومِ inbound/گروه ندارد؛ این مرحله استفاده "
@@ -1560,11 +1592,11 @@ async def vpn_setup_inbounds(msg: Message, bot: Bot, state: FSMContext):
     # شاهان/هیدیفای اصلاً مفهومِ inbound/گروه ندارند — هرچه ادمین اینجا بفرستد
     # نادیده گرفته می‌شود (بدونِ این میان‌بر، فرستادنِ «همه» چون پنل همیشه
     # لیستِ خالی برمی‌گرداند، ادمین را تو یه پیامِ خطا-و-دوباره‌بفرست گیر می‌انداخت).
-    if key in ("shahan", "hiddify"):
-        fetch_all = False
+    if key in ("shahan", "hiddify") or (_bk(key) == "eylan" and fetch_all):
+        fetch_all = False      # ایلان + «همه» = پیش‌فرضِ خودِ کلاینت (inbound خالی) — PATCH_EYLAN_PANEL_V1
         inbound = ""
     elif not fetch_all:
-        if _bk(key) in ("marzban", "rebecca", "upanel_mizban"):
+        if _bk(key) in ("marzban", "rebecca", "upanel_mizban", "eylan"):
             # مرزبان / ربکا / یوپنل: شناسهٔ inbound رشتهٔ «tag» است، نه عدد
             tags = [p.strip() for p in raw.replace("،", ",").split(",") if p.strip()]
             if not tags:
@@ -2275,7 +2307,7 @@ async def vpn_custom_count_save(msg: Message, bot: Bot, state: FSMContext):
 # محدودیتِ تعدادِ کاربرِ هم‌زمان (IP) رویِ خودِ پنل. تا امروز فقط «پلن»
 # می‌توانست محدودیت داشته باشد، پس خریدِ «حجم/روزِ دلخواه» — که پلنی ندارد —
 # همیشه بدونِ محدودیت ساخته می‌شد.
-_IP_LIMIT_PANELS = {"pasargad", "pasarguard", "rebecca", "shahan", "sanai", "alireza", "degeris"}
+_IP_LIMIT_PANELS = {"pasargad", "pasarguard", "rebecca", "shahan", "sanai", "alireza", "degeris", "eylan"}
 
 
 @vpn_admin_router.callback_query(F.data.startswith("tvpn:panel_iplimit:"))

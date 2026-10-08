@@ -30,6 +30,7 @@ from tenant.shared.panel_clients.upanel_mizban import UPanelMizbanClient
 from tenant.shared.panel_clients.nodex_panel import NodexPanelClient  # === PATCH_NODEX_PANEL_V1 ===
 from tenant.shared.panel_clients.shahan_panel import ShahanPanelClient
 from tenant.shared.panel_clients.degeris_panel import DegerisPanelClient  # === PATCH_DEGERIS_PANEL_V1 ===
+from tenant.shared.panel_clients.eylan_panel import EylanPanelClient  # === PATCH_EYLAN_PANEL_V1 ===
 
 # پنل‌هایی که inbound_ids آن‌ها به‌صورت رشتهٔ تگ هستند (نه عدد)
 # نکته: پاسارگاد/PasarGuard واقعاً «گروه» عددی دارند نه تگ، اما چون فرم ورودی
@@ -37,7 +38,8 @@ from tenant.shared.panel_clients.degeris_panel import DegerisPanelClient  # === 
 # می‌شود و خودِ کلاینت مقادیر عددی را از رشته‌ها استخراج می‌کند (نگاه کن به
 # tenant/pasargad_panel.py و tenant/pasarguard_panel.py). ربکا هم مثل مرزبان
 # واقعاً تگ‌محور است (نه فقط برای سازگاری فرم).
-_TAG_BASED_PANELS = frozenset({"marzban", "rebecca", "pasargad", "pasarguard", "upanel_mizban"})
+_TAG_BASED_PANELS = frozenset({"marzban", "rebecca", "pasargad", "pasarguard", "upanel_mizban",
+                               "eylan"})   # ایلان: پروتکل/تگ‌هایِ رشته‌ای
 
 _CLIENT_BY_PANEL_KEY = {
     "sanai":         SanaiPanelClient,
@@ -51,6 +53,7 @@ _CLIENT_BY_PANEL_KEY = {
     "upanel_mizban": UPanelMizbanClient,   # یوپنل (مرزبان)
     "nodex":         NodexPanelClient,     # نودکس — GuardCore API (api.cyberpower.space) — PATCH_NODEX_PANEL_V1
     "degeris":       DegerisPanelClient,   # DEGERIS (ثنایی جدید) — PATCH_DEGERIS_PANEL_V1
+    "eylan":         EylanPanelClient,     # ایلان (EylanPanel — X-API-KEY) — PATCH_EYLAN_PANEL_V1
     "shahan":        ShahanPanelClient,    # شاهان — endpoint واحد + توکنِ ثابت (shahanpanel.com)
 }
 
