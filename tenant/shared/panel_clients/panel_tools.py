@@ -421,6 +421,113 @@ async def _find_account_on_panel(client, email: str):
     return email, None, None, similar[:6]
 
 
+# === PATCH_MANUAL_LINK_LIMITS_V1 ===
+def panel_limits(cur: dict | None, usage: dict | None) -> tuple[int, int | None, int, datetime | None]:
+    """حجم و انقضایِ یک سرویسِ موجود روی پنل، از هر دو شکلِ پاسخ:
+    x-ui (total/totalGB بایت، expiryTime میلی‌ثانیه؛ منفی = «از اولین اتصال») و
+    خانوادهٔ مرزبان/یوپنل (data_limit بایت، expire ثانیه یا ISO).
+    خروجی: (گیگ، مگ برایِ زیرِ ۱ گیگ یا None، روزِ باقی‌مانده، تاریخِ انقضا یا None).
+    ۰ فقط وقتی برمی‌گردد که پنل واقعاً نامحدود/بی‌انقضا باشد."""
+    from tenant.shared.panel_clients.marzban_panel import _expire_to_epoch
+    cur = cur if isinstance(cur, dict) else {}
+    usage = usage if isinstance(usage, dict) else {}
+
+    def _int(v) -> int:
+        try:
+            return int(float(v or 0))
+        except (TypeError, ValueError):
+            return 0
+    total = _int(usage.get("total")) or _int(cur.get("totalGB")) or _int(cur.get("total")) \
+        or _int(cur.get("data_limit"))
+    gb, mb = 0, None
+    if total > 0:
+        if total < 1024 ** 3:
+            mb = max(1, int(round(total / (1024 ** 2))))
+        else:
+            gb = int(round(total / (1024 ** 3)))
+    exp_ms = _int(usage.get("expiryTime")) or _int(cur.get("expiryTime"))
+    if not exp_ms and cur.get("expire"):
+        try:
+            exp_ms = _expire_to_epoch(cur.get("expire")) * 1000
+        except (TypeError, ValueError):
+            exp_ms = 0
+    expires, days = None, 0
+    if exp_ms > 0:
+        expires = datetime.utcfromtimestamp(exp_ms / 1000)
+        left = (expires - datetime.utcnow()).total_seconds()
+        days = int(left // 86400) + (1 if left % 86400 else 0) if left > 0 else 0
+    elif exp_ms < 0:          # x-ui: «شروع از اولین اتصال» — مدت، نه تاریخ
+        days = max(1, int(abs(exp_ms) // 86_400_000))
+    return gb, mb, days, expires
+
+
+async def repair_manual_accounts(limit: int = 500) -> int:
+    """سرویس‌هایِ دستیِ قبلی که با باگِ خواندن «نامحدود / بی‌انقضا» (۰/۰) ثبت شدند را
+    از رویِ پنل اصلاح می‌کند. فقط ردیف‌هایِ ۰/۰ِ «سرویس دستی» دست می‌خورند."""
+    async with Session() as s:
+        rows = (await s.scalars(select(PanelAccount).where(
+            PanelAccount.plan_title == "سرویس دستی", PanelAccount.status == "active",
+            PanelAccount.volume_gb == 0, PanelAccount.volume_mb.is_(None),
+            PanelAccount.days == 0, PanelAccount.expires_at.is_(None)).limit(limit))).all()
+        items = [(r.id, r.bot_id, r.panel_key, r.email) for r in rows]
+    fixed = 0
+    clients: dict = {}
+    try:
+        for aid, bid, key, email in items:
+            ck = (bid, key)
+            if ck not in clients:
+                try:
+                    clients[ck] = await _client_for(bid, key)
+                except Exception as e:
+                    logger.info("repair manual: پنلِ %s/%s در دسترس نیست: %s", bid, key, e)
+                    clients[ck] = None
+            c = clients[ck]
+            if c is None:
+                continue
+            try:
+                cur = await c.get_client(email)
+                usage = await c.get_usage(email) if cur else None
+            except Exception as e:
+                logger.info("repair manual: خواندنِ %s ناموفق: %s", email, e)
+                continue
+            if not cur:
+                continue
+            gb, mb, days, expires = panel_limits(cur, usage)
+            if not (gb or mb or days or expires):
+                continue          # واقعاً نامحدود/بی‌انقضاست
+            async with Session() as s:
+                a = await s.get(PanelAccount, aid)
+                if a and a.volume_gb == 0 and a.volume_mb is None and a.days == 0 and a.expires_at is None:
+                    a.volume_gb, a.volume_mb, a.days, a.expires_at = gb, mb, days, expires
+                    await s.commit()
+                    fixed += 1
+    finally:
+        for c in clients.values():
+            if c is not None:
+                await _close(c)
+    if fixed:
+        logger.info("repair manual: %s سرویسِ دستی اصلاح شد", fixed)
+    return fixed
+
+
+async def repair_manual_accounts_once() -> None:
+    """یک‌بار پس از استقرار (پرچم در تنظیماتِ سطحِ پلتفرم)."""
+    import asyncio as _aio
+    await _aio.sleep(90)
+    flag = "repair_manual_limits_v1"
+    try:
+        async with Session() as s:
+            done = await s.scalar(select(Setting).where(Setting.bot_id == 0, Setting.key == flag))
+        if done:
+            return
+        await repair_manual_accounts()
+        async with Session() as s:
+            s.add(Setting(bot_id=0, key=flag, value="1"))
+            await s.commit()
+    except Exception:
+        logger.exception("repair manual: اصلاحِ یک‌باره ناموفق بود")
+
+
 @panel_tools_router.message(PtlFSM.add_email, F.text)
 async def ptl_add_email(msg: Message, bot: Bot, state: FSMContext):
     row = await _owner_msg(msg, bot)
@@ -478,21 +585,14 @@ async def ptl_add_email(msg: Message, bot: Bot, state: FSMContext):
             return await wait.edit_text(
                 f"⚠️ این سرویس قبلاً ثبت شده (کاربر <code>{dup2.user_telegram_id}</code>).",
                 reply_markup=_panel_back(key), parse_mode="HTML")
-        total = int(usage.get("total") or cur.get("totalGB") or 0)
-        gb = int(round(total / (1024 ** 3))) if total else 0
-        exp_ms = int(usage.get("expiryTime") or cur.get("expiryTime") or 0)
-        expires = None
-        days = 0
-        if exp_ms > 0:
-            expires = datetime.utcfromtimestamp(exp_ms / 1000)
-            days = max(0, int((expires - datetime.utcnow()).total_seconds() // 86400))
+        gb, mb, days, expires = panel_limits(cur, usage)
         from tenant.bots.vpn.vpn_user import new_svc_code
         async with Session() as s:
             acc = PanelAccount(
                 bot_id=row.id, user_telegram_id=int(uid), email=email, panel_key=key,
                 uuid=str(cur.get("id") or cur.get("uuid") or "") or None,
                 sub_id=sub_id or None, sub_link=sub_link or None,
-                volume_gb=gb, days=days, plan_title="سرویس دستی", status="active",
+                volume_gb=gb, volume_mb=mb, days=days, plan_title="سرویس دستی", status="active",
                 svc_code=await new_svc_code(s, row.id), expires_at=expires)
             s.add(acc)
             await s.commit()
@@ -504,7 +604,8 @@ async def ptl_add_email(msg: Message, bot: Bot, state: FSMContext):
             logger.info("اطلاعِ سرویسِ تازه به کاربر %s نرسید", uid)
         await wait.edit_text(
             f"✅ سرویسِ <code>{email}</code> به کاربرِ <code>{uid}</code> وصل شد.\n"
-            f"حجم: {gb or 'نامحدود'} | مدتِ باقی‌مانده: {days or 'بی‌انقضا'} روز",
+            f"حجم: {(f'{mb} مگابایت' if mb else (f'{gb} گیگ' if gb else 'نامحدود'))} | "
+            f"مدتِ باقی‌مانده: {(f'{days} روز' if days else 'بی‌انقضا')}",
             reply_markup=_panel_back(key))
     except Exception as e:
         logger.exception("ptl add manual")

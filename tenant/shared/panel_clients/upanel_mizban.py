@@ -643,7 +643,12 @@ class UPanelMizbanClient:
             logger.warning("usage endpoint برایِ %s جواب نداد؛ fallback به get_client",
                            username)
             usage_res = None
-        if usage_res and isinstance(usage_res, dict):
+        # === PATCH_UPANEL_USAGE_SHAPE_V1 ===
+        # در بعضی نصب‌ها /usage فقط مصرفِ هر نود را می‌دهد ({"usages": [...]}) و
+        # data_limit/expire ندارد؛ قبلاً همین dict پذیرفته می‌شد و همه‌چیز ۰ (یعنی
+        # «نامحدود / بی‌انقضا») برمی‌گشت. فقط پاسخی که فیلدهایِ کاربر را دارد معتبر است.
+        if (usage_res and isinstance(usage_res, dict)
+                and ("data_limit" in usage_res or "expire" in usage_res)):
             used = int(usage_res.get("used_traffic", 0) or 0)
             cap = int(usage_res.get("data_limit", 0) or 0)
             expire = usage_res.get("expire")
