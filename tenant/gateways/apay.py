@@ -42,6 +42,7 @@ _TIMEOUT = 15
 MIN_AMOUNT = 10_000            # حداقلِ پیش‌فرضِ شارژ (تومان) — کفِ فنیِ APay ۱٬۰۰۰ تومان است
 API_MIN_TOMAN = 1_000          # ۱۰٬۰۰۰ ریال
 API_MAX_TOMAN = 100_000_000    # ۱٬۰۰۰٬۰۰۰٬۰۰۰ ریال
+FEE_TOMAN = 1_500              # کارمزدِ هر پرداختِ موفق (fee=15000 ریال در پاسخِ آپی)
 POLL_FOR_MINUTES = 30          # ۱۵ دقیقه اعتبار + ۱۰ دقیقه پیامکِ دیرهنگام + حاشیه
 
 
@@ -161,8 +162,8 @@ async def validate_token(token: str) -> tuple[bool, str]:
         msg += f" · کارت/گوشیِ متصل: {n_dev}"
         if n_dev == 0:
             msg += "\n⚠️ هنوز کارتی در آپی اضافه نکرده‌ای؛ تا کارت اضافه نشود پرداختی ساخته نمی‌شود."
-    if bal_t < 1_000:
-        msg += "\n⚠️ موجودیِ کیف پولِ آپی کمتر از کارمزدِ هر پرداخت (۱٬۰۰۰ تومان) است؛ شارژش کن."
+    if bal_t < FEE_TOMAN:
+        msg += f"\n⚠️ موجودیِ کیف پولِ آپی کمتر از کارمزدِ هر پرداخت ({FEE_TOMAN:,} تومان) است؛ شارژش کن."
     return True, msg
 
 
@@ -240,14 +241,19 @@ def card_info(res: dict) -> tuple[str, str]:
 async def card_for(token: str, res: dict) -> tuple[str, str]:
     """کارت/صاحبِ کارت از پاسخِ ساخت؛ اگر نبود یک‌بار از GET /payments/:id."""
     card, holder = card_info(res)
-    if not card and isinstance(res, dict) and res.get("id"):
+    # === PATCH_APAY_PUBLIC_CARD_V1 === API کارت را نمی‌دهد؛ صفحهٔ پرداختِ خودِ آپی آن را از
+    # endpointِ عمومیِ /api/v1/public/payments/:id می‌خواند (card_number، card_holder).
+    if not card and isinstance(res, dict) and res.get("id") and aiohttp is not None:
         try:
-            code, r = await _api(token, "GET", f"/api/v1/payments/{res['id']}")
-            if code == 200 and isinstance(r, dict):
-                c2, h2 = card_info(r.get("payment") if isinstance(r.get("payment"), dict) else r)
+            t = aiohttp.ClientTimeout(total=6)
+            async with aiohttp.ClientSession(timeout=t) as s:
+                async with s.get(f"{BASE_URL}/api/v1/public/payments/{res['id']}") as r:
+                    pub = await r.json(content_type=None) if r.status == 200 else None
+            if isinstance(pub, dict):
+                c2, h2 = card_info(pub.get("payment") if isinstance(pub.get("payment"), dict) else pub)
                 card, holder = card or c2, holder or h2
-        except Exception:
-            logger.info("apay: خواندنِ کارتِ پرداخت ناموفق بود")
+        except Exception as e:
+            logger.info("apay: خواندنِ کارتِ پرداخت از صفحهٔ عمومی ناموفق بود: %s", e)
     if not card:
         from log_throttle import should_log
         if should_log("apay:no_card_fields", 86400):

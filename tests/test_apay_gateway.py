@@ -270,3 +270,29 @@ def test_invoice_view_layout():
                               pay_url="https://apaygate.shop/p/x", check_cb="c", cancel_cb="x")
     assert [b.copy_text.text for r in kb2.inline_keyboard for b in r if b.copy_text] == ["100610"]
     assert "«💳 پرداخت» را بزن" in t2
+
+
+@pytest.mark.asyncio
+async def test_card_for_reads_public_endpoint(monkeypatch):
+    """PATCH_APAY_PUBLIC_CARD_V1 — شکلِ واقعیِ پاسخِ /api/v1/public/payments/:id روی سرور."""
+    pub = {"id": "pay_x", "pay_amount": 100590, "fee": 15000, "status": "pending",
+           "card_number": "5047 0611 3505 6063", "card_holder": "آریان شجاعی", "merchant": "BotSaz"}
+    calls = []
+
+    class R:
+        status = 200
+        async def json(self, content_type=None): return pub
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+
+    class S:
+        def __init__(self, *a, **k): pass
+        def get(self, url):
+            calls.append(url)
+            return R()
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+    monkeypatch.setattr(AP.aiohttp, "ClientSession", S)
+    api_res = {"id": "pay_x", "amount": 100000, "pay_amount": 100590, "pay_url": "u", "status": "pending"}
+    assert await AP.card_for("tok", api_res) == ("5047061135056063", "آریان شجاعی")
+    assert calls == ["https://apaygate.shop/api/v1/public/payments/pay_x"]
