@@ -1120,15 +1120,31 @@ async def smm_psync_settings(cb: CallbackQuery, bot: Bot):
         await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
+@smm_router.callback_query(F.data.startswith("smm:psync:p:"))
+async def smm_psync_panel_toggle(cb: CallbackQuery, bot: Bot):
+    from tenant.bots.virtual_service import smm_price_sync as _PS
+    row = await _owner(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    pid = int(cb.data.rsplit(":", 1)[1])
+    on = await _PS.panel_auto_on(row.id, pid)
+    await _PS.set_panel_auto(row.id, pid, not on)
+    await cb.answer("استعلامِ خودکارِ قیمت " + ("خاموش شد" if on else "روشن شد"))
+    await _render_panel_detail(cb.message, row.id, pid)
+
+
 @smm_router.callback_query(F.data == "smm:psync:now")
+@smm_router.callback_query(F.data.startswith("smm:psync:now:"))
 async def smm_psync_now(cb: CallbackQuery, bot: Bot):
     from tenant.bots.virtual_service import smm_price_sync as _PS
     row = await _owner(cb, bot)
     if not row:
         await cb.answer()
         return
-    await cb.answer("⏳ در حالِ گرفتنِ قیمت‌ها از ارائه‌دهنده‌ها…")
-    reports = await _PS.sync_bot(row.id)
+    await cb.answer("⏳ در حالِ گرفتنِ قیمت‌ها از ارائه‌دهنده…")
+    only = int(cb.data.rsplit(":", 1)[1]) if cb.data.count(":") == 3 else "all"
+    reports = await _PS.sync_bot(row.id, only_pk=only)
     texts = [t for t in (_PS.report_text(r) for r in reports) if t]
     for t in texts or ["ℹ️ هیچ محصولِ متصل به ارائه‌دهنده‌ای برایِ بروزرسانیِ قیمت نداری."]:
         await cb.message.answer(t, parse_mode="HTML")
@@ -2546,6 +2562,8 @@ async def _panel_detail_content(bot_id: int, panel_id: int) -> tuple[str, Inline
     price_mode = await _panel_price_mode(bot_id, p.id)
     browse_pk = await _get_browsing_panel(bot_id)
     bulk_on = await _panel_bulk_enabled(bot_id, p.id)
+    from tenant.bots.virtual_service import smm_price_sync as _PS   # PATCH_SMM_PRICE_AUTOSYNC_V1
+    price_auto = await _PS.panel_auto_on(bot_id, p.id)
     balance_txt = "—" if p.last_balance is None else f"{float(p.last_balance):,.2f} {p.last_currency}".strip()
     masked_key = (p.api_key[:4] + "…" + p.api_key[-4:]) if p.api_key and len(p.api_key) > 10 else (p.api_key or "—")
     lines = [
@@ -2574,6 +2592,12 @@ async def _panel_detail_content(bot_id: int, panel_id: int) -> tuple[str, Inline
         [InlineKeyboardButton(text="🔁 بررسیِ وضعیت‌گرِ خودکار", callback_data="noop"),
          InlineKeyboardButton(text=("✅ فعال" if p.auto_check_enabled else "❌ غیرفعال"),
                               callback_data=f"smm:panel:autochk:{p.id}")],
+        # === PATCH_SMM_PRICE_AUTOSYNC_V1 === استعلامِ خودکارِ قیمت برایِ همین ارائه‌دهنده
+        [InlineKeyboardButton(text="💲 استعلامِ خودکارِ قیمت (هر ۳۰ دقیقه)", callback_data="noop"),
+         InlineKeyboardButton(text=("✅ فعال" if price_auto else "❌ غیرفعال"),
+                              callback_data=f"smm:psync:p:{p.id}")],
+        [InlineKeyboardButton(text="💲 بروزرسانیِ قیمتِ محصولاتِ این ارائه‌دهنده (همین الان)",
+                              callback_data=f"smm:psync:now:{p.id}", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="📈 درصدِ سودِ ارائه‌دهنده", callback_data="noop"),
          InlineKeyboardButton(text=(f"{margin:g}٪" if price_mode == "margin" else "تنظیم نشده"),
                               callback_data=f"smm:panel:settings:{p.id}")],

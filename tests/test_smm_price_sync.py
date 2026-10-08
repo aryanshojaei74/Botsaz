@@ -101,7 +101,7 @@ async def test_no_change_text_and_notify_modes(db, monkeypatch):
 async def test_run_due_respects_interval_and_toggle(db, monkeypatch):
     calls = []
 
-    async def fake_sync(bid):
+    async def fake_sync(bid, **kw):
         calls.append(bid)
         await tenant.set_setting(bid, "smm_price_sync_last", str(10**10))
         return []
@@ -119,3 +119,11 @@ def test_ton_done_posts_trust_report():
     src = inspect.getsource(SM.ton_order_done)
     assert "_notify_gift_order_trust_success(bot, row, oid)" in src
     assert src.index('o.status = "sent"') < src.index("_notify_gift_order_trust_success")
+
+
+@pytest.mark.asyncio
+async def test_per_panel_toggle_only_affects_auto(db):
+    await PS.set_panel_auto(9, None, False)
+    assert await PS.sync_bot(9, auto=True) == []            # پنل خاموش: دورِ خودکار ردش می‌کند
+    assert len(await PS.sync_bot(9)) == 1                   # بروزرسانیِ دستی همچنان کار می‌کند
+    assert await PS.sync_bot(9, only_pk=5) == []            # فقط پنلِ ۵ (سرویسی ندارد)

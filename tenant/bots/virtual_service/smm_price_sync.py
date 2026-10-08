@@ -41,6 +41,19 @@ async def notify_mode(bot_id: int) -> str:
     return m if m in NOTIFY_MODES else "changes"
 
 
+def _panel_key(panel_pk) -> str:
+    return f"smm_price_autosync_p{panel_pk if panel_pk is not None else 0}"
+
+
+async def panel_auto_on(bot_id: int, panel_pk) -> bool:
+    """کلیدِ استعلامِ خودکارِ قیمت برایِ هر ارائه‌دهنده (پیش‌فرض روشن)."""
+    return (await _gs(bot_id, _panel_key(panel_pk), "1")) == "1"
+
+
+async def set_panel_auto(bot_id: int, panel_pk, on: bool) -> None:
+    await _ss(bot_id, _panel_key(panel_pk), "1" if on else "0")
+
+
 def _num(v) -> float:
     try:
         return round(float(v or 0), 4)
@@ -52,7 +65,7 @@ def _fmt_rate(v: float) -> str:
     return f"{v:,.4f}".rstrip("0").rstrip(".")
 
 
-async def sync_bot(bot_id: int) -> list[dict]:
+async def sync_bot(bot_id: int, *, auto: bool = False, only_pk="all") -> list[dict]:
     """یک دورِ بروزرسانی برایِ یک ربات. خروجی: گزارشِ هر پنل
     [{"panel": نام, "ok": bool, "checked": n, "up": [...], "down": [...], "missing": [...]}]."""
     from tenant.bots.virtual_service import smm as SM
@@ -62,6 +75,10 @@ async def sync_bot(bot_id: int) -> list[dict]:
             SmmService.category.notin_(_SKIP_CATEGORIES) | SmmService.category.is_(None)))).all()
     reports = []
     for panel_pk in sorted(set(pks), key=lambda x: (x is not None, x)):
+        if only_pk != "all" and panel_pk != only_pk:
+            continue
+        if auto and not await panel_auto_on(bot_id, panel_pk):
+            continue
         _u, _k, pname = await SM._panel_creds(bot_id, panel_pk)
         rep = {"panel": pname, "ok": False, "checked": 0, "up": [], "down": [], "missing": []}
         try:
@@ -194,7 +211,7 @@ async def run_due_once() -> int:
             last = float(await _gs(bid, "smm_price_sync_last", "0") or 0)
             if now - last < INTERVAL_MIN * 60:
                 continue
-            reports = await sync_bot(bid)
+            reports = await sync_bot(bid, auto=True)
             await send_reports(bid, reports, await notify_mode(bid))
             n += 1
         except Exception:
