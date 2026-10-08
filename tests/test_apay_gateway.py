@@ -247,3 +247,26 @@ async def test_site_links_parse_and_cache(monkeypatch):
                  "apk": "https://apaygate.shop/download/apay-forwarder.apk"}
     await AP.site_links()
     assert calls == ["https://apaygate.shop/config.js"]       # کش
+
+
+def test_card_info_shapes():
+    assert AP.card_info({"card_number": "5047-0611-3505-6063", "card_holder": "آریان شجاعی"}) == \
+        ("5047061135056063", "آریان شجاعی")
+    assert AP.card_info({"card": {"number": "5047061135056063", "name": "علی"}, "name": "shop"}) == \
+        ("5047061135056063", "علی")
+    assert AP.card_info({"card": "5047 0611 3505 6063"}) == ("5047061135056063", "")
+    assert AP.card_info({"id": "pay_1", "name": "MyShop"}) == ("", "")   # «name» ِ سطحِ اول نامِ فروشگاه است
+
+
+def test_invoice_view_layout():
+    t, kb = AP.invoice_view(title="آپی", pay_rial=100_610, card="5047061135056063", holder="آریان شجاعی",
+                            order_id="bs1", pay_url="https://apaygate.shop/p/x",
+                            check_cb="apu:check:bs1", cancel_cb="apu:cancel:bs1")
+    assert "مبلغِ شارژ" not in t and "100,610" in t and "10,061 تومان" in t
+    assert "5047 0611 3505 6063" in t and "آریان شجاعی" in t
+    copies = [b.copy_text.text for r in kb.inline_keyboard for b in r if b.copy_text]
+    assert copies == ["5047061135056063", "100610"]
+    t2, kb2 = AP.invoice_view(title="آپی", pay_rial=100_610, card="", holder="", order_id="bs1",
+                              pay_url="https://apaygate.shop/p/x", check_cb="c", cancel_cb="x")
+    assert [b.copy_text.text for r in kb2.inline_keyboard for b in r if b.copy_text] == ["100610"]
+    assert "«💳 پرداخت» را بزن" in t2

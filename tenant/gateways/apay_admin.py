@@ -502,7 +502,7 @@ async def apu_amount(msg: Message, bot: Bot, state: FSMContext):
     wait = await msg.answer("⏳ در حالِ ساختِ فاکتور…")
     code, res = await AP.create_payment(
         token, amount_toman=int(amount), order_id=oid,
-        description=f"شارژ کیف پول — کاربر {msg.from_user.id}",
+        description="شارژ کیف پول",   # بدونِ آیدیِ کاربر؛ در صفحهٔ پرداخت دیده می‌شود
         callback_url=await AP.webhook_url(row.id),
         return_url=(f"https://t.me/{row.username}" if row.username else ""))
     if code == 400 and isinstance(res, dict) and (res.get("error") or {}).get("code") == "invalid_url":
@@ -527,27 +527,12 @@ async def apu_amount(msg: Message, bot: Bot, state: FSMContext):
     except Exception:
         logger.debug("apay: حذفِ پیامِ انتظار ناموفق بود")
 
-    pay_line = (f"💳 مبلغِ دقیقِ واریز: <b>{pay_rial:,}</b> ریال "
-                f"(≈ {pay_rial / 10:,.1f} تومان)\n" if pay_rial else "")
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 پرداخت", url=str(res["pay_url"]))],
-        [InlineKeyboardButton(text="🔍 بررسیِ پرداخت", callback_data=f"apu:check:{oid}",
-                              style=ButtonStyle.SUCCESS)],
-        [InlineKeyboardButton(text="❌ لغو و بازگشت", callback_data=f"apu:cancel:{oid}",
-                              style=ButtonStyle.DANGER)],
-    ])
-    await msg.answer(
-        f"🧾 <b>فاکتورِ شارژِ کیف پول — {await get_display_name(row.id)}</b>\n"
-        "➖➖➖➖➖➖➖➖➖➖\n\n"
-        f"💵 مبلغِ شارژ: <b>{amount:,}</b> تومان\n"
-        f"{pay_line}"
-        f"🔑 کدِ پیگیری: <code>{oid}</code>\n\n"
-        "📋 <b>مراحل:</b>\n"
-        "۱. «💳 پرداخت» را بزن؛ شمارهٔ کارت و مبلغ را می‌بینی.\n"
-        "۲. <b>دقیقاً</b> همان مبلغ را کارت‌به‌کارت کن (رقم‌هایِ آخر مهم است).\n"
-        "۳. کیفِ پولت خودکار شارژ می‌شود؛ اگر طول کشید «🔍 بررسیِ پرداخت» را بزن.\n\n"
-        "⏳ این فاکتور ۱۵ دقیقه اعتبار دارد.",
-        reply_markup=kb, parse_mode="HTML")
+    card, holder = await AP.card_for(token, res)
+    text, kb = AP.invoice_view(
+        title=await get_display_name(row.id), pay_rial=pay_rial, card=card, holder=holder,
+        order_id=oid, pay_url=str(res["pay_url"]), check_cb=f"apu:check:{oid}",
+        cancel_cb=f"apu:cancel:{oid}")
+    await msg.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 @apay_router.callback_query(F.data.startswith("apu:check:"))

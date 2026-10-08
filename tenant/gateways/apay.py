@@ -208,6 +208,99 @@ async def site_links() -> dict:
     return data
 
 
+# === PATCH_APAY_INVOICE_CARD_V1 ===
+def _digits(v) -> str:
+    return "".join(ch for ch in str(v or "") if ch.isdigit())
+
+
+def card_info(res: dict) -> tuple[str, str]:
+    """(شمارهٔ کارت، نامِ صاحبِ کارت) از پاسخِ ساختِ پرداخت؛ اگر آپی نفرستاده بود رشتهٔ خالی.
+    مستنداتِ آپی این فیلدها را صریح نام نبرده، پس چند شکلِ رایج پذیرفته می‌شود."""
+    if not isinstance(res, dict):
+        return "", ""
+    card, holder = "", ""
+    src = [res] + [res[k] for k in ("card", "bank_card", "destination", "device") if isinstance(res.get(k), dict)]
+    for d in src:
+        for k in ("card_number", "number", "pan", "card_no", "cardNumber"):
+            n = _digits(d.get(k))
+            if 16 <= len(n) <= 19:
+                card = card or n
+        # «name» فقط داخلِ شیءِ کارت معنیِ صاحبِ کارت دارد؛ در سطحِ اول ممکن است اسمِ فروشگاه باشد
+        keys = ("card_holder", "holder", "holder_name", "owner", "owner_name", "cardHolder") + \
+            (("name",) if d is not res else ())
+        for k in keys:
+            v = d.get(k)
+            if isinstance(v, str) and v.strip() and not _digits(v):
+                holder = holder or v.strip()[:60]
+    if not card and isinstance(res.get("card"), str) and 16 <= len(_digits(res["card"])) <= 19:
+        card = _digits(res["card"])
+    return card, holder
+
+
+async def card_for(token: str, res: dict) -> tuple[str, str]:
+    """کارت/صاحبِ کارت از پاسخِ ساخت؛ اگر نبود یک‌بار از GET /payments/:id."""
+    card, holder = card_info(res)
+    if not card and isinstance(res, dict) and res.get("id"):
+        try:
+            code, r = await _api(token, "GET", f"/api/v1/payments/{res['id']}")
+            if code == 200 and isinstance(r, dict):
+                c2, h2 = card_info(r.get("payment") if isinstance(r.get("payment"), dict) else r)
+                card, holder = card or c2, holder or h2
+        except Exception:
+            logger.info("apay: خواندنِ کارتِ پرداخت ناموفق بود")
+    if not card:
+        from log_throttle import should_log
+        if should_log("apay:no_card_fields", 86400):
+            logger.info("apay: پاسخِ پرداخت شمارهٔ کارت ندارد؛ فیلدها: %s",
+                        sorted(res.keys()) if isinstance(res, dict) else type(res).__name__)
+    return card, holder
+
+
+def invoice_view(*, title: str, pay_rial: int, card: str, holder: str, order_id: str,
+                 pay_url: str, check_cb: str, cancel_cb: str, support_url: str = ""):
+    """متن و کیبوردِ فاکتور — مشترکِ رباتِ مستأجر و بات‌ساز."""
+    from aiogram.types import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
+    from aiogram.enums import ButtonStyle
+    toman = pay_rial // 10 if pay_rial % 10 == 0 else pay_rial / 10
+    card_fmt = " ".join(card[i:i + 4] for i in range(0, len(card), 4)) if card else ""
+    lines = [f"🧾 <b>فاکتورِ شارژِ کیف پول — {title}</b>", "➖➖➖➖➖➖➖➖➖➖", ""]
+    if pay_rial:
+        lines.append(f"💳 مبلغِ دقیقِ واریز: <b>{pay_rial:,}</b> ریال (= {toman:,} تومان)")
+    if card:
+        lines.append(f"🏦 شمارهٔ کارت: <code>{card_fmt}</code>")
+    if holder:
+        lines.append(f"👤 به نامِ: <b>{holder}</b>")
+    lines += [f"🔑 کدِ پیگیری: <code>{order_id}</code>", ""]
+    if card:
+        lines += ["📋 <b>مراحل:</b>",
+                  "۱. <b>دقیقاً</b> همین مبلغ را به همین کارت واریز کن (رقم‌هایِ آخر مهم است)؛ "
+                  "با دکمه‌هایِ کپی می‌توانی مستقیم از اپِ بانک پرداخت کنی، یا «💳 پرداخت» را بزن.",
+                  "۲. کیف پولت خودکار شارژ می‌شود؛ اگر طول کشید «🔍 بررسیِ پرداخت» را بزن."]
+    else:
+        lines += ["📋 <b>مراحل:</b>",
+                  "۱. «💳 پرداخت» را بزن؛ شمارهٔ کارت و مبلغ را می‌بینی.",
+                  "۲. <b>دقیقاً</b> همان مبلغ را کارت‌به‌کارت کن (رقم‌هایِ آخر مهم است).",
+                  "۳. کیف پولت خودکار شارژ می‌شود؛ اگر طول کشید «🔍 بررسیِ پرداخت» را بزن."]
+    lines += ["", "⏳ این فاکتور ۱۵ دقیقه اعتبار دارد."]
+    rows = []
+    copy = []
+    if card:
+        copy.append(InlineKeyboardButton(text="📋 کپیِ شمارهٔ کارت", copy_text=CopyTextButton(text=card)))
+    if pay_rial:
+        copy.append(InlineKeyboardButton(text="📋 کپیِ مبلغِ دقیق (ریال)",
+                                          copy_text=CopyTextButton(text=str(pay_rial))))
+    if copy:
+        rows.append(copy)
+    rows.append([InlineKeyboardButton(text="💳 پرداخت", url=pay_url)])
+    rows.append([InlineKeyboardButton(text="🔍 بررسیِ پرداخت", callback_data=check_cb,
+                                      style=ButtonStyle.SUCCESS)])
+    if support_url:
+        rows.append([InlineKeyboardButton(text="💬 پیام به پشتیبانی (در صورت شارژ نشدن)", url=support_url)])
+    rows.append([InlineKeyboardButton(text="❌ لغو و بازگشت", callback_data=cancel_cb,
+                                      style=ButtonStyle.DANGER)])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def webhook_url(bot_id: int) -> str:
     from tenant.gateways.custom_domain import get_bot_webhook_base
     base = (await get_bot_webhook_base(bot_id) or "").rstrip("/")

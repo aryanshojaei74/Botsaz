@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from aiogram import Bot, F, Router
+from aiogram import F, Router
 from aiogram.enums import ButtonStyle
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -526,7 +526,7 @@ async def _make_invoice(msg: Message, tg_id: int, amount: int) -> None:
     wait = await msg.answer("⏳ در حالِ ساختِ فاکتور…")
     ret = f"https://t.me/{me_user}" if me_user else ""
     code, res = await AP.create_payment(token, amount_toman=amount, order_id=oid,
-                                        description=f"شارژ کیف پول بات‌ساز — {tg_id}",
+                                        description="شارژ کیف پول بات‌ساز",
                                         callback_url=await webhook_url(), return_url=ret)
     if code == 400 and isinstance(res, dict) and (res.get("error") or {}).get("code") == "invalid_url":
         code, res = await AP.create_payment(token, amount_toman=amount, order_id=oid, return_url=ret)
@@ -545,22 +545,12 @@ async def _make_invoice(msg: Message, tg_id: int, amount: int) -> None:
                                 pay_url=str(res["pay_url"])[:300], status="waiting")
         s.add(ch)
         await s.commit()
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 پرداخت", url=str(res["pay_url"]))],
-        [_hx("🔍 بررسیِ پرداخت", callback_data=f"papay:check:{oid}", style=ButtonStyle.SUCCESS)],
-        [_hx("💬 پیام به پشتیبانی (در صورت شارژ نشدن)", url="https://t.me/BaBotSaz?direct")],
-        [_hx("❌ لغو", callback_data=f"papay:cancel:{oid}", style=ButtonStyle.DANGER)],
-    ])
-    sent = await msg.answer(
-        f"🧾 <b>فاکتورِ شارژِ کیف پول — {await display_name()}</b>\n\n"
-        f"💵 مبلغِ شارژ: <b>{amount:,}</b> تومان\n"
-        + (f"💳 مبلغِ دقیقِ واریز: <b>{pay_rial:,}</b> ریال (≈ {pay_rial / 10:,.1f} تومان)\n" if pay_rial else "")
-        + f"🔑 کدِ پیگیری: <code>{oid}</code>\n\n"
-        "۱. «💳 پرداخت» را بزن؛ شمارهٔ کارت و مبلغ را می‌بینی.\n"
-        "۲. <b>دقیقاً</b> همان مبلغ را کارت‌به‌کارت کن (رقم‌هایِ آخر مهم است).\n"
-        "۳. کیف پولت خودکار شارژ می‌شود؛ اگر طول کشید «🔍 بررسیِ پرداخت» را بزن.\n\n"
-        "⏳ این فاکتور ۱۵ دقیقه اعتبار دارد.",
-        reply_markup=kb)
+    card, holder = await AP.card_for(token, res)
+    text, kb = AP.invoice_view(
+        title=await display_name(), pay_rial=pay_rial, card=card, holder=holder, order_id=oid,
+        pay_url=str(res["pay_url"]), check_cb=f"papay:check:{oid}", cancel_cb=f"papay:cancel:{oid}",
+        support_url="https://t.me/BaBotSaz?direct")
+    sent = await msg.answer(text, reply_markup=kb)
     async with Session() as s:
         await s.execute(sa_update(PlatformApayCharge).where(PlatformApayCharge.order_id == oid)
                         .values(chat_id=sent.chat.id, msg_id=sent.message_id))
