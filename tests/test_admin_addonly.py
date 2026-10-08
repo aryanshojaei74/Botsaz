@@ -104,9 +104,41 @@ async def test_identity_and_access(db):
 @pytest.mark.parametrize("data", ["tvpn:plans:sanai", "tvpn:panel:sanai", "tvpn:menu",
                                   "tadm:sec:products", "tvpn:test:sanai", "tvpn:planedit:1"])
 async def test_addonly_has_no_admin_power_elsewhere(db, data):
-    cb = _Cb(data=data, from_user=SimpleNamespace(id=50), message=_Msg())
+    # === PATCH_ADDONLY_FULL_LOCK_V1 === اصلاً به هندلر نمی‌رسد؛ فقط صفحهٔ «اتصالِ پنلِ جدید»
+    msg = _Msg()
+    cb = _Cb(data=data, from_user=SimpleNamespace(id=50), message=msg)
     seen, _ = await _admin_seen(cb)
-    assert seen == [False]
+    assert seen == []
+    assert any("اتصالِ پنلِ جدید" in t for t, _k in msg.sent)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["/start", "خرید سرویس جدید", "لیست قیمت سرویس ها", "📦 سرویس‌ها و محصولات"])
+async def test_addonly_sees_no_shop_or_buttons(db, text):
+    msg = _Msg(text=text, from_user=SimpleNamespace(id=50), chat=SimpleNamespace(type="private"))
+    seen, _ = await _admin_seen(msg)
+    assert seen == []                                    # هیچ هندلری (فروشگاه/دکمه‌ها) اجرا نشد
+    texts = [t for t, _k in msg.sent]
+    assert any("اتصالِ پنلِ جدید" in t for t in texts)
+    assert "secret.example" not in "".join(texts)
+
+
+@pytest.mark.asyncio
+async def test_addonly_keyboard_swapped_once(db):
+    msg = _Msg(text="/start", from_user=SimpleNamespace(id=50), chat=SimpleNamespace(type="private"))
+    await _admin_seen(msg)
+    kbs = [k for _t, k in msg.sent if k is not None and hasattr(k, "keyboard")]
+    assert len(kbs) == 1 and [b.text for r in kbs[0].keyboard for b in r] == [tenant.BTN_TADMIN]
+    msg2 = _Msg(text="x", from_user=SimpleNamespace(id=50), chat=SimpleNamespace(type="private"))
+    await _admin_seen(msg2)
+    assert not [k for _t, k in msg2.sent if k is not None and hasattr(k, "keyboard")]
+
+
+@pytest.mark.asyncio
+async def test_addonly_group_messages_untouched(db):
+    msg = _Msg(text="سلام", from_user=SimpleNamespace(id=50), chat=SimpleNamespace(type="supergroup"))
+    seen, _ = await _admin_seen(msg)
+    assert seen == [False] and not getattr(msg, "sent", [])
 
 
 @pytest.mark.asyncio
@@ -130,7 +162,7 @@ async def test_setup_steps_allowed_only_for_its_own_key(db):
     assert seen == [True]
     st2 = _State("VpnPanelFSM:base_url", {"panel_key": "sanai"})   # بدونِ علامتِ add-only
     seen2, _ = await _admin_seen(_Msg(text="x", from_user=SimpleNamespace(id=50)), st2)
-    assert seen2 == [False]
+    assert seen2 == []          # PATCH_ADDONLY_FULL_LOCK_V1: به هندلر نمی‌رسد، فقط منویِ اتصال
 
 
 @pytest.mark.asyncio
@@ -141,7 +173,7 @@ async def test_admin_button_shows_addonly_menu_without_existing_panels(db, monke
     msg = _Msg(text=tenant.BTN_TADMIN, from_user=SimpleNamespace(id=50))
     seen, _ = await _admin_seen(msg)
     assert seen == []
-    text, kb = msg.sent[0]
+    text, kb = [x for x in msg.sent if hasattr(x[1], "inline_keyboard")][-1]
     blob = text + json.dumps([[b.callback_data + b.text for b in r] for r in kb.inline_keyboard],
                              ensure_ascii=False)
     assert "secret.example" not in blob and "سرور آلمان" not in blob

@@ -32715,6 +32715,19 @@ async def _addonly_menu_content(row) -> tuple[str, InlineKeyboardMarkup]:
 
 async def _addonly_show_menu(event, row) -> None:
     text, kb = await _addonly_menu_content(row)
+    # === PATCH_ADDONLY_FULL_LOCK_V1 ===
+    # کیبوردِ قدیمی (مدیریت یا منویِ فروشگاه) یک‌بار با کیبوردِ تک‌دکمه‌ایِ «پنل مدیریت» عوض می‌شود.
+    uid = getattr(getattr(event, "from_user", None), "id", None)
+    if uid and await get_setting(row.id, f"addonly_kb_v1:{uid}", "") != "1":
+        target = event.message if isinstance(event, CallbackQuery) else event
+        try:
+            await target.answer(
+                "🔌 دسترسیِ شما در این ربات فقط «اتصالِ پنلِ جدید» است.",
+                reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=BTN_TADMIN)]],
+                                                 resize_keyboard=True, is_persistent=True))
+            await set_setting(row.id, f"addonly_kb_v1:{uid}", "1")
+        except Exception:
+            logger.exception("تعویضِ کیبوردِ ادمینِ add-only ناموفق بود")
     if isinstance(event, CallbackQuery):
         try:
             await event.message.edit_text(text, reply_markup=kb)
@@ -32797,6 +32810,16 @@ async def _addonly_mw(handler, event, data):
     if verdict == "handled":
         return None
     if verdict != "allow":
+        # === PATCH_ADDONLY_FULL_LOCK_V1 ===
+        # درخواستِ مالک: این ادمین نه قیمت‌ها/فروشگاه را ببیند نه هیچ دکمهٔ ساخته‌شدهٔ ربات را؛
+        # در چتِ خصوصی هر چیزِ دیگری فقط همان صفحهٔ «اتصالِ پنلِ جدید» را نشان می‌دهد.
+        chat = (getattr(event.message, "chat", None) if isinstance(event, CallbackQuery)
+                else getattr(event, "chat", None))
+        if getattr(chat, "type", "private") == "private":
+            if state is not None and not isinstance(event, CallbackQuery):
+                await state.clear()
+            await _addonly_show_menu(event, row)
+            return None
         return await handler(event, data)
     token = _ADDONLY_ALLOW.set((row.id, uid))
     try:
