@@ -170,7 +170,7 @@ async def _after_paid(tg_id, credit, new_bal, uname, ufull, chat_id, msg_id) -> 
             logger.info("platform apay: حذفِ پیامِ فاکتور ممکن نشد")
     try:
         from config import PLATFORM_ADMIN_ID
-        if PLATFORM_ADMIN_ID:
+        if PLATFORM_ADMIN_ID and int(tg_id) != int(PLATFORM_ADMIN_ID):   # خودِ ادمین دو پیام نگیرد
             await platform_bot.send_message(
                 PLATFORM_ADMIN_ID,
                 "💳 <b>شارژِ خودکارِ کیفِ پول انجام شد</b>\n\n"
