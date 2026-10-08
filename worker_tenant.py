@@ -57,6 +57,8 @@ from tenant.shared.panel_clients.panel_watchdog import panel_watchdog_loop as _p
 from tenant.gateways.uniquepay import uniquepay_poll_loop as _uniquepay_loop
 # === PATCH_APAY_GATEWAY_V1 ===
 from tenant.gateways.apay import apay_poll_loop as _apay_loop
+# === PATCH_SMM_PRICE_AUTOSYNC_V1 ===
+from tenant.bots.virtual_service.smm_price_sync import smm_price_sync_loop as _smm_price_sync_loop
 # === PATCH_MANUAL_LINK_LIMITS_V1 === اصلاحِ یک‌بارهٔ سرویس‌هایِ دستیِ ۰/۰
 from tenant.shared.panel_clients.panel_tools import repair_manual_accounts_once as _repair_manual_once
 # === PATCH_ABANGATEWAY_V1 ===
@@ -123,6 +125,7 @@ async def _worker_startup():
         _panel_watchdog_loop(),
         _uniquepay_loop(),
         _apay_loop(),
+        _smm_price_sync_loop(),
         _repair_manual_once(),
         # === PATCH_ABANGATEWAY_V1 ===
         _abangateway_loop(),

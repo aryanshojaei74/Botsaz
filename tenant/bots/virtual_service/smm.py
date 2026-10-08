@@ -1054,6 +1054,9 @@ async def smm_admin_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
 # محصولاتِ فعلی، مدیریتِ دسته‌ها، و ترتیبِ نمایش — هیچ‌کدوم منطقِ تازه
 # نیست، فقط میان‌برهایی به چیزهایی که از قبل ساخته شده بودن.
 async def smm_products_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    from tenant.bots.virtual_service import smm_price_sync as _PS   # PATCH_SMM_PRICE_AUTOSYNC_V1
+    _ps_on = (await _get_setting(bot_id, "smm_price_autosync", "1")) == "1"
+    _ps_mode = await _PS.notify_mode(bot_id)
     sort_order = await _get_setting(bot_id, "smm_sort_order", "none")
     async with Session() as s:
         n_active = await s.scalar(select(func.count()).select_from(SmmService).where(
@@ -1079,9 +1082,56 @@ async def smm_products_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
         # پنل را می‌گیرد و توضیحات را برایِ محصولاتِ موجود پر می‌کند.
         [InlineKeyboardButton(text="🔄 بروزرسانیِ توضیحات از ارائه‌دهنده",
                               callback_data="smm:descsync")],
+        # === PATCH_SMM_PRICE_AUTOSYNC_V1 ===
+        [InlineKeyboardButton(
+            text=("🔁 بروزرسانیِ خودکارِ قیمت (هر ۳۰ دقیقه): " + ("✅ روشن" if _ps_on else "❌ خاموش")),
+            callback_data="smm:psync:auto",
+            style=(ButtonStyle.SUCCESS if _ps_on else ButtonStyle.DANGER))],
+        [InlineKeyboardButton(text=f"📨 گزارشِ بروزرسانیِ قیمت: {_PS.NOTIFY_LABELS[_ps_mode]}",
+                              callback_data="smm:psync:mode")],
+        [InlineKeyboardButton(text="💲 بروزرسانیِ قیمت‌ها از ارائه‌دهنده (همین الان)",
+                              callback_data="smm:psync:now", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:products", style=ButtonStyle.DANGER)],
     ]
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# === PATCH_SMM_PRICE_AUTOSYNC_V1 ===
+@smm_router.callback_query(F.data.in_({"smm:psync:auto", "smm:psync:mode"}))
+async def smm_psync_settings(cb: CallbackQuery, bot: Bot):
+    from tenant.bots.virtual_service import smm_price_sync as _PS
+    row = await _owner(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    if cb.data == "smm:psync:auto":
+        on = (await _get_setting(row.id, "smm_price_autosync", "1")) == "1"
+        await _set_setting(row.id, "smm_price_autosync", "0" if on else "1")
+        await cb.answer("خاموش شد" if on else "روشن شد؛ هر ۳۰ دقیقه قیمت‌ها از ارائه‌دهنده به‌روز می‌شوند")
+    else:
+        cur = await _PS.notify_mode(row.id)
+        nxt = _PS.NOTIFY_MODES[(_PS.NOTIFY_MODES.index(cur) + 1) % len(_PS.NOTIFY_MODES)]
+        await _set_setting(row.id, "smm_price_sync_notify", nxt)
+        await cb.answer("گزارش: " + _PS.NOTIFY_LABELS[nxt])
+    text, kb = await smm_products_content(row.id)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@smm_router.callback_query(F.data == "smm:psync:now")
+async def smm_psync_now(cb: CallbackQuery, bot: Bot):
+    from tenant.bots.virtual_service import smm_price_sync as _PS
+    row = await _owner(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    await cb.answer("⏳ در حالِ گرفتنِ قیمت‌ها از ارائه‌دهنده‌ها…")
+    reports = await _PS.sync_bot(row.id)
+    texts = [t for t in (_PS.report_text(r) for r in reports) if t]
+    for t in texts or ["ℹ️ هیچ محصولِ متصل به ارائه‌دهنده‌ای برایِ بروزرسانیِ قیمت نداری."]:
+        await cb.message.answer(t, parse_mode="HTML")
 
 
 @smm_router.callback_query(F.data == "smm:products:menu")
@@ -15858,6 +15908,9 @@ async def ton_order_done(cb: CallbackQuery, bot: Bot):
         buyer_tg = buyer.telegram_id if buyer else None
         trk = o.tracking_code
         await s.commit()
+    # === PATCH_TON_TRUST_REPORT_V1 === گزارشِ فدایی: خریدِ تون در کانالِ اعتمادسازی پست نمی‌شد.
+    # هنگامِ ثبت، سفارش awaiting_admin است و پست عمداً رد می‌شود؛ اینجا (بعد از تحویل) باید پست شود.
+    await _notify_gift_order_trust_success(bot, row, oid)
     await cb.answer("✅ به‌عنوان ارسال‌شده ثبت شد.")
     try:
         await cb.message.edit_reply_markup(reply_markup=None)
