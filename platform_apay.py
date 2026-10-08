@@ -42,6 +42,7 @@ class PApayFSM(StatesGroup):
     max_amount = State()
     display_name = State()
     amount = State()
+    fee_amount = State()     # === PATCH_APAY_FEE_PAYER_V1 ===
 
 
 async def _g(key: str, default: str = "") -> str:
@@ -85,6 +86,16 @@ async def max_amount() -> int:
     return min(n, AP.API_MAX_TOMAN) if n > 0 else AP.API_MAX_TOMAN
 
 
+async def fee_cfg() -> tuple[str, int]:
+    """=== PATCH_APAY_FEE_PAYER_V1 === (پرداخت‌کنندهٔ کارمزد، مبلغ)."""
+    payer = await _g("papay_fee_payer", "seller")
+    try:
+        amt = int(await _g("papay_fee_amount", str(AP.FEE_TOMAN)))
+    except (TypeError, ValueError):
+        amt = AP.FEE_TOMAN
+    return (payer if payer in AP.FEE_PAYERS else "seller"), max(amt, 0)
+
+
 async def is_available(where: str = "") -> bool:
     if (await _g("papay_enabled", "0")) != "1" or not await _g("papay_token", ""):
         return False
@@ -115,6 +126,7 @@ async def settle_charge(order_id: str) -> tuple[bool, str, int]:
         if not ch.payment_id:
             return False, "این فاکتور شناسهٔ پرداخت ندارد.", 0
         payment_id, credit, tg_id = ch.payment_id, int(ch.amount_toman or 0), int(ch.user_telegram_id)
+        expected = credit + int(ch.fee_toman or 0)     # PATCH_APAY_FEE_PAYER_V1
         chat_id, msg_id = ch.chat_id, ch.msg_id
 
     code, res = await AP.verify_payment(token, payment_id)
@@ -124,7 +136,7 @@ async def settle_charge(order_id: str) -> tuple[bool, str, int]:
     if not res.get("verified") or str(pay.get("status")) != "paid":
         return False, ("مهلتِ این فاکتور تمام شده و پرداختی ثبت نشد."
                        if str(pay.get("status")) == "expired" else "هنوز پرداختی ثبت نشده است."), 0
-    if str(pay.get("order_id")) != order_id or int(pay.get("amount") or 0) != credit * 10:
+    if str(pay.get("order_id")) != order_id or int(pay.get("amount") or 0) != expected * 10:
         logger.error("platform apay: عدمِ تطابقِ پرداخت (order=%s): %s", order_id, pay)
         return False, "اطلاعاتِ پرداخت با فاکتور نمی‌خواند؛ با پشتیبانی تماس بگیر.", 0
 
@@ -247,12 +259,14 @@ async def _menu() -> tuple[str, InlineKeyboardMarkup]:
     mx_txt = "بدونِ سقف" if mx >= AP.API_MAX_TOMAN else f"{mx:,}"
     hook = await webhook_url()
     sms_on = (await _g("platform_sms_enabled", "0")) == "1"
+    fee_payer, fee_amt = await fee_cfg()
     txt = ("💳 <b>درگاهِ آپی (کارت‌به‌کارتِ آنی)</b>\n\n"
            "کاربر مبلغ را وارد می‌کند، در صفحهٔ پرداختِ آپی کارت و <b>مبلغِ دقیق</b> را می‌بیند و "
            "کارت‌به‌کارت می‌کند؛ با رسیدنِ پیامکِ بانک، کیف پولش خودکار شارژ می‌شود.\n\n"
            f"وضعیت: {'✅ فعال' if on else '❌ غیرفعال'}\n"
            f"🔑 توکنِ API: <code>{(tok[:6] + '…' + tok[-4:]) if len(tok) > 12 else ('ثبت شده' if tok else '—')}</code>\n"
            f"🏷 اسمِ نمایشی برایِ کاربر: <b>{await display_name()}</b>\n"
+           f"💸 کارمزدِ هر پرداخت: <b>{fee_amt:,}</b> تومان — پرداخت توسطِ <b>{AP.FEE_PAYERS[fee_payer]}</b>\n"
            f"🔐 کلیدِ وب‌هوک: {'✅ ثبت شده' if sec else '— (اختیاری)'}\n"
            f"🔽 حداقل: <b>{mn:,}</b> تومان | 🔼 حداکثر: <b>{mx_txt}</b>\n"
            f"👛 کیف پول: {'✅' if w else '❌'} | 🛒 پرداختِ محصول: {'✅' if b else '❌'}\n\n"
@@ -266,6 +280,9 @@ async def _menu() -> tuple[str, InlineKeyboardMarkup]:
         [_hx("🔑 ثبت / تغییرِ توکن", callback_data="papay:setkey"),
          _hx("🔐 کلیدِ وب‌هوک", callback_data="papay:setsecret")],
         [_hx(f"🏷 اسمِ نمایشی: {await display_name()}", callback_data="papay:setname")],
+        [_hx("💸 کارمزد با: " + ("👤 خریدار" if fee_payer == "buyer" else "🏪 فروشنده"),
+             callback_data="papay:feepayer"),
+         _hx(f"💸 مبلغِ کارمزد: {fee_amt:,}", callback_data="papay:feeamt")],
         [_hx(f"🔽 حداقل: {mn:,}", callback_data="papay:setmin"),
          _hx(f"🔼 حداکثر: {mx_txt}", callback_data="papay:setmax")],
         [_hx(f"👛 نمایش در کیف پول: {'✅' if w else '❌'}", callback_data="papay:vis:wallet")],
@@ -328,6 +345,8 @@ _PROMPTS = {
     "setsecret": (PApayFSM.secret, "🔐 <b>کلیدِ وب‌هوک</b> (webhook secret) را از رباتِ آپی بفرست؛ برایِ حذف ۰ بفرست."),
     "setmin": (PApayFSM.min_amount, f"🔽 حداقلِ شارژ را به تومان بفرست (کمترین مقدارِ مجاز {AP.API_MIN_TOMAN:,})."),
     "setmax": (PApayFSM.max_amount, "🔼 حداکثرِ شارژ را به تومان بفرست؛ برایِ برداشتنِ سقف ۰ بفرست."),
+    "feeamt": (PApayFSM.fee_amount, "💸 مبلغِ کارمزدِ هر پرداخت را به تومان بفرست. فقط وقتی «کارمزد با خریدار» "
+                                    "باشد رویِ فاکتورِ مشتری اضافه می‌شود."),
     "setname": (PApayFSM.display_name, "🏷 اسمی که کاربر رویِ دکمه می‌بیند را بفرست (حداکثر ۴۰ حرف؛ "
                                        "مثلاً <code>💳 کارت به کارت آنی</code>). برایِ اسمِ پیش‌فرض، "
                                        "<code>پیش‌فرض</code> بفرست."),
@@ -413,6 +432,30 @@ async def papay_max_save(msg: Message, state: FSMContext):
     if n is None or n < 0:
         return await msg.answer("عددِ نامعتبر.")
     await _s("papay_max_amount", str(int(n)))
+    await _show(msg)
+
+
+@papay_router.callback_query(F.data == "papay:feepayer")
+async def papay_feepayer(cb: CallbackQuery):
+    if not await _is_super(cb.from_user.id):
+        return await cb.answer()
+    payer, _a = await fee_cfg()
+    nxt = "seller" if payer == "buyer" else "buyer"
+    await _s("papay_fee_payer", nxt)
+    await cb.answer("کارمزد با " + ("خریدار" if nxt == "buyer" else "فروشنده"))
+    await _show(cb)
+
+
+@papay_router.message(PApayFSM.fee_amount, F.text)
+async def papay_feeamt_save(msg: Message, state: FSMContext):
+    from platform_bot import fa_to_int
+    if not await _is_super(msg.from_user.id):
+        return
+    await state.clear()
+    n = fa_to_int(msg.text)
+    if n is None or n < 0 or n > 1_000_000:
+        return await msg.answer("عددِ نامعتبر.")
+    await _s("papay_fee_amount", str(int(n)))
     await _show(msg)
 
 
@@ -517,6 +560,8 @@ async def _make_invoice(msg: Message, tg_id: int, amount: int) -> None:
         return
     token = await _g("papay_token", "")
     oid = "pb" + AP.new_order_id()[2:]
+    _payer, _famt = await fee_cfg()                     # PATCH_APAY_FEE_PAYER_V1
+    fee = AP.fee_for_buyer(_payer, _famt)
     me_user = ""
     try:
         from main_platform import platform_bot
@@ -525,11 +570,11 @@ async def _make_invoice(msg: Message, tg_id: int, amount: int) -> None:
         logger.debug("platform apay: نامِ کاربریِ ربات خوانده نشد")
     wait = await msg.answer("⏳ در حالِ ساختِ فاکتور…")
     ret = f"https://t.me/{me_user}" if me_user else ""
-    code, res = await AP.create_payment(token, amount_toman=amount, order_id=oid,
+    code, res = await AP.create_payment(token, amount_toman=amount + fee, order_id=oid,
                                         description="شارژ کیف پول بات‌ساز",
                                         callback_url=await webhook_url(), return_url=ret)
     if code == 400 and isinstance(res, dict) and (res.get("error") or {}).get("code") == "invalid_url":
-        code, res = await AP.create_payment(token, amount_toman=amount, order_id=oid, return_url=ret)
+        code, res = await AP.create_payment(token, amount_toman=amount + fee, order_id=oid, return_url=ret)
     try:
         await wait.delete()
     except Exception:
@@ -541,7 +586,7 @@ async def _make_invoice(msg: Message, tg_id: int, amount: int) -> None:
     pay_rial = int(res.get("pay_amount") or 0)
     async with Session() as s:
         ch = PlatformApayCharge(user_telegram_id=tg_id, order_id=oid, payment_id=str(res.get("id") or ""),
-                                amount_toman=amount, pay_amount_rial=pay_rial or None,
+                                amount_toman=amount, fee_toman=fee, pay_amount_rial=pay_rial or None,
                                 pay_url=str(res["pay_url"])[:300], status="waiting")
         s.add(ch)
         await s.commit()
@@ -549,7 +594,7 @@ async def _make_invoice(msg: Message, tg_id: int, amount: int) -> None:
     text, kb = AP.invoice_view(
         title=await display_name(), pay_rial=pay_rial, card=card, holder=holder, order_id=oid,
         pay_url=str(res["pay_url"]), check_cb=f"papay:check:{oid}", cancel_cb=f"papay:cancel:{oid}",
-        support_url="https://t.me/BaBotSaz?direct")
+        support_url="https://t.me/BaBotSaz?direct", fee_toman=fee, credit_toman=amount)
     sent = await msg.answer(text, reply_markup=kb)
     async with Session() as s:
         await s.execute(sa_update(PlatformApayCharge).where(PlatformApayCharge.order_id == oid)

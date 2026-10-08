@@ -1566,6 +1566,8 @@ class ApayCharge(Base):
     order_id: Mapped[str] = mapped_column(String(40), index=True)      # شناسهٔ ما (به APay فرستاده می‌شود)
     payment_id: Mapped[str | None] = mapped_column(String(64), index=True)   # pay_… از APay
     amount_toman: Mapped[int] = mapped_column(Integer, default=0)      # مبلغی که کیف پول شارژ می‌شود
+    # === PATCH_APAY_FEE_PAYER_V1 === کارمزدی که خریدار رویِ فاکتور می‌دهد (۰ = به‌عهدهٔ فروشنده)
+    fee_toman: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     pay_amount_rial: Mapped[int | None] = mapped_column(BigInteger)    # مبلغِ دقیقِ واریز (با رقمِ یکتا)
     pay_url: Mapped[str | None] = mapped_column(String(300))
     chat_id: Mapped[int | None] = mapped_column(BigInteger)   # پیامِ فاکتور؛ بعد از پرداخت پاک می‌شود
@@ -2453,6 +2455,7 @@ class PlatformApayCharge(Base):
     order_id: Mapped[str] = mapped_column(String(40), index=True)
     payment_id: Mapped[str | None] = mapped_column(String(64), index=True)
     amount_toman: Mapped[int] = mapped_column(Integer, default=0)
+    fee_toman: Mapped[int] = mapped_column(Integer, default=0, server_default="0")   # PATCH_APAY_FEE_PAYER_V1
     pay_amount_rial: Mapped[int | None] = mapped_column(BigInteger)
     pay_url: Mapped[str | None] = mapped_column(String(300))
     chat_id: Mapped[int | None] = mapped_column(BigInteger)

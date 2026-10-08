@@ -262,8 +262,31 @@ async def card_for(token: str, res: dict) -> tuple[str, str]:
     return card, holder
 
 
+# === PATCH_APAY_FEE_PAYER_V1 ===
+FEE_PAYERS = {"seller": "فروشنده (از کیف پولِ آپیِ شما)", "buyer": "خریدار (رویِ مبلغِ فاکتور)"}
+
+
+def fee_for_buyer(payer: str, fee_amount) -> int:
+    """کارمزدی که باید رویِ فاکتورِ خریدار اضافه شود."""
+    try:
+        f = int(fee_amount or 0)
+    except (TypeError, ValueError):
+        f = 0
+    return max(f, 0) if payer == "buyer" else 0
+
+
+async def get_fee_cfg(bot_id: int) -> tuple[str, int]:
+    payer = await _get(bot_id, "apay_fee_payer", "seller")
+    try:
+        amt = int(await _get(bot_id, "apay_fee_amount", str(FEE_TOMAN)))
+    except (TypeError, ValueError):
+        amt = FEE_TOMAN
+    return (payer if payer in FEE_PAYERS else "seller"), max(amt, 0)
+
+
 def invoice_view(*, title: str, pay_rial: int, card: str, holder: str, order_id: str,
-                 pay_url: str, check_cb: str, cancel_cb: str, support_url: str = ""):
+                 pay_url: str, check_cb: str, cancel_cb: str, support_url: str = "",
+                 fee_toman: int = 0, credit_toman: int = 0):
     """متن و کیبوردِ فاکتور — مشترکِ رباتِ مستأجر و بات‌ساز."""
     from aiogram.types import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
     from aiogram.enums import ButtonStyle
@@ -275,6 +298,9 @@ def invoice_view(*, title: str, pay_rial: int, card: str, holder: str, order_id:
     if pay_rial:
         lines.append(f"💳 مبلغِ دقیقِ واریز (ریال): <code>{pay_rial}</code>")
         lines.append(f"     (= {toman:,} تومان؛ برایِ کپی رویِ عدد بزن)")
+    if fee_toman > 0:
+        lines.append(f"ℹ️ شاملِ <b>{fee_toman:,}</b> تومان کارمزدِ درگاه؛ "
+                     f"<b>{credit_toman:,}</b> تومان به کیف پولت اضافه می‌شود.")
     if card:
         lines.append(f"🏦 شمارهٔ کارت: <code>{card}</code>")
     if holder:
@@ -332,6 +358,7 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
         if not ch.payment_id:
             return False, "این فاکتور شناسهٔ پرداخت ندارد.", 0
         payment_id, credit = ch.payment_id, int(ch.amount_toman or 0)
+        expected = credit + int(getattr(ch, "fee_toman", 0) or 0)   # PATCH_APAY_FEE_PAYER_V1
         inv_chat, inv_msg = ch.chat_id, ch.msg_id
 
     code, res = await verify_payment(token, payment_id)
@@ -343,7 +370,7 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
         return False, ("مهلتِ این فاکتور تمام شده و پرداختی ثبت نشد." if st == "expired"
                        else "هنوز پرداختی ثبت نشده است."), 0
     # تطبیق با سفارشِ خودمان — هرگز به مبلغِ اعلامی اعتماد نمی‌کنیم
-    if str(pay.get("order_id")) != order_id or int(pay.get("amount") or 0) != credit * 10:
+    if str(pay.get("order_id")) != order_id or int(pay.get("amount") or 0) != expected * 10:
         logger.error("apay: عدمِ تطابقِ پرداخت (bot=%s order=%s): %s", bot_id, order_id, pay)
         return False, "اطلاعاتِ پرداخت با فاکتور نمی‌خواند؛ با پشتیبانی تماس بگیر.", 0
 

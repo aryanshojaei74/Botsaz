@@ -140,3 +140,21 @@ async def test_availability_and_name(db):
     store["papay_enabled"] = "0"
     kb = await PB._platform_wallet_kb()
     assert not any(b.callback_data == "charge_papay" for r in kb.inline_keyboard for b in r)
+
+
+@pytest.mark.asyncio
+async def test_platform_buyer_fee(db, monkeypatch):
+    maker, store, paid = db
+    async with maker() as s:
+        ch = await s.scalar(select(models.PlatformApayCharge))
+        ch.fee_toman = 1_500
+        await s.commit()
+
+    async def v(tok, pid):
+        return _vr(amount=1_015_000)
+    monkeypatch.setattr(AP, "verify_payment", v)
+    assert (await PA.settle_charge("pbx1"))[0]
+    assert await _state(maker) == (100_000, "paid", 1)
+    assert await PA.fee_cfg() == ("seller", AP.FEE_TOMAN)
+    store["papay_fee_payer"] = "buyer"
+    assert (await PA.fee_cfg())[0] == "buyer"

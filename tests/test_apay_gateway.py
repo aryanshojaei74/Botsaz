@@ -320,3 +320,38 @@ async def test_fast_watch_settles_when_public_status_paid(db, monkeypatch):
             break
     assert (await _balance(maker))[:2] == (50_000, "paid")
     assert notified == [(777, 50_000, 50_000)]
+
+
+@pytest.mark.asyncio
+async def test_buyer_pays_fee_settles_on_total_credits_amount(db, monkeypatch):
+    """PATCH_APAY_FEE_PAYER_V1 — کارمزد با خریدار: آپی مبلغ+کارمزد، کیف پول فقط مبلغ."""
+    maker, notified = db
+    async with maker() as s:
+        ch = await s.scalar(select(models.ApayCharge))
+        ch.fee_toman = 1_500
+        await s.commit()
+
+    async def v_wrong(token, pid):
+        return _verify_resp(amount=500_000)              # بدونِ کارمزد → رد
+    monkeypatch.setattr(AP, "verify_payment", v_wrong)
+    assert not (await AP.settle_charge(5, "bsabc"))[0]
+
+    async def v(token, pid):
+        return _verify_resp(amount=515_000)              # (50,000 + 1,500) × 10
+    monkeypatch.setattr(AP, "verify_payment", v)
+    ok, _m, amt = await AP.settle_charge(5, "bsabc")
+    assert ok and amt == 50_000
+    assert (await _balance(maker))[:2] == (50_000, "paid")
+
+
+@pytest.mark.asyncio
+async def test_fee_cfg_and_invoice_line(db):
+    assert await AP.get_fee_cfg(5) == ("seller", AP.FEE_TOMAN)
+    await tenant.set_setting(5, "apay_fee_payer", "buyer")
+    await tenant.set_setting(5, "apay_fee_amount", "2000")
+    assert await AP.get_fee_cfg(5) == ("buyer", 2000)
+    assert AP.fee_for_buyer("buyer", 2000) == 2000 and AP.fee_for_buyer("seller", 2000) == 0
+    t, _kb = AP.invoice_view(title="آپی", pay_rial=520_340, card="", holder="", order_id="x",
+                             pay_url="https://p", check_cb="c", cancel_cb="x",
+                             fee_toman=2000, credit_toman=50_000)
+    assert "2,000" in t and "50,000" in t and "کارمزدِ درگاه" in t

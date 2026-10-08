@@ -30,6 +30,7 @@ class ApFSM(StatesGroup):
     min_amount = State()
     max_amount = State()
     display_name = State()   # === PATCH_APAY_DISPLAY_NAME_V1 ===
+    fee_amount = State()     # === PATCH_APAY_FEE_PAYER_V1 ===
 
 
 APAY_BOT = "APayGateBot"
@@ -63,6 +64,7 @@ async def _menu_content(bot_id: int):
     max_amount = await AP.get_max_amount(bot_id)
     hook = await AP.webhook_url(bot_id)
     disp = await get_display_name(bot_id)
+    fee_payer, fee_amt = await AP.get_fee_cfg(bot_id)   # PATCH_APAY_FEE_PAYER_V1
 
     txt = ("💳 <b>درگاهِ آپی (کارت‌به‌کارتِ آنی)</b>\n\n"
            "کاربر مبلغ را وارد می‌کند، در صفحهٔ پرداختِ آپی شمارهٔ کارتِ تو را می‌بیند و "
@@ -71,6 +73,7 @@ async def _menu_content(bot_id: int):
            f"وضعیت: {'✅ فعال' if on else '❌ غیرفعال'}\n"
            f"🔑 توکنِ API: <code>{_mask(tok)}</code>\n"
            f"🏷 اسمِ نمایشی برایِ کاربر: <b>{disp}</b>\n"
+           f"💸 کارمزدِ هر پرداخت: <b>{fee_amt:,}</b> تومان — پرداخت توسطِ <b>{AP.FEE_PAYERS[fee_payer]}</b>\n"
            f"🔐 کلیدِ وب‌هوک: {'✅ ثبت شده' if sec else '— (اختیاری؛ بدونِ آن هم با استعلام کار می‌کند)'}\n"
            f"🔽 حداقلِ مبلغ: <b>{min_amount:,}</b> تومان\n"
            f"🔼 حداکثرِ مبلغ: <b>{(f'{max_amount:,}' if max_amount else 'بدونِ سقف')}</b>\n"
@@ -94,6 +97,10 @@ async def _menu_content(bot_id: int):
                               callback_data="ap:setsecret", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text=f"🏷 اسمِ نمایشی: {disp}",
                               callback_data="ap:setname", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text=("💸 کارمزد با: " + ("👤 خریدار" if fee_payer == "buyer" else "🏪 فروشنده")),
+                              callback_data="ap:feepayer", style=ButtonStyle.PRIMARY),
+         InlineKeyboardButton(text=f"💸 مبلغِ کارمزد: {fee_amt:,}",
+                              callback_data="ap:feeamt", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text=f"🔽 حداقل: {min_amount:,}",
                               callback_data="ap:setmin", style=ButtonStyle.PRIMARY),
          InlineKeyboardButton(text=f"🔼 حداکثر: {max_amount:,}" if max_amount else "🔼 حداکثر: بدونِ سقف",
@@ -318,6 +325,52 @@ async def ap_setmax_save(msg: Message, bot: Bot, state: FSMContext):
     await _show(msg, row.id)
 
 
+# === PATCH_APAY_FEE_PAYER_V1 ===
+@apay_router.callback_query(F.data == "ap:feepayer")
+async def ap_feepayer(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    payer, _a = await AP.get_fee_cfg(row.id)
+    nxt = "seller" if payer == "buyer" else "buyer"
+    await AP._set(row.id, "apay_fee_payer", nxt)
+    await cb.answer("کارمزد از این پس با " + ("خریدار است (رویِ فاکتور اضافه می‌شود)" if nxt == "buyer"
+                                              else "فروشنده است (از کیف پولِ آپیِ شما)"), show_alert=True)
+    await _show(cb, row.id)
+
+
+@apay_router.callback_query(F.data == "ap:feeamt")
+async def ap_feeamt(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok, smart_cancel_kb
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    _p, cur = await AP.get_fee_cfg(row.id)
+    await state.set_state(ApFSM.fee_amount)
+    await cb.message.answer(
+        f"💸 مبلغِ کارمزدِ هر پرداخت را به تومان بفرست (فعلاً: <b>{cur:,}</b>).\n"
+        f"کارمزدِ فعلیِ خودِ آپی {AP.FEE_TOMAN:,} تومان است. این عدد فقط وقتی «کارمزد با خریدار» "
+        "باشد رویِ فاکتورِ مشتری اضافه می‌شود.",
+        reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
+    await cb.answer()
+
+
+@apay_router.message(ApFSM.fee_amount, F.text)
+async def ap_feeamt_save(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok, fa_to_int
+    row = await _owner_ok(msg, bot)
+    await state.clear()
+    if not row:
+        return
+    n = fa_to_int(msg.text)
+    if n is None or n < 0 or n > 1_000_000:
+        return await msg.answer("عددِ نامعتبر. دوباره امتحان کن.")
+    await AP._set(row.id, "apay_fee_amount", str(int(n)))
+    await msg.answer(f"✅ کارمزد رویِ {int(n):,} تومان تنظیم شد.")
+    await _show(msg, row.id)
+
+
 # === PATCH_APAY_DISPLAY_NAME_V1 ===
 @apay_router.callback_query(F.data == "ap:setname")
 async def ap_setname(cb: CallbackQuery, bot: Bot, state: FSMContext):
@@ -499,16 +552,20 @@ async def apu_amount(msg: Message, bot: Bot, state: FSMContext):
         return await msg.answer("درگاه تنظیم نشده است.")
 
     oid = AP.new_order_id()
+    _payer, _famt = await AP.get_fee_cfg(row.id)          # PATCH_APAY_FEE_PAYER_V1
+    fee = AP.fee_for_buyer(_payer, _famt)
+    if int(amount) + fee > AP.API_MAX_TOMAN:
+        return await msg.answer(f"حداکثرِ مبلغ با کارمزد {AP.API_MAX_TOMAN:,} تومان است.")
     wait = await msg.answer("⏳ در حالِ ساختِ فاکتور…")
     code, res = await AP.create_payment(
-        token, amount_toman=int(amount), order_id=oid,
+        token, amount_toman=int(amount) + fee, order_id=oid,
         description="شارژ کیف پول",   # بدونِ آیدیِ کاربر؛ در صفحهٔ پرداخت دیده می‌شود
         callback_url=await AP.webhook_url(row.id),
         return_url=(f"https://t.me/{row.username}" if row.username else ""))
     if code == 400 and isinstance(res, dict) and (res.get("error") or {}).get("code") == "invalid_url":
         # دامنهٔ وب‌هوک را نپذیرفت؛ بدونِ callback (با استعلامِ دوره‌ای) دوباره
         code, res = await AP.create_payment(
-            token, amount_toman=int(amount), order_id=oid,
+            token, amount_toman=int(amount) + fee, order_id=oid,
             return_url=(f"https://t.me/{row.username}" if row.username else ""))
     if code not in (200, 201) or not isinstance(res, dict) or not res.get("pay_url"):
         logger.warning("apay: ساختِ پرداخت ناموفق (bot=%s): %s %s", row.id, code, str(res)[:300])
@@ -518,7 +575,7 @@ async def apu_amount(msg: Message, bot: Bot, state: FSMContext):
     async with Session() as s:
         s.add(ApayCharge(
             bot_id=row.id, user_telegram_id=msg.from_user.id, order_id=oid,
-            payment_id=str(res.get("id") or ""), amount_toman=int(amount),
+            payment_id=str(res.get("id") or ""), amount_toman=int(amount), fee_toman=fee,
             pay_amount_rial=pay_rial or None, pay_url=str(res["pay_url"])[:300],
             status="waiting"))
         await s.commit()
@@ -531,7 +588,7 @@ async def apu_amount(msg: Message, bot: Bot, state: FSMContext):
     text, kb = AP.invoice_view(
         title=await get_display_name(row.id), pay_rial=pay_rial, card=card, holder=holder,
         order_id=oid, pay_url=str(res["pay_url"]), check_cb=f"apu:check:{oid}",
-        cancel_cb=f"apu:cancel:{oid}")
+        cancel_cb=f"apu:cancel:{oid}", fee_toman=fee, credit_toman=int(amount))
     sent = await msg.answer(text, reply_markup=kb, parse_mode="HTML")
     # === PATCH_APAY_FAST_WATCH_V1 ===
     try:
