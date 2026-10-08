@@ -203,3 +203,47 @@ async def test_guide_pages(db, monkeypatch):
     assert any(b.url == AA.APK_URL for r in kb.inline_keyboard for b in r)
     t, _kb = await AA._guide_content(5, "ios")
     assert "hook/sms/KEY" in t and "Shortcuts" in t
+
+
+@pytest.mark.asyncio
+async def test_guide_uses_site_links(db, monkeypatch):
+    import tenant.gateways.custom_domain as cd
+    monkeypatch.setattr(cd, "Session", db[0])
+    from tenant.gateways import apay_admin as AA
+
+    async def links():
+        return {"ios": "https://www.icloud.com/shortcuts/abc", "apk": "https://apaygate.shop/download/x.apk"}
+    monkeypatch.setattr(AP, "site_links", links)
+    t, kb = await AA._guide_content(5, "ios")
+    urls = [b.url for r in kb.inline_keyboard for b in r]
+    assert "https://www.icloud.com/shortcuts/abc" in urls and "Add Shortcut" in t
+    t, kb = await AA._guide_content(5, "android")
+    assert "https://apaygate.shop/download/x.apk" in [b.url for r in kb.inline_keyboard for b in r]
+    assert "Install anyway" in t
+
+
+@pytest.mark.asyncio
+async def test_site_links_parse_and_cache(monkeypatch):
+    body = 'window.APAY={"bot":"https://t.me/APayGateBot","ios":"https://www.icloud.com/shortcuts/z","apk":"/download/apay-forwarder.apk"};'
+    calls = []
+
+    class R:
+        status = 200
+        async def text(self): return body
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+
+    class S:
+        def __init__(self, *a, **k): pass
+        def get(self, url):
+            calls.append(url)
+            return R()
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+    monkeypatch.setattr(AP.aiohttp, "ClientSession", S)
+    monkeypatch.setattr(AP, "_SITE_CACHE", {"at": 0.0, "data": {}})
+    d = await AP.site_links()
+    assert d == {"ios": "https://www.icloud.com/shortcuts/z",
+                 "apk": "https://apaygate.shop/download/apay-forwarder.apk"}
+    await AP.site_links()
+    assert calls == ["https://apaygate.shop/config.js"]       # کش

@@ -166,6 +166,48 @@ async def validate_token(token: str) -> tuple[bool, str]:
     return True, msg
 
 
+# === PATCH_APAY_SITE_LINKS_V1 ===
+# لینکِ شورتکاتِ امضاشدهٔ آیفون و APK را خودِ سایتِ آپی در /config.js منتشر می‌کند
+# (window.APAY={"bot":…,"ios":…,"apk":…})؛ از همان‌جا می‌خوانیم تا هر بار که آپی
+# فایل را عوض کرد، دکمه بدونِ آپدیتِ ربات به نسخهٔ تازه برود.
+_SITE_CACHE: dict = {"at": 0.0, "data": {}}
+_SITE_TTL_OK, _SITE_TTL_FAIL = 3600.0, 300.0
+
+
+def _abs_site(u: str) -> str:
+    u = (u or "").strip()
+    if not u:
+        return ""
+    if u.startswith("/"):
+        return BASE_URL + u
+    return u if u.startswith("https://") else ""
+
+
+async def site_links() -> dict:
+    """{'ios': url|'', 'apk': url|''} — از کش؛ در خطا خالی (دکمه پنهان/پیش‌فرض)."""
+    import json
+    import re
+    now = time.monotonic()
+    ttl = _SITE_TTL_OK if _SITE_CACHE["data"] else _SITE_TTL_FAIL
+    if _SITE_CACHE["at"] and now - _SITE_CACHE["at"] < ttl:
+        return _SITE_CACHE["data"]
+    data: dict = {}
+    if aiohttp is not None:
+        try:
+            t = aiohttp.ClientTimeout(total=6)
+            async with aiohttp.ClientSession(timeout=t) as s:
+                async with s.get(f"{BASE_URL}/config.js") as r:
+                    body = await r.text() if r.status == 200 else ""
+            m = re.search(r"\{.*\}", body or "", re.S)
+            cfg = json.loads(m.group(0)) if m else {}
+            data = {"ios": _abs_site(cfg.get("ios", "")), "apk": _abs_site(cfg.get("apk", ""))}
+        except Exception as e:
+            logger.info("apay: خواندنِ config.js ِ سایت ناموفق بود: %s", e)
+            data = {}
+    _SITE_CACHE.update(at=now, data=data)
+    return data
+
+
 async def webhook_url(bot_id: int) -> str:
     from tenant.gateways.custom_domain import get_bot_webhook_base
     base = (await get_bot_webhook_base(bot_id) or "").rstrip("/")

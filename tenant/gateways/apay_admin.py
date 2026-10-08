@@ -33,7 +33,8 @@ class ApFSM(StatesGroup):
 
 APAY_BOT = "APayGateBot"
 APK_URL = "https://apaygate.shop/download/apay-forwarder.apk"
-# فایلِ آمادهٔ شورتکاتِ آیفون؛ تا وقتی خالی است فقط راهنمایِ ساختِ دستی نشان داده می‌شود
+# لینکِ شورتکاتِ امضاشدهٔ آیفون از /config.js ِ سایتِ آپی خوانده می‌شود (AP.site_links)؛
+# این فقط برایِ جایگزینیِ دستی است اگر روزی لازم شد.
 IOS_SHORTCUT_URL = ""
 
 
@@ -108,10 +109,14 @@ async def _guide_content(bot_id: int, page: str):
     back = [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="ap:guide",
                                  style=ButtonStyle.DANGER)]
     bot_btn = [InlineKeyboardButton(text="🤖 رباتِ آپی", url=f"https://t.me/{APAY_BOT}")]
+    links = await AP.site_links() if page in ("android", "ios") else {}
     if page == "android":
         txt = ("🤖 <b>اتصالِ گوشیِ اندروید</b>\n\n"
                "گوشی‌ای را انتخاب کن که سیم‌کارتِ پیامکِ بانکت رویِ آن است (اندروید ۷ به بالا).\n\n"
                "۱. اپِ آپی را با دکمهٔ «📥 دانلودِ اپ اندروید» نصب کن و دسترسیِ پیامک را بده.\n"
+               "   🛡 اگر موقعِ نصب هشدارِ امنیتی (Play Protect / «برنامهٔ ناامن») آمد، "
+               "«جزئیاتِ بیشتر» را بزن و <b>«در هر صورت نصب شود» (Install anyway)</b> را انتخاب کن. "
+               "این هشدار فقط تا گرفتنِ تأییدِ امنیتیِ گوگل نمایش داده می‌شود و بعد از آن دیگر نمی‌آید.\n"
                f"۲. در @{APAY_BOT} از بخشِ «💳 کارت‌ها» کارت را انتخاب کن تا لینکِ اتصال "
                "(<code>apaygate.shop/pair/…</code>) را بدهد.\n"
                "۳. لینک را رویِ همان گوشی باز کن و «باز کردن در اپ» را بزن "
@@ -120,30 +125,43 @@ async def _guide_content(bot_id: int, page: str):
                "۵. ⚠️ بهینه‌سازیِ باتری را برایِ اپ خاموش و «اجرایِ خودکار / auto-start» را روشن کن؛ "
                "در شیائومی، سامسونگ، هوآوی و… وگرنه گوشی اپ را می‌بندد و پیامک‌ها نمی‌رسند.\n\n"
                "✅ اگر گوشی خاموش یا بی‌اینترنت باشد، پیامک‌ها در صف می‌مانند و به‌محضِ وصل‌شدن ارسال می‌شوند.")
-        rows = [[InlineKeyboardButton(text="📥 دانلودِ اپ اندروید", url=APK_URL)], bot_btn, back]
+        rows = [[InlineKeyboardButton(text="📥 دانلودِ اپ اندروید", url=links.get("apk") or APK_URL)],
+                bot_btn, back]
     elif page == "ios":
-        txt = ("🍎 <b>اتصالِ آیفون (شورتکات)</b>\n\n"
-               + ("" if IOS_SHORTCUT_URL else
-                  "⏳ فایلِ آمادهٔ شورتکات به‌زودی همین‌جا گذاشته می‌شود؛ فعلاً شورتکات را دستی بساز:\n\n")
-               + f"۱. در @{APAY_BOT} از بخشِ «گوشی‌ها» یک <b>آیفون</b> اضافه کن و "
-               "<b>کلیدِ گوشی</b> (کدِ اتصال) را کپی کن.\n"
-               "۲. اپِ <b>Shortcuts</b> ← تبِ <b>Automation</b> ← <b>New Automation</b> ← <b>Message</b>.\n"
-               "۳. در <b>Sender</b> فرستندهٔ پیامکِ بانک را انتخاب کن، "
-               "<b>Run Immediately</b> را روشن کن و <b>Next</b> ← <b>New Blank Automation</b>.\n"
-               "۴. اکشنِ <b>Get Contents of URL</b> را اضافه کن و این آدرس را بنویس "
-               "(به‌جایِ KEY کلیدِ گوشی را بگذار):\n"
-               "<code>https://apaygate.shop/hook/sms/KEY</code>\n"
-               "۵. رویِ فلشِ اکشن بزن: <b>Method</b> = <b>POST</b> و <b>Request Body</b> = <b>JSON</b>.\n"
-               "۶. دو فیلد از نوعِ Text اضافه کن:\n"
-               "   • <code>message</code> ← مقدار: <b>Shortcut Input</b> و از رویش <b>Content</b> را انتخاب کن\n"
-               "   • <code>sender</code> ← مقدار: <b>Shortcut Input</b> و از رویش <b>Sender</b> را انتخاب کن\n"
-               "۷. <b>Done</b> را بزن. با یک واریزِ کوچک تست کن؛ گوشی در رباتِ آپی 🟢 می‌شود.\n\n"
-               "⚠️ آیفون پیامک‌هایِ ناموفق را دوباره نمی‌فرستد: اگر هنگامِ رسیدنِ پیامک گوشی خاموش "
-               "یا بی‌اینترنت باشد، آن پرداخت خودکار تأیید نمی‌شود. برایِ فروشِ زیاد گوشیِ اندروید بهتر است.")
-        rows = []
-        if IOS_SHORTCUT_URL:
-            rows.append([InlineKeyboardButton(text="➕ افزودنِ شورتکاتِ آپی", url=IOS_SHORTCUT_URL)])
-        rows += [bot_btn, back]
+        ios_url = IOS_SHORTCUT_URL or links.get("ios") or ""
+        warn = ("⚠️ آیفون پیامک‌هایِ ناموفق را دوباره نمی‌فرستد: اگر هنگامِ رسیدنِ پیامک گوشی خاموش "
+                "یا بی‌اینترنت باشد، آن پرداخت خودکار تأیید نمی‌شود. برایِ فروشِ زیاد گوشیِ اندروید بهتر است.")
+        if ios_url:
+            txt = ("🍎 <b>اتصالِ آیفون (شورتکات)</b>\n\n"
+                   f"۱. در @{APAY_BOT} از بخشِ «گوشی‌ها» یک <b>آیفون</b> اضافه کن و "
+                   "<b>کدِ اتصال</b> (کلیدِ گوشی) را کپی کن.\n"
+                   "۲. دکمهٔ «➕ افزودنِ شورتکاتِ آپی» را بزن و در اپِ Shortcuts «<b>Add Shortcut</b>» را بزن.\n"
+                   "۳. شورتکاتِ «APay» را یک‌بار اجرا کن، «🔑 تنظیمات» را بزن و کدِ اتصال را paste کن؛ "
+                   "باید «وصل شد» ببینی.\n"
+                   "۴. اپِ <b>Shortcuts</b> ← <b>Automation</b> ← <b>New Automation</b> ← <b>Message</b>؛ "
+                   "در <b>Sender</b> فرستندهٔ پیامکِ بانک را انتخاب کن، <b>Run Immediately</b> را روشن کن "
+                   "و شورتکاتِ «APay» را به‌عنوانِ کار انتخاب کن.\n"
+                   "۵. در شورتکات «🧪 تستِ اتصال» را بزن؛ گوشی در رباتِ آپی 🟢 می‌شود.\n\n" + warn)
+            rows = [[InlineKeyboardButton(text="➕ افزودنِ شورتکاتِ آپی", url=ios_url)], bot_btn, back]
+        else:
+            txt = ("🍎 <b>اتصالِ آیفون (شورتکات)</b>\n\n"
+                   "لینکِ شورتکات الان از سایتِ آپی در دسترس نیست؛ می‌توانی آن را از صفحهٔ "
+                   "<code>apaygate.shop/docs#ios</code> بگیری یا دستی بسازی:\n\n"
+                   f"۱. در @{APAY_BOT} از بخشِ «گوشی‌ها» یک <b>آیفون</b> اضافه کن و "
+                   "<b>کلیدِ گوشی</b> (کدِ اتصال) را کپی کن.\n"
+                   "۲. اپِ <b>Shortcuts</b> ← تبِ <b>Automation</b> ← <b>New Automation</b> ← <b>Message</b>.\n"
+                   "۳. در <b>Sender</b> فرستندهٔ پیامکِ بانک را انتخاب کن، "
+                   "<b>Run Immediately</b> را روشن کن و <b>Next</b> ← <b>New Blank Automation</b>.\n"
+                   "۴. اکشنِ <b>Get Contents of URL</b> را اضافه کن و این آدرس را بنویس "
+                   "(به‌جایِ KEY کلیدِ گوشی را بگذار):\n"
+                   "<code>https://apaygate.shop/hook/sms/KEY</code>\n"
+                   "۵. رویِ فلشِ اکشن بزن: <b>Method</b> = <b>POST</b> و <b>Request Body</b> = <b>JSON</b>.\n"
+                   "۶. دو فیلد از نوعِ Text اضافه کن:\n"
+                   "   • <code>message</code> ← مقدار: <b>Shortcut Input</b> و از رویش <b>Content</b> را انتخاب کن\n"
+                   "   • <code>sender</code> ← مقدار: <b>Shortcut Input</b> و از رویش <b>Sender</b> را انتخاب کن\n"
+                   "۷. <b>Done</b> را بزن. با یک واریزِ کوچک تست کن؛ گوشی در رباتِ آپی 🟢 می‌شود.\n\n" + warn)
+            rows = [[InlineKeyboardButton(text="🌐 راهنمایِ آیفون در سایتِ آپی",
+                                          url="https://apaygate.shop/docs#ios")], bot_btn, back]
     else:
         txt = ("📖 <b>راهنمایِ درگاهِ آپی</b>\n\n"
                f"۱. در @{APAY_BOT} استارت بزن و ثبت‌نام کن.\n"
