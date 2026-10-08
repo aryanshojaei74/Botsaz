@@ -262,8 +262,8 @@ def test_invoice_view_layout():
     t, kb = AP.invoice_view(title="آپی", pay_rial=100_610, card="5047061135056063", holder="آریان شجاعی",
                             order_id="bs1", pay_url="https://apaygate.shop/p/x",
                             check_cb="apu:check:bs1", cancel_cb="apu:cancel:bs1")
-    assert "مبلغِ شارژ" not in t and "100,610" in t and "10,061 تومان" in t
-    assert "5047 0611 3505 6063" in t and "آریان شجاعی" in t
+    assert "مبلغِ شارژ" not in t and "<code>100610</code>" in t and "10,061 تومان" in t
+    assert "<code>5047061135056063</code>" in t and "آریان شجاعی" in t
     copies = [b.copy_text.text for r in kb.inline_keyboard for b in r if b.copy_text]
     assert copies == ["5047061135056063", "100610"]
     t2, kb2 = AP.invoice_view(title="آپی", pay_rial=100_610, card="", holder="", order_id="bs1",

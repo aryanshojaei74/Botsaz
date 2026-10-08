@@ -268,12 +268,15 @@ def invoice_view(*, title: str, pay_rial: int, card: str, holder: str, order_id:
     from aiogram.types import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
     from aiogram.enums import ButtonStyle
     toman = pay_rial // 10 if pay_rial % 10 == 0 else pay_rial / 10
-    card_fmt = " ".join(card[i:i + 4] for i in range(0, len(card), 4)) if card else ""
     lines = [f"🧾 <b>فاکتورِ شارژِ کیف پول — {title}</b>", "➖➖➖➖➖➖➖➖➖➖", ""]
+    # === PATCH_APAY_INVOICE_TAP_COPY_V1 ===
+    # کارت بدونِ فاصله: گروه‌هایِ ۴رقمیِ جداشده با فاصله در متنِ راست‌به‌چپ برعکس چیده می‌شدند.
+    # مبلغ و کارت داخلِ <code> اند تا با یک لمس دقیقاً همان رقم‌ها (بدونِ ویرگول) کپی شوند.
     if pay_rial:
-        lines.append(f"💳 مبلغِ دقیقِ واریز: <b>{pay_rial:,}</b> ریال (= {toman:,} تومان)")
+        lines.append(f"💳 مبلغِ دقیقِ واریز (ریال): <code>{pay_rial}</code>")
+        lines.append(f"     (= {toman:,} تومان؛ برایِ کپی رویِ عدد بزن)")
     if card:
-        lines.append(f"🏦 شمارهٔ کارت: <code>{card_fmt}</code>")
+        lines.append(f"🏦 شمارهٔ کارت: <code>{card}</code>")
     if holder:
         lines.append(f"👤 به نامِ: <b>{holder}</b>")
     lines += [f"🔑 کدِ پیگیری: <code>{order_id}</code>", ""]
