@@ -245,6 +245,8 @@ def md_to_html(text: str) -> str:
 async def ask_ai(provider: str, api_key: str, question: str, context: str = "",
                 system_prompt: str | None = None) -> str | None:
     """سؤال را با context اختصاصی همان ربات به ارائه‌دهنده می‌فرستد."""
+    # PATCH_AI_KEY_STRIP_V1 — کلیدِ کپی‌شده با «\n» در هدر خطایِ ValueError می‌داد
+    api_key = "".join((api_key or "").split())
     if not aiohttp or not api_key:
         return None
     fn = _PROVIDER_FUNCS.get(provider)

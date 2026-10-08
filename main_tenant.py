@@ -446,11 +446,11 @@ def _log_unauthorized(tbot) -> None:
 _MISSING_CLIENT_LOGGED: dict[int, float] = {}
 
 
-def _missing_client_should_log(account_id: int) -> bool:
+def _missing_client_should_log(account_id) -> bool:
     """هشدارِ «کلاینت رویِ پنل نیست» برایِ هر حساب حداکثر روزی یک‌بار.
     PATCH_LOG_THROTTLE_PERSIST_V1: زمان رویِ دیسک می‌ماند تا ری‌استارت/پروسهٔ دیگر دوباره لاگ نکند."""
     from log_throttle import should_log
-    return should_log(f"vpnmiss:{int(account_id)}", 86_400)
+    return should_log(f"vpnmiss:{account_id}", 86_400)
 
 
 async def vpn_expiry_loop():
@@ -564,11 +564,14 @@ async def vpn_expiry_loop():
                         # حالت قابلِ‌ردیابی باشد، نه یک سکوتِ کاملاً نامرئی.
                         # هر دور (هر ~۲۰ دقیقه) برایِ همان حساب تکرار می‌شد و error.log
                         # را با ده‌ها هزار خطِ تکراری پر می‌کرد؛ حالا روزی یک‌بار.
-                        if c is None and _missing_client_should_log(aid):
+                        # PATCH_VPN_MISSING_CLIENT_SUMMARY_V1 — هزاران حسابِ حذف‌شده رویِ پنل روزی
+                        # ده‌ها هزار خط می‌ساخت؛ حالا برایِ هر (ربات، پنل) روزی یک خط.
+                        if c is None and _missing_client_should_log(f"{bot_id}:{panel_key}"):
                             logger.warning(
-                                "vpn_expiry_loop: پنلِ %s هیچ کلاینتی با email=%r برای "
-                                "PanelAccount#%s (bot_id=%s) برنگرداند — هشدارِ حجم/انقضا "
-                                "برایِ این حساب رد شد.", panel_key, email, aid, bot_id)
+                                "vpn_expiry_loop: پنلِ %s (bot_id=%s) برایِ بعضی حساب‌ها (مثلاً %r، "
+                                "PanelAccount#%s) کلاینتی برنگرداند — احتمالاً رویِ پنل حذف شده‌اند؛ "
+                                "هشدارِ حجم/انقضایشان رد شد (روزی یک‌بار گزارش می‌شود).",
+                                panel_key, bot_id, email, aid)
                         tr = (c.get("traffic") if c and isinstance(c.get("traffic"), dict)
                               else c) if c else None
                         up = int(tr.get("up", 0) or 0) if tr else 0
