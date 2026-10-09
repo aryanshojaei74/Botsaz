@@ -296,3 +296,35 @@ async def test_partner_invoice_created_and_expired_order_rejected(partner, monke
     async with maker() as s:
         o = await s.get(models.PartnerStockOrder, 7)
     assert o.status == "rejected"
+
+
+# === PATCH_APAY_ASK_CLEANUP_V1 ===
+@pytest.mark.asyncio
+async def test_auto_settle_deletes_admin_ask_message(db, monkeypatch):
+    maker, _st, paid = db
+    deleted = []
+
+    async def drop(chat, msg):
+        deleted.append((chat, msg))
+    monkeypatch.setattr(PA, "_drop_admin_ask", drop)
+    async with maker() as s:
+        ch = await s.scalar(select(models.PlatformApayCharge))
+        ch.admin_ask_chat, ch.admin_ask_msg = 777, 4321
+        await s.commit()
+
+    async def v(tok, pid):
+        return _vr()
+    monkeypatch.setattr(AP, "verify_payment", v)
+    assert (await PA.settle_charge("pbx1"))[0]
+    assert deleted == [(777, 4321)]
+
+
+@pytest.mark.asyncio
+async def test_partner_manual_confirm_approves_order_not_wallet(partner, monkeypatch):
+    maker, _sent = partner
+    ok, _m = await PA.manual_settle(2, 777)         # id=2: شارژِ همکار (اولی کیف پول است)
+    async with maker() as s:
+        o = await s.get(models.PartnerStockOrder, 7)
+        u = await s.scalar(select(models.PlatformUser).where(models.PlatformUser.telegram_id == 42))
+    assert ok and o.status == "approved" and float(u.balance) == 0
+    assert not (await PA.manual_settle(2, 777))[0]

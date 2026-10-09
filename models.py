@@ -1579,6 +1579,9 @@ class ApayCharge(Base):
     paid_at: Mapped[datetime | None] = mapped_column(DateTime)
     # === PATCH_APAY_ADMIN_ASK_V1 === پرسشِ «واریز شد؟» از ادمین بعد از ۵ دقیقه (یک‌بار)
     admin_asked_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # === PATCH_APAY_ASK_CLEANUP_V1 === پیامِ «واریز شد؟»ی ادمین؛ با تسویهٔ خودکار پاک می‌شود
+    admin_ask_chat: Mapped[int | None] = mapped_column(BigInteger)
+    admin_ask_msg: Mapped[int | None] = mapped_column(BigInteger)
 
 
 # === PATCH_ABANGATEWAY_V1 ===
@@ -2468,6 +2471,8 @@ class PlatformApayCharge(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     paid_at: Mapped[datetime | None] = mapped_column(DateTime)
     admin_asked_at: Mapped[datetime | None] = mapped_column(DateTime)   # PATCH_APAY_ADMIN_ASK_V1
+    admin_ask_chat: Mapped[int | None] = mapped_column(BigInteger)       # PATCH_APAY_ASK_CLEANUP_V1
+    admin_ask_msg: Mapped[int | None] = mapped_column(BigInteger)
     # === PATCH_PARTNER_APAY_V1 === «wallet» = شارژِ کیف پول | «partner_order» = خریدِ عمدهٔ همکار ( ref_id = PartnerStockOrder.id)
     purpose: Mapped[str] = mapped_column(String(20), default="wallet", server_default="wallet")
     ref_id: Mapped[int | None] = mapped_column(Integer)

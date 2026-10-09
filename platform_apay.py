@@ -139,6 +139,7 @@ async def settle_charge(order_id: str) -> tuple[bool, str, int]:
         expected = credit + int(ch.fee_toman or 0)     # PATCH_APAY_FEE_PAYER_V1
         chat_id, msg_id = ch.chat_id, ch.msg_id
         purpose, ref_id = (ch.purpose or "wallet"), ch.ref_id
+        ask_chat, ask_msg = ch.admin_ask_chat, ch.admin_ask_msg      # PATCH_APAY_ASK_CLEANUP_V1
 
     code, res = await AP.verify_payment(token, payment_id)
     if code != 200 or not isinstance(res, dict):
@@ -152,7 +153,10 @@ async def settle_charge(order_id: str) -> tuple[bool, str, int]:
         return False, "اطلاعاتِ پرداخت با فاکتور نمی‌خواند؛ با پشتیبانی تماس بگیر.", 0
 
     if purpose == "partner_order":      # === PATCH_PARTNER_APAY_V1 ===
-        return await _settle_partner_order(order_id, ref_id, tg_id, credit, chat_id, msg_id)
+        _r = await _settle_partner_order(order_id, ref_id, tg_id, credit, chat_id, msg_id)
+        if _r[0]:
+            await _drop_admin_ask(ask_chat, ask_msg)
+        return _r
 
     from platform_bot import get_user
     async with Session() as s:
@@ -169,8 +173,26 @@ async def settle_charge(order_id: str) -> tuple[bool, str, int]:
                                + (" (پیامکِ دیرهنگام)" if pay.get("late") else "")))
         new_bal, uname, ufull = float(u.balance), u.username, u.full_name
         await s.commit()
+    await _drop_admin_ask(ask_chat, ask_msg)
     await _after_paid(tg_id, credit, new_bal, uname, ufull, chat_id, msg_id)
     return True, "پرداخت تأیید و کیف پول شارژ شد.", credit
+
+
+async def _drop_admin_ask(chat_id, msg_id) -> None:
+    """=== PATCH_APAY_ASK_CLEANUP_V1 === فاکتور خودکار تسویه شد → پیامِ «واریز شد؟»یِ مدیر پاک می‌شود
+    تا دوباره رویش «تأیید» نزند (و کیف پول دوبار شارژ نشود)."""
+    if not (chat_id and msg_id):
+        return
+    try:
+        from config import PLATFORM_BOT_TOKEN
+        from aiogram import Bot as _B
+        b = _B(token=PLATFORM_BOT_TOKEN)
+        try:
+            await b.delete_message(chat_id=int(chat_id), message_id=int(msg_id))
+        finally:
+            await b.session.close()
+    except Exception:
+        logger.info("platform apay: حذفِ پیامِ پرسش از مدیر ممکن نشد")
 
 
 # === PATCH_PARTNER_APAY_V1 === خریدِ عمدهٔ همکار با آپی
@@ -799,13 +821,20 @@ async def ask_admin_pending() -> int:
         if int(ch.user_telegram_id) == int(PLATFORM_ADMIN_ID):
             continue
         who = ("@" + u.username) if u and u.username else ((u.full_name if u else "") or "—")
+        if (ch.purpose or "wallet") == "partner_order":
+            who += f" — 🛒 خریدِ عمدهٔ همکار (سفارش #{ch.ref_id})"
         try:
             from main_platform import platform_bot
-            await platform_bot.send_message(PLATFORM_ADMIN_ID, AP.admin_ask_text(
+            _sent = await platform_bot.send_message(PLATFORM_ADMIN_ID, AP.admin_ask_text(
                 who=who, tg_id=ch.user_telegram_id, amount=ch.amount_toman, fee=ch.fee_toman or 0,
                 pay_rial=ch.pay_amount_rial, order_id=ch.order_id, status=ch.status,
                 created=ch.created_at),
                 reply_markup=AP.admin_ask_kb("papadm", cid))
+            if getattr(_sent, "message_id", None):
+                async with Session() as s:
+                    await s.execute(sa_update(PlatformApayCharge).where(PlatformApayCharge.id == cid).values(
+                        admin_ask_chat=int(PLATFORM_ADMIN_ID), admin_ask_msg=_sent.message_id))
+                    await s.commit()
             n += 1
         except Exception as e:
             logger.info("platform apay: پرسش از ادمین ناموفق بود: %s", e)
@@ -814,6 +843,26 @@ async def ask_admin_pending() -> int:
 
 async def manual_settle(charge_id: int, admin_uid: int) -> tuple[bool, str]:
     from platform_bot import get_user
+    async with Session() as s0:      # === PATCH_PARTNER_APAY_V1 === خریدِ عمدهٔ همکار → تأییدِ سفارش، نه شارژِ کیف پول
+        _c0 = await s0.get(PlatformApayCharge, charge_id)
+        _p0 = (_c0.purpose if _c0 else None) or "wallet"
+        _r0 = (_c0.ref_id, _c0.order_id, _c0.chat_id, _c0.msg_id, int(_c0.amount_toman or 0),
+               int(_c0.user_telegram_id)) if _c0 else None
+    if _r0 and _p0 == "partner_order":
+        ref_id, oid, c_chat, c_msg, amt, tg0 = _r0
+        async with Session() as s:
+            claim = await s.execute(sa_update(PlatformApayCharge).where(
+                PlatformApayCharge.id == charge_id, PlatformApayCharge.status != "paid"
+            ).values(status="paid", paid_at=datetime.utcnow()))
+            await s.commit()
+            if claim.rowcount == 0:
+                return False, "این فاکتور قبلاً تأیید شده است."
+        from platform_partner import pp_order_auto_approve
+        ok = await pp_order_auto_approve(int(ref_id), method_text="تأییدِ دستیِ ادمین (آپی)",
+                                         log_note="خرید عمده (تأییدِ دستیِ ادمین — آپی)")
+        await _delete_partner_invoice(ref_id, c_chat, c_msg)
+        return (True, f"✅ سفارشِ خریدِ عمده تأیید و موجودی افزوده شد ({amt:,} تومان).") if ok else \
+               (False, "پرداخت ثبت شد ولی سفارش pending نبود (قبلاً تأیید/رد شده).")
     async with Session() as s:
         claim = await s.execute(sa_update(PlatformApayCharge).where(
             PlatformApayCharge.id == charge_id, PlatformApayCharge.status != "paid"

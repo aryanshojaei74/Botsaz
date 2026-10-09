@@ -360,6 +360,7 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
         payment_id, credit = ch.payment_id, int(ch.amount_toman or 0)
         expected = credit + int(getattr(ch, "fee_toman", 0) or 0)   # PATCH_APAY_FEE_PAYER_V1
         inv_chat, inv_msg = ch.chat_id, ch.msg_id
+        ask_chat, ask_msg = ch.admin_ask_chat, ch.admin_ask_msg      # PATCH_APAY_ASK_CLEANUP_V1
 
     code, res = await verify_payment(token, payment_id)
     if code != 200 or not isinstance(res, dict):
@@ -396,6 +397,7 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
             await _ac(bot_id, kyc_uid)
         except Exception:
             logger.exception("apay: after_charge (KYC) ناموفق بود")
+    await _drop_admin_ask(bot_id, ask_chat, ask_msg)       # PATCH_APAY_ASK_CLEANUP_V1
     if uid:
         try:
             await _notify_paid(bot_id, uid, credit, bal, inv_chat, inv_msg)
@@ -606,25 +608,50 @@ async def ask_admin_pending() -> int:
             continue
         who = ("@" + u.username) if u and u.username else ((u.full_name if u else "") or "—")
         try:
-            await _send_owner(brow, admin_ask_text(
+            _sent = await _send_owner(brow, admin_ask_text(
                 who=who, tg_id=ch.user_telegram_id, amount=ch.amount_toman, fee=ch.fee_toman or 0,
                 pay_rial=ch.pay_amount_rial, order_id=ch.order_id, status=ch.status,
                 created=ch.created_at), admin_ask_kb("apadm", cid))
+            if getattr(_sent, "message_id", None):
+                async with Session() as s:
+                    await s.execute(sa_update(ApayCharge).where(ApayCharge.id == cid).values(
+                        admin_ask_chat=int(brow.owner_id), admin_ask_msg=_sent.message_id))
+                    await s.commit()
             n += 1
         except Exception as e:
             logger.info("apay: پرسش از ادمینِ ربات %s ناموفق بود: %s", ch.bot_id, e)
     return n
 
 
-async def _send_owner(brow, text: str, kb) -> None:
+async def _send_owner(brow, text: str, kb):
     from aiogram import Bot
     from aiogram.client.default import DefaultBotProperties
     from aiogram.enums import ParseMode
     tbot = Bot(token=brow.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
-        await tbot.send_message(int(brow.owner_id), text, reply_markup=kb)
+        return await tbot.send_message(int(brow.owner_id), text, reply_markup=kb)
     finally:
         await tbot.session.close()
+
+
+async def _drop_admin_ask(bot_id: int, chat_id, msg_id) -> None:
+    """=== PATCH_APAY_ASK_CLEANUP_V1 === فاکتور خودکار تسویه شد → پیامِ «واریز شد؟» پاک می‌شود
+    تا مالک دوباره رویش «تأیید» نزند."""
+    if not (chat_id and msg_id):
+        return
+    try:
+        async with Session() as s:
+            brow = await s.get(BotRow, bot_id)
+        if not brow:
+            return
+        from aiogram import Bot
+        tbot = Bot(token=brow.token)
+        try:
+            await tbot.delete_message(chat_id=int(chat_id), message_id=int(msg_id))
+        finally:
+            await tbot.session.close()
+    except Exception:
+        logger.info("apay: حذفِ پیامِ پرسش از ادمین ممکن نشد")
 
 
 async def manual_settle(bot_id: int, charge_id: int, admin_uid: int) -> tuple[bool, str]:

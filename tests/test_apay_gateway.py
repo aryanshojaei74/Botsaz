@@ -381,3 +381,33 @@ async def test_tenant_admin_ask_and_manual_settle(db, monkeypatch):
     assert (await AP.manual_settle(5, cid, 1))[0]
     assert not (await AP.manual_settle(5, cid, 1))[0]
     assert await _balance(maker) == (50_000, "paid", 1) and notified == [(777, 50_000, 50_000)]
+
+
+# === PATCH_APAY_ASK_CLEANUP_V1 ===
+@pytest.mark.asyncio
+async def test_tenant_auto_settle_deletes_owner_ask_message(db, monkeypatch):
+    maker, _n = db
+    dropped = []
+
+    class Sent:
+        message_id = 555
+
+    async def _so(brow, text, kb):
+        return Sent()
+
+    async def _drop(bot_id, chat, msg):
+        dropped.append((bot_id, chat, msg))
+    monkeypatch.setattr(AP, "_send_owner", _so)
+    monkeypatch.setattr(AP, "_drop_admin_ask", _drop)
+    from datetime import datetime, timedelta
+    async with maker() as s:
+        ch = await s.scalar(select(models.ApayCharge))
+        ch.created_at = datetime.utcnow() - timedelta(minutes=6)
+        await s.commit()
+    assert await AP.ask_admin_pending() == 1
+
+    async def _v(token, pid):
+        return _verify_resp()
+    monkeypatch.setattr(AP, "verify_payment", _v)
+    assert (await AP.settle_charge(5, "bsabc"))[0]
+    assert dropped == [(5, 1, 555)]
