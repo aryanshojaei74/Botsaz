@@ -153,6 +153,8 @@ router.include_router(blu_router)
 # === PATCH_PLATFORM_APAY_V1 ===
 from platform_apay import papay_router
 router.include_router(papay_router)
+from platform_promoters import promo_router   # PATCH_PLATFORM_PROMOTER_V1
+router.include_router(promo_router)
 
 # === PATCH_DICE_GAME_V1 ===
 # آخر از همه ثبت می‌شود تا هندلرِ «نوشتنِ نامِ بازی» فقط وقتی به آن
@@ -4125,6 +4127,14 @@ async def start(msg: Message, command: CommandObject, state: FSMContext, bot: Bo
     async with Session() as s:
         await get_user(s, msg.from_user.id, msg.from_user.full_name, referrer, username=msg.from_user.username)
         await s.commit()
+    # === PATCH_PLATFORM_PROMOTER_V1 === لینکِ معرفِ فروش: t.me/ربات?start=pr_کد
+    if command.args and command.args.startswith("pr_"):
+        try:
+            from platform_promoters import attach as _promo_attach, PREFIX as _PP
+            _pok, _ptxt = await _promo_attach(msg.from_user.id, command.args[len(_PP):])
+            await msg.answer(_ptxt)
+        except Exception:
+            logger.exception("اتصالِ کدِ معرف ناموفق بود")
         sa = await get_sub_admin(s, msg.from_user.id)
         u_row = await s.scalar(select(PlatformUser).where(PlatformUser.telegram_id == msg.from_user.id))
     show_admin = sa is not None
@@ -5403,6 +5413,7 @@ async def choose_plan(cb: CallbackQuery, state: FSMContext):
         await cb.answer(PLAN_SALE_LOCK_MSG, show_alert=True)
         return
     price = 0
+    promo_id, promo_pct = None, 0     # PATCH_PLATFORM_PROMOTER_V1
     trial_req_id = None
     trial_expires = None
     if plan == Plan.FREE.value:
@@ -5430,6 +5441,12 @@ async def choose_plan(cb: CallbackQuery, state: FSMContext):
                 await s.commit()
                 bal = float(u.balance)
             disc = referral_discount(refs or 0)
+            # === PATCH_PLATFORM_PROMOTER_V1 === تخفیفِ خریدِ اولِ معرف (بزرگ‌ترِ دو تخفیف)
+            from platform_promoters import promo_for as _promo_for, pct_with_promo as _pwp
+            _pinfo = await _promo_for(cb.from_user.id)
+            disc, _promo_hit = _pwp(disc, _pinfo)
+            promo_id = _pinfo.promoter_id if _promo_hit else None
+            promo_pct = _pinfo.percent if _promo_hit else 0
             base_after_plan_disc, _, _ = plan_price_final(plan)
             price = base_after_plan_disc * (100 - disc) // 100
             if bal < price:
@@ -5438,6 +5455,7 @@ async def choose_plan(cb: CallbackQuery, state: FSMContext):
                     f"موجودی کافی نیست. لازم: {rial(price)} (تخفیف {disc}٪). اول کیف پول را شارژ کن.",
                     show_alert=True)
                 return
+    await state.update_data(promo_id=promo_id, promo_pct=promo_pct)
     await state.update_data(plan=plan, price=price,
                             trial_req_id=trial_req_id,
                             trial_expires=(trial_expires.isoformat() if trial_expires else None))
@@ -5472,7 +5490,10 @@ async def choose_plan(cb: CallbackQuery, state: FSMContext):
             [hx_button("⬅️ انصراف", callback_data="freerules:cancel",
                                   style=ButtonStyle.DANGER)],
         ])
-        await cb.message.answer("🗓 مدت پلن را انتخاب کن:", reply_markup=kb)
+        await cb.message.answer(
+            "🗓 مدت پلن را انتخاب کن:"
+            + (f"\n\n🎁 تخفیفِ خریدِ اول ({promo_pct}٪) روی قیمت‌ها اعمال شده است." if promo_id else ""),
+            reply_markup=kb)
         await cb.answer()
         return
     await state.set_state(Create.token)
@@ -5745,8 +5766,28 @@ async def save_token(msg: Message, state: FSMContext):
                             plan=data["plan"], amount=price))
             s.add(PlatformTxn(user_telegram_id=msg.from_user.id, amount=-price, kind="purchase",
                               note=f"ساخت ربات با پلن {data['plan']}"))
+            # === PATCH_PLATFORM_PROMOTER_V1 === مصرفِ تخفیفِ خریدِ اول
+            _promo_used = None
+            if data.get("promo_id"):
+                from platform_promoters import PromoInfo as _PI, finalize as _pfin
+                _pi = _PI(int(data["promo_id"]), "", int(data.get("promo_pct") or 0))
+                _pd = await _pfin(s, msg.from_user.id, _pi, int(price))
+                if _pd:
+                    _promo_used = (_pi, int(price), _pd)
         await s.commit()
         bot_id = row.id
+    if needs_charge and _promo_used:
+        try:
+            from platform_promoters import notify_admin as _pnotify
+            _pr_i, _pr_paid, _pr_disc = _promo_used
+            async with Session() as _ps:
+                from models import PlatformPromoter as _PP2
+                _pr_row = await _ps.get(_PP2, _pr_i.promoter_id)
+            _pr_i.name = _pr_row.name if _pr_row else str(_pr_i.promoter_id)
+            await _pnotify(None, msg.from_user.id, _pr_i, _pr_paid, _pr_disc,
+                           f"ساخت ربات @{me.username} — {data['plan']}")
+        except Exception:
+            logger.exception("اطلاعِ مصرفِ کدِ معرف ناموفق بود")
 
     # === PATCH_FREE_NO_EXPIRY_PANEL_LOCK_NOTIFY_V1: اطلاع به ادمین پلتفرم ===
     if needs_charge and not trial_req_id:
@@ -12223,6 +12264,10 @@ async def buyplan_confirm(cb: CallbackQuery):
             .where(PlatformUser.referrer_id == cb.from_user.id)
         )
         disc = referral_discount(refs or 0)
+        # === PATCH_PLATFORM_PROMOTER_V1 === تخفیفِ خریدِ اولِ معرف
+        from platform_promoters import promo_for as _promo_for, pct_with_promo as _pwp
+        _pinfo = await _promo_for(cb.from_user.id)
+        disc, _promo_hit = _pwp(disc, _pinfo)
         ptc_mode, ptc_amt = await ptc_discount_for(cb.from_user.id)
         ptc_note = ""
         if ptc_mode == "percent" and ptc_amt > disc:
@@ -12287,10 +12332,23 @@ async def buyplan_confirm(cb: CallbackQuery):
             row.status = "active"
         row.sub_months = months
         s.add(PlanOrder(user_telegram_id=cb.from_user.id, target_bot_id=row.id, plan=plan, amount=price))
+        _promo_used = None
         if price:
             s.add(PlatformTxn(user_telegram_id=cb.from_user.id, amount=-price, kind="purchase",
                               note=f"ارتقای @{row.username} به {plan} ({months} ماهه)"))
+            if _promo_hit:     # PATCH_PLATFORM_PROMOTER_V1
+                from platform_promoters import finalize as _pfin
+                _pd = await _pfin(s, cb.from_user.id, _pinfo, int(price))
+                if _pd:
+                    _promo_used = (_pinfo, int(price), _pd, row.username)
         await s.commit()
+        if _promo_used:
+            try:
+                from platform_promoters import notify_admin as _pnotify
+                await _pnotify(None, cb.from_user.id, _promo_used[0], _promo_used[1], _promo_used[2],
+                               f"خرید/تمدید پلن {plan} برای @{_promo_used[3]}")
+            except Exception:
+                logger.exception("اطلاعِ مصرفِ کدِ معرف ناموفق بود")
         uname = row.username
         token = row.token
         _bank_admin_msg = None
@@ -20162,6 +20220,9 @@ async def settings_kb() -> InlineKeyboardMarkup:
         [hx_button("🏷 تخفیف‌های زمان‌دار", callback_data="set:sched",
                    style=ButtonStyle.SUCCESS)],
         [hx_button("💳 پرداخت و کیف پول", callback_data="set:hub_pay")],
+        # === PATCH_PLATFORM_PROMOTER_V1 ===
+        [hx_button("🤝 معرفِ فروش (تخفیفِ خریدِ اول)", callback_data="set:prm",
+                   style=ButtonStyle.SUCCESS)],
         [hx_button("🤖 تنظیمات عمومی ربات", callback_data="set:hub_general")],
         [hx_button(("🟢 مینی‌اپ فروشگاهی برای مستأجرها: فعال" if miniapp_on
                     else "🔴 مینی‌اپ فروشگاهی برای مستأجرها: غیرفعال"),

@@ -630,6 +630,8 @@ class PlatformUser(Base):
     # خودِ ربات اصلیِ بات‌ساز (platform_bot.py)، نه ربات‌های مستأجر.
     rules_accepted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     rules_accepted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # === PATCH_PLATFORM_PROMOTER_V1 === معرفِ فروش (لینک/کدِ تخفیفِ خریدِ اول)
+    promoter_id: Mapped[int | None] = mapped_column(Integer, index=True)
 
 
 class InviteCampaignEntry(Base):
@@ -3543,3 +3545,31 @@ class FunstatLog(Base):
     cost: Mapped[float] = mapped_column(Float, default=0)
     ok: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+class PlatformPromoter(Base):
+    """=== PATCH_PLATFORM_PROMOTER_V1 === معرفِ فروش: هر کس با لینک/کدِ او بیاید، روی
+    «خریدِ اولِ» خودش درصدِ مشخصی تخفیف می‌گیرد."""
+    __tablename__ = "platform_promoters"
+    __table_args__ = (UniqueConstraint("code"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(32), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    percent: Mapped[int] = mapped_column(Integer, default=10)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class PlatformPromoUse(Base):
+    """مصرفِ تخفیفِ معرف — برایِ هر کاربر فقط یک‌بار (UniqueConstraint)."""
+    __tablename__ = "platform_promo_uses"
+    __table_args__ = (UniqueConstraint("user_telegram_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    promoter_id: Mapped[int] = mapped_column(Integer, index=True)
+    percent: Mapped[int] = mapped_column(Integer, default=0)
+    paid_toman: Mapped[int] = mapped_column(Integer, default=0)
+    discount_toman: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
