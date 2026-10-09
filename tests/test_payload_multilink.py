@@ -55,3 +55,14 @@ async def test_delivery_sends_text_without_qr_photo_for_mixed(monkeypatch):
     kind, text = bot.sent[0]
     assert kind == "msg" and len(text) < 4096
     assert re.findall(r"<code>(.*?)</code>", text, re.S) == [SSH, NPV]
+
+
+def test_edit_preview_full_and_separate_links():
+    from types import SimpleNamespace as NS
+    two = ("لینک برای برنامه Netmode\nssh://mc9501:7288@n1.prvn.ir:3290#mc9501\n"
+           "لینک برای NPV\nnpvt-ssh://" + "A" * 400)
+    cfg = NS(code="12", days=30, volume_gb=0, status="available", price=0, user_count=1,
+             display_mode="glass", category=None, payload=two, kind="manual")
+    t = tenant._cfg_edit_field_text(cfg)
+    assert "A" * 400 in t and "…" not in t
+    assert t.count("<code>") == 2 and "لینک برای NPV\n<code>npvt-ssh://" in t

@@ -23971,8 +23971,13 @@ def _cfg_edit_field_text(cfg: "Config") -> str:
     cat_lbl = cfg.category or "—"
     payload = (cfg.payload or "").strip()
     if payload:
-        payload_disp = payload if len(payload) <= 200 else payload[:200] + "…"
-        link_line = f"🔗 لینک/محتوا:\n<code>{_html.escape(payload_disp)}</code>\n"
+        # === PATCH_PAYLOAD_EDIT_PREVIEW_V1 === قبلاً در ۲۰۰ کاراکتر بریده می‌شد (لینکِ دومِ
+        # SSH/NPV نصفه می‌ماند) و همه داخلِ یک <code> بود. حالا کامل و هر لینک جدا.
+        if len(payload) <= 2800:
+            _ph, _pm = _fmt_payload_html(payload)
+            link_line = f"🔗 لینک/محتوا:\n{_ph if _pm else '<code>' + _html.escape(payload) + '</code>'}\n"
+        else:
+            link_line = f"🔗 لینک/محتوا:\n<code>{_html.escape(payload[:2800])}</code>…\n"
     else:
         link_line = "🔗 لینک/محتوا: <i>— خالی —</i>\n"
     # اگر رزرو مانده، هشدار بده
@@ -24545,17 +24550,23 @@ def _cfg_detail_kb(cfg: "Config") -> InlineKeyboardMarkup:
 
 async def _cfg_detail_text(s, cfg: "Config") -> str:
     buyer = await _cfg_buyer_block(s, cfg)
-    payload_preview = (cfg.payload or "")[:120]
-    if cfg.payload and len(cfg.payload) > 120:
-        payload_preview += "…"
+    _pv = (cfg.payload or "").strip()
+    if len(_pv) <= 1500:      # PATCH_PAYLOAD_EDIT_PREVIEW_V1
+        _pvh, _pvm = _fmt_payload_html(_pv)
+        payload_preview = _pvh if _pvm else _html.escape(_pv)
+        _pv_code = not _pvm
+    else:
+        payload_preview, _pv_code = _html.escape(_pv[:1500]) + "…", True
     price_lbl = f"{int(cfg.price):,} ت" if cfg.price else "قیمت کلی"
     sold_at = cfg.created_at.strftime("%Y-%m-%d") if getattr(cfg, "created_at", None) else "—"
+    _link_line = (("🔗 " + (f"<code>{payload_preview}</code>" if _pv_code else payload_preview))
+                  if payload_preview else "🔗 —")
     return (
         f"📄 <b>کانفیگ #{cfg.code}</b>\n"
         f"📦 {_cfg_vol_disp(cfg)} / {_cfg_days_disp(cfg)} · {_cfg_status_disp(cfg)}\n"
         f"💰 {price_lbl} · 👥 {cfg.user_count or '—'}\n"
         f"📅 تاریخ ثبت: {sold_at}\n"
-        f"🔗 <code>{payload_preview or '—'}</code>\n\n"
+        f"{_link_line}\n\n"
         f"{buyer}"
     )
 
