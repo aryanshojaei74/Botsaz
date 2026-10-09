@@ -177,3 +177,43 @@ async def test_finance_menu_hides_trial_report_for_non_vpn_bots(db):
     smm = [cb for _l, cb in await tenant._sec_finance_opts(7, "pro")]
     vpn = [cb for _l, cb in await tenant._sec_finance_opts(8, "pro")]
     assert "set:trrep" not in smm and "set:trrep" in vpn
+
+
+@pytest.mark.asyncio
+async def test_keyboard_mode_menu_opens_via_fakecb(db):
+    """حالتِ کیبوردی: همان هندلر با _FakeCb صدا زده می‌شود (قبلاً دکمه هیچ واکنشی نداشت)."""
+    maker = db
+    async with maker() as s:
+        s.add(models.Bot(id=8, owner_id=555, token="8:T", username="vpn", field="vpn_sales",
+                         plan="pro", status="active"))
+        s.add(models.Bot(id=9, owner_id=555, token="9:T", username="ads", field="ad_bot",
+                         plan="pro", status="active"))
+        await s.commit()
+    from types import SimpleNamespace
+    from tenant.shared.trial_report_admin import trrep_menu
+
+    class Chat:
+        id = 555
+
+    def mk(token):
+        out = []
+
+        class M:
+            from_user = SimpleNamespace(id=555, full_name="O", username="o", is_bot=False)
+            chat = Chat()
+            message_id = 10
+            bot = None
+
+            async def answer(self, text, **k):
+                out.append(text)
+        return M(), SimpleNamespace(token=token, id=1), out
+
+    class St:
+        async def clear(self):
+            pass
+    m, b, out = mk("8:T")
+    await trrep_menu(tenant._FakeCb(m), b, St())
+    assert any("گزارشِ اکانتِ تست" in t for t in out), out
+    m, b, out = mk("9:T")                                        # رباتِ تبلیغاتی → رد می‌شود
+    await trrep_menu(tenant._FakeCb(m), b, St())
+    assert not any("وضعیت:" in t for t in out)

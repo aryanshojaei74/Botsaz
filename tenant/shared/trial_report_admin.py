@@ -55,16 +55,21 @@ async def _content(bot_id: int):
 async def _gate(cb_or_msg, bot: Bot):
     from tenant import _owner_ok, _owner_ok_msg
     from plans import has_feature, Feature
-    row = await (_owner_ok(cb_or_msg, bot) if isinstance(cb_or_msg, CallbackQuery)
-                 else _owner_ok_msg(cb_or_msg, bot))
+    # _FakeCb (حالتِ کیبوردی) CallbackQuery نیست ولی Message هم نیست؛ پس «Message بودن» را می‌سنجیم.
+    is_msg = isinstance(cb_or_msg, Message)
+    row = await (_owner_ok_msg(cb_or_msg, bot) if is_msg else _owner_ok(cb_or_msg, bot))
     if not row:
         return None
     if getattr(row, "field", None) != "vpn_sales":
-        if isinstance(cb_or_msg, CallbackQuery):
+        if is_msg:
+            await cb_or_msg.answer("این قابلیت فقط برایِ رباتِ فروشِ VPN است.")
+        else:
             await cb_or_msg.answer("این قابلیت فقط برایِ رباتِ فروشِ VPN است.", show_alert=True)
         return None
     if not has_feature(row.plan, Feature.TRIAL_REPORT_CHANNEL):
-        if isinstance(cb_or_msg, CallbackQuery):
+        if is_msg:
+            await cb_or_msg.answer("این قابلیت از پلن «رشد» به بالا فعال است.")
+        else:
             await cb_or_msg.answer("این قابلیت از پلن «رشد» به بالا فعال است.", show_alert=True)
         return None
     return row

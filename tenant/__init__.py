@@ -6119,6 +6119,16 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         await _txch_menu(_FakeCb(msg), bot, state)
         return
 
+    # === PATCH_TRIAL_REPORT_KEYBOARD_MODE_V1 ===
+    # «🔑 کانالِ گزارشِ اکانتِ تست: …» — بدونِ این سطر در حالتِ کیبوردی (پیش‌فرضِ ربات)
+    # زدنِ دکمه هیچ واکنشی نداشت؛ هندلر فقط برایِ callback (set:trrep) نوشته شده بود.
+    if (msg.text and msg.text.strip().startswith("🔑 کانالِ گزارشِ اکانتِ تست")
+            and await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id)):
+        from tenant.shared.trial_report_admin import trrep_menu as _trrep_menu
+        await state.clear()
+        await _trrep_menu(_FakeCb(msg), bot, state)
+        return
+
     # === PATCH_KYC_KEYBOARD_MODE_V1 ===
     if (msg.text and msg.text.strip().startswith("🛡 احرازِ هویتِ کاربران")
             and await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id)):
@@ -6339,6 +6349,7 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
                 # === PATCH_FINANCE_KEYBOARD_MODE_MISSING_ENTRIES_V1 ===
                 "tadm:welcomebonus": ("tenant", "tadm_welcomebonus"),
                 "tadm:firstbuy": ("tenant", "tadm_firstbuy"),
+                "set:trrep": ("tenant.shared.trial_report_admin", "trrep_menu"),   # PATCH_TRIAL_REPORT_KEYBOARD_MODE_V1
             }
             _mod_name, _fn_name = _fin_handlers.get(_fin_cbd, (None, None))
             if _mod_name:
