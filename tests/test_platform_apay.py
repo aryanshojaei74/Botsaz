@@ -183,7 +183,7 @@ async def test_admin_ask_after_5min_and_manual_settle(db, monkeypatch):
         await s.commit()
     assert await PA.ask_admin_pending() == 1
     assert await PA.ask_admin_pending() == 0                   # فقط یک‌بار
-    assert sent[0][0] == 777 and "100,000" in sent[0][1]
+    assert sent[0][0] == 777 and "100,000" in sent[0][1] and "ثبتِ فاکتور" in sent[0][1]
     assert sent[0][2].inline_keyboard[0][0].callback_data == f"papadm:ok:{cid}"
     assert (await PA.manual_settle(cid, 777))[0]
     assert not (await PA.manual_settle(cid, 777))[0]           # دوبار شارژ نشود

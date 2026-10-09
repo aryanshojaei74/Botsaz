@@ -677,7 +677,8 @@ async def ask_admin_pending() -> int:
             from main_platform import platform_bot
             await platform_bot.send_message(PLATFORM_ADMIN_ID, AP.admin_ask_text(
                 who=who, tg_id=ch.user_telegram_id, amount=ch.amount_toman, fee=ch.fee_toman or 0,
-                pay_rial=ch.pay_amount_rial, order_id=ch.order_id, status=ch.status),
+                pay_rial=ch.pay_amount_rial, order_id=ch.order_id, status=ch.status,
+                created=ch.created_at),
                 reply_markup=AP.admin_ask_kb("papadm", cid))
             n += 1
         except Exception as e:

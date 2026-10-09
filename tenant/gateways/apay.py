@@ -547,7 +547,7 @@ ASK_AFTER_MIN = 5
 
 
 def admin_ask_text(*, who: str, tg_id: int, amount: int, fee: int, pay_rial: int | None,
-                   order_id: str, status: str) -> str:
+                   order_id: str, status: str, created=None) -> str:
     st = {"waiting": "⏳ در انتظارِ پرداخت", "cancelled": "🚫 کاربر لغو کرد",
           "expired": "⌛️ منقضی شد"}.get(status, status)
     return ("🔔 <b>درخواستِ شارژِ پرداخت‌نشده (کارت‌به‌کارتِ آنی)</b>\n\n"
@@ -555,10 +555,21 @@ def admin_ask_text(*, who: str, tg_id: int, amount: int, fee: int, pay_rial: int
             f"💰 مبلغِ شارژ: <b>{int(amount):,} تومان</b>\n"
             + (f"🧾 کارمزد با خریدار: {int(fee):,} تومان\n" if fee else "")
             + (f"💳 مبلغِ دقیقِ واریز: <code>{int(pay_rial)}</code> ریال\n" if pay_rial else "")
-            + f"🆔 فاکتور: <code>{order_id}</code>\n📌 وضعیت: {st}\n\n"
+            + f"🆔 فاکتور: <code>{order_id}</code>\n"
+            + _created_line(created)
+            + f"📌 وضعیت: {st}\n\n"
             f"⏱ {ASK_AFTER_MIN} دقیقه گذشته و پرداختی ثبت نشده.\n"
             "<b>آیا این کاربر واقعاً واریز کرده است؟</b>\n"
             "با «تأیید» کیف پولِ کاربر همین الان شارژ می‌شود.")
+
+
+def _created_line(created) -> str:
+    if not created:
+        return ""
+    from tenant.gateways.wallet_receipt import tehran_date_time
+    d, t = tehran_date_time(created)
+    mins = max(0, int((datetime.utcnow() - created).total_seconds() // 60))
+    return f"🕒 ثبتِ فاکتور: <b>{d}</b> ساعت <b>{t}</b> ({mins} دقیقه پیش)\n"
 
 
 def admin_ask_kb(prefix: str, charge_id: int):
@@ -597,8 +608,8 @@ async def ask_admin_pending() -> int:
         try:
             await _send_owner(brow, admin_ask_text(
                 who=who, tg_id=ch.user_telegram_id, amount=ch.amount_toman, fee=ch.fee_toman or 0,
-                pay_rial=ch.pay_amount_rial, order_id=ch.order_id, status=ch.status),
-                admin_ask_kb("apadm", cid))
+                pay_rial=ch.pay_amount_rial, order_id=ch.order_id, status=ch.status,
+                created=ch.created_at), admin_ask_kb("apadm", cid))
             n += 1
         except Exception as e:
             logger.info("apay: پرسش از ادمینِ ربات %s ناموفق بود: %s", ch.bot_id, e)
