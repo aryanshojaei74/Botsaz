@@ -8101,7 +8101,7 @@ async def do_free_trial(msg, bot: "Bot", bot_id: int, u: BotUser,
                              limit_ip=t_users, hours=hours,
                              claim_ctx=_button_trial_claim_ctx(mb_id, btn_cfg),
                              category=btn_cfg.get("trial_category") or None,
-                             tg_username=msg.from_user.username)
+                             tg_username=_trial_user_name(msg, u))
         return
 
     # ---- مسیر قدیمی/سراسریِ ربات (بدون تغییر) ----
@@ -8193,7 +8193,7 @@ async def do_free_trial(msg, bot: "Bot", bot_id: int, u: BotUser,
                 f"{_fmt_payload_html(payload)[0]}",
                 parse_mode="HTML",
                 reply_markup=await _trial_stock_markup(bot_id, cfg_vol, cfg_cat))
-            await _trial_report_post(bot, bot_id, u, msg.from_user.username, payload,
+            await _trial_report_post(bot, bot_id, u, _trial_user_name(msg, u), payload,
                                      ('♾️ نامحدود' if not cfg_vol else f'{cfg_vol} گیگ'),
                                      fmt_days(cfg_days), None, "stock")   # PATCH_TRIAL_REPORT_CHANNEL_V1
         except Exception as e:
@@ -8224,7 +8224,7 @@ async def do_free_trial(msg, bot: "Bot", bot_id: int, u: BotUser,
             email = await _make_config_email(
                 bot_id, panel.panel_key,
                 bot_row.username if bot_row else None,
-                u.telegram_id, msg.from_user.username)
+                u.telegram_id, _trial_user_name(msg, u))
             # === PATCH_TRIAL_ON_HOLD_V1 ===
             _onhold = await get_setting(bot_id, "trial_on_hold", "0") == "1"
             if gb < 1:
@@ -8251,7 +8251,7 @@ async def do_free_trial(msg, bot: "Bot", bot_id: int, u: BotUser,
                 await s.commit()
                 aid = new_acc.id
             await _send_config_delivery(bot, u.telegram_id, aid)
-            await _trial_report_post(bot, bot_id, u, msg.from_user.username, sub_link,
+            await _trial_report_post(bot, bot_id, u, _trial_user_name(msg, u), sub_link,
                                      _gb_display, _dur_display, panel.panel_key, "panel")   # PATCH_TRIAL_REPORT_CHANNEL_V1
         except PanelError as e:
             await _rollback_trial()
@@ -8271,6 +8271,18 @@ async def do_free_trial(msg, bot: "Bot", bot_id: int, u: BotUser,
 
 
 # === PATCH_TRIAL_WIZARD: توابع کمکیِ تحویل و انتخابِ بازه‌ایِ تست رایگان ===
+
+def _trial_user_name(msg, u) -> str | None:
+    """یوزرنیمِ واقعیِ کاربر. با دکمهٔ اینلاین msg همان cb.message است و from_user آن *خودِ ربات*
+    است، پس یوزرنیمِ ربات در گزارش/ایمیلِ سرویس می‌آمد؛ اول از ردیفِ کاربر می‌خوانیم."""
+    un = getattr(u, "username", None)
+    if un:
+        return un
+    fu = getattr(msg, "from_user", None)
+    if fu is not None and not getattr(fu, "is_bot", False):
+        return getattr(fu, "username", None)
+    return None
+
 
 async def _trial_report_post(bot, bot_id, u, tg_username, link, volume, duration, panel_key, source):
     """=== PATCH_TRIAL_REPORT_CHANNEL_V1 === گزارشِ تستِ تحویل‌شده در کانالِ مالک (فقط رشد/حرفه‌ای)."""
