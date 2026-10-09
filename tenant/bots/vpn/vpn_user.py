@@ -232,6 +232,40 @@ class _vpn_once:
             _vpn_action_inflight.discard(self.key)
         return False
 
+# === PATCH_VC_RECOVER_PANEL_KEY_V1 ===
+async def _vc_recover_panel_key(state: FSMContext, bot_id: int) -> str:
+    """کلیدِ پنلِ خریدِ دلخواه را برمی‌گرداند و اگر از state گم شده بازیابی می‌کند.
+
+    لاگِ واقعی: چند مشتری بعد از انتخابِ حجم و نوشتنِ نام، در «پرداخت» با «نشستِ خرید
+    منقضی شده» برگشتند (panel_key خالی). دلیل: با /start یا دکمه‌هایِ قدیمیِ صفحه، state
+    پاک می‌شد ولی gb/days دوباره از callback ست می‌شد و کلیدِ پنل نه — پیش‌فاکتور هم با
+    قیمتِ عمومی/پیش‌فرض ساخته می‌شد. اگر کلید نیست: اول کلیدِ آخرین صفحهٔ پلن‌ها
+    (vbuy_panel_key)، وگرنه تنها پنلِ فعالِ دارایِ فروشِ دلخواه. اگر مبهم بود خالی
+    می‌ماند (و پرداخت مثلِ قبل رد می‌شود)."""
+    data = await state.get_data()
+    pk = (data.get("vc_panel_key") or "").strip()
+    if pk:
+        return pk
+    cand = (data.get("vbuy_panel_key") or "").strip()
+    if not cand:
+        async with Session() as s:
+            keys = [r for r in (await s.scalars(select(VpnPanel.panel_key).where(
+                VpnPanel.bot_id == bot_id, VpnPanel.enabled == True))).all() if r]  # noqa: E712
+        ok = []
+        for k in keys:
+            try:
+                if (await _vc(bot_id, "vc_enabled", k)) == "1":
+                    ok.append(k)
+            except Exception:
+                logger.exception("vc: بررسیِ فعال‌بودنِ فروشِ دلخواهِ پنل %s ناموفق بود", k)
+        if len(ok) == 1:
+            cand = ok[0]
+    if cand:
+        await state.update_data(vc_panel_key=cand, vc_bot_id=bot_id)
+        logger.info("vc: کلیدِ پنل از state گم شده بود؛ بازیابی شد → %s (bot=%s)", cand, bot_id)
+    return cand
+
+
 class _VpnNameFSM(StatesGroup):
     naming = State()        # پرسیدن اسم دلخواه قبل از پیش‌فاکتورِ پلن آماده
     naming_vc = State()     # پرسیدن اسم دلخواه قبل از پیش‌فاکتورِ خرید دلخواه (vc)
@@ -3739,6 +3773,7 @@ async def vc_pay_card(cb: CallbackQuery, bot: Bot, state: FSMContext):
         if not row:
             await cb.answer()
             return
+        await _vc_recover_panel_key(state, row.id)     # PATCH_VC_RECOVER_PANEL_KEY_V1
         _state_data = await state.get_data()
         _pkey = _state_data.get("vc_panel_key", "")
         _clabel = (_state_data.get("vcustom_label") or "").strip()[:60] or None
@@ -4364,6 +4399,7 @@ async def vc_adjust(cb: CallbackQuery, bot: Bot, state: FSMContext):
         row = await s.scalar(select(BotRow).where(BotRow.token == bot.token))
     if not row:
         await cb.answer(); return
+    await _vc_recover_panel_key(state, row.id)     # PATCH_VC_RECOVER_PANEL_KEY_V1
     data  = await state.get_data()
     cur_panel_key = data.get("vc_panel_key", "")
     cfg   = await _vc_all_for_user(row.id, cb.from_user.id, cur_panel_key,
@@ -4444,6 +4480,7 @@ async def vc_manual_prompt(cb: CallbackQuery, bot: Bot, state: FSMContext):
         row = await s.scalar(select(BotRow).where(BotRow.token == bot.token))
     if not row:
         await cb.answer(); return
+    await _vc_recover_panel_key(state, row.id)     # PATCH_VC_RECOVER_PANEL_KEY_V1
     data = await state.get_data()
     cur_panel_key = data.get("vc_panel_key", "")
     gb = data.get("vc_gb"); days = data.get("vc_days"); count = data.get("vc_count", 1)
@@ -4818,18 +4855,20 @@ async def vc_checkout(cb: CallbackQuery, bot: Bot, state: FSMContext):
     # === PATCH_CFG_NAME_PROMPT_EDIT_V1 ===
     from tenant import get_bot_row as _gbr
     _r = await _gbr(bot)
+    if _r:
+        await _vc_recover_panel_key(state, _r.id)     # PATCH_VC_RECOVER_PANEL_KEY_V1
     await _ask_custom_name(_EditFirst(cb.message), 0, "vc", _r.id if _r else 0)
 
 
 async def _show_vc_preinvoice(target, bot: Bot, state: FSMContext, telegram_id: int):
     data = await state.get_data()
     gb = data.get("vc_gb"); days = data.get("vc_days"); count = data.get("vc_count", 1)
-    panel_key = data.get("vc_panel_key", "")
     async with Session() as s:
         row = await s.scalar(select(BotRow).where(BotRow.token == bot.token))
     if not row or gb is None:
         await target.answer("این بخش دیگر در دسترس نیست.")
         return
+    panel_key = await _vc_recover_panel_key(state, row.id)     # PATCH_VC_RECOVER_PANEL_KEY_V1
     # علامت بگذار که کاربر در فاز پیش‌فاکتور است تا کد تخفیف به پیش‌فاکتور برگردد
     await state.update_data(vc_stage="preinvoice")
     text, kb = await _vc_preinvoice(bot, row.id, telegram_id, gb, days, count, panel_key, state)
@@ -4904,6 +4943,7 @@ async def _vc_pay_impl(cb: CallbackQuery, bot: Bot, state: FSMContext):
         if not row:
             print("[VC_PAY] ربات (row) پیدا نشد", flush=True)
             await cb.answer(); return
+        await _vc_recover_panel_key(state, row.id)     # PATCH_VC_RECOVER_PANEL_KEY_V1
         _sd = await state.get_data()
         _pk = _sd.get("vc_panel_key", "")
 
