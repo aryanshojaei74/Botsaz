@@ -6335,6 +6335,7 @@ async def _vpn_add_traffic_pay_impl(cb: CallbackQuery, bot: Bot):
         if price <= 0:
             await cb.answer("⛔️ افزایش حجم در حال حاضر امکان‌پذیر نیست.", show_alert=True)
             return
+        price = int(await _renew_partner_price(row.id, cb.from_user.id, price, _pk, "custom"))   # PATCH_RENEW_PARTNER_DISCOUNT_V1
         u = await s.scalar(select(BotUser).where(
             BotUser.bot_id == row.id, BotUser.telegram_id == cb.from_user.id).with_for_update())
         if not u or float(u.balance) < price:
@@ -6426,7 +6427,7 @@ async def vpn_add_traffic(cb: CallbackQuery, bot: Bot):
         gb += st_gb
     rows = []
     for g in options:
-        price = g * price_gb
+        price = int(await _renew_partner_price(bot_id, cb.from_user.id, g * price_gb, pk, "custom"))   # PATCH_RENEW_PARTNER_DISCOUNT_V1
         rows.append([InlineKeyboardButton(
             text=f"📈 +{g} گیگ — {price:,} تومان",
             callback_data=f"vadd:pay:{aid}:{g}")])
@@ -6675,6 +6676,24 @@ async def vpn_rename_save(msg: Message, bot: Bot, state: FSMContext):
 
 
 
+# === PATCH_RENEW_PARTNER_DISCOUNT_V1 ===
+async def _renew_partner_price(bot_id: int, telegram_id: int, price, panel_key: str,
+                               scope: str, gb=None) -> float:
+    """تخفیفِ «همکار» (VpnPartner) روی تمدید. قبلاً فقط روی خریدِ تازه اعمال می‌شد و
+    تمدیدِ همکار به قیمتِ کامل حساب می‌شد. همان قاعدهٔ خرید: فقط همکاریِ دستی
+    (include_auto_reseller=False)؛ پلنِ ثابت → scope='plans'، تمدیدِ روز/حجمِ دلخواه → 'custom'."""
+    try:
+        from tenant.bots.vpn.vpn_partners import partner_discount
+        pd_ = await partner_discount(
+            bot_id=bot_id, telegram_id=telegram_id, price=price, panel_key=panel_key,
+            scope=scope, include_auto_reseller=False, gb=gb)
+        if pd_.ok and pd_.discount > 0:
+            return float(pd_.final_price)
+    except Exception:
+        logger.exception("محاسبهٔ تخفیفِ همکار روی تمدید ناموفق بود؛ قیمتِ کامل اعمال شد")
+    return float(price)
+
+
 @vpn_user_router.callback_query(F.data.startswith("vren:"))
 async def vpn_renew_menu(cb: CallbackQuery, bot: Bot):
     aid = int(cb.data.split(":")[1])
@@ -6703,6 +6722,10 @@ async def vpn_renew_menu(cb: CallbackQuery, bot: Bot):
     if not panel or not panel.enabled:
         await cb.answer("تمدید در حال حاضر ممکن نیست.", show_alert=True)
         return
+    # === PATCH_RENEW_PARTNER_DISCOUNT_V1 === قیمتِ نمایشی = قیمتِ واقعیِ پرداخت
+    items = [(pid, title, gb, days, await _renew_partner_price(
+                  row.id, cb.from_user.id, price, panel.panel_key, "plans", gb))
+             for pid, title, gb, days, price in items]
     rows = []
     from tenant import ibtn_style as _ibs
     _renew_style = await _ibs(row.id, "ibtn:renew") or ButtonStyle.SUCCESS
@@ -6726,7 +6749,7 @@ async def vpn_renew_menu(cb: CallbackQuery, bot: Bot):
         d = mn_d
         count = 0
         while d <= mx_d and count < 6:
-            price = d * price_day
+            price = await _renew_partner_price(row.id, cb.from_user.id, d * price_day, pk, "custom")
             rows.append([InlineKeyboardButton(
                 text=f"♻️ +{d} روز — {rial(price)}",
                 callback_data=f"vrend:{aid}:{d}", style=_renew_style)])
@@ -6797,13 +6820,16 @@ async def vpn_renew_pay_days(cb: CallbackQuery, bot: Bot):
             # مرحلهٔ دوم: انتخابِ حجمِ همراهِ تمدید (یا فقط روز)
             from tenant import ibtn_style as _ibs
             _st = await _ibs(bot_id, "ibtn:renew") or ButtonStyle.SUCCESS
+            _pk_r = panel.panel_key
             vrows = [[InlineKeyboardButton(
-                text=f"♻️ فقط +{add_days} روز — {rial(add_days * price_day)}",
+                text=f"♻️ فقط +{add_days} روز — "
+                     f"{rial(await _renew_partner_price(bot_id, cb.from_user.id, add_days * price_day, _pk_r, 'custom'))}",
                 callback_data=f"vrend:{aid}:{add_days}:0", style=_st)]]
             g, n = max(mn_g, 1), 0
             while g <= mx_g and n < 6:
                 vrows.append([InlineKeyboardButton(
-                    text=f"♻️ +{add_days} روز + {g} گیگ — {rial(add_days * price_day + g * price_gb)}",
+                    text=f"♻️ +{add_days} روز + {g} گیگ — "
+                         f"{rial(await _renew_partner_price(bot_id, cb.from_user.id, add_days * price_day + g * price_gb, _pk_r, 'custom'))}",
                     callback_data=f"vrend:{aid}:{add_days}:{g}", style=_st)])
                 g += st_g
                 n += 1
@@ -6816,6 +6842,7 @@ async def vpn_renew_pay_days(cb: CallbackQuery, bot: Bot):
             return
         add_gb = add_gb or 0
         price = add_days * price_day + add_gb * price_gb
+        price = await _renew_partner_price(bot_id, cb.from_user.id, price, panel.panel_key, "custom")   # PATCH_RENEW_PARTNER_DISCOUNT_V1
         u = await s.scalar(select(BotUser).where(
             BotUser.bot_id == bot_id, BotUser.telegram_id == cb.from_user.id).with_for_update())
         if not u or float(u.balance) < price:
@@ -6951,7 +6978,8 @@ async def _vpn_renew_pay_impl(cb: CallbackQuery, bot: Bot):
         bot_id = row.id
         u = await s.scalar(select(BotUser).where(
             BotUser.bot_id == bot_id, BotUser.telegram_id == cb.from_user.id).with_for_update())
-        price = float(plan.price)
+        price = await _renew_partner_price(bot_id, cb.from_user.id, float(plan.price),
+                                           plan.panel_key, "plans", plan.volume_gb)   # PATCH_RENEW_PARTNER_DISCOUNT_V1
         if not u or float(u.balance) < price:
             await cb.answer("موجودی کیف پول کافی نیست.", show_alert=True)
             return
