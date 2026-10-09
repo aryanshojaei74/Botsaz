@@ -34,6 +34,8 @@ async def db(monkeypatch):
         store[k] = v
     monkeypatch.setattr(PB, "get_pset", gp)
     monkeypatch.setattr(PB, "set_pset", sp)
+    monkeypatch.setattr(PA, "_g", gp)      # PATCH_PARTNER_APAY_V1: _g دیگر از platform_bot نمی‌خواند
+    monkeypatch.setattr(PA, "_s", sp)
     paid = []
 
     async def after(tg, credit, bal, *a):
@@ -188,3 +190,109 @@ async def test_admin_ask_after_5min_and_manual_settle(db, monkeypatch):
     assert (await PA.manual_settle(cid, 777))[0]
     assert not (await PA.manual_settle(cid, 777))[0]           # دوبار شارژ نشود
     assert await _state(maker) == (100_000, "paid", 1)
+
+
+# === PATCH_PARTNER_APAY_V1 ===
+@pytest_asyncio.fixture
+async def partner(db, monkeypatch):
+    maker, store, paid = db
+    import platform_partner as PP
+    monkeypatch.setattr(PP, "Session", maker)
+    sent = []
+
+    async def fake_send(chat, text):
+        sent.append((chat, text))
+    monkeypatch.setattr(PP, "_pp_send_platform", fake_send)
+
+    async def noop(*a, **k):
+        return None
+    monkeypatch.setattr(PA, "_delete_partner_invoice", noop)
+    async with maker() as s:
+        s.add(models.Bot(id=9, owner_id=42, token="9:T", username="pb", field="vpn_sales",
+                         plan="partner", status="active"))
+        await s.flush()
+        s.add(models.PartnerBot(id=3, bot_id=9, owner_id=42, stock_growth=0, stock_pro=1))
+        await s.flush()
+        s.add(models.PartnerStockOrder(id=7, partner_bot_id=3, qty_growth=2, qty_pro=1,
+                                       amount=320_600, method="apay", status="pending"))
+        s.add(models.PlatformApayCharge(user_telegram_id=42, order_id="ppord7", payment_id="pay_p7",
+                                        amount_toman=320_600, status="waiting",
+                                        purpose="partner_order", ref_id=7))
+        await s.commit()
+    yield maker, sent
+
+
+@pytest.mark.asyncio
+async def test_partner_order_paid_with_apay_adds_stock_not_wallet(partner, monkeypatch):
+    maker, sent = partner
+
+    async def v(tok, pid):
+        return 200, {"verified": True, "payment": {"id": "pay_p7", "order_id": "ppord7",
+                                                   "amount": 3_206_000, "status": "paid"}}
+    monkeypatch.setattr(AP, "verify_payment", v)
+    assert (await PA.settle_charge("ppord7"))[0]
+    assert not (await PA.settle_charge("ppord7"))[0]            # دوباره تسویه نمی‌شود
+    async with maker() as s:
+        o = await s.get(models.PartnerStockOrder, 7)
+        pb = await s.get(models.PartnerBot, 3)
+        u = await s.scalar(select(models.PlatformUser).where(models.PlatformUser.telegram_id == 42))
+    assert o.status == "approved" and pb.stock_growth == 2 and pb.stock_pro == 2
+    assert float(u.balance) == 0                                 # کیف پول شارژ نشد
+    assert sent and "روش" in sent[0][1] and "کارت" in sent[0][1]
+
+
+@pytest.mark.asyncio
+async def test_partner_invoice_created_and_expired_order_rejected(partner, monkeypatch):
+    maker, _sent = partner
+    msgs = []
+
+    class FakeMsg:
+        class bot:
+            @staticmethod
+            async def get_me():
+                class M:
+                    username = "pb"
+                return M()
+
+        class chat:
+            id = 5
+
+        async def answer(self, text, reply_markup=None, **k):
+            msgs.append(text)
+
+            class S:
+                class chat:
+                    id = 5
+                message_id = 99
+            return S()
+
+    async def cp(token, **kw):
+        assert kw["amount_toman"] == 320_600 + 1500 * 0 or kw["amount_toman"] == 320_600 + 1500
+        return 200, {"id": "pay_n", "pay_url": "https://x/p", "pay_amount": 3_206_070}
+
+    async def cf(token, res):
+        return "6219861900000000", "علی"
+    monkeypatch.setattr(AP, "create_payment", cp)
+    monkeypatch.setattr(AP, "card_for", cf)
+    monkeypatch.setattr(AP, "spawn_watch", lambda *a, **k: None)
+    assert await PA.create_partner_invoice(FakeMsg(), 42, 7, 320_600)
+    async with maker() as s:
+        rows = (await s.scalars(select(models.PlatformApayCharge).where(
+            models.PlatformApayCharge.payment_id == "pay_n"))).all()
+    assert len(rows) == 1 and rows[0].purpose == "partner_order" and rows[0].ref_id == 7
+    assert rows[0].msg_id == 99 and any("6219861900000000" in m for m in msgs)
+
+    # فاکتورِ قدیمی و پرداخت‌نشده → منقضی؛ سفارشِ pending رد می‌شود
+    async with maker() as s:
+        ch = await s.scalar(select(models.PlatformApayCharge).where(
+            models.PlatformApayCharge.order_id == "ppord7"))
+        ch.created_at = datetime.utcnow() - timedelta(minutes=45)
+        await s.commit()
+
+    async def v(tok, pid):
+        return 200, {"verified": False, "payment": {"status": "expired"}}
+    monkeypatch.setattr(AP, "verify_payment", v)
+    await PA.poll_pending_once()
+    async with maker() as s:
+        o = await s.get(models.PartnerStockOrder, 7)
+    assert o.status == "rejected"

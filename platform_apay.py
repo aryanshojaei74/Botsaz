@@ -46,13 +46,23 @@ class PApayFSM(StatesGroup):
 
 
 async def _g(key: str, default: str = "") -> str:
-    from platform_bot import get_pset
-    return await get_pset(key, default)
+    # === PATCH_PARTNER_APAY_V1 === مستقیم از Setting(bot_id=0) (همان جایی که get_pset می‌خواند)؛
+    # تا سرویسِ مستأجر (که حق ندارد platform_bot را import کند) هم بتواند از این ماژول استفاده کند.
+    from models import Setting
+    async with Session() as s:
+        r = await s.scalar(select(Setting).where(Setting.bot_id == 0, Setting.key == key))
+    return r.value if (r and r.value is not None) else default
 
 
 async def _s(key: str, value: str) -> None:
-    from platform_bot import set_pset
-    await set_pset(key, value)
+    from models import Setting
+    async with Session() as s:
+        r = await s.scalar(select(Setting).where(Setting.bot_id == 0, Setting.key == key))
+        if r:
+            r.value = value
+        else:
+            s.add(Setting(bot_id=0, key=key, value=value))
+        await s.commit()
 
 
 def _hx(*a, **k):
@@ -128,6 +138,7 @@ async def settle_charge(order_id: str) -> tuple[bool, str, int]:
         payment_id, credit, tg_id = ch.payment_id, int(ch.amount_toman or 0), int(ch.user_telegram_id)
         expected = credit + int(ch.fee_toman or 0)     # PATCH_APAY_FEE_PAYER_V1
         chat_id, msg_id = ch.chat_id, ch.msg_id
+        purpose, ref_id = (ch.purpose or "wallet"), ch.ref_id
 
     code, res = await AP.verify_payment(token, payment_id)
     if code != 200 or not isinstance(res, dict):
@@ -139,6 +150,9 @@ async def settle_charge(order_id: str) -> tuple[bool, str, int]:
     if str(pay.get("order_id")) != order_id or int(pay.get("amount") or 0) != expected * 10:
         logger.error("platform apay: عدمِ تطابقِ پرداخت (order=%s): %s", order_id, pay)
         return False, "اطلاعاتِ پرداخت با فاکتور نمی‌خواند؛ با پشتیبانی تماس بگیر.", 0
+
+    if purpose == "partner_order":      # === PATCH_PARTNER_APAY_V1 ===
+        return await _settle_partner_order(order_id, ref_id, tg_id, credit, chat_id, msg_id)
 
     from platform_bot import get_user
     async with Session() as s:
@@ -157,6 +171,110 @@ async def settle_charge(order_id: str) -> tuple[bool, str, int]:
         await s.commit()
     await _after_paid(tg_id, credit, new_bal, uname, ufull, chat_id, msg_id)
     return True, "پرداخت تأیید و کیف پول شارژ شد.", credit
+
+
+# === PATCH_PARTNER_APAY_V1 === خریدِ عمدهٔ همکار با آپی
+async def _settle_partner_order(order_id: str, ref_id, tg_id: int, amount: int, chat_id, msg_id):
+    """پرداختِ آپی تأیید شد → سفارشِ خریدِ عمده تأیید و موجودی اضافه می‌شود (کیف پول دست نمی‌خورد)."""
+    async with Session() as s:
+        claim = await s.execute(sa_update(PlatformApayCharge).where(
+            PlatformApayCharge.order_id == order_id, PlatformApayCharge.status != "paid"
+        ).values(status="paid", paid_at=datetime.utcnow()))
+        await s.commit()
+        if claim.rowcount == 0:
+            return False, "این فاکتور قبلاً تسویه شده است.", 0
+    ok = False
+    try:
+        from platform_partner import pp_order_auto_approve
+        ok = await pp_order_auto_approve(int(ref_id), method_text=await display_name(),
+                                         log_note="خرید عمده (تاییدِ خودکار — آپی)")
+    except Exception:
+        logger.exception("platform apay: تأییدِ سفارشِ خریدِ عمده ناموفق بود (order=%s ref=%s)", order_id, ref_id)
+    if not ok:
+        # پرداخت انجام شده ولی سفارش pending نبوده/تأیید نشد → به مدیر خبر بده تا دستی رسیدگی کند
+        try:
+            from platform_partner import _pp_send_platform
+            from config import PLATFORM_ADMIN_ID
+            if PLATFORM_ADMIN_ID:
+                await _pp_send_platform(
+                    PLATFORM_ADMIN_ID,
+                    "⚠️ <b>پرداختِ آپی برایِ خریدِ عمدهٔ همکار تأیید شد ولی سفارش خودکار تأیید نشد</b>\n\n"
+                    f"👤 همکار: <code>{tg_id}</code>\n💰 مبلغ: {amount:,} تومان\n"
+                    f"🧾 سفارش #{ref_id} | فاکتور: <code>{order_id}</code>\n"
+                    "لطفاً دستی بررسی کن (ممکن است قبلاً تأیید/رد شده باشد).")
+        except Exception:
+            logger.exception("platform apay: اطلاع به مدیر ناموفق بود")
+    await _delete_partner_invoice(ref_id, chat_id, msg_id)
+    return True, "پرداخت تأیید و موجودیِ همکار افزوده شد.", amount
+
+
+async def _delete_partner_invoice(ref_id, chat_id, msg_id) -> None:
+    """فاکتور در رباتِ خودِ همکار فرستاده شده؛ با توکنِ همان ربات پاک می‌شود."""
+    if not (chat_id and msg_id and ref_id):
+        return
+    try:
+        from models import Bot as BotRow, PartnerBot, PartnerStockOrder
+        async with Session() as s:
+            o = await s.get(PartnerStockOrder, int(ref_id))
+            pb = await s.get(PartnerBot, o.partner_bot_id) if o else None
+            brow = await s.get(BotRow, pb.bot_id) if pb else None
+            token = brow.token if brow else None
+        if token:
+            from aiogram import Bot as AioBot
+            tb = AioBot(token=token)
+            try:
+                await tb.delete_message(chat_id=chat_id, message_id=msg_id)
+            finally:
+                await tb.session.close()
+    except Exception:
+        logger.info("platform apay: حذفِ فاکتورِ خریدِ عمده ممکن نشد")
+
+
+async def create_partner_invoice(msg, tg_id: int, order_row_id: int, amount: int, back_kb=None):
+    """فاکتورِ آپی برایِ سفارشِ خریدِ عمدهٔ همکار؛ پیام در رباتِ خودِ همکار (msg.answer) ساخته می‌شود.
+    خروجی: True اگر فاکتور ساخته شد."""
+    mn, mx = await min_amount(), await max_amount()
+    if amount < mn or amount > mx:
+        await msg.answer(f"❌ مبلغِ این سفارش ({amount:,} تومان) خارج از بازهٔ مجازِ درگاه ({mn:,} تا {mx:,}) است.")
+        return False
+    token = await _g("papay_token", "")
+    oid = "pp" + AP.new_order_id()[2:]
+    _payer, _famt = await fee_cfg()
+    fee = AP.fee_for_buyer(_payer, _famt)
+    me_user = ""
+    try:
+        me_user = (await msg.bot.get_me()).username or ""
+    except Exception:
+        logger.debug("platform apay: نامِ کاربریِ رباتِ همکار خوانده نشد")
+    ret = f"https://t.me/{me_user}" if me_user else ""
+    code, res = await AP.create_payment(token, amount_toman=amount + fee, order_id=oid,
+                                        description=f"خرید عمده همکار #{order_row_id}",
+                                        callback_url=await webhook_url(), return_url=ret)
+    if code == 400 and isinstance(res, dict) and (res.get("error") or {}).get("code") == "invalid_url":
+        code, res = await AP.create_payment(token, amount_toman=amount + fee, order_id=oid, return_url=ret)
+    if code not in (200, 201) or not isinstance(res, dict) or not res.get("pay_url"):
+        logger.warning("platform apay (partner): ساختِ پرداخت ناموفق: %s %s", code, str(res)[:300])
+        await msg.answer("❌ ساختِ فاکتور ناموفق بود.\n" + AP.err_text(code, res), reply_markup=back_kb)
+        return False
+    pay_rial = int(res.get("pay_amount") or 0)
+    async with Session() as s:
+        s.add(PlatformApayCharge(user_telegram_id=tg_id, order_id=oid, payment_id=str(res.get("id") or ""),
+                                 amount_toman=amount, fee_toman=fee, pay_amount_rial=pay_rial or None,
+                                 pay_url=str(res["pay_url"])[:300], status="waiting",
+                                 purpose="partner_order", ref_id=order_row_id))
+        await s.commit()
+    card, holder = await AP.card_for(token, res)
+    text, kb = AP.invoice_view(
+        title=f"🛒 خریدِ عمده — {await display_name()}", pay_rial=pay_rial, card=card, holder=holder,
+        order_id=oid, pay_url=str(res["pay_url"]), check_cb=f"ppay:check:{oid}", cancel_cb=f"ppay:cancel:{oid}",
+        support_url="https://t.me/BaBotSaz?direct", fee_toman=fee, credit_toman=amount)
+    sent = await msg.answer(text, reply_markup=kb)
+    async with Session() as s:
+        await s.execute(sa_update(PlatformApayCharge).where(PlatformApayCharge.order_id == oid)
+                        .values(chat_id=sent.chat.id, msg_id=sent.message_id))
+        await s.commit()
+    AP.spawn_watch(str(res.get("id") or ""), lambda: _is_open(oid), lambda: settle_charge(oid))
+    return True
 
 
 async def _after_paid(tg_id, credit, new_bal, uname, ufull, chat_id, msg_id) -> None:
@@ -241,10 +359,18 @@ async def poll_pending_once() -> int:
             n += 1
         elif created and created <= now - timedelta(minutes=POLL_FOR_MINUTES):
             async with Session() as s:
-                await s.execute(sa_update(PlatformApayCharge).where(
+                ex = await s.execute(sa_update(PlatformApayCharge).where(
                     PlatformApayCharge.order_id == oid, PlatformApayCharge.status == "waiting"
                 ).values(status="expired"))
                 await s.commit()
+                if ex.rowcount:     # PATCH_PARTNER_APAY_V1 — سفارشِ خریدِ عمدهٔ پرداخت‌نشده رد می‌شود
+                    ch = await s.scalar(select(PlatformApayCharge).where(PlatformApayCharge.order_id == oid))
+                    if ch and ch.purpose == "partner_order" and ch.ref_id:
+                        from models import PartnerStockOrder
+                        await s.execute(sa_update(PartnerStockOrder).where(
+                            PartnerStockOrder.id == ch.ref_id, PartnerStockOrder.status == "pending"
+                        ).values(status="rejected", decided_at=datetime.utcnow()))
+                        await s.commit()
     return n
 
 

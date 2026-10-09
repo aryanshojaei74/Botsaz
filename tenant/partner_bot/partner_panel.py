@@ -26,6 +26,7 @@ from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
 )
 from sqlalchemy import select, func
+from sqlalchemy import update as sa_update
 
 from config import Session, PLATFORM_BOT_TOKEN, PLATFORM_ADMIN_ID
 from models import (
@@ -495,14 +496,48 @@ async def pp_pay_card(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
     card = await _pset("platform_card", "")
     holder = await _pset("card_holder", "")
-    if not card:
-        await cb.answer("پرداخت کارت‌به‌کارت فعلاً در دسترس نیست.", show_alert=True)
-        return
-
     g, p, pb_id = data.get("pp_g"), data.get("pp_p"), data.get("pp_pb")
     back_kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🔙 برگشت", callback_data=f"pp:order:{g}:{p}",
                              style=ButtonStyle.DANGER)]])
+
+    # === PATCH_PARTNER_APAY_V1 ===
+    # اگر درگاهِ «آپی» (همان که کیف پول را شارژ می‌کند) فعال است، خریدِ عمده هم همان‌طور
+    # پرداخت می‌شود: فاکتورِ آپی، تأییدِ خودکار و افزودنِ موجودی — بدونِ عکسِ رسید.
+    try:
+        import platform_apay as _PAY
+        _apay_ok = await _PAY.is_available("purchase")
+    except Exception:
+        logger.exception("بررسیِ دسترسیِ آپی برایِ خریدِ عمده ناموفق بود")
+        _apay_ok = False
+    if _apay_ok and pb_id and total:
+        async with Session() as s:
+            o = PartnerStockOrder(
+                partner_bot_id=pb_id, qty_growth=g, qty_pro=p, amount=total,
+                method="apay", status="pending")
+            s.add(o)
+            await s.commit()
+            await s.refresh(o)
+            order_row_id = o.id
+        await cb.answer("⏳ در حالِ ساختِ فاکتور…")
+        made = await _PAY.create_partner_invoice(cb.message, cb.from_user.id, order_row_id, int(total), back_kb)
+        if made:
+            await state.clear()
+            try:
+                await cb.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                logger.debug("حذفِ دکمه‌هایِ پیامِ انتخابِ روشِ پرداخت ممکن نشد")
+        else:
+            async with Session() as s:
+                await s.execute(sa_update(PartnerStockOrder).where(
+                    PartnerStockOrder.id == order_row_id, PartnerStockOrder.status == "pending"
+                ).values(status="rejected", decided_at=datetime.datetime.now()))
+                await s.commit()
+        return
+
+    if not card:
+        await cb.answer("پرداخت کارت‌به‌کارت فعلاً در دسترس نیست.", show_alert=True)
+        return
 
     # === PATCH_PARTNER_ORDER_SMS_AUTO_V1 ===
     # اگه تاییدِ خودکارِ کارت‌به‌کارت (همون سیستمِ شارژِ آنیِ کیف‌پول) روشنه،
@@ -558,6 +593,45 @@ async def pp_pay_card(cb: CallbackQuery, bot: Bot, state: FSMContext):
         "بعد از تایید مدیریت، ربات‌ها به موجودی‌ات اضافه می‌شوند.",
         reply_markup=back_kb)
     await cb.answer()
+
+
+# === PATCH_PARTNER_APAY_V1 === دکمه‌هایِ فاکتورِ آپیِ خریدِ عمده (در رباتِ همکار)
+@partner_panel_router.callback_query(F.data.startswith("ppay:check:"))
+async def pp_apay_check(cb: CallbackQuery, bot: Bot):
+    import platform_apay as _PAY
+    from models import PlatformApayCharge
+    oid = cb.data.split(":", 2)[2]
+    async with Session() as s:
+        ch = await s.scalar(select(PlatformApayCharge).where(PlatformApayCharge.order_id == oid))
+    if not ch or ch.user_telegram_id != cb.from_user.id or ch.purpose != "partner_order":
+        return await cb.answer("این فاکتور پیدا نشد.", show_alert=True)
+    if ch.status == "paid":
+        return await cb.answer("✅ این فاکتور پرداخت و سفارش تأیید شده است.", show_alert=True)
+    await cb.answer("در حالِ استعلام…")
+    ok, note, _c = await _PAY.settle_charge(oid)
+    if not ok:
+        await cb.message.answer("ℹ️ " + note)
+
+
+@partner_panel_router.callback_query(F.data.startswith("ppay:cancel:"))
+async def pp_apay_cancel(cb: CallbackQuery, bot: Bot):
+    from models import PlatformApayCharge
+    oid = cb.data.split(":", 2)[2]
+    async with Session() as s:
+        ch = await s.scalar(select(PlatformApayCharge).where(PlatformApayCharge.order_id == oid))
+        if not ch or ch.user_telegram_id != cb.from_user.id or ch.purpose != "partner_order":
+            return await cb.answer("این فاکتور پیدا نشد.", show_alert=True)
+        if ch.status == "paid":
+            return await cb.answer("این فاکتور قبلاً پرداخت شده است.", show_alert=True)
+        ch.status = "cancelled"
+        await s.commit()
+    await cb.answer("فاکتور لغو شد.")
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        logger.debug("تمیزکاریِ پیامِ فاکتور ممکن نشد")
+    await cb.message.answer("❌ فاکتور لغو شد.\n\nاگر قبل از لغو واریز کرده بودی نگران نباش؛ "
+                            "به‌محضِ تأییدِ بانک سفارش خودکار تأیید می‌شود.")
 
 
 @partner_panel_router.message(PartnerBuyFSM.receipt, F.photo)

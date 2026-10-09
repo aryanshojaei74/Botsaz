@@ -1017,7 +1017,22 @@ async def partner_save_token(msg: Message, state: FSMContext, bot: Bot):
 # دکمه‌اش در *ربات مادر* کلیک می‌کند.
 
 # === PATCH_PARTNER_ORDER_SMS_AUTO_V1 ===
-async def pp_order_auto_approve(order_id: int) -> bool:
+async def _pp_send_platform(chat_id: int, text: str) -> None:
+    """پیام با توکنِ رباتِ مادر — مستقل از main_platform، تا از سرویسِ مستأجر هم قابل‌استفاده باشد."""
+    from config import PLATFORM_BOT_TOKEN
+    if not PLATFORM_BOT_TOKEN:
+        raise RuntimeError("PLATFORM_BOT_TOKEN تنظیم نشده")
+    from aiogram.client.default import DefaultBotProperties
+    from aiogram.enums import ParseMode
+    b = Bot(token=PLATFORM_BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    try:
+        await b.send_message(chat_id, text)
+    finally:
+        await b.session.close()
+
+
+async def pp_order_auto_approve(order_id: int, method_text: str = "📲 کارت‌به‌کارتِ خودکار (پیامکِ بانکی)",
+                                log_note: str = "خرید عمده (تاییدِ خودکار — پیامکِ بانکی)") -> bool:
     """تاییدِ خودکارِ سفارشِ خریدِ عمدهٔ همکار، وقتی پیامکِ بانکی با مبلغِ
     اختصاصیِ فاکتور تطبیق پیدا کنه (بدونِ نیاز به کلیکِ دستیِ ادمین) — همون
     اثری که دکمهٔ «✅ تایید» تویِ partner_stock_order_decide داره، فقط
@@ -1038,10 +1053,10 @@ async def pp_order_auto_approve(order_id: int) -> bool:
         pb.stock_pro += p
         if g:
             await log_stock(s, pb.id, "growth", g, "buy",
-                            "خرید عمده (تاییدِ خودکار — پیامکِ بانکی)", pb.stock_growth)
+                            log_note, pb.stock_growth)
         if p:
             await log_stock(s, pb.id, "pro", p, "buy",
-                            "خرید عمده (تاییدِ خودکار — پیامکِ بانکی)", pb.stock_pro)
+                            log_note, pb.stock_pro)
         pb.bought_growth += g
         pb.bought_pro += p
         new_g, new_p = pb.stock_growth, pb.stock_pro
@@ -1055,27 +1070,25 @@ async def pp_order_auto_approve(order_id: int) -> bool:
         await s.commit()
 
     try:
-        from main_platform import platform_bot as _pbot
-        await _pbot.send_message(
+        await _pp_send_platform(
             owner,
             "✅ <b>پرداختت خودکار تایید شد!</b>\n\n"
             f"🚀 رشد: +{g}\n💎 حرفه‌ای: +{p}\n\n"
             f"📦 موجودیِ جدید:\n🚀 رشد: <b>{new_g}</b>\n💎 حرفه‌ای: <b>{new_p}</b>\n\n"
-            "🧾 روش: 📲 کارت‌به‌کارتِ خودکار (پیامکِ بانکی)")
+            f"🧾 روش: {method_text}")
     except Exception:
         logger.exception("اطلاعِ تاییدِ خودکارِ سفارشِ خریدِ عمده به همکار ناموفق بود")
 
     try:
         if PLATFORM_ADMIN_ID:
-            from main_platform import platform_bot as _pbot_notify
-            await _pbot_notify.send_message(
+            await _pp_send_platform(
                 PLATFORM_ADMIN_ID,
                 "📲 <b>خریدِ عمدهٔ همکار خودکار تایید شد</b>\n\n"
                 f"👤 همکار: <code>{owner}</code>\n"
                 f"🚀 رشد: {g} | 💎 حرفه‌ای: {p}\n"
                 f"💰 مبلغ: {int(o.amount or 0):,} تومان\n"
                 f"🧾 سفارش #{order_id}\n"
-                "🧾 روش: 📲 کارت‌به‌کارتِ خودکار (پیامکِ بانکی)")
+                f"🧾 روش: {method_text}")
     except Exception:
         logger.exception("اطلاعِ تاییدِ خودکارِ سفارشِ خریدِ عمده به ادمین ناموفق بود")
     return True
