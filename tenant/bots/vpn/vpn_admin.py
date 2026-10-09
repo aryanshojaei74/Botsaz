@@ -1292,7 +1292,7 @@ async def vpn_setup_base(msg: Message, bot: Bot, state: FSMContext):
     await state.update_data(base_url=url.rstrip("/"))
     await state.set_state(VpnPanelFSM.username)
     data = await state.get_data()
-    if data.get("panel_key") == "eylan":      # === PATCH_EYLAN_PANEL_V1 ===
+    if _bk(data.get("panel_key") or "") == "eylan":      # === PATCH_EYLAN_PANEL_V1 === (پنلِ دوم کلیدِ «eylan#2» دارد)
         await msg.answer(
             "۲/۵ — پنلِ ایلان یوزرنیم/رمز ندارد و فقط با «کلیدِ API» وصل می‌شود؛ "
             "این مرحله استفاده نمی‌شود. فقط «-» بفرست:",
@@ -1335,7 +1335,7 @@ async def vpn_setup_user(msg: Message, bot: Bot, state: FSMContext):
     await state.update_data(username=msg.text.strip())
     await state.set_state(VpnPanelFSM.password)
     data = await state.get_data()
-    if data.get("panel_key") == "eylan":      # === PATCH_EYLAN_PANEL_V1 ===
+    if _bk(data.get("panel_key") or "") == "eylan":      # === PATCH_EYLAN_PANEL_V1 === (پنلِ دوم کلیدِ «eylan#2» دارد)
         await msg.answer(
             "۳/۵ — <b>کلیدِ API</b> پنلِ ایلان را بفرست (X-API-KEY؛ از پنل، بخشِ تنظیماتِ API "
             "ادمینِ اصلی یا نماینده). کلیدِ نماینده فقط کاربرانِ همان نماینده را می‌بیند:",

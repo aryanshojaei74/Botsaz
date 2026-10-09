@@ -234,8 +234,11 @@ class EylanPanelClient:
     async def active_inbound_ids(self):
         if self.inbound_ids:
             return list(self.inbound_ids)
-        return [i["id"] for i in await self.list_inbounds() if not str(i["id"]).startswith("node:")
-                and i["id"] not in ("l2tp", "cisco")]
+        # پیش‌فرض: OpenVPN + همهٔ WG/sing-box مجاز + همهٔ نودهایِ آنلاین («Node Access → Select All»
+        # در پنل). بدونِ نود، کاربرِ ساخته‌شده به هیچ نودی دسترسی نداشت.
+        return [i["id"] for i in await self.list_inbounds()
+                if i["id"] not in ("l2tp", "cisco")
+                and (not str(i["id"]).startswith("node:") or i.get("enable", True))]
 
     async def _protocol_fields(self, inbound_ids) -> dict:
         ids = [str(x).strip() for x in (inbound_ids or [])

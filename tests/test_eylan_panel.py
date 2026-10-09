@@ -164,3 +164,60 @@ def test_registered_everywhere():
     assert "eylan" not in vpn_admin._panel_labels_for_plan("growth")
     src = open(tenant.__file__, encoding="utf-8").read()
     assert src.count('"buy_vpn_eylan"') >= 6
+
+
+@pytest.mark.asyncio
+async def test_default_protocols_include_all_online_nodes(cl):
+    await cl.create_account("nodeusr", 5, 5)                    # بدونِ انتخابِ دستی → همهٔ نودها
+    assert cl.fake.users["nodeusr"]["body"]["nodes"] == [1]
+    await cl.create_account("nonode", 5, 5, inbound_ids=["openvpn"])   # انتخابِ صریح رعایت می‌شود
+    assert "nodes" not in cl.fake.users["nonode"]["body"]
+
+
+@pytest.mark.asyncio
+async def test_second_eylan_panel_wizard_uses_api_key_prompts():
+    """«eylan#2» (پنلِ دوم) باید همان پرسش‌هایِ «کلید API» را بگیرد، نه «نام کاربری»."""
+    from types import SimpleNamespace
+    from tenant.bots.vpn import vpn_admin as VA
+    assert VA._bk("eylan#2") == "eylan"
+    src = open(VA.__file__, encoding="utf-8").read()
+    assert 'data.get("panel_key") == "eylan"' not in src
+
+
+@pytest.mark.asyncio
+async def test_wizard_steps_for_second_eylan_panel(monkeypatch):
+    from types import SimpleNamespace
+    from tenant.bots.vpn import vpn_admin as VA
+
+    async def owner_ok(msg, bot):
+        return SimpleNamespace(id=1, plan="pro")
+    monkeypatch.setattr(VA, "_owner_msg", owner_ok)
+
+    class St:
+        def __init__(self):
+            self.d = {"panel_key": "eylan#2"}
+            self.state = None
+
+        async def update_data(self, **kw):
+            self.d.update(kw)
+
+        async def get_data(self):
+            return dict(self.d)
+
+        async def set_state(self, s):
+            self.state = s
+
+    class Msg:
+        def __init__(self, text):
+            self.text = text
+            self.out = []
+
+        async def answer(self, text, **k):
+            self.out.append(text)
+    st = St()
+    m = Msg("https://service.example.space:5000")
+    await VA.vpn_setup_base(m, None, st)
+    assert "«-»" in m.out[0] and "نام کاربری به پنل" not in m.out[0]      # مرحلهٔ ۲: «-» بفرست
+    m2 = Msg("-")
+    await VA.vpn_setup_user(m2, None, st)
+    assert "کلیدِ API" in m2.out[0]                                        # مرحلهٔ ۳: کلیدِ API
