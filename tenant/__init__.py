@@ -11081,7 +11081,10 @@ async def _sec_finance_opts(bot_id: int, plan: str) -> list[tuple[str, str]]:
         opts.append(("📊 کانالِ لاگ تراکنشها: " + ("✅ متصل" if _txch else "❌ خاموش"),
                      "set:txlog"))
     # === PATCH_TRIAL_REPORT_CHANNEL_V1 ===
-    if ok(Feature.TRIAL_REPORT_CHANNEL):
+    # فقط رباتِ فروشِ VPN تستِ رایگانِ VPN دارد (در «خدمات مجازی»/فروشگاه/… بی‌معنی است)
+    async with Session() as _sf:
+        _bf = await _sf.scalar(select(BotRow.field).where(BotRow.id == bot_id))
+    if ok(Feature.TRIAL_REPORT_CHANNEL) and _bf == "vpn_sales":
         _trch = await get_setting(bot_id, "trial_report_channel", "")
         opts.append(("🔑 کانالِ گزارشِ اکانتِ تست: " + ("✅ متصل" if _trch else "❌ خاموش"),
                      "set:trrep"))

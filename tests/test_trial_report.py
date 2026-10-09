@@ -155,3 +155,25 @@ async def test_free_trial_button_posts_report_for_keyboard_and_inline(trial_env,
     assert posts, f"گزارش ارسال نشد؛ پیام‌ها: {[t for _, t in b.sent]}"
     assert "https://sub.example/xyz" in posts[0] and "id: <code>99</code>" in posts[0]
     assert "@TheBotName" not in posts[0]          # یوزرنیمِ ربات (دکمهٔ اینلاین) نباید جایِ کاربر بیاید
+
+
+def test_feature_is_vpn_only_in_plan_listing():
+    from plans import FEATURE_BOT_TYPES, features_by_bot_type, Plan
+    assert FEATURE_BOT_TYPES[Feature.TRIAL_REPORT_CHANNEL] == frozenset({"vpn_sales"})
+    assert Feature.TRIAL_REPORT_CHANNEL in features_by_bot_type(Plan.GROWTH, "vpn_sales")
+    assert Feature.TRIAL_REPORT_CHANNEL not in features_by_bot_type(Plan.GROWTH, "virtual_service")
+    assert Feature.TRIAL_REPORT_CHANNEL not in features_by_bot_type(Plan.PRO, "digital_shop")
+
+
+@pytest.mark.asyncio
+async def test_finance_menu_hides_trial_report_for_non_vpn_bots(db):
+    maker = db
+    async with maker() as s:
+        s.add(models.Bot(id=7, owner_id=1, token="7:T", username="smm", field="virtual_service",
+                         plan="pro", status="active"))
+        s.add(models.Bot(id=8, owner_id=1, token="8:T", username="vpn", field="vpn_sales",
+                         plan="pro", status="active"))
+        await s.commit()
+    smm = [cb for _l, cb in await tenant._sec_finance_opts(7, "pro")]
+    vpn = [cb for _l, cb in await tenant._sec_finance_opts(8, "pro")]
+    assert "set:trrep" not in smm and "set:trrep" in vpn

@@ -596,6 +596,8 @@ FEATURE_BOT_TYPES: dict[Feature, frozenset | None] = {
     Feature.WIREGUARD_CONFIG: frozenset({"vpn_sales"}),
     # === PATCH_OPENVPN_PLAN_GATE_V1 ===
     Feature.OPENVPN_CONFIG: frozenset({"vpn_sales"}),
+    # گزارشِ اکانتِ تستِ VPN فقط برایِ رباتِ فروشِ VPN معنا دارد (PATCH_TRIAL_REPORT_CHANNEL_V1)
+    Feature.TRIAL_REPORT_CHANNEL: frozenset({"vpn_sales"}),
     # --- مخصوصِ فروشگاهِ دیجیتال ---
     Feature.PRODUCT_SHOP: frozenset({"digital_shop"}),
     # === PATCH_COMMUNITY_MGMT_V1 ===
