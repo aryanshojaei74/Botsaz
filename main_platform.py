@@ -460,6 +460,13 @@ async def subscription_loop():
                                   await platform_bot.send_message(b.owner_id, note)
                               except Exception:
                                   logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+                              # === PATCH_PARTNER_ORPHAN_RENEW_NOTICE_V1 ===
+                              try:
+                                  from partner_orphan_notice import notice_due as _orph_due, send_notice as _orph_send
+                                  if purchased and not _is_trial and await _orph_due(s, b):
+                                      await _orph_send(b, platform_bot, days_left=None, archived=True)
+                              except Exception:
+                                  logger.exception("پیامِ تمدید در بات‌سازِ اصلی (خریدارِ همکارِ غیرفعال) ارسال نشد")
                               continue
                           if days_left <= REMIND_BEFORE_DAYS and b.last_expiry_notice != today:
                               b.last_expiry_notice = today
@@ -493,6 +500,13 @@ async def subscription_loop():
                                   InlineKeyboardButton(text="💳 ارتقا و تمدیدِ ربات", callback_data=f"mbup:{b.id}",
                                                        style=ButtonStyle.PRIMARY),
                               ]])
+                              # === PATCH_PARTNER_ORPHAN_RENEW_NOTICE_V1 ===
+                              # خریدارِ رباتِ یک همکارِ غیرفعال: پیام از طریقِ خودِ رباتش با دکمهٔ
+                              # شیشه‌ای به بات‌سازِ اصلی (بات‌سازِ اصلی ممکن است هرگز استارت نشده باشد).
+                              from partner_orphan_notice import notice_due as _orph_due, send_notice as _orph_send
+                              if purchased and await _orph_due(s, b):
+                                  if await _orph_send(b, platform_bot, days_left=days_left):
+                                      continue
                               try:
                                   await platform_bot.send_message(b.owner_id, msg, reply_markup=renew_kb)
                               except Exception as e:
