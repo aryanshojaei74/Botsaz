@@ -45,6 +45,7 @@ class Feature(str, Enum):
     GATEWAY_HESABPAY     = "gateway_hesabpay"       # درگاهِ حساب‌پی (افغانی)
     KYC_VERIFY           = "kyc_verify"             # احرازِ هویتِ کاربران
     TX_LOG_CHANNEL       = "tx_log_channel"         # کانالِ لاگِ تراکنش‌ها
+    TRIAL_REPORT_CHANNEL = "trial_report_channel"   # کانالِ گزارشِ اکانتِ تست (PATCH_TRIAL_REPORT_CHANNEL_V1)
     BULK_WALLET          = "bulk_wallet"            # شارژ/کسرِ همگانیِ کیف پول
     PHONE_VERIFY         = "phone_verify"           # تاییدِ شماره و کانالِ ثبتِ شماره‌ها
     AUTO_APPROVE_RECEIPT = "auto_approve_receipt"   # تاییدِ خودکارِ رسید
@@ -221,6 +222,7 @@ FEATURE_LABELS = {
     Feature.GATEWAY_HESABPAY: "🇦🇫 درگاه حساب‌پی",
     Feature.KYC_VERIFY: "🛡 احراز هویت کاربران",
     Feature.TX_LOG_CHANNEL: "📊 کانال لاگ تراکنش‌ها",
+    Feature.TRIAL_REPORT_CHANNEL: "🔑 کانال گزارش اکانت تست",
     Feature.BULK_WALLET: "💸 شارژ/کسر همگانی کیف پول",
     Feature.PHONE_VERIFY: "📱 تایید شماره پیش از پرداخت",
     Feature.AUTO_APPROVE_RECEIPT: "🤖 تایید خودکار رسید",
@@ -325,6 +327,7 @@ _GROWTH_EXTRA = {
     # === PATCH_ABANGATEWAY_V1 === طبقِ خواستهٔ مدیر: رشد و حرفه‌ای.
     Feature.GATEWAY_ABANGATEWAY,
     Feature.KYC_VERIFY, Feature.TX_LOG_CHANNEL, Feature.BULK_WALLET,
+    Feature.TRIAL_REPORT_CHANNEL,      # PATCH_TRIAL_REPORT_CHANNEL_V1 — رشد و حرفه‌ای
     Feature.PHONE_VERIFY, Feature.AUTO_APPROVE_RECEIPT,
     Feature.WALLET_RECEIPT_BTNS,
     Feature.DICE_GAME, Feature.BOT_BACKUP, Feature.ONBOARDING_WIZARD,

@@ -159,6 +159,9 @@ tenant_router.include_router(stars_admin_router)
 # === PATCH_TX_LOG_CHANNEL_V1 ===
 from tenant.shared.tx_channel_admin import tx_channel_admin_router
 tenant_router.include_router(tx_channel_admin_router)
+# === PATCH_TRIAL_REPORT_CHANNEL_V1 ===
+from tenant.shared.trial_report_admin import trial_report_admin_router
+tenant_router.include_router(trial_report_admin_router)
 # === PATCH_KYC_V1 ===
 from tenant.shared.kyc_admin import kyc_admin_router
 tenant_router.include_router(kyc_admin_router)
@@ -8190,6 +8193,9 @@ async def do_free_trial(msg, bot: "Bot", bot_id: int, u: BotUser,
                 f"{_fmt_payload_html(payload)[0]}",
                 parse_mode="HTML",
                 reply_markup=await _trial_stock_markup(bot_id, cfg_vol, cfg_cat))
+            await _trial_report_post(bot, bot_id, u, msg.from_user.username, payload,
+                                     ('♾️ نامحدود' if not cfg_vol else f'{cfg_vol} گیگ'),
+                                     fmt_days(cfg_days), None, "stock")   # PATCH_TRIAL_REPORT_CHANNEL_V1
         except Exception as e:
             print(f"[do_free_trial][stock] unexpected error: {e}")
             await _rollback_trial()
@@ -8245,6 +8251,8 @@ async def do_free_trial(msg, bot: "Bot", bot_id: int, u: BotUser,
                 await s.commit()
                 aid = new_acc.id
             await _send_config_delivery(bot, u.telegram_id, aid)
+            await _trial_report_post(bot, bot_id, u, msg.from_user.username, sub_link,
+                                     _gb_display, _dur_display, panel.panel_key, "panel")   # PATCH_TRIAL_REPORT_CHANNEL_V1
         except PanelError as e:
             await _rollback_trial()
             await report_user_error(bot, bot_id, "ساختِ تستِ رایگان (پنل)", e, msg.from_user.id)
@@ -8263,6 +8271,21 @@ async def do_free_trial(msg, bot: "Bot", bot_id: int, u: BotUser,
 
 
 # === PATCH_TRIAL_WIZARD: توابع کمکیِ تحویل و انتخابِ بازه‌ایِ تست رایگان ===
+
+async def _trial_report_post(bot, bot_id, u, tg_username, link, volume, duration, panel_key, source):
+    """=== PATCH_TRIAL_REPORT_CHANNEL_V1 === گزارشِ تستِ تحویل‌شده در کانالِ مالک (فقط رشد/حرفه‌ای)."""
+    try:
+        from plans import has_feature, Feature
+        async with Session() as s:
+            br = await s.get(BotRow, bot_id)
+        if not br or not has_feature(br.plan, Feature.TRIAL_REPORT_CHANNEL):
+            return
+        from tenant.shared.trial_report import report
+        await report(bot, bot_id, u, tg_username=tg_username, link=link, volume=volume,
+                     duration=duration, panel_key=panel_key, source=source)
+    except Exception:
+        logger.exception("گزارشِ تست ارسال نشد")
+
 
 def _button_trial_claim_ctx(mb_id: int, cfg: dict) -> dict:
     """ساختِ contextِ لازم برای بررسی/رزروِ سهمیهٔ تستِ این دکمه از روی
@@ -8510,6 +8533,9 @@ async def _trial_deliver(bot: "Bot", bot_id: int, u: "BotUser", trial_mode: str,
                 f"{_fmt_payload_html(payload)[0]}",
                 parse_mode="HTML",
                 reply_markup=await _trial_stock_markup(bot_id, cfg_vol, cfg_cat))
+            await _trial_report_post(bot, bot_id, u, tg_username, payload,
+                                     ('♾️ نامحدود' if not cfg_vol else f'{cfg_vol} گیگ'),
+                                     fmt_days(cfg_days), None, "stock")   # PATCH_TRIAL_REPORT_CHANNEL_V1
         except Exception as e:
             print(f"[_trial_deliver][stock] unexpected error: {e}")
             await _rollback_trial()
@@ -8578,6 +8604,8 @@ async def _trial_deliver(bot: "Bot", bot_id: int, u: "BotUser", trial_mode: str,
             await s.commit()
             aid = new_acc.id
         await _send_config_delivery(bot, u.telegram_id, aid)
+        await _trial_report_post(bot, bot_id, u, tg_username, sub_link,
+                                 _gb_display, _dur_display, panel.panel_key, "panel")   # PATCH_TRIAL_REPORT_CHANNEL_V1
     except PanelError as e:
         await _rollback_trial()
         await report_user_error(bot, bot_id, "ساختِ تستِ رایگان (پنل)", e, u.telegram_id)
@@ -11040,6 +11068,11 @@ async def _sec_finance_opts(bot_id: int, plan: str) -> list[tuple[str, str]]:
     if ok(Feature.TX_LOG_CHANNEL):   # PATCH_FREE_PLAN_SIMPLIFY_V1
         opts.append(("📊 کانالِ لاگ تراکنشها: " + ("✅ متصل" if _txch else "❌ خاموش"),
                      "set:txlog"))
+    # === PATCH_TRIAL_REPORT_CHANNEL_V1 ===
+    if ok(Feature.TRIAL_REPORT_CHANNEL):
+        _trch = await get_setting(bot_id, "trial_report_channel", "")
+        opts.append(("🔑 کانالِ گزارشِ اکانتِ تست: " + ("✅ متصل" if _trch else "❌ خاموش"),
+                     "set:trrep"))
     # === PATCH_KYC_V1 ===
     _kyc_on = await get_setting(bot_id, "kyc_enabled", "0") == "1"
     if ok(Feature.KYC_VERIFY):       # PATCH_FREE_PLAN_SIMPLIFY_V1
@@ -29491,6 +29524,8 @@ async def set_trial_menu(cb: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(
             text=f"⏳ شروعِ زمانِ تست: {onhold_lbl}",
             callback_data="set:trial_onhold", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="🔑 کانالِ گزارشِ اکانتِ تست", callback_data="set:trrep",
+                              style=ButtonStyle.SUCCESS)],     # PATCH_TRIAL_REPORT_CHANNEL_V1
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:settings", style=ButtonStyle.DANGER)],
     ])
     text = (
