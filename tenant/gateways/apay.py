@@ -29,7 +29,7 @@ try:
 except ImportError:      # pragma: no cover
     aiohttp = None
 
-from sqlalchemy import select
+from sqlalchemy import select, update as sa_update
 
 from config import Session
 from models import ApayCharge, Bot as BotRow, BotUser, WalletTxn
@@ -539,6 +539,121 @@ async def handle_webhook(bot_id: int, raw: bytes, ts: str, sig: str) -> int:
     return 200
 
 
+# ─────────────── پرسش از ادمین بعد از ۵ دقیقه ───────────────
+# === PATCH_APAY_ADMIN_ASK_V1 ===
+# مثلِ «کارت‌به‌کارتِ خودکار»ِ قبلی: اگر فاکتوری ۵ دقیقه بعد هنوز تسویه نشده، از ادمین
+# پرسیده می‌شود «فلانی خواست شارژ کند؛ واریز شد؟» — با «تأیید» کیف پول دستی شارژ می‌شود.
+ASK_AFTER_MIN = 5
+
+
+def admin_ask_text(*, who: str, tg_id: int, amount: int, fee: int, pay_rial: int | None,
+                   order_id: str, status: str) -> str:
+    st = {"waiting": "⏳ در انتظارِ پرداخت", "cancelled": "🚫 کاربر لغو کرد",
+          "expired": "⌛️ منقضی شد"}.get(status, status)
+    return ("🔔 <b>درخواستِ شارژِ پرداخت‌نشده (کارت‌به‌کارتِ آنی)</b>\n\n"
+            f"👤 کاربر: {who} (<code>{tg_id}</code>)\n"
+            f"💰 مبلغِ شارژ: <b>{int(amount):,} تومان</b>\n"
+            + (f"🧾 کارمزد با خریدار: {int(fee):,} تومان\n" if fee else "")
+            + (f"💳 مبلغِ دقیقِ واریز: <code>{int(pay_rial)}</code> ریال\n" if pay_rial else "")
+            + f"🆔 فاکتور: <code>{order_id}</code>\n📌 وضعیت: {st}\n\n"
+            f"⏱ {ASK_AFTER_MIN} دقیقه گذشته و پرداختی ثبت نشده.\n"
+            "<b>آیا این کاربر واقعاً واریز کرده است؟</b>\n"
+            "با «تأیید» کیف پولِ کاربر همین الان شارژ می‌شود.")
+
+
+def admin_ask_kb(prefix: str, charge_id: int):
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ واریز شد — شارژ کن", callback_data=f"{prefix}:ok:{charge_id}"),
+        InlineKeyboardButton(text="❌ واریز نشده", callback_data=f"{prefix}:no:{charge_id}")]])
+
+
+async def ask_admin_pending() -> int:
+    """فاکتورهایِ تسویه‌نشدهٔ بیش از ۵ دقیقه را (یک‌بار) برایِ مالکِ ربات می‌فرستد."""
+    now = datetime.utcnow()
+    async with Session() as s:
+        rows = (await s.scalars(select(ApayCharge).where(
+            ApayCharge.status.in_(("waiting", "cancelled", "expired")),
+            ApayCharge.admin_asked_at.is_(None),
+            ApayCharge.created_at <= now - timedelta(minutes=ASK_AFTER_MIN),
+            ApayCharge.created_at >= now - timedelta(hours=6)))).all()
+        items = [r.id for r in rows]
+    n = 0
+    for cid in items:
+        async with Session() as s:     # ادعایِ اتمیک: هر فاکتور فقط یک پیام
+            claim = await s.execute(sa_update(ApayCharge).where(
+                ApayCharge.id == cid, ApayCharge.admin_asked_at.is_(None),
+                ApayCharge.status != "paid").values(admin_asked_at=now))
+            await s.commit()
+            if not claim.rowcount:
+                continue
+            ch = await s.get(ApayCharge, cid)
+            brow = await s.get(BotRow, ch.bot_id)
+            u = await s.scalar(select(BotUser).where(
+                BotUser.bot_id == ch.bot_id, BotUser.telegram_id == ch.user_telegram_id))
+        if not brow or not brow.owner_id or int(brow.owner_id) == int(ch.user_telegram_id):
+            continue
+        who = ("@" + u.username) if u and u.username else ((u.full_name if u else "") or "—")
+        try:
+            await _send_owner(brow, admin_ask_text(
+                who=who, tg_id=ch.user_telegram_id, amount=ch.amount_toman, fee=ch.fee_toman or 0,
+                pay_rial=ch.pay_amount_rial, order_id=ch.order_id, status=ch.status),
+                admin_ask_kb("apadm", cid))
+            n += 1
+        except Exception as e:
+            logger.info("apay: پرسش از ادمینِ ربات %s ناموفق بود: %s", ch.bot_id, e)
+    return n
+
+
+async def _send_owner(brow, text: str, kb) -> None:
+    from aiogram import Bot
+    from aiogram.client.default import DefaultBotProperties
+    from aiogram.enums import ParseMode
+    tbot = Bot(token=brow.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    try:
+        await tbot.send_message(int(brow.owner_id), text, reply_markup=kb)
+    finally:
+        await tbot.session.close()
+
+
+async def manual_settle(bot_id: int, charge_id: int, admin_uid: int) -> tuple[bool, str]:
+    """ادمین تأیید کرد که واریز انجام شده → شارژِ اتمیک و یک‌بار (با تسویهٔ خودکار هم تداخل ندارد)."""
+    async with Session() as s:
+        ch = await s.scalar(select(ApayCharge).where(
+            ApayCharge.id == charge_id, ApayCharge.bot_id == bot_id).with_for_update())
+        if not ch:
+            return False, "این فاکتور پیدا نشد."
+        if ch.status == "paid":
+            return False, "این فاکتور قبلاً شارژ شده است."
+        u = await s.scalar(select(BotUser).where(
+            BotUser.bot_id == bot_id, BotUser.telegram_id == ch.user_telegram_id).with_for_update())
+        if not u:
+            return False, "کاربر پیدا نشد."
+        credit = int(ch.amount_toman or 0)
+        ch.status = "paid"
+        ch.paid_at = datetime.utcnow()
+        u.balance = float(u.balance or 0) + credit
+        s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=credit, kind="apay_charge",
+                        note=f"شارژِ آپی با تأییدِ دستیِ ادمین ({admin_uid})؛ {ch.order_id}"))
+        uid, bal, kyc_uid, inv_chat, inv_msg = u.telegram_id, float(u.balance), u.id, ch.chat_id, ch.msg_id
+        await s.commit()
+    try:
+        from tenant.shared.kyc import after_charge as _ac
+        await _ac(bot_id, kyc_uid)
+    except Exception:
+        logger.exception("apay: after_charge (KYC) ناموفق بود")
+    try:
+        await _notify_paid(bot_id, uid, credit, bal, inv_chat, inv_msg)
+    except Exception:
+        logger.exception("apay: اطلاع به کاربر ناموفق بود")
+    try:
+        from tenant.gateways.payment_page import _tx_log_tenant
+        await _tx_log_tenant(bot_id, uid, credit, bal, "apay")
+    except Exception:
+        logger.exception("apay: tx_log ناموفق بود")
+    return True, f"✅ {credit:,} تومان به کیف پولِ کاربر اضافه شد."
+
+
 # ─────────────── حلقهٔ استعلام ───────────────
 async def poll_pending() -> int:
     """فاکتورهایِ بازِ ۳۰ دقیقهٔ اخیر را verify می‌کند (اگر وب‌هوک نرسید)؛ قدیمی‌ترها expired می‌شوند."""
@@ -582,4 +697,8 @@ async def apay_poll_loop():
                 logger.info("[APAY] %s فاکتور خودکار تسویه شد", n)
         except Exception:
             logger.exception("[APAY] حلقهٔ استعلام خطا داد")
+        try:
+            await ask_admin_pending()            # PATCH_APAY_ADMIN_ASK_V1
+        except Exception:
+            logger.exception("[APAY] پرسش از ادمین خطا داد")
         await asyncio.sleep(60)

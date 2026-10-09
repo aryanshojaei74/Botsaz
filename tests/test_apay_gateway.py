@@ -355,3 +355,29 @@ async def test_fee_cfg_and_invoice_line(db):
                              pay_url="https://p", check_cb="c", cancel_cb="x",
                              fee_toman=2000, credit_toman=50_000)
     assert "2,000" in t and "50,000" in t and "کارمزدِ درگاه" in t
+
+
+# === PATCH_APAY_ADMIN_ASK_V1 ===
+@pytest.mark.asyncio
+async def test_tenant_admin_ask_and_manual_settle(db, monkeypatch):
+    from datetime import datetime, timedelta
+    maker, notified = db
+    sent = []
+
+    async def _so(brow, text, kb):
+        sent.append((brow.owner_id, text, kb))
+    monkeypatch.setattr(AP, "_send_owner", _so)
+    assert await AP.ask_admin_pending() == 0
+    async with maker() as s:
+        ch = await s.scalar(select(models.ApayCharge))
+        ch.created_at = datetime.utcnow() - timedelta(minutes=6)
+        ch.status = "cancelled"
+        cid = ch.id
+        await s.commit()
+    assert await AP.ask_admin_pending() == 1 and await AP.ask_admin_pending() == 0
+    assert sent[0][0] == 1 and "50,000" in sent[0][1] and "500370" in sent[0][1]
+    assert sent[0][2].inline_keyboard[0][0].callback_data == f"apadm:ok:{cid}"
+    assert not (await AP.manual_settle(6, cid, 1))[0]          # ربات دیگر
+    assert (await AP.manual_settle(5, cid, 1))[0]
+    assert not (await AP.manual_settle(5, cid, 1))[0]
+    assert await _balance(maker) == (50_000, "paid", 1) and notified == [(777, 50_000, 50_000)]

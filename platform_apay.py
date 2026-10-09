@@ -644,3 +644,97 @@ async def papay_cancel(cb: CallbackQuery):
         logger.debug("platform apay: تمیزکاریِ پیام ناموفق بود")
     await cb.message.answer("❌ فاکتور لغو شد.\n\nاگر قبل از لغو واریز کرده بودی نگران نباش؛ "
                             "به‌محضِ تأییدِ بانک کیف پولت خودکار شارژ می‌شود.")
+
+
+# === PATCH_APAY_ADMIN_ASK_V1 === «فلانی خواست شارژ کند؛ واریز شد؟» بعد از ۵ دقیقه
+async def ask_admin_pending() -> int:
+    from config import PLATFORM_ADMIN_ID
+    if not PLATFORM_ADMIN_ID:
+        return 0
+    now = datetime.utcnow()
+    async with Session() as s:
+        ids = (await s.scalars(select(PlatformApayCharge.id).where(
+            PlatformApayCharge.status.in_(("waiting", "cancelled", "expired")),
+            PlatformApayCharge.admin_asked_at.is_(None),
+            PlatformApayCharge.created_at <= now - timedelta(minutes=AP.ASK_AFTER_MIN),
+            PlatformApayCharge.created_at >= now - timedelta(hours=6)))).all()
+    n = 0
+    for cid in ids:
+        async with Session() as s:
+            claim = await s.execute(sa_update(PlatformApayCharge).where(
+                PlatformApayCharge.id == cid, PlatformApayCharge.admin_asked_at.is_(None),
+                PlatformApayCharge.status != "paid").values(admin_asked_at=now))
+            await s.commit()
+            if not claim.rowcount:
+                continue
+            ch = await s.get(PlatformApayCharge, cid)
+            from models import PlatformUser
+            u = await s.scalar(select(PlatformUser).where(PlatformUser.telegram_id == ch.user_telegram_id))
+        if int(ch.user_telegram_id) == int(PLATFORM_ADMIN_ID):
+            continue
+        who = ("@" + u.username) if u and u.username else ((u.full_name if u else "") or "—")
+        try:
+            from main_platform import platform_bot
+            await platform_bot.send_message(PLATFORM_ADMIN_ID, AP.admin_ask_text(
+                who=who, tg_id=ch.user_telegram_id, amount=ch.amount_toman, fee=ch.fee_toman or 0,
+                pay_rial=ch.pay_amount_rial, order_id=ch.order_id, status=ch.status),
+                reply_markup=AP.admin_ask_kb("papadm", cid))
+            n += 1
+        except Exception as e:
+            logger.info("platform apay: پرسش از ادمین ناموفق بود: %s", e)
+    return n
+
+
+async def manual_settle(charge_id: int, admin_uid: int) -> tuple[bool, str]:
+    from platform_bot import get_user
+    async with Session() as s:
+        claim = await s.execute(sa_update(PlatformApayCharge).where(
+            PlatformApayCharge.id == charge_id, PlatformApayCharge.status != "paid"
+        ).values(status="paid", paid_at=datetime.utcnow()))
+        if claim.rowcount == 0:
+            await s.rollback()
+            return False, "این فاکتور قبلاً شارژ شده یا پیدا نشد."
+        ch = await s.get(PlatformApayCharge, charge_id)
+        credit, tg_id = int(ch.amount_toman or 0), int(ch.user_telegram_id)
+        u = await get_user(s, tg_id, for_update=True)
+        u.balance = float(u.balance or 0) + credit
+        s.add(PlatformTxn(user_telegram_id=tg_id, amount=float(credit), kind="charge",
+                          note=f"شارژِ آپی با تأییدِ دستیِ ادمین ({admin_uid})؛ {ch.order_id}"))
+        new_bal, chat_id, msg_id = float(u.balance), ch.chat_id, ch.msg_id
+        await s.commit()
+    try:
+        from main_platform import platform_bot
+        await platform_bot.send_message(
+            tg_id, "✅ <b>کیف پولت پس از بررسیِ ادمین شارژ شد!</b>\n"
+                   f"💰 مبلغ: <b>{credit:,} تومان</b>\n👛 موجودی فعلی: <b>{new_bal:,.0f} تومان</b>")
+        if chat_id and msg_id:
+            try:
+                await platform_bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            except Exception:
+                pass
+    except Exception:
+        logger.exception("platform apay: اطلاع به کاربر ناموفق بود")
+    return True, f"✅ {credit:,} تومان به کیف پولِ کاربر اضافه شد."
+
+
+@papay_router.callback_query(F.data.startswith("papadm:"))
+async def papay_admin_answer(cb: CallbackQuery):
+    from platform_bot import has_perm
+    if not await has_perm(cb.from_user.id, "adm:fin"):
+        return await cb.answer("دسترسی ندارید", show_alert=True)
+    try:
+        _p, act, cid = cb.data.split(":")
+        cid = int(cid)
+    except ValueError:
+        return await cb.answer()
+    if act == "ok":
+        ok, msg = await manual_settle(cid, cb.from_user.id)
+        tail = "\n\n✅ <b>تأیید شد و کیف پولِ کاربر شارژ گردید.</b>" if ok else f"\n\n⚠️ {msg}"
+    else:
+        ok, msg = True, "ثبت شد."
+        tail = "\n\n❌ <b>واریز نشده — شارژی انجام نشد.</b>"
+    try:
+        await cb.message.edit_text((cb.message.html_text or "") + tail, reply_markup=None)
+    except Exception:
+        logger.info("platform apay: ویرایشِ پیامِ پرسش ممکن نشد")
+    await cb.answer(msg if not ok else ("شارژ شد ✅" if act == "ok" else "ثبت شد"), show_alert=not ok)

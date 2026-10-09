@@ -967,6 +967,11 @@ async def apay_platform_poll_loop(interval_sec: int = 60):
             await poll_pending_once()
         except Exception:
             logger.exception("apay_platform_poll_loop error")
+        try:
+            from platform_apay import ask_admin_pending
+            await ask_admin_pending()            # PATCH_APAY_ADMIN_ASK_V1
+        except Exception:
+            logger.exception("apay_platform ask_admin error")
         await asyncio.sleep(interval_sec)
 
 

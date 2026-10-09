@@ -652,3 +652,28 @@ async def apu_cancel(cb: CallbackQuery, bot: Bot):
         "❌ فاکتور لغو شد.\n\nاگر قبل از لغو واریز کرده بودی نگران نباش؛ "
         "به‌محضِ تأییدِ بانک کیف پولت خودکار شارژ می‌شود.",
         reply_markup=await inline_back_kb(row.id))
+
+
+# === PATCH_APAY_ADMIN_ASK_V1 === پاسخِ ادمین به «واریز شد؟» (بعد از ۵ دقیقه)
+@apay_router.callback_query(F.data.startswith("apadm:"))
+async def ap_admin_answer(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    try:
+        _p, act, cid = cb.data.split(":")
+        cid = int(cid)
+    except ValueError:
+        return await cb.answer()
+    if act == "ok":
+        ok, msg = await AP.manual_settle(row.id, cid, cb.from_user.id)
+        tail = "\n\n✅ <b>تأیید شد و کیف پولِ کاربر شارژ گردید.</b>" if ok else f"\n\n⚠️ {msg}"
+    else:
+        ok, msg = True, "ثبت شد."
+        tail = "\n\n❌ <b>واریز نشده — شارژی انجام نشد.</b>"
+    try:
+        await cb.message.edit_text((cb.message.html_text or "") + tail, reply_markup=None)
+    except Exception:
+        logger.info("apay: ویرایشِ پیامِ پرسش ممکن نشد")
+    await cb.answer(msg if not ok else ("شارژ شد ✅" if act == "ok" else "ثبت شد"), show_alert=not ok)

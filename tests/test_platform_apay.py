@@ -158,3 +158,33 @@ async def test_platform_buyer_fee(db, monkeypatch):
     assert await PA.fee_cfg() == ("seller", AP.FEE_TOMAN)
     store["papay_fee_payer"] = "buyer"
     assert (await PA.fee_cfg())[0] == "buyer"
+
+
+# === PATCH_APAY_ADMIN_ASK_V1 ===
+@pytest.mark.asyncio
+async def test_admin_ask_after_5min_and_manual_settle(db, monkeypatch):
+    maker, _st, _p = db
+    import sys, types
+    sent = []
+
+    class FakeBot:
+        async def send_message(self, chat, text, reply_markup=None):
+            sent.append((chat, text, reply_markup))
+
+        async def delete_message(self, **k):
+            pass
+    monkeypatch.setitem(sys.modules, "main_platform", types.SimpleNamespace(platform_bot=FakeBot()))
+    monkeypatch.setattr(config, "PLATFORM_ADMIN_ID", 777)
+    assert await PA.ask_admin_pending() == 0                   # هنوز ۵ دقیقه نشده
+    async with maker() as s:
+        ch = await s.scalar(select(models.PlatformApayCharge))
+        ch.created_at = datetime.utcnow() - timedelta(minutes=6)
+        cid = ch.id
+        await s.commit()
+    assert await PA.ask_admin_pending() == 1
+    assert await PA.ask_admin_pending() == 0                   # فقط یک‌بار
+    assert sent[0][0] == 777 and "100,000" in sent[0][1]
+    assert sent[0][2].inline_keyboard[0][0].callback_data == f"papadm:ok:{cid}"
+    assert (await PA.manual_settle(cid, 777))[0]
+    assert not (await PA.manual_settle(cid, 777))[0]           # دوبار شارژ نشود
+    assert await _state(maker) == (100_000, "paid", 1)

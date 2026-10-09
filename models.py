@@ -1575,6 +1575,8 @@ class ApayCharge(Base):
     status: Mapped[str] = mapped_column(String(20), default="waiting")   # waiting/paid/cancelled/expired
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     paid_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # === PATCH_APAY_ADMIN_ASK_V1 === پرسشِ «واریز شد؟» از ادمین بعد از ۵ دقیقه (یک‌بار)
+    admin_asked_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 # === PATCH_ABANGATEWAY_V1 ===
@@ -2463,6 +2465,7 @@ class PlatformApayCharge(Base):
     status: Mapped[str] = mapped_column(String(20), default="waiting")  # waiting/paid/cancelled/expired
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     paid_at: Mapped[datetime | None] = mapped_column(DateTime)
+    admin_asked_at: Mapped[datetime | None] = mapped_column(DateTime)   # PATCH_APAY_ADMIN_ASK_V1
 
 
 class PlatformBluCharge(Base):
