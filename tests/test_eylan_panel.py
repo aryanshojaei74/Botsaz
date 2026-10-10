@@ -221,3 +221,38 @@ async def test_wizard_steps_for_second_eylan_panel(monkeypatch):
     m2 = Msg("-")
     await VA.vpn_setup_user(m2, None, st)
     assert "کلیدِ API" in m2.out[0]                                        # مرحلهٔ ۳: کلیدِ API
+
+
+# ── نامِ کوتاه: «mctWG528196579jrj-wg-TR» در اپِ وایرگارد خطا می‌داد (نامِ تونل ≤ ۱۵) ──
+LONG = "mctWG528196579jrj"
+
+
+@pytest.mark.asyncio
+async def test_long_requested_name_becomes_short_and_consistent(cl):
+    acc = await cl.create_account(LONG, 10, 10)
+    name = acc["email"]
+    assert len(name) <= 8 and name in cl.fake.users and LONG not in cl.fake.users
+    # عملیاتِ بعدی با همان نامِ ذخیره‌شده در دیتابیس (بلند) همان کاربرِ کوتاه را پیدا می‌کنند
+    await cl.add_traffic(LONG, 5)
+    await cl.renew(LONG, 30)
+    await cl.set_enabled(LONG, False)
+    assert cl.fake.users[name]["data_limit"] == 15 and cl.fake.users[name]["active"] is False
+    assert (await cl.get_usage(LONG))["total"] == 15 * GB
+    assert await cl.delete_account(LONG) and name not in cl.fake.users
+
+
+@pytest.mark.asyncio
+async def test_legacy_long_account_still_found(cl):
+    cl.fake.users[LONG] = {"data_limit": 7, "used": 0, "active": True, "expiry": "", "body": {}}
+    await cl.add_traffic(LONG, 3)                  # حسابِ قدیمی (قبل از کوتاه‌سازی) → همان نامِ بلند
+    assert cl.fake.users[LONG]["data_limit"] == 10
+
+
+def test_wg_file_names_fit_tunnel_limit_and_are_unique():
+    used = set()
+    names = [EP._wg_file_name(f, LONG, used) for f in
+             (f"{LONG}-DE.conf", f"{LONG}-wg-TR.conf", f"{LONG}-wg-TR.conf")]
+    assert all(n.endswith(".conf") and len(n) - 5 <= 15 for n in names), names
+    assert len(set(n.lower() for n in names)) == 3
+    short = EP._wg_file_name("u1a2b3c4-wg-TR.conf", "u1a2b3c4", set())
+    assert short == "u1a2b3c4-wg-TR.conf"            # کوتاه است؛ دست نمی‌خورد

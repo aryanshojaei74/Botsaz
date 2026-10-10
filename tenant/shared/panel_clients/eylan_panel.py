@@ -72,6 +72,44 @@ def _safe_username(email: str) -> str:
     return cleaned
 
 
+# === PATCH_EYLAN_SHORT_NAMES_V1 ===
+# نامِ فایلِ WireGuard همان نامِ تونل در اپ می‌شود و اپ‌های وایرگارد نامِ تونلِ بیشتر از ۱۵ کاراکتر
+# را رد می‌کنند («mctWG528196579jrj-wg-TR» → خطا موقعِ ایمپورت). نامِ ساختهٔ ربات
+# (پیشوند + آیدی + پسوندِ تصادفی) بلند است، پس برایِ ایلان یک نامِ کوتاهِ تصادفی‌مانند و
+# قطعی (هش) از رویِ همان نام ساخته می‌شود؛ قطعی بودن یعنی همهٔ عملیاتِ بعدی (تمدید/حجم/حذف…)
+# بدونِ ذخیرهٔ چیزِ اضافه همان نام را پیدا می‌کنند.
+_SHORT_MAX = 8
+_WG_STEM_MAX = 15
+
+
+def _short_username(long_name: str) -> str:
+    import hashlib
+    n = int.from_bytes(hashlib.sha1(long_name.encode("utf-8")).digest()[:6], "big")
+    a = string.ascii_lowercase + string.digits
+    out = ""
+    for _ in range(_SHORT_MAX - 1):
+        n, r = divmod(n, len(a))
+        out += a[r]
+    return "u" + out
+
+
+def _wg_file_name(filename: str, username: str, used: set) -> str:
+    """نامِ فایلِ .conf را طوری کوتاه می‌کند که نامِ تونل ≤ ۱۵ کاراکتر شود و یکتا بماند."""
+    stem = re.sub(r"\.conf$", "", str(filename or ""), flags=re.I)
+    if len(stem) > _WG_STEM_MAX:
+        if stem.lower().startswith(username.lower()):
+            rest = stem[len(username):]
+        else:
+            rest = "-" + stem[-6:]
+        stem = (username[:_SHORT_MAX] + rest)[:_WG_STEM_MAX]
+    base, i = stem, 1
+    while stem.lower() in used:
+        i += 1
+        stem = base[:_WG_STEM_MAX - len(str(i))] + str(i)
+    used.add(stem.lower())
+    return stem + ".conf"
+
+
 def _num(v) -> float:
     try:
         return float(v or 0)
@@ -294,8 +332,27 @@ class EylanPanelClient:
                 return _parse_date(u[k])
         return 0
 
+    async def _uname(self, email) -> str:
+        """نامِ واقعیِ کاربر در پنل. حسابِ قدیمی (بلند) را هم پیدا می‌کند."""
+        long = _safe_username(email)
+        if len(long) <= _SHORT_MAX:
+            return long
+        cache = self.__dict__.setdefault("_uname_cache", {})
+        if email in cache:
+            return cache[email]
+        short = _short_username(long)
+        chosen = short
+        try:
+            if not await self._request("GET", f"/api/v1/users/{short}"):
+                if await self._request("GET", f"/api/v1/users/{long}"):
+                    chosen = long          # حسابی که قبل از کوتاه‌سازی ساخته شده
+        except PanelError:
+            logger.info("eylan: تشخیصِ نامِ کاربر برایِ %s ناموفق بود؛ نامِ کوتاه فرض شد", long)
+        cache[email] = chosen
+        return chosen
+
     async def get_client(self, email):
-        username = _safe_username(email)
+        username = await self._uname(email)
         u = await self._request("GET", f"/api/v1/users/{username}")
         if not u:
             return None
@@ -348,7 +405,7 @@ class EylanPanelClient:
         return []
 
     async def get_client_links(self, email):
-        username = _safe_username(email)
+        username = await self._uname(email)
         res = await self._request("GET", f"/api/v1/users/{username}/all_ovpn_links") or {}
         links = []
         for ib in res.get("singbox_inbounds") or []:
@@ -358,7 +415,8 @@ class EylanPanelClient:
         return links
 
     async def _wg_files(self, email) -> list[dict]:
-        username = _safe_username(email)
+        username = await self._uname(email)
+        used: set = set()
         res = await self._request("GET", f"/api/v1/users/{username}/all_ovpn_links") or {}
         out = []
         for b in [res.get("wireguard_config") or {}] + list(res.get("wireguard_instances") or []):
@@ -367,7 +425,8 @@ class EylanPanelClient:
             for srv in b.get("servers") or []:
                 if srv.get("full_config_text"):
                     out.append({"id": len(out) + 1, "name": srv.get("name") or "WireGuard",
-                                "file": srv.get("filename") or f"{username}-{len(out) + 1}.conf",
+                                "file": _wg_file_name(srv.get("filename") or f"{username}-{len(out) + 1}.conf",
+                                                      username, used),
                                 "text": srv["full_config_text"]})
         return out
 
@@ -388,7 +447,8 @@ class EylanPanelClient:
     # ───────────── ساخت/ویرایش ─────────────
     async def create_account(self, email, gb, days, *, uuid_str=None, sub_id=None,
                              limit_ip=0, inbound_ids=None, mb=None, hours=0, on_hold=False):
-        username = _safe_username(email)
+        long = _safe_username(email)
+        username = long if len(long) <= _SHORT_MAX else _short_username(long)   # PATCH_EYLAN_SHORT_NAMES_V1
         body: dict = {"username": username, **await self._protocol_fields(inbound_ids)}
         if mb:
             body["data_limit"], body["data_limit_unit"] = int(mb), "MB"
@@ -407,6 +467,7 @@ class EylanPanelClient:
         res = await self._request("POST", "/api/v1/users", json=body) or {}
         created = res.get("created_users") or []
         final = str(created[0]) if created else username
+        self.__dict__.setdefault("_uname_cache", {})[email] = final
         sub = ""
         try:
             sub = ((await self._request("GET", f"/api/v1/users/{final}/sub")) or {}).get("sub_url") or ""
@@ -418,7 +479,7 @@ class EylanPanelClient:
                 "sub_link": sub, "expiry_ms": exp * 1000}
 
     async def _put(self, email, **fields):
-        res = await self._request("PUT", f"/api/v1/users/{_safe_username(email)}", json=fields)
+        res = await self._request("PUT", f"/api/v1/users/{await self._uname(email)}", json=fields)
         if res is None:
             raise PanelError("کاربر رویِ پنلِ ایلان پیدا نشد.")
         self._list_cache = None
@@ -449,11 +510,11 @@ class EylanPanelClient:
         return res
 
     async def reset_usage(self, email):
-        res = await self._request("POST", f"/api/v1/users/{_safe_username(email)}/reset_traffic")
+        res = await self._request("POST", f"/api/v1/users/{await self._uname(email)}/reset_traffic")
         return res is not None
 
     async def reset_sub(self, email, new_sub_id=None):
-        res = await self._request("POST", f"/api/v1/users/{_safe_username(email)}/revoke") or {}
+        res = await self._request("POST", f"/api/v1/users/{await self._uname(email)}/revoke") or {}
         link = res.get("new_subscription_url") or ""
         if not link:
             raise PanelError("ریستِ لینک رویِ پنلِ ایلان ناموفق بود.")
@@ -471,7 +532,7 @@ class EylanPanelClient:
         return True
 
     async def delete_account(self, email, keep_traffic=False):
-        res = await self._request("DELETE", f"/api/v1/users/{_safe_username(email)}")
+        res = await self._request("DELETE", f"/api/v1/users/{await self._uname(email)}")
         self._list_cache = None
         return res is not None
 
