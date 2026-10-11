@@ -96,12 +96,20 @@ def _short_username(long_name: str) -> str:
 def _wg_file_name(filename: str, username: str, used: set) -> str:
     """نامِ فایلِ .conf را طوری کوتاه می‌کند که نامِ تونل ≤ ۱۵ کاراکتر شود و یکتا بماند."""
     stem = re.sub(r"\.conf$", "", str(filename or ""), flags=re.I)
+    # === PATCH_WG_FILENAME_ASCII_V1 ===
+    # گزارشِ ادمین: نامِ لوکیشن در پنل ایموجیِ پرچم/فاصله دارد («🇩🇪 - DE») و فایل با نامِ
+    # «udvkfuci-  -DE.conf» می‌رسید؛ وایرگارد نامِ تونل را فقط با [A-Za-z0-9_=+.-] قبول می‌کند
+    # و موقعِ ایمپورت خطا می‌داد. هر کاراکترِ غیرمجاز حذف و خط‌تیره‌هایِ پشت‌سرهم یکی می‌شود.
+    stem = re.sub(r"[^A-Za-z0-9_=+.\-]", "", stem)
+    stem = re.sub(r"-{2,}", "-", stem).strip("-.")
+    if not stem:
+        stem = username[:_SHORT_MAX] or "wg"
     if len(stem) > _WG_STEM_MAX:
         if stem.lower().startswith(username.lower()):
             rest = stem[len(username):]
         else:
             rest = "-" + stem[-6:]
-        stem = (username[:_SHORT_MAX] + rest)[:_WG_STEM_MAX]
+        stem = (username[:_SHORT_MAX] + rest)[:_WG_STEM_MAX].rstrip("-.") or username[:_SHORT_MAX]
     base, i = stem, 1
     while stem.lower() in used:
         i += 1

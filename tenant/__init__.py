@@ -4641,6 +4641,23 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
             else:
                 logger.exception('ری‌اکشن‌زدن رویِ پیامِ /start ناموفق بود')
 
+    # === PATCH_CHPOST_DEEPLINK_ONLY_BTN_V1 ===
+    # گزارشِ ادمین: وقتی کاربر زیرِ پستِ کانال روی دکمهٔ ربات می‌زد، اول پیامِ /start
+    # (استیکر + خوش‌آمد + منوی اصلی + محصولاتِ پین‌شده) می‌آمد و بعد پیامِ همان دکمه.
+    # کاربر فقط پیامِ خودِ دکمه را می‌خواهد. پس برایِ دیپ‌لینکِ دکمهٔ کانال (mbtn_/vhelp_)
+    # همهٔ این‌ها رد می‌شود و مستقیم همان دکمه اجرا می‌شود.
+    # استثنا: حالتِ «کیبورد» برایِ کاربرِ تازه — کیبوردِ منو فقط با پیامِ خوش‌آمد روی صفحه
+    # می‌نشیند؛ آنجا خوش‌آمد حفظ می‌شود تا کاربر بدونِ منو نماند.
+    if mbtn_deeplink_id is not None or vhelp_deeplink_key:
+        _dl_mode = await get_setting(row.id, "menu_mode", "reply")
+        if _dl_mode == "inline" or not was_created:
+            if mbtn_deeplink_id is not None:
+                await mbtn_tap(_FakeCb(msg, f"mbtn:{mbtn_deeplink_id}"), bot, state)
+            if vhelp_deeplink_key:
+                from tenant.bots.vpn.vpn_user import vpn_help_show as _vhs
+                await _vhs(_FakeCb(msg, f"vhelp:{vhelp_deeplink_key}"), bot)
+            return
+
     # === PATCH_TENANT_HOME_STICKER_V1 ===
     # استیکرِ استارت (اگر تنظیم شده و ربات پلنِ حرفه‌ای است) پیش از پیامِ
     # خوش‌آمد ارسال می‌شود؛ دقیقاً همان رفتاری که در ربات اصلیِ بات‌ساز هست.
