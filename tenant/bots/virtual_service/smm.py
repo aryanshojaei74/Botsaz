@@ -10064,7 +10064,7 @@ async def smmu_bulk_confirm(cb: CallbackQuery, bot: Bot, state: FSMContext):
             from tenant.gateways.discount_engine import validate_discount
             res = await validate_discount(
                 bot_id=row.id, code=disc["code"], telegram_id=cb.from_user.id,
-                price=int(total), session=s)
+                price=int(total), product_key="smm", session=s)   # PATCH_VS_DISCOUNT_V1
             if res.ok:
                 final_total = float(res.final_price)
                 applied_code_id = res.code_id
@@ -10164,7 +10164,7 @@ async def smmu_bulkdisc_enter(msg: Message, bot: Bot, state: FSMContext):
     total = int(unit_price) * len(links)
     from tenant.gateways.discount_engine import validate_discount
     res = await validate_discount(
-        bot_id=row.id, code=raw, telegram_id=msg.from_user.id, price=total)
+        bot_id=row.id, code=raw, telegram_id=msg.from_user.id, price=total, product_key="smm")   # PATCH_VS_DISCOUNT_V1
     if not res.ok:
         await msg.answer(f"❌ {res.reason or 'کد تخفیف نامعتبر است.'}\nدوباره بفرست یا /cancel بزن:")
         return
@@ -10474,7 +10474,7 @@ async def smm_place_order(bot: Bot, row, msg, v, link: str, qty: int, price: int
             from tenant.gateways.discount_engine import validate_discount
             res = await validate_discount(
                 bot_id=row.id, code=disc["code"], telegram_id=msg.from_user.id,
-                price=int(price), session=s)
+                price=int(price), product_key="smm", session=s)   # PATCH_VS_DISCOUNT_V1
             if res.ok:
                 final_price = float(res.final_price)
                 applied_code_id = res.code_id
@@ -10710,7 +10710,7 @@ async def smmu_disc_enter(msg: Message, bot: Bot, state: FSMContext):
         return
     from tenant.gateways.discount_engine import validate_discount
     res = await validate_discount(
-        bot_id=row.id, code=raw, telegram_id=msg.from_user.id, price=int(price))
+        bot_id=row.id, code=raw, telegram_id=msg.from_user.id, price=int(price), product_key="smm")   # PATCH_VS_DISCOUNT_V1
     if not res.ok:
         await msg.answer(f"❌ {res.reason or 'کد تخفیف نامعتبر است.'}\nدوباره بفرست یا /cancel بزن:")
         return
@@ -12142,6 +12142,12 @@ async def gift_back_shop(cb: CallbackQuery, bot: Bot):
     await show_gift_shop_to_user(bot, _EditFirstV(cb.message), row.id)
 
 
+async def _vsd_rows_lazy(bot_id: int, kind: str, price: int):
+    """PATCH_VS_DISCOUNT_V1 — ردیفِ دکمهٔ «کد تخفیف» (خالی اگر قابلیت/کدی نیست)."""
+    from tenant.bots.virtual_service.vs_discount import vsd_rows
+    return await vsd_rows(bot_id, kind, price)
+
+
 async def _gift_show_invoice(target: Message, bot_id: int, gift_id: str,
                              dest_id: int, dest_label: str, qty: int = 1, via: str = "",
                              comment: str = "", state: "FSMContext | None" = None) -> None:
@@ -12211,6 +12217,7 @@ async def _gift_show_invoice(target: Message, bot_id: int, gift_id: str,
         [InlineKeyboardButton(text="💳 کارت‌به‌کارت",
                               callback_data=f"gift:cardpay:{gift_id}:{dest_id}:{qty}{_sfx}",
                               style=ButtonStyle.PRIMARY)],
+        *await _vsd_rows_lazy(bot_id, "gift", total_price),   # PATCH_VS_DISCOUNT_V1
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="gift:back_shop", style=ButtonStyle.DANGER)],
     ])
     qty_line = f"تعداد: {qty}\n" if qty > 1 else ""
@@ -12551,6 +12558,7 @@ async def gift_support_quick(cb: CallbackQuery, bot: Bot, state: FSMContext):
 @smm_router.callback_query(F.data.startswith("gift:pay:"))
 async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from tenant import get_bot_row, get_or_create_user
+    from tenant.bots.virtual_service.vs_discount import vsd_pick, vsd_charge, vsd_record, vsd_clear, VsdError   # PATCH_VS_DISCOUNT_V1
     row = await get_bot_row(bot)
     if not row:
         await cb.answer()
@@ -12591,12 +12599,25 @@ async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
         b = await s.get(BotUser, buyer.id, with_for_update=True)  # قفلِ ردیف: دابل‌کلیک = دو خرید با یک پول
         # === PATCH_FIRST_PURCHASE_DISCOUNT_V1 ===
         _note_extra = ""
-        from tenant.gateways.discount_engine import first_purchase_discount
-        _fd = await first_purchase_discount(
-            bot_id=row.id, telegram_id=cb.from_user.id, price=int(price), session=s)
-        if _fd.ok and _fd.discount > 0:
-            _note_extra = f" (تخفیف اولین خرید −{_fd.discount:,})"
-            price = _fd.final_price
+        # === PATCH_VS_DISCOUNT_V1 === کدِ تخفیفِ واردشده بر تخفیفِ اولین خرید اولویت دارد (ترکیب نمی‌شوند)
+        _dc_id, _dc_amt = None, 0
+        _dc_code = vsd_pick(await state.get_data(), cb.message.message_id, "gift")
+        if _dc_code:
+            try:
+                price, _dc_id, _dc_amt = await vsd_charge(
+                    s, bot_id=row.id, tg_id=cb.from_user.id, code=_dc_code, kind="gift", price=int(price))
+            except VsdError as _e:
+                await cb.answer(f"❌ {_e}", show_alert=True)
+                return
+            await vsd_record(s, bot_id=row.id, tg_id=cb.from_user.id, code_id=_dc_id, discount=_dc_amt)
+            _note_extra = f" (کد تخفیف −{_dc_amt:,})"
+        else:
+            from tenant.gateways.discount_engine import first_purchase_discount
+            _fd = await first_purchase_discount(
+                bot_id=row.id, telegram_id=cb.from_user.id, price=int(price), session=s)
+            if _fd.ok and _fd.discount > 0:
+                _note_extra = f" (تخفیف اولین خرید −{_fd.discount:,})"
+                price = _fd.final_price
         if float(b.balance) < price:
             await cb.answer(
                 f"❌ موجودیِ کیف‌پول کافی نیست. کمبود: {price - int(b.balance):,} تومان",
@@ -12630,10 +12651,12 @@ async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
                           status="pending", pay_method="wallet", tracking_code=trk,
                           deliver_via={"b": "bot", "s": "support"}.get(via, ""),
                           comment=(comment or None), anonymous=bool(anon),
-                          comment_scope=int(scope or 0))
+                          comment_scope=int(scope or 0),
+                          discount_code_id=_dc_id, discount_amount=int(_dc_amt or 0))   # PATCH_VS_DISCOUNT_V1
         s.add(order)
         await s.commit()
         order_id = order.id
+    await vsd_clear(state)   # PATCH_VS_DISCOUNT_V1
 
     # === PATCH_MANUAL_GIFT_V1 / PATCH_GLOBAL_MANUAL_DELIVERY_V1 ===
     # برایِ گیفتِ سفارشی، gift_id یک شناسهٔ ساختگیِ ماست، نه یک گیفتِ
@@ -12717,7 +12740,7 @@ async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
         await _gift_hold_notify(bot, row, order_id, cb.message, sent_count, qty, trk)
         return
     if sent_count < qty:
-        refund = unit_price * (qty - sent_count)
+        refund = _paid_unit * (qty - sent_count)   # PATCH_VS_DISCOUNT_V1 — مبلغِ واقعاً پرداخت‌شده (با کد/تخفیف)
         async with Session() as s:
             b2 = await s.get(BotUser, buyer.id)
             b2.balance = float(b2.balance) + refund
@@ -12862,6 +12885,8 @@ async def gift_retry_send(cb: CallbackQuery, bot: Bot):
 @smm_router.callback_query(F.data.startswith("gift:cardpay:"))
 async def gift_cardpay_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from tenant import get_bot_row, get_or_create_user, get_setting, _gen_tracking, smart_cancel_kb
+    from tenant.bots.virtual_service.vs_discount import vsd_pick, vsd_charge, vsd_record, VsdError   # PATCH_VS_DISCOUNT_V1
+    _disc_code = vsd_pick(await state.get_data(), cb.message.message_id, "gift")
     row = await get_bot_row(bot)
     if not row:
         await cb.answer()
@@ -12900,6 +12925,17 @@ async def gift_cardpay_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from models import next_tracking as _next_tracking  # PATCH_SEQ_TRACKING_V1
     trk = await _next_tracking(row.id)
     async with Session() as s:
+        # === PATCH_VS_DISCOUNT_V1 === قیمتِ کارت‌به‌کارت = بعد از کد؛ مصرفِ کد همین‌جا (رد → برمی‌گردد)
+        _dc_id, _dc_amt = None, 0
+        if _disc_code:
+            try:
+                total_price, _dc_id, _dc_amt = await vsd_charge(
+                    s, bot_id=row.id, tg_id=cb.from_user.id, code=_disc_code, kind="gift", price=int(total_price))
+            except VsdError as _e:
+                await cb.answer(f"❌ {_e}", show_alert=True)
+                return
+            await vsd_record(s, bot_id=row.id, tg_id=cb.from_user.id, code_id=_dc_id, discount=_dc_amt)
+            unit_price = max(1, int(total_price) // max(1, qty))
         # === PATCH_GIFT_DEST_LABEL_FIX_V1 ===
         # === PATCH_DEST_LABEL_USERNAME_LINE_V1 ===
         # درخواستِ ادمین: زیرِ آیدیِ عددی، یوزرنیم هم به‌صورتِ خط جدا نشان
@@ -12913,13 +12949,14 @@ async def gift_cardpay_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
                           status="awaiting_receipt", pay_method="card", tracking_code=trk,
                           deliver_via={"b": "bot", "s": "support"}.get(via, ""),
                           comment=(comment or None), anonymous=bool(anon),
-                          comment_scope=int(scope or 0))
+                          comment_scope=int(scope or 0),
+                          discount_code_id=_dc_id, discount_amount=int(_dc_amt or 0))   # PATCH_VS_DISCOUNT_V1
         s.add(order)
         await s.commit()
         order_id = order.id
 
     await state.set_state(SmmFSM.gift_receipt_photo)
-    await state.update_data(gift_order_id=order_id)
+    await state.update_data(gift_order_id=order_id, vsd=None, vsd_pending=None)   # PATCH_VS_DISCOUNT_V1
     await _delete_shop_panel(cb)
     await cb.answer()
     holder_line = f"\n👤 به‌نامِ: {card_holder}" if card_holder else ""
@@ -13176,6 +13213,8 @@ async def gift_cardpay_reject(cb: CallbackQuery, bot: Bot):
         buyer = await s.get(BotUser, o.buyer_user_id, with_for_update=True)
         buyer_tg_id = buyer.telegram_id if buyer else None
         trk = o.tracking_code
+        from tenant.bots.virtual_service.vs_discount import vsd_revert_order   # PATCH_VS_DISCOUNT_V1
+        await vsd_revert_order(s, o, buyer_tg_id)
         # === PATCH_WALLET_GIFT_REJECT_REFUND_V1 ===
         # باگ: این دکمه از سفارش‌هایِ کارت‌به‌کارت می‌آمد که هیچ‌وقت کیف‌پول
         # کم نشده بود، پس رد کردن بدونِ بازگشتِ وجه درست بود. اما حالا همین
@@ -13872,10 +13911,11 @@ async def vnum_auto_add_price_save(msg: Message, bot: Bot, state: FSMContext):
 
 
 @smm_router.callback_query(F.data.startswith("vnum:autobuy:"))
-async def vnum_auto_buy(cb: CallbackQuery, bot: Bot):
+async def vnum_auto_buy(cb: CallbackQuery, bot: Bot, state: FSMContext):
     """خریدِ خودکارِ یک شمارهٔ مجازی از SMSPool — بلافاصله شماره تحویل
     داده می‌شود و یک تسکِ پس‌زمینه منتظرِ رسیدنِ کدِ پیامک می‌ماند."""
     from tenant import get_bot_row, get_or_create_user, _gen_tracking, _notify_admins, _purchase_alert
+    from tenant.bots.virtual_service.vs_discount import vsd_pick   # PATCH_VS_DISCOUNT_V1
     row = await get_bot_row(bot)
     if not row:
         await cb.answer()
@@ -13897,11 +13937,22 @@ async def vnum_auto_buy(cb: CallbackQuery, bot: Bot):
     buyer, _ = await get_or_create_user(
         row.id, cb.from_user.id, cb.from_user.full_name, cb.from_user.username or "",
         return_created=True)
+    # === PATCH_VS_DISCOUNT_V1 === کدِ تخفیف: اینجا فقط پیش‌چکِ مبلغ؛ مصرفِ واقعی داخلِ تراکنشِ کسرِ پول
+    _dc_code = vsd_pick(await state.get_data(), cb.message.message_id, "vnum")
+    _chk_price = real_price
+    if _dc_code:
+        from tenant.gateways.discount_engine import validate_discount
+        _r = await validate_discount(bot_id=row.id, code=_dc_code, telegram_id=cb.from_user.id,
+                                     price=int(real_price), product_key="vnum")
+        if not _r.ok:
+            await cb.answer(f"❌ {_r.reason or 'کد تخفیف دیگر معتبر نیست.'}", show_alert=True)
+            return
+        _chk_price = int(_r.final_price)
     async with Session() as s:
         b = await s.get(BotUser, buyer.id)
-        if float(b.balance) < real_price:
+        if float(b.balance) < _chk_price:
             await cb.answer(
-                f"❌ موجودیِ کیف‌پول کافی نیست. کمبود: {real_price - int(b.balance):,} تومان",
+                f"❌ موجودیِ کیف‌پول کافی نیست. کمبود: {_chk_price - int(b.balance):,} تومان",
                 show_alert=True)
             return
 
@@ -13913,7 +13964,7 @@ async def vnum_auto_buy(cb: CallbackQuery, bot: Bot):
     _VNUM_BUY_INFLIGHT.add(_guard)
     try:
         await _vnum_auto_buy_locked(cb, bot, row, country, api_key, sp_country, sp_service,
-                                    real_price, buyer)
+                                    real_price, buyer, disc_code=_dc_code, state=state)
     finally:
         _VNUM_BUY_INFLIGHT.discard(_guard)
 
@@ -13922,8 +13973,9 @@ _VNUM_BUY_INFLIGHT: set = set()
 
 
 async def _vnum_auto_buy_locked(cb, bot, row, country, api_key, sp_country, sp_service,
-                                real_price, buyer):
+                                real_price, buyer, disc_code=None, state=None):
     from tenant import _purchase_alert
+    from tenant.bots.virtual_service.vs_discount import vsd_charge, vsd_record, vsd_clear, VsdError   # PATCH_VS_DISCOUNT_V1
     await cb.answer("⏳ در حالِ خریدِ شماره از SMSPool…")
     result = await smspool_api.order_sms(api_key, sp_country, sp_service)
     if not result or str(result.get("success")) not in ("1", "True", "true"):
@@ -13939,6 +13991,19 @@ async def _vnum_auto_buy_locked(cb, bot, row, country, api_key, sp_country, sp_s
 
     async with Session() as s:
         b = await s.get(BotUser, buyer.id, with_for_update=True)   # PATCH_VNUM_AUDIT_V1: قفلِ ردیف (جلوگیری از کسرِ هم‌زمان)
+        # === PATCH_VS_DISCOUNT_V1 === قیمتِ واقعاً پرداخت‌شده (بعد از کد) در کسر، سفارش، پیام و بازگشتِ وجهِ حلقهٔ استعلام
+        _dc_id, _dc_amt = None, 0
+        if disc_code:
+            try:
+                real_price, _dc_id, _dc_amt = await vsd_charge(
+                    s, bot_id=row.id, tg_id=cb.from_user.id, code=disc_code, kind="vnum", price=int(real_price))
+            except VsdError as _e:
+                try:
+                    await smspool_api.cancel_sms(api_key, sp_order_id)
+                except Exception:
+                    logger.exception("لغوِ سفارشِ SMSPool بعد از ردِ کدِ تخفیف ناموفق بود")
+                await cb.message.answer(f"❌ {_e}")
+                return
         if float(b.balance) < real_price:
             # موجودی بینِ چک اول و رسیدنِ پاسخِ SMSPool ممکن است تغییر کرده
             # باشد — احتیاطاً همینجا سفارشِ SMSPool را لغو کن تا هدر نرود.
@@ -13957,12 +14022,17 @@ async def _vnum_auto_buy_locked(cb, bot, row, country, api_key, sp_country, sp_s
             link=full_phone, quantity=1, price_toman=real_price,
             status="sent", panel_order_id=sp_order_id, panel_status="pending",
             tracking_code=trk,
-            note=f"خریدِ خودکارِ شمارهٔ مجازی از SMSPool — {country.name}")
+            note=f"خریدِ خودکارِ شمارهٔ مجازی از SMSPool — {country.name}",
+            discount_code_id=_dc_id, discount_amount=int(_dc_amt or 0))   # PATCH_VS_DISCOUNT_V1
         s.add(o)
+        if _dc_id:
+            await vsd_record(s, bot_id=row.id, tg_id=cb.from_user.id, code_id=_dc_id, discount=_dc_amt)
         s.add(WalletTxn(bot_id=row.id, user_id=b.id, amount=-real_price,
                         kind="smm_order", note=f"خریدِ شمارهٔ مجازی (خودکار): {country.name}"))
         await s.commit()
         order_id = o.id
+    if state is not None:
+        await vsd_clear(state)   # PATCH_VS_DISCOUNT_V1
 
     check_kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="📩 دریافتِ کدِ پیامک", callback_data=f"vnum:autocheck:{order_id}",
@@ -14033,6 +14103,8 @@ async def _vnum_auto_apply_result(bot: Bot, bot_id: int, order_id: int, api_key:
                                     note=f"بازگشتِ وجهِ شمارهٔ مجازی (SMSPool) — {country_name}"))
                 o.status = "refunded"
                 o.panel_status = smspool_api.STATUS_LABELS.get(status, str(status))
+                from tenant.bots.virtual_service.vs_discount import vsd_revert_order   # PATCH_VS_DISCOUNT_V1
+                await vsd_revert_order(s, o, buyer_chat_id)
                 await s.commit()
                 try:
                     await bot.send_message(
@@ -14662,6 +14734,7 @@ async def _premium_show_invoice(target: Message, bot_id: int, months: int,
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💳 پرداخت", callback_data=f"prm:pay:{months}:{dest_id}",
                               style=ButtonStyle.SUCCESS)],
+        *await _vsd_rows_lazy(bot_id, "premium", price),   # PATCH_VS_DISCOUNT_V1
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="prm:back_shop", style=ButtonStyle.DANGER)],
     ])
     await target.answer(
@@ -14713,8 +14786,9 @@ async def prm_dest_username_in(msg: Message, bot: Bot, state: FSMContext):
 
 
 @smm_router.callback_query(F.data.startswith("prm:pay:"))
-async def prm_pay(cb: CallbackQuery, bot: Bot):
+async def prm_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from tenant import get_bot_row, get_or_create_user, _gen_tracking
+    from tenant.bots.virtual_service.vs_discount import vsd_pick, vsd_charge, vsd_record, vsd_clear, VsdError   # PATCH_VS_DISCOUNT_V1
     row = await get_bot_row(bot)
     if not row:
         await cb.answer()
@@ -14736,12 +14810,25 @@ async def prm_pay(cb: CallbackQuery, bot: Bot):
         b = await s.get(BotUser, buyer.id, with_for_update=True)  # قفلِ ردیف: دابل‌کلیک = دو خرید با یک پول
         # === PATCH_FIRST_PURCHASE_DISCOUNT_V1 ===
         _note_extra = ""
-        from tenant.gateways.discount_engine import first_purchase_discount
-        _fd = await first_purchase_discount(
-            bot_id=row.id, telegram_id=cb.from_user.id, price=int(price), session=s)
-        if _fd.ok and _fd.discount > 0:
-            _note_extra = f" (تخفیف اولین خرید −{_fd.discount:,})"
-            price = _fd.final_price
+        # === PATCH_VS_DISCOUNT_V1 === کدِ واردشده بر تخفیفِ اولین خرید اولویت دارد
+        _dc_id, _dc_amt = None, 0
+        _dc_code = vsd_pick(await state.get_data(), cb.message.message_id, "premium")
+        if _dc_code:
+            try:
+                price, _dc_id, _dc_amt = await vsd_charge(
+                    s, bot_id=row.id, tg_id=cb.from_user.id, code=_dc_code, kind="premium", price=int(price))
+            except VsdError as _e:
+                await cb.answer(f"❌ {_e}", show_alert=True)
+                return
+            await vsd_record(s, bot_id=row.id, tg_id=cb.from_user.id, code_id=_dc_id, discount=_dc_amt)
+            _note_extra = f" (کد تخفیف −{_dc_amt:,})"
+        else:
+            from tenant.gateways.discount_engine import first_purchase_discount
+            _fd = await first_purchase_discount(
+                bot_id=row.id, telegram_id=cb.from_user.id, price=int(price), session=s)
+            if _fd.ok and _fd.discount > 0:
+                _note_extra = f" (تخفیف اولین خرید −{_fd.discount:,})"
+                price = _fd.final_price
         if float(b.balance) < price:
             await cb.answer(
                 f"❌ موجودیِ کیف‌پول کافی نیست. کمبود: {price - int(b.balance):,} تومان",
@@ -14762,10 +14849,12 @@ async def prm_pay(cb: CallbackQuery, bot: Bot):
         order = GiftOrder(bot_id=row.id, buyer_user_id=b.id, gift_id=f"premium_{months}",
                           gift_emoji="🌟", star_count=stars, price_toman=price,
                           dest_telegram_id=dest_id, dest_label=dest_label,
-                          status="pending", tracking_code=trk)
+                          status="pending", tracking_code=trk,
+                          discount_code_id=_dc_id, discount_amount=int(_dc_amt or 0))   # PATCH_VS_DISCOUNT_V1
         s.add(order)
         await s.commit()
         order_id = order.id
+    await vsd_clear(state)   # PATCH_VS_DISCOUNT_V1
 
     # === PATCH_TGTOOLS_PREMIUM_V1 === خریدِ خودکار با TGTools (اگر روشن و کلید ثبت باشد)
     if await _tgt_premium_on(row.id):
@@ -14900,6 +14989,8 @@ async def prm_admin_reject(cb: CallbackQuery, bot: Bot):
         buyer = await s.get(BotUser, o.buyer_user_id, with_for_update=True)
         buyer_tg_id = buyer.telegram_id if buyer else None
         trk = o.tracking_code
+        from tenant.bots.virtual_service.vs_discount import vsd_revert_order   # PATCH_VS_DISCOUNT_V1
+        await vsd_revert_order(s, o, buyer_tg_id)
         if buyer:
             buyer.balance = float(buyer.balance) + float(o.price_toman)
             s.add(WalletTxn(bot_id=row.id, user_id=buyer.id, amount=o.price_toman, kind="charge",
@@ -15781,15 +15872,19 @@ async def ton_amount_in(msg: Message, bot: Bot, state: FSMContext):
     if amount is None or amount < qmin or amount > qmax:
         await msg.answer(f"❌ مقدار باید بینِ {qmin:g} تا {qmax:g} تون باشد. دوباره بفرست:")
         return
-    await state.update_data(ton_amount=amount)
+    await state.update_data(ton_amount=amount, ton_disc=None)   # PATCH_VS_DISCOUNT_V1
     await state.set_state(SmmFSM.ton_wallet_in)
     from tenant import smart_cancel_kb
     price = round(amount * rate)
+    from tenant.bots.virtual_service.vs_discount import vsd_enabled   # PATCH_VS_DISCOUNT_V1
+    _disc_hint = ("\n\n🏷 کد تخفیف داری؟ <b>قبل از آدرس</b>، همان کد را بفرست."
+                  if await vsd_enabled(row.id) else "")
     await msg.answer(
         f"💎 {amount:g} TON — {price:,} تومان\n\n"
         "حالا <b>آدرسِ کیف‌پولِ TON</b> مقصد را بفرست (همان‌جایی که می‌خواهی تون‌ها "
         "واریز شود).\n\n"
-        "⚠️ آدرس را با دقت بفرست؛ واریزِ اشتباه روی بلاک‌چین قابلِ برگشت نیست.",
+        "⚠️ آدرس را با دقت بفرست؛ واریزِ اشتباه روی بلاک‌چین قابلِ برگشت نیست."
+        + _disc_hint,
         parse_mode="HTML", reply_markup=await smart_cancel_kb(bot))
 
 
@@ -15800,7 +15895,28 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext):
     if not row:
         return
     wallet = (msg.text or "").strip()
+    # === PATCH_VS_DISCOUNT_V1 === متنی که آدرسِ TON نیست ولی کدِ تخفیفِ معتبر است ⇒ کد اعمال می‌شود
     if not _looks_like_ton_address(wallet):
+        from tenant.bots.virtual_service.vs_discount import vsd_enabled
+        if await vsd_enabled(row.id):
+            _d = await state.get_data()
+            _amt = _d.get("ton_amount")
+            if _amt:
+                from tenant.gateways.discount_engine import validate_discount
+                _rate, _, _ = await _ton_sell_settings(row.id)
+                _res = await validate_discount(bot_id=row.id, code=wallet, telegram_id=msg.from_user.id,
+                                               price=round(_amt * _rate), product_key="ton")
+                if _res.ok:
+                    await state.update_data(ton_disc=_res.code or wallet.upper())
+                    await msg.answer(
+                        f"✅ کد تخفیف اعمال شد (−{_res.discount:,} تومان)\n"
+                        f"💰 مبلغِ نهایی: <b>{_res.final_price:,} تومان</b>\n\n"
+                        "حالا <b>آدرسِ کیف‌پولِ TON</b> را بفرست:", parse_mode="HTML")
+                    return
+                if len(wallet) <= 40 and " " not in wallet and not wallet.lower().endswith(".ton"):
+                    await msg.answer(f"❌ {_res.reason or 'کد تخفیف نامعتبر است.'}\n"
+                                     "کدِ دیگری بفرست یا آدرسِ کیف‌پولِ TON را بفرست:")
+                    return
         await msg.answer(
             "❌ این آدرس معتبر به‌نظر نمی‌رسد. آدرسِ کیف‌پولِ TON معمولاً با "
             "<code>UQ</code> یا <code>EQ</code> شروع می‌شود (۴۸ کاراکتر) یا یک "
@@ -15828,12 +15944,27 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext):
         # *قبل* از بررسیِ موجودی، وگرنه کاربری که با تخفیف پولش می‌رسید
         # اشتباهاً «موجودی ناکافی» می‌گیرد.
         _note_extra = ""
-        from tenant.gateways.discount_engine import first_purchase_discount
-        _fd = await first_purchase_discount(
-            bot_id=row.id, telegram_id=msg.from_user.id, price=int(price), session=s)
-        if _fd.ok and _fd.discount > 0:
-            _note_extra = f" (تخفیف اولین خرید −{_fd.discount:,})"
-            price = _fd.final_price
+        # === PATCH_VS_DISCOUNT_V1 === کدِ واردشده بر تخفیفِ اولین خرید اولویت دارد
+        _dc_id, _dc_amt = None, 0
+        _dc_code = data.get("ton_disc")
+        if _dc_code:
+            from tenant.bots.virtual_service.vs_discount import vsd_charge, vsd_record, VsdError
+            try:
+                price, _dc_id, _dc_amt = await vsd_charge(
+                    s, bot_id=row.id, tg_id=msg.from_user.id, code=_dc_code, kind="ton", price=int(price))
+            except VsdError as _e:
+                await state.update_data(ton_disc=None)
+                await msg.answer(f"❌ {_e}\nدوباره آدرس را بفرست تا بدونِ کد ادامه بدهیم.")
+                return
+            await vsd_record(s, bot_id=row.id, tg_id=msg.from_user.id, code_id=_dc_id, discount=_dc_amt)
+            _note_extra = f" (کد تخفیف −{_dc_amt:,})"
+        else:
+            from tenant.gateways.discount_engine import first_purchase_discount
+            _fd = await first_purchase_discount(
+                bot_id=row.id, telegram_id=msg.from_user.id, price=int(price), session=s)
+            if _fd.ok and _fd.discount > 0:
+                _note_extra = f" (تخفیف اولین خرید −{_fd.discount:,})"
+                price = _fd.final_price
         if float(b.balance) < price:
             await state.clear()
             await msg.answer(
@@ -15849,7 +15980,8 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext):
         order = GiftOrder(bot_id=row.id, buyer_user_id=b.id, gift_id=f"tonsell_{centi}",
                           gift_emoji="💎", star_count=centi, price_toman=price,
                           dest_telegram_id=msg.from_user.id, dest_label=wallet[:120],
-                          status="awaiting_admin", pay_method="wallet", tracking_code=trk)
+                          status="awaiting_admin", pay_method="wallet", tracking_code=trk,
+                          discount_code_id=_dc_id, discount_amount=int(_dc_amt or 0))   # PATCH_VS_DISCOUNT_V1
         s.add(order)
         await s.commit()
         order_id = order.id
@@ -15968,6 +16100,8 @@ async def ton_order_refund(cb: CallbackQuery, bot: Bot):
         o.status = "refunded"
         buyer = await s.get(BotUser, o.buyer_user_id, with_for_update=True)
         refunded = int(o.price_toman or 0)
+        from tenant.bots.virtual_service.vs_discount import vsd_revert_order   # PATCH_VS_DISCOUNT_V1
+        await vsd_revert_order(s, o, buyer.telegram_id if buyer else None)
         if buyer:
             buyer.balance = float(buyer.balance or 0) + refunded
             s.add(WalletTxn(bot_id=row.id, user_id=buyer.id, amount=refunded,
@@ -16767,11 +16901,13 @@ async def _stars_show_invoice(target: Message, bot: Bot, dest_id: int, dest_labe
     uname_part = f":{dest_username}" if dest_id == 0 and dest_username else ""
     note = ("\n\n⚠️ این شخص ربات را استارت نکرده — سفارش ثبت می‌شود ولی "
             "ارسال کاملاً دستی خواهد بود." if dest_id == 0 else "")
+    from tenant.bots.virtual_service.vs_discount import vsd_rows   # PATCH_VS_DISCOUNT_V1
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 از کیف‌پول", callback_data=f"star:pay:{dest_id}:{qty}{uname_part}",
                               style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="💳 کارت‌به‌کارت", callback_data=f"star:cardpay:{dest_id}:{qty}{uname_part}",
                               style=ButtonStyle.PRIMARY)],
+        *await vsd_rows(row.id, "stars", price),
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="star:back_shop", style=ButtonStyle.DANGER)],
     ])
     await target.answer(
@@ -16791,6 +16927,7 @@ async def _stars_admin_kb(order_id: int) -> InlineKeyboardMarkup:
                              style=ButtonStyle.DANGER),
     ]]
     # === PATCH_TGTOOLS_STARS_V1 === دکمهٔ ارسالِ خودکار وقتی کلیدِ TGTools ثبت شده
+    _o = None   # PATCH_FRAGMENT_AUTO_STARS_V1
     try:
         async with Session() as s:
             _o = await s.get(GiftOrder, order_id)
@@ -16800,6 +16937,14 @@ async def _stars_admin_kb(order_id: int) -> InlineKeyboardMarkup:
                                               style=ButtonStyle.PRIMARY)])
     except Exception:
         logger.exception("tgtools: ساختِ دکمهٔ ارسال خودکار ناموفق")
+    # === PATCH_FRAGMENT_AUTO_STARS_V1 === دکمهٔ ارسال با ولتِ فرگمنت وقتی کاملاً وصل است
+    try:
+        if _o and await _fg_wallet(_o.bot_id) is not None:
+            rows.append([InlineKeyboardButton(text="⭐ ارسال خودکار با ولتِ فرگمنت",
+                                              callback_data=f"star:fgt:{order_id}",
+                                              style=ButtonStyle.PRIMARY)])
+    except Exception:
+        logger.exception("fragment-auto: ساختِ دکمهٔ ارسال ناموفق")
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -16816,7 +16961,8 @@ class StarsOrderError(Exception):
 async def place_stars_order(bot: Bot, row, *, buyer_tg_id: int, buyer_name: str,
                             buyer_username: str, dest_id: int, qty: int,
                             self_user=None, dest_username: str = "",
-                            price_override: int | None = None) -> dict:
+                            price_override: int | None = None,
+                            disc_code: str | None = None) -> dict:   # PATCH_VS_DISCOUNT_V1
     """کسرِ پول، ثبتِ سفارش و اطلاع‌رسانی. هم از ربات و هم از مینی‌اپ.
 
     price_override (PATCH_API_SPECIAL_PRODUCTS_V1): قیمتِ نهایی برایِ وب‌سرویس
@@ -16836,12 +16982,22 @@ async def place_stars_order(bot: Bot, row, *, buyer_tg_id: int, buyer_name: str,
         row.id, buyer_tg_id, buyer_name, buyer_username or "", return_created=True)
     async with Session() as s:
         b = await s.get(BotUser, buyer.id, with_for_update=True)  # قفلِ ردیف: دابل‌کلیک = دو خرید با یک پول
+        # === PATCH_VS_DISCOUNT_V1 === کدِ تخفیف: اعتبارسنجیِ دوباره + ثبتِ مصرف در همین تراکنش
+        _dc_id, _dc_amt = None, 0
+        if disc_code:
+            from tenant.bots.virtual_service.vs_discount import vsd_charge, vsd_record, VsdError
+            try:
+                price, _dc_id, _dc_amt = await vsd_charge(
+                    s, bot_id=row.id, tg_id=buyer_tg_id, code=disc_code, kind="stars", price=price)
+            except VsdError as _e:
+                raise StarsOrderError(str(_e))
+            await vsd_record(s, bot_id=row.id, tg_id=buyer_tg_id, code_id=_dc_id, discount=_dc_amt)
         if float(b.balance) < price:
             raise StarsOrderError(
                 f"موجودیِ کیف‌پول کافی نیست. کمبود: {price - int(b.balance):,} تومان")
         b.balance = float(b.balance) - price
         s.add(WalletTxn(bot_id=row.id, user_id=b.id, amount=-price, kind="purchase",
-                        note=f"خریدِ {qty:,} استارز"))
+                        note=f"خریدِ {qty:,} استارز" + (f" (کد تخفیف −{_dc_amt:,})" if _dc_amt else "")))
         from models import alloc_tracking_in as _alloc_in  # PATCH_SEQ_TRACKING_V1
         trk = await _alloc_in(s, row.id)
         # PATCH_SELF_DEST_LABEL_V1
@@ -16859,7 +17015,8 @@ async def place_stars_order(bot: Bot, row, *, buyer_tg_id: int, buyer_name: str,
         order = GiftOrder(bot_id=row.id, buyer_user_id=b.id, gift_id=f"starsell_{qty}",
                           gift_emoji="⭐", star_count=qty, price_toman=price,
                           dest_telegram_id=dest_id, dest_label=dest_label,
-                          status="awaiting_admin", pay_method="wallet", tracking_code=trk)
+                          status="awaiting_admin", pay_method="wallet", tracking_code=trk,
+                          discount_code_id=_dc_id, discount_amount=int(_dc_amt or 0))   # PATCH_VS_DISCOUNT_V1
         s.add(order)
         await s.commit()
         order_id = order.id
@@ -16876,6 +17033,8 @@ async def place_stars_order(bot: Bot, row, *, buyer_tg_id: int, buyer_name: str,
         if ((await _get_setting(row.id, "tgtools_auto", "0")) == "1"
                 and await _get_setting(row.id, "tgtools_api_key", "")):
             _tgt_spawn(bot, row, order_id)
+        elif await _fg_auto_on(row.id):   # PATCH_FRAGMENT_AUTO_STARS_V1 — اگر TGTools خودکار نیست، ولتِ فرگمنت
+            _fg_spawn(bot, row, order_id)
     except Exception:
         logger.exception("tgtools: شروعِ ارسالِ خودکار ناموفق")
     return {"order_id": order_id, "tracking": trk, "price": price,
@@ -16883,8 +17042,9 @@ async def place_stars_order(bot: Bot, row, *, buyer_tg_id: int, buyer_name: str,
 
 
 @smm_router.callback_query(F.data.startswith("star:pay:"))
-async def star_pay(cb: CallbackQuery, bot: Bot):
+async def star_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from tenant import get_bot_row
+    from tenant.bots.virtual_service.vs_discount import vsd_pick, vsd_clear   # PATCH_VS_DISCOUNT_V1
     row = await get_bot_row(bot)
     if not row:
         await cb.answer()
@@ -16896,10 +17056,12 @@ async def star_pay(cb: CallbackQuery, bot: Bot):
         res = await place_stars_order(
             bot, row, buyer_tg_id=cb.from_user.id, buyer_name=cb.from_user.full_name,
             buyer_username=cb.from_user.username or "", dest_id=dest_id, qty=qty,
-            self_user=cb.from_user, dest_username=dest_username)
+            self_user=cb.from_user, dest_username=dest_username,
+            disc_code=vsd_pick(await state.get_data(), cb.message.message_id, "stars"))   # PATCH_VS_DISCOUNT_V1
     except StarsOrderError as e:
         await cb.answer(f"❌ {e}", show_alert=True)
         return
+    await vsd_clear(state)
     await _delete_shop_panel(cb)
     await cb.answer("✅ پرداخت شد")
     _t2, _k2 = await _with_sfirst(
@@ -16944,6 +17106,8 @@ async def _resolve_dest_label(bot_id: int, dest_id: int) -> str:
 @smm_router.callback_query(F.data.startswith("star:cardpay:"))
 async def star_cardpay_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from tenant import get_bot_row, get_or_create_user, get_setting, _gen_tracking, smart_cancel_kb
+    from tenant.bots.virtual_service.vs_discount import vsd_pick, vsd_charge, vsd_record, VsdError   # PATCH_VS_DISCOUNT_V1
+    _disc_code = vsd_pick(await state.get_data(), cb.message.message_id, "stars")
     row = await get_bot_row(bot)
     if not row:
         await cb.answer()
@@ -16976,16 +17140,28 @@ async def star_cardpay_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     else:
         dest_label = await _resolve_dest_label(row.id, dest_id)
     async with Session() as s:
+        # === PATCH_VS_DISCOUNT_V1 === قیمتِ کارت‌به‌کارت = قیمتِ بعد از کد؛ مصرفِ کد هم همین‌جا ثبت می‌شود
+        # (اگر ادمین رسید را رد کند، همین مصرف در star:reject برگردانده می‌شود)
+        _dc_id, _dc_amt = None, 0
+        if _disc_code:
+            try:
+                price, _dc_id, _dc_amt = await vsd_charge(
+                    s, bot_id=row.id, tg_id=cb.from_user.id, code=_disc_code, kind="stars", price=price)
+            except VsdError as _e:
+                await cb.answer(f"❌ {_e}", show_alert=True)
+                return
+            await vsd_record(s, bot_id=row.id, tg_id=cb.from_user.id, code_id=_dc_id, discount=_dc_amt)
         order = GiftOrder(bot_id=row.id, buyer_user_id=buyer.id, gift_id=f"starsell_{qty}",
                           gift_emoji="⭐", star_count=qty, price_toman=price,
                           dest_telegram_id=dest_id, dest_label=dest_label,
-                          status="awaiting_receipt", pay_method="card", tracking_code=trk)
+                          status="awaiting_receipt", pay_method="card", tracking_code=trk,
+                          discount_code_id=_dc_id, discount_amount=int(_dc_amt or 0))
         s.add(order)
         await s.commit()
         order_id = order.id
 
     await state.set_state(SmmFSM.stars_receipt_photo)
-    await state.update_data(stars_order_id=order_id)
+    await state.update_data(stars_order_id=order_id, vsd=None, vsd_pending=None)
     await _delete_shop_panel(cb)
     await cb.answer()
     holder_line = f"\n👤 به‌نامِ: {card_holder}" if card_holder else ""
@@ -17149,6 +17325,8 @@ async def star_admin_reject(cb: CallbackQuery, bot: Bot):
         buyer = await s.get(BotUser, o.buyer_user_id, with_for_update=True)
         buyer_tg_id = buyer.telegram_id if buyer else None
         trk = o.tracking_code
+        from tenant.bots.virtual_service.vs_discount import vsd_revert_order   # PATCH_VS_DISCOUNT_V1
+        await vsd_revert_order(s, o, buyer_tg_id)
         # === PATCH_STARS_REJECT_REFUND_V1 ===
         # باگ: ردِ سفارشِ استارزِ پرداخت‌شده با کیف‌پول فقط وضعیت را عوض می‌کرد و
         # پولِ کسرشده برنمی‌گشت (پرمیوم و ری‌اکشن این را داشتند، استارز نه).
@@ -17364,6 +17542,189 @@ async def tgtools_fulfil_order(bot: Bot, row, order_id: int, *, by_admin: bool =
             logger.exception("tgtools: برگرداندن به دستی هم ناموفق بود")
     finally:
         _tgt_running.discard(order_id)
+
+
+# ═══════════════════════════════════════════
+#  ارسالِ خودکارِ استارز با ولتِ فرگمنتِ خودِ ربات — PATCH_FRAGMENT_AUTO_STARS_V1
+# ═══════════════════════════════════════════
+# گزارشِ ادمین (فدایی): «ولتی که ربات برای فرگمنت داده، فروش‌مون خودکار باشه و برای کاربر بزنه».
+# مثلِ TGTools (همان وضعیتِ auto_processing، همان برگشت به تحویلِ دستی)، ولی خریدِ استارز با
+# TONِ ولتِ اختصاصیِ همین ربات از طریقِ pyfragment انجام می‌شود.
+#
+# اصولِ ایمنی (پولِ واقعی خرج می‌شود):
+#  • ادعایِ اتمیِ سفارش (awaiting_admin → auto_processing) ⇒ تحویلِ دوبارِ «دستی + خودکار» ممکن نیست.
+#  • برایِ هر ربات هم‌زمان فقط یک خرید (قفلِ per-bot) — دو تراکنشِ هم‌زمان از یک ولت seqno را خراب می‌کند.
+#  • خطاهایی که قطعاً «قبل از پرداخت» رخ می‌دهند (یوزر پیدا نشد، کوکی خراب، ...) ⇒ برگشت به دستی، بدونِ هشدار.
+#  • هر خطایِ نامشخص (تایم‌اوت، خطای تراکنش، پارس...) ⇒ برگشت به دستی *با هشدار*: «اول تراکنش‌هایِ ولت را
+#    ببین»؛ هیچ retryِ خودکاریِ خرید وجود ندارد.
+#  • سقفِ هر سفارشِ خودکار _FG_AUTO_MAX_STARS؛ بالاتر از آن دستی می‌ماند. کمتر از ۵۰ هم (حدِ فرگمنت).
+_FG_AUTO_MAX_STARS = 5000
+_FG_MIN_STARS = 50
+_fg_running: set[int] = set()
+_fg_tasks: set = set()
+_fg_locks: dict[int, asyncio.Lock] = {}
+
+
+async def _fg_wallet(bot_id: int):
+    from models import FragmentWallet
+    async with Session() as s:
+        w = await s.scalar(select(FragmentWallet).where(FragmentWallet.bot_id == bot_id))
+    if w and w.enabled and w.encrypted_fragment_cookies and w.encrypted_tonapi_key:
+        return w
+    return None
+
+
+async def _fg_auto_on(bot_id: int) -> bool:
+    """فروشِ خودکار روشن است و ولتِ فرگمنت کاملاً وصل شده؟"""
+    if (await _get_setting(bot_id, "fragment_auto", "0")) != "1":
+        return False
+    return (await _fg_wallet(bot_id)) is not None
+
+
+def _fg_spawn(bot: Bot, row, order_id: int, by_admin: bool = False) -> None:
+    t = asyncio.create_task(fragment_fulfil_order(bot, row, order_id, by_admin=by_admin))
+    _fg_tasks.add(t)
+    t.add_done_callback(_fg_tasks.discard)
+
+
+def _fg_clean_failure(e: Exception) -> str | None:
+    """خطاهایی که مطمئنیم *قبل* از ارسالِ تراکنش بوده‌اند ⇒ متنِ فارسی؛ وگرنه None (نامشخص)."""
+    try:
+        import pyfragment as _pf
+    except ImportError:
+        return "کتابخانهٔ pyfragment روی سرور نصب نیست (pip install pyfragment)."
+    table = (
+        (_pf.UserNotFoundError, "فرگمنت این کاربر را پیدا نکرد (یوزرنیم اشتباه یا غیرقابلِ دریافت)."),
+        (_pf.CookieError, "کوکی‌هایِ فرگمنت خراب/منقضی است؛ از «⭐ استارزِ خودکار ← ویرایشِ اتصال» دوباره وصل کن."),
+        (_pf.ConfigurationError, "تنظیماتِ اتصالِ فرگمنت ناقص است؛ دوباره وصلش کن."),
+        (_pf.VerificationError, "فرگمنت برایِ این حساب احرازِ هویت (KYC) می‌خواهد."),
+        (_pf.FragmentPageError, "صفحهٔ فرگمنت در دسترس نبود؛ کمی بعد دوباره امتحان کن."),
+        (_pf.WalletError, "ولتِ فرگمنت مشکل دارد (احتمالاً موجودیِ TON کافی نیست)؛ شارژش کن."),
+    )
+    for cls, msg in table:
+        if isinstance(e, cls):
+            return msg
+    return None
+
+
+async def fragment_fulfil_order(bot: Bot, row, order_id: int, *, by_admin: bool = False) -> None:
+    from tenant.bots.virtual_service import tgtools_api as _tg   # فقط extract_username
+    if order_id in _fg_running:
+        return
+    _fg_running.add(order_id)
+    try:
+        lock = _fg_locks.setdefault(row.id, asyncio.Lock())
+        async with lock:
+            # ادعایِ اتمیِ سفارش (جلوگیری از تحویلِ دوبار: دستی + TGTools + فرگمنت)
+            async with Session() as s:
+                o = await s.get(GiftOrder, order_id, with_for_update=True)
+                if (not o or o.bot_id != row.id or not str(o.gift_id).startswith("starsell_")
+                        or o.status != "awaiting_admin"):
+                    return
+                o.status = "auto_processing"
+                qty, dest_label = int(o.star_count), o.dest_label
+                await s.commit()
+
+            wallet = await _fg_wallet(row.id)
+            if wallet is None:
+                await _tgt_revert_manual(bot, row, order_id,
+                                         "ولتِ فرگمنت وصل/فعال نیست (از «⭐ استارزِ خودکار» وصلش کن).")
+                return
+            username = _tg.extract_username(dest_label)
+            if not username:
+                await _tgt_revert_manual(bot, row, order_id,
+                                         "مقصدِ این سفارش یوزرنیم ندارد و فرگمنت فقط با یوزرنیم می‌فرستد.")
+                return
+            if qty < _FG_MIN_STARS or qty > _FG_AUTO_MAX_STARS:
+                await _tgt_revert_manual(
+                    bot, row, order_id,
+                    f"تعدادِ {qty:,} استارز خارج از بازهٔ ارسالِ خودکار ({_FG_MIN_STARS}–{_FG_AUTO_MAX_STARS:,}) است؛ دستی بفرست.")
+                return
+
+            from tenant.bots.virtual_service.fragment_stars import _get_fragment_client
+            try:
+                client = await _get_fragment_client(wallet)
+                async with client:
+                    res = await asyncio.wait_for(
+                        client.purchase_stars(username, amount=qty, show_sender=False), timeout=150)
+            except Exception as e:   # noqa: BLE001
+                clean = _fg_clean_failure(e)
+                if clean:
+                    logger.warning("fragment-auto: خرید رد شد (قبل از پرداخت): %s", type(e).__name__)
+                    await _tgt_revert_manual(bot, row, order_id, f"خریدِ فرگمنت انجام نشد: {clean}")
+                else:
+                    logger.exception("fragment-auto: خطایِ نامشخص در سفارش %s", order_id)
+                    await _tgt_revert_manual(
+                        bot, row, order_id,
+                        f"پاسخِ فرگمنت نامشخص بود ({type(e).__name__}). ممکن است TON از ولت خرج و استارز ارسال شده باشد!\n"
+                        "⛔ قبل از هر کاری تراکنش‌هایِ ولتِ فرگمنت (و پروفایلِ گیرنده) را چک کن؛ "
+                        "اگر خرج شده، دستی نفرست.", warn=True)
+                return
+
+            tx = getattr(res, "transaction_id", None)
+            if not tx or not getattr(res, "confirmed", True):
+                await _tgt_revert_manual(
+                    bot, row, order_id,
+                    f"تراکنشِ فرگمنت ارسال شد ولی تأیید نشد (شناسه: <code>{tx or '—'}</code>). "
+                    "قبل از ارسالِ دستی، وضعیتِ تراکنش را در ولت/فرگمنت چک کن.", warn=True)
+                return
+            await _set_setting(row.id, f"fragment_tx_{order_id}", str(tx))
+            async with Session() as s:
+                o = await s.get(GiftOrder, order_id, with_for_update=True)
+                if not o or o.bot_id != row.id:
+                    return
+                o.status = "sent"
+                buyer = await s.get(BotUser, o.buyer_user_id)
+                buyer_tg_id = buyer.telegram_id if buyer else None
+                trk = o.tracking_code
+                await s.commit()
+            await _notify_gift_order_trust_success(bot, row, order_id)
+            await _notify_manual_order(
+                bot, row,
+                f"✅ سفارشِ استارز #{await order_no(GiftOrder, order_id)} با ولتِ فرگمنت تحویل داده شد "
+                f"({qty:,} ⭐ → @{username}).\nتراکنش: <code>{tx}</code>")
+            if buyer_tg_id:
+                try:
+                    await bot.send_message(
+                        buyer_tg_id,
+                        f"✅ سفارش شما با موفقیت تکمیل شد! 🎉\n\n⭐ تعداد {qty:,} استارز با موفقیت ارسال شد.\n"
+                        f"🔖 کد پیگیری: <code>{trk}</code>", parse_mode="HTML",
+                        reply_markup=await _gift_support_kb(trk))
+                except Exception:
+                    logger.exception("fragment-auto: خبر به مشتری ناموفق بود")
+    except Exception:
+        logger.exception("fragment-auto: خطایِ پیش‌بینی‌نشده در سفارش %s", order_id)
+        try:
+            await _tgt_revert_manual(
+                bot, row, order_id,
+                "خطایِ داخلی رخ داد. اگر مطمئن نیستی خرید انجام شده یا نه، اول تراکنش‌هایِ ولتِ فرگمنت را چک کن.",
+                warn=True)
+        except Exception:
+            logger.exception("fragment-auto: برگرداندن به دستی هم ناموفق بود")
+    finally:
+        _fg_running.discard(order_id)
+
+
+@smm_router.callback_query(F.data.startswith("star:fgt:"))
+async def star_fragment_go(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    order_id = int(cb.data.split(":")[2])
+    if await _fg_wallet(row.id) is None:
+        await cb.answer("اول ولتِ فرگمنت را کامل وصل کن (⭐ استارزِ خودکار).", show_alert=True)
+        return
+    async with Session() as s:
+        o = await s.get(GiftOrder, order_id)
+    if not o or o.bot_id != row.id or o.status != "awaiting_admin":
+        await cb.answer("این سفارش قبلاً رسیدگی شده.", show_alert=True)
+        return
+    await cb.answer("🤖 در حالِ ارسال با ولتِ فرگمنت… نتیجه اینجا اعلام می‌شود.", show_alert=True)
+    _fg_spawn(bot, row, order_id, by_admin=True)
+    try:
+        await cb.message.delete()
+    except Exception:
+        logger.info("حذفِ پیامِ سفارشِ استارز پس از ارسالِ خودکارِ فرگمنت ممکن نشد")
 
 
 @smm_router.callback_query(F.data.startswith("star:tgt:"))
@@ -18131,6 +18492,7 @@ async def _vnum_customer_numbers_render(target: Message, bot_id: int, country_id
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"🤖 خریدِ آنی (خودکار) — {real_price:,} تومان",
                                   callback_data=f"vnum:autobuy:{country_id}", style=ButtonStyle.SUCCESS)],
+            *await _vsd_rows_lazy(bot_id, "vnum", real_price),   # PATCH_VS_DISCOUNT_V1
             [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="vnum:shop:0", style=ButtonStyle.DANGER)],
         ])
         await target.answer(
@@ -18151,6 +18513,7 @@ async def _vnum_customer_numbers_render(target: Message, bot_id: int, country_id
                 [InlineKeyboardButton(text=f"🖐 خرید با تحویلِ دستی — {real_price:,} تومان",
                                       callback_data=f"vnum:manualbuy:{country_id}",
                                       style=ButtonStyle.SUCCESS)],
+                *await _vsd_rows_lazy(bot_id, "vnum", real_price),   # PATCH_VS_DISCOUNT_V1
                 [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="vnum:shop:0", style=ButtonStyle.DANGER)],
             ])
             # === PATCH_VNUM_DOUBLE_MOBILE_EMOJI_FIX_V1 ===
@@ -18189,6 +18552,8 @@ async def _vnum_customer_numbers_render(target: Message, bot_id: int, country_id
             rows.insert(0, [InlineKeyboardButton(
                 text=f"🖐 خرید با تحویلِ دستی — {real_price:,} تومان",
                 callback_data=f"vnum:manualbuy:{country_id}", style=ButtonStyle.SUCCESS)])
+            for _i, _r in enumerate(await _vsd_rows_lazy(bot_id, "vnum", real_price), start=1):   # PATCH_VS_DISCOUNT_V1
+                rows.insert(_i, _r)
     nav = []
     if start > 0:
         nav.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"vnum:numspage:{country_id}:{page-1}"))
@@ -18245,6 +18610,7 @@ async def vnum_number_pick(cb: CallbackQuery, bot: Bot):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 از کیف‌پول", callback_data=f"vnum:npay:{num_id}",
                               style=ButtonStyle.SUCCESS)],
+        *await _vsd_rows_lazy(row.id, "vnum", real_price),   # PATCH_VS_DISCOUNT_V1
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"vnum:buy:{country.id}", style=ButtonStyle.DANGER)],
     ])
     await cb.answer()
@@ -18257,12 +18623,13 @@ async def vnum_number_pick(cb: CallbackQuery, bot: Bot):
 
 
 @smm_router.callback_query(F.data.startswith("vnum:npay:"))
-async def vnum_number_pay(cb: CallbackQuery, bot: Bot):
+async def vnum_number_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
     """خریدِ اتمیک: با یک UPDATE شرطی روی status='available'، اگر دو
     مشتری هم‌زمان همین شماره را بزنند، فقط یکی موفق می‌شود — دیگری
     پیامِ «قبلاً فروخته شد» می‌گیرد، نه این‌که دو نفر یک شماره بخرند."""
     from tenant import get_bot_row, get_or_create_user, _gen_tracking
     from sqlalchemy import update as sa_update
+    from tenant.bots.virtual_service.vs_discount import vsd_pick, vsd_charge, vsd_record, vsd_clear, VsdError   # PATCH_VS_DISCOUNT_V1
     row = await get_bot_row(bot)
     if not row:
         await cb.answer()
@@ -18284,6 +18651,16 @@ async def vnum_number_pay(cb: CallbackQuery, bot: Bot):
         return_created=True)
     async with Session() as s:
         b = await s.get(BotUser, buyer.id)
+        # === PATCH_VS_DISCOUNT_V1 === کدِ تخفیف (قبل از چکِ موجودی)
+        _dc_id, _dc_amt = None, 0
+        _dc_code = vsd_pick(await state.get_data(), cb.message.message_id, "vnum")
+        if _dc_code:
+            try:
+                real_price, _dc_id, _dc_amt = await vsd_charge(
+                    s, bot_id=row.id, tg_id=cb.from_user.id, code=_dc_code, kind="vnum", price=real_price)
+            except VsdError as _e:
+                await cb.answer(f"❌ {_e}", show_alert=True)
+                return
         if float(b.balance) < real_price:
             await cb.answer(
                 f"❌ موجودیِ کیف‌پول کافی نیست. کمبود: {real_price - int(b.balance):,} تومان",
@@ -18306,8 +18683,11 @@ async def vnum_number_pay(cb: CallbackQuery, bot: Bot):
             bot_id=row.id, user_telegram_id=cb.from_user.id,
             smm_service_pk=country.id, service_id=country.service_id, service_name=country.name,
             link="", quantity=1, price_toman=real_price,
-            status="completed", tracking_code=trk)
+            status="completed", tracking_code=trk,
+            discount_code_id=_dc_id, discount_amount=int(_dc_amt or 0))   # PATCH_VS_DISCOUNT_V1
         s.add(o)
+        if _dc_id:
+            await vsd_record(s, bot_id=row.id, tg_id=cb.from_user.id, code_id=_dc_id, discount=_dc_amt)
         s.add(WalletTxn(bot_id=row.id, user_id=b.id, amount=-real_price,
                         kind="smm_order", note=f"خریدِ شمارهٔ مجازی: {country.name}"))
         await s.commit()
@@ -18319,6 +18699,7 @@ async def vnum_number_pay(cb: CallbackQuery, bot: Bot):
         n2.sold_at = func.now()
         await s.commit()
 
+    await vsd_clear(state)   # PATCH_VS_DISCOUNT_V1
     await _delete_shop_panel(cb)
     await cb.answer("✅ خریداری شد")
     kb = InlineKeyboardMarkup(inline_keyboard=[[
@@ -18352,10 +18733,11 @@ async def vnum_number_pay(cb: CallbackQuery, bot: Bot):
 
 # === PATCH_VNUM_MANUAL_DELIVERY_V1 ===
 @smm_router.callback_query(F.data.startswith("vnum:manualbuy:"))
-async def vnum_manual_buy_pay(cb: CallbackQuery, bot: Bot):
+async def vnum_manual_buy_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
     """خریدِ شماره وقتی انبار خالی است — سفارش ثبت و پرداخت می‌شود، ولی
     خودِ شماره را ادمین بعداً دستی می‌فرستد (تابعِ vnum_admin_sendnum)."""
     from tenant import get_bot_row, get_or_create_user, _gen_tracking, _notify_admins
+    from tenant.bots.virtual_service.vs_discount import vsd_pick, vsd_charge, vsd_record, vsd_clear, VsdError   # PATCH_VS_DISCOUNT_V1
     row = await get_bot_row(bot)
     if not row:
         await cb.answer()
@@ -18377,6 +18759,16 @@ async def vnum_manual_buy_pay(cb: CallbackQuery, bot: Bot):
         return_created=True)
     async with Session() as s:
         b = await s.get(BotUser, buyer.id, with_for_update=True)  # قفلِ ردیف: دابل‌کلیک = دو خرید با یک پول
+        # === PATCH_VS_DISCOUNT_V1 ===
+        _dc_id, _dc_amt = None, 0
+        _dc_code = vsd_pick(await state.get_data(), cb.message.message_id, "vnum")
+        if _dc_code:
+            try:
+                real_price, _dc_id, _dc_amt = await vsd_charge(
+                    s, bot_id=row.id, tg_id=cb.from_user.id, code=_dc_code, kind="vnum", price=real_price)
+            except VsdError as _e:
+                await cb.answer(f"❌ {_e}", show_alert=True)
+                return
         if float(b.balance) < real_price:
             await cb.answer(
                 f"❌ موجودیِ کیف‌پول کافی نیست. کمبود: {real_price - int(b.balance):,} تومان",
@@ -18390,13 +18782,17 @@ async def vnum_manual_buy_pay(cb: CallbackQuery, bot: Bot):
             smm_service_pk=country.id, service_id=country.service_id, service_name=country.name,
             link="", quantity=1, price_toman=real_price,
             status="awaiting_admin", tracking_code=trk,
-            note=f"خریدِ دستیِ شمارهٔ مجازی — انبار خالی بود، شماره را باید ادمین دستی بفرستد.")
+            note=f"خریدِ دستیِ شمارهٔ مجازی — انبار خالی بود، شماره را باید ادمین دستی بفرستد.",
+            discount_code_id=_dc_id, discount_amount=int(_dc_amt or 0))   # PATCH_VS_DISCOUNT_V1
         s.add(o)
+        if _dc_id:
+            await vsd_record(s, bot_id=row.id, tg_id=cb.from_user.id, code_id=_dc_id, discount=_dc_amt)
         s.add(WalletTxn(bot_id=row.id, user_id=b.id, amount=-real_price,
                         kind="smm_order", note=f"خریدِ شمارهٔ مجازی (دستی): {country.name}"))
         await s.commit()
         order_id = o.id
 
+    await vsd_clear(state)   # PATCH_VS_DISCOUNT_V1
     await _delete_shop_panel(cb)
     await cb.answer("✅ پرداخت شد")
     from tenant import _purchase_alert
@@ -18548,6 +18944,8 @@ async def vnum_admin_manual_reject(cb: CallbackQuery, bot: Bot):
         buyer_tg_id = o.user_telegram_id
         trk = o.tracking_code
         price = float(o.price_toman)
+        from tenant.bots.virtual_service.vs_discount import vsd_revert_order   # PATCH_VS_DISCOUNT_V1
+        await vsd_revert_order(s, o, buyer_tg_id)
         b = await s.scalar(select(BotUser).where(
             BotUser.bot_id == row.id, BotUser.telegram_id == buyer_tg_id).with_for_update())
         if b:

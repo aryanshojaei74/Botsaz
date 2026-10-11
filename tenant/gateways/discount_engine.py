@@ -82,6 +82,7 @@ async def validate_discount(
     panel_key: str | None = None,
     plan_id: int | None = None,
     button_id: int | None = None,
+    product_key: str | None = None,   # === PATCH_VS_DISCOUNT_PRODUCTS_V1 === stars/ton/gift/premium/vnum/smm
     session: AsyncSession | None = None,
 ) -> DiscountResult:
     """کد تخفیف را اعتبارسنجی و مبلغ تخفیف را محاسبه می‌کند (بدون ثبت مصرف).
@@ -119,6 +120,13 @@ async def validate_discount(
         if dc.restricted_user_id is not None and dc.restricted_user_id != telegram_id:
             return DiscountResult(ok=False, final_price=price,
                                   reason="این کد مخصوص کاربر دیگری است.")
+
+        # === PATCH_VS_DISCOUNT_PRODUCTS_V1 ===
+        # کدِ محدود به دسته‌هایِ محصول: فقط وقتی معتبر است که خریدِ جاری از همان دسته‌ها باشد.
+        _pk = {k.strip() for k in (dc.product_keys or "").split(",") if k.strip()}
+        if _pk and (product_key or "") not in _pk:
+            return DiscountResult(ok=False, final_price=price,
+                                  reason="این کد برای این محصول معتبر نیست.")
 
         # انقضا
         if dc.expires_at is not None and dc.expires_at < datetime.utcnow():

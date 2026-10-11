@@ -153,6 +153,13 @@ def _detail_kb(bot_id: int) -> InlineKeyboardMarkup:
 
 
 async def _detail_text_kb(wallet: FragmentWallet) -> tuple[str, InlineKeyboardMarkup]:
+    # === PATCH_FRAGMENT_AUTO_STARS_V1 === وضعیتِ «فروشِ خودکار»
+    try:
+        from tenant import get_setting as _gs
+        _auto_on = (await _gs(wallet.bot_id, "fragment_auto", "0")) == "1"
+    except Exception:
+        logger.exception("fragment: خواندنِ وضعیتِ فروشِ خودکار ناموفق بود")
+        _auto_on = False
     checked = ("هنوز بررسی نشده" if not wallet.last_balance_checked_at else
                wallet.last_balance_checked_at.strftime("%Y-%m-%d %H:%M UTC"))
     # === PATCH_FRAGMENT_PURCHASE_V1 ===
@@ -167,6 +174,9 @@ async def _detail_text_kb(wallet: FragmentWallet) -> tuple[str, InlineKeyboardMa
         f"💰 آخرین موجودیِ ثبت‌شده: <b>{float(wallet.last_balance_ton):.4f} TON</b>\n"
         f"🕒 آخرین بررسی: {checked}\n\n"
         f"🔗 وضعیتِ اتصال: {conn_line}"
+        + ("\n\n🤖 <b>فروشِ خودکار روشن است:</b> هر سفارشِ استارزِ پرداخت‌شده (۵۰ تا ۵٬۰۰۰ ⭐، با یوزرنیمِ مقصد) "
+           "همان لحظه با TONِ همین ولت خریده و ارسال می‌شود. هر مشکل/ابهامی ⇒ سفارش به تحویلِ دستی برمی‌گردد و "
+           "به تو خبر می‌دهد." if _auto_on else "")
     )
     rows = [
         [InlineKeyboardButton(text="📋 کپیِ آدرس", copy_text=CopyTextButton(text=wallet.address))],
@@ -178,6 +188,12 @@ async def _detail_text_kb(wallet: FragmentWallet) -> tuple[str, InlineKeyboardMa
     if configured:
         rows.append([InlineKeyboardButton(text="🧪 تستِ خریدِ استارز", callback_data="smm:fragment:testbuy",
                                           style=ButtonStyle.PRIMARY)])
+        # === PATCH_FRAGMENT_AUTO_STARS_V1 ===
+        rows.append([InlineKeyboardButton(
+            text=("🤖 فروشِ خودکار: ✅ روشن (برایِ خاموش‌کردن بزن)" if _auto_on
+                  else "🤖 فروشِ خودکار: ⛔ خاموش (برایِ روشن‌کردن بزن)"),
+            callback_data="smm:fragment:autotoggle",
+            style=ButtonStyle.DANGER if _auto_on else ButtonStyle.SUCCESS)])
     # === PATCH_FRAGMENT_WITHDRAW_V1 ===
     # راهِ خروجِ پول. مستقل از وضعیتِ اتصال نشان داده می‌شود، چون دقیقاً
     # همان کاربری که هنوز وصل نشده ممکن است بخواهد پولش را پس بگیرد.
@@ -252,6 +268,29 @@ async def fragment_create(cb: CallbackQuery, bot: Bot):
         await cb.message.edit_text(text, reply_markup=kb)
     except Exception:
         await cb.message.answer(text, reply_markup=kb)
+
+
+@fragment_router.callback_query(F.data == "smm:fragment:autotoggle")
+async def fragment_auto_toggle(cb: CallbackQuery, bot: Bot):
+    """PATCH_FRAGMENT_AUTO_STARS_V1 — روشن/خاموش‌کردنِ فروشِ خودکارِ استارز با ولتِ فرگمنت (فقط مالک)."""
+    row = await _owner_only_strict(cb, bot)
+    if not row:
+        return
+    from tenant import get_setting, set_setting
+    async with Session() as s:
+        wallet = await s.scalar(select(FragmentWallet).where(FragmentWallet.bot_id == row.id))
+    if not wallet or not (wallet.encrypted_fragment_cookies and wallet.encrypted_tonapi_key):
+        await cb.answer("اول باید ولت کامل وصل شده باشد.", show_alert=True)
+        return
+    cur = (await get_setting(row.id, "fragment_auto", "0")) == "1"
+    await set_setting(row.id, "fragment_auto", "0" if cur else "1")
+    await cb.answer("⛔ فروشِ خودکار خاموش شد" if cur else "✅ فروشِ خودکار روشن شد")
+    text, kb = await _detail_text_kb(wallet)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception as e:   # noqa: BLE001
+        if "not modified" not in str(e).lower():
+            logger.exception("fragment: به‌روزرسانیِ صفحه ممکن نشد")
 
 
 @fragment_router.callback_query(F.data == "smm:fragment:refresh")
