@@ -1533,6 +1533,8 @@ async def _refund_order(bot: Bot, order_id: int, note: str, text: str | None = N
                         kind="smm_refund", note=note))
         order.status = "refunded"
         order.panel_status = "canceled"
+        from tenant.bots.virtual_service.vs_discount import vsd_revert_order   # PATCH_VS_DISCOUNT_V1
+        await vsd_revert_order(s, order, order.user_telegram_id)
         await s.commit()
     try:
         await bot.send_message(order.user_telegram_id,
@@ -1667,7 +1669,7 @@ async def ozv_info(cb: CallbackQuery, bot: Bot):
 
 
 @ozvinoo_router.callback_query(F.data.startswith("vnum:ozbuy:"))
-async def ozv_buy(cb: CallbackQuery, bot: Bot):
+async def ozv_buy(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from tenant import get_bot_row, get_or_create_user, _gen_tracking, _purchase_alert
     row = await get_bot_row(bot)
     if not row:
@@ -1684,11 +1686,40 @@ async def ozv_buy(cb: CallbackQuery, bot: Bot):
         await cb.answer("این سرویس فعلاً آمادهٔ استفاده نیست.", show_alert=True)
         return
     real_price = int(country.sell_rate) // 1000
+    # === PATCH_VS_DISCOUNT_V1 ===
+    # این دکمه قبلاً مستقیم می‌خرید؛ اگر ربات کدِ تخفیفِ فعال دارد، اول فاکتور (با دکمهٔ «🏷 کد تخفیف»)
+    # نشان داده می‌شود و پرداختِ واقعی با «vnum:ozbuy:go:<id>» انجام می‌شود. بدونِ کدِ فعال، رفتارِ قبلی.
+    from tenant.bots.virtual_service.vs_discount import vsd_enabled, vsd_rows, vsd_pick
+    if ":go:" not in cb.data and await vsd_enabled(row.id):
+        _kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💰 پرداخت از کیف‌پول", callback_data=f"vnum:ozbuy:go:{service_pk}",
+                                  style=ButtonStyle.SUCCESS)],
+            *await vsd_rows(row.id, "vnum", real_price),
+            [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="vnum:shop:0", style=ButtonStyle.DANGER)],
+        ])
+        _txt = (f"🧾 <b>فاکتورِ خرید</b>\n\n🌍 کشور: {html.escape(country.name)}\n"
+                f"💰 قیمت: {real_price:,} تومان")
+        await cb.answer()
+        try:
+            await cb.message.edit_text(_txt, reply_markup=_kb, parse_mode="HTML")
+        except Exception:
+            await cb.message.answer(_txt, reply_markup=_kb, parse_mode="HTML")
+        return
+    _dc_code = vsd_pick(await state.get_data(), cb.message.message_id, "vnum") if ":go:" in cb.data else None
+    _chk_price = real_price
+    if _dc_code:
+        from tenant.gateways.discount_engine import validate_discount
+        _r = await validate_discount(bot_id=row.id, code=_dc_code, telegram_id=cb.from_user.id,
+                                     price=int(real_price), product_key="vnum")
+        if not _r.ok:
+            await cb.answer(f"❌ {_r.reason or 'کد تخفیف دیگر معتبر نیست.'}", show_alert=True)
+            return
+        _chk_price = int(_r.final_price)
     buyer, _ = await get_or_create_user(row.id, cb.from_user.id, cb.from_user.full_name, cb.from_user.username or "", return_created=True)
     async with Session() as s:
         b = await s.get(BotUser, buyer.id)
-        if not b or float(b.balance) < real_price:
-            await cb.answer(f"❌ موجودی کافی نیست. کمبود: {real_price - int(float(b.balance) if b else 0):,} تومان", show_alert=True)
+        if not b or float(b.balance) < _chk_price:
+            await cb.answer(f"❌ موجودی کافی نیست. کمبود: {_chk_price - int(float(b.balance) if b else 0):,} تومان", show_alert=True)
             return
     # === PATCH_VNUM_AUDIT_V1 === دو تپِ پشتِ‌سرهم = دو شماره و دو بار کسرِ پول؛ یکی در لحظه.
     _guard = (row.id, cb.from_user.id)
@@ -1697,7 +1728,8 @@ async def ozv_buy(cb: CallbackQuery, bot: Bot):
         return
     _BUY_INFLIGHT.add(_guard)
     try:
-        await _ozv_buy_locked(cb, bot, row, country, provider, api_country_id, buyer, real_price)
+        await _ozv_buy_locked(cb, bot, row, country, provider, api_country_id, buyer, real_price,
+                              disc_code=_dc_code, state=state)   # PATCH_VS_DISCOUNT_V1
     finally:
         _BUY_INFLIGHT.discard(_guard)
 
@@ -1705,8 +1737,10 @@ async def ozv_buy(cb: CallbackQuery, bot: Bot):
 _BUY_INFLIGHT: set = set()
 
 
-async def _ozv_buy_locked(cb, bot, row, country, provider, api_country_id, buyer, real_price):
+async def _ozv_buy_locked(cb, bot, row, country, provider, api_country_id, buyer, real_price,
+                           disc_code=None, state=None):
     from tenant import _purchase_alert
+    from tenant.bots.virtual_service.vs_discount import vsd_charge, vsd_record, vsd_clear, VsdError   # PATCH_VS_DISCOUNT_V1
     await cb.answer("⏳ در حال رزرو شماره…")
     # PATCH_TNUMBER_PROVIDER_V1 — رزرو از طریقِ لایهٔ مشترک (OzVinoo یا TNumber)
     _ok, _err, api_order_id, phone = await _pv_buy(provider, api_country_id, country)
@@ -1733,6 +1767,16 @@ async def _ozv_buy_locked(cb, bot, row, country, provider, api_country_id, buyer
         async with Session() as s:
             b = await s.scalar(select(BotUser).where(
                 BotUser.id == buyer.id, BotUser.bot_id == row.id).with_for_update())
+            # === PATCH_VS_DISCOUNT_V1 === قیمتِ بعد از کد در کسر/سفارش/بازگشتِ وجه (price_toman)
+            _dc_id, _dc_amt = None, 0
+            if disc_code:
+                try:
+                    real_price, _dc_id, _dc_amt = await vsd_charge(
+                        s, bot_id=row.id, tg_id=cb.from_user.id, code=disc_code, kind="vnum", price=int(real_price))
+                except VsdError as _e:
+                    await _pv_cancel(provider, api_order_id)
+                    await cb.message.answer(f"❌ {_e}\nسفارشِ ارائه‌دهنده لغو شد و وجهی کسر نشد.")
+                    return
             if not b or float(b.balance) < real_price:
                 await _pv_cancel(provider, api_order_id)
                 await cb.message.answer("❌ موجودی در لحظهٔ نهایی کافی نبود؛ سفارش ارائه‌دهنده لغو شد.")
@@ -1743,12 +1787,17 @@ async def _ozv_buy_locked(cb, bot, row, country, provider, api_country_id, buyer
                              service_name=country.name, link=phone, quantity=1,
                              price_toman=real_price, status="sent",
                              panel_order_id=str(api_order_id), panel_status="pending",
-                             tracking_code=trk, note=f"خرید خودکار شماره از {_pname} — {country.name}")
+                             tracking_code=trk, note=f"خرید خودکار شماره از {_pname} — {country.name}",
+                             discount_code_id=_dc_id, discount_amount=int(_dc_amt or 0))   # PATCH_VS_DISCOUNT_V1
             s.add(order)
+            if _dc_id:
+                await vsd_record(s, bot_id=row.id, tg_id=cb.from_user.id, code_id=_dc_id, discount=_dc_amt)
             s.add(WalletTxn(bot_id=row.id, user_id=b.id, amount=-real_price,
                             kind="smm_order", note=f"خرید شمارهٔ مجازی {_pname} — {country.name}"))
             await s.commit()
             local_order_id = order.id
+        if state is not None:
+            await vsd_clear(state)   # PATCH_VS_DISCOUNT_V1
     except Exception:
         # شماره از ارائه‌دهنده گرفته شده ولی ثبتِ سفارش/کسرِ پول خطا داد؛ شماره را آزاد کن تا
         # پولی هدر نرود و کاربر هم چیزی کسر نشده.

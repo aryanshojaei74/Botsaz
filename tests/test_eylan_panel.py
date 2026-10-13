@@ -256,3 +256,18 @@ def test_wg_file_names_fit_tunnel_limit_and_are_unique():
     assert len(set(n.lower() for n in names)) == 3
     short = EP._wg_file_name("u1a2b3c4-wg-TR.conf", "u1a2b3c4", set())
     assert short == "u1a2b3c4-wg-TR.conf"            # کوتاه است؛ دست نمی‌خورد
+
+
+# === PATCH_WG_FILENAME_ASCII_V1 ===
+def test_wg_file_name_strips_emoji_and_spaces():
+    """گزارشِ ادمین: «udvkfuci-  -DE.conf» (پرچم/فاصله) در وایرگارد ایمپورت نمی‌شد."""
+    import re
+    used = set()
+    n1 = EP._wg_file_name("udvkfuci-\U0001F1E9\U0001F1EA  -DE.conf", "udvkfuci", used)
+    n2 = EP._wg_file_name("udvkfuci-wg-TR.conf", "udvkfuci", used)
+    assert n1 == "udvkfuci-DE.conf", n1
+    assert n2 == "udvkfuci-wg-TR.conf", n2
+    for n in (n1, n2):
+        assert re.fullmatch(r"[A-Za-z0-9_=+.\-]{1,15}\.conf", n), n
+    # نامِ کاملاً غیرمجاز → فالبک به نامِ کاربری
+    assert EP._wg_file_name("\U0001F1E9\U0001F1EA.conf", "udvkfuci", set()) == "udvkfuci.conf"

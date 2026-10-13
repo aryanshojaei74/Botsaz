@@ -490,6 +490,11 @@ class DiscountCode(Base):
     # محدود به یک کاربر خاص (telegram_id)؛ None = برای همه معتبر.
     # وقتی مقدار دارد، این کد فقط با همین آیدی عددی تلگرام قابل‌استفاده است.
     restricted_user_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    # === PATCH_VS_DISCOUNT_PRODUCTS_V1 ===
+    # محدود به دسته‌هایِ محصولِ «خدمات مجازی» (کلیدها با کاما: stars,ton,gift,premium,vnum,smm).
+    # None/خالی = همهٔ محصولات (مثلِ قبل). اگر پر باشد، کد فقط در همان دسته‌ها معتبر است
+    # و در جریان‌هایی که دسته‌شان را نمی‌دانند (فروشگاه/VPN) رد می‌شود.
+    product_keys: Mapped[str | None] = mapped_column(String(120))
 
 
 class DiscountUsage(Base):
@@ -1976,6 +1981,11 @@ class GiftOrder(Base):
     # comment_scope: 0 = کامنت برایِ همهٔ گیفت‌ها، N = فقط گیفتِ شمارهٔ N.
     anonymous: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     comment_scope: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # === PATCH_VS_DISCOUNT_V1 ===
+    # کدِ تخفیفِ مصرف‌شده برایِ این سفارش (DiscountCode.id) و مبلغِ تخفیف؛ برایِ برگرداندنِ مصرفِ کد
+    # وقتی ادمین سفارش را رد می‌کند. NULL = بدونِ کد.
+    discount_code_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discount_amount: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class ButtonSlide(Base):
@@ -2265,6 +2275,9 @@ class SmmOrder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     # === PATCH_ORDER_TRACKING_V1 ===
     tracking_code: Mapped[str | None] = mapped_column(String(20), index=True)
+    # === PATCH_VS_DISCOUNT_V1 === کدِ تخفیفِ مصرف‌شده (برایِ برگرداندنِ مصرف هنگامِ رد/عودت). NULL = بدونِ کد
+    discount_code_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    discount_amount: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # === PATCH_VS_ORDER_DETAIL_V1 ===
     # برای صفحهٔ جزئیاتِ سفارش (مشاهده سفارشات → لیست/جستجو): مقدارِ
     # remains که پنل موقعِ استعلامِ وضعیت برمی‌گرداند (چقدر از تعداد هنوز

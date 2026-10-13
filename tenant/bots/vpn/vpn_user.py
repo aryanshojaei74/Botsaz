@@ -3202,14 +3202,46 @@ async def vget_sub(cb: CallbackQuery, bot: Bot):
     if not sub_link:
         await cb.message.answer("⛔️ این سرویس ساب لینک ندارد. از «کانفیگ‌های تکی» استفاده کن.")
         return
-    body = (f"🔗 <b>لینک اشتراک (Subscription):</b>\n<code>{sub_link}</code>\n\n"
-            "این لینک را در کلاینت (v2rayNG، نکوباکس، استریسند و…) اضافه کن.")
+    # === PATCH_WG_SUB_NO_HINT_V1 ===
+    # ادمین: برایِ وایرگارد توضیحِ «در کلاینت v2rayNG/نکوباکس… اضافه کن» بی‌معنی است
+    # (وایرگارد یا با لینک یا با فایل ایمپورت می‌شود). اگر اکانت فایلِ وایرگارد دارد، فقط
+    # خودِ لینک با عنوانِ «لینک ساب اشتراک» فرستاده می‌شود. هر خطایی → متنِ قبلی.
+    _is_wg_acc = False
+    if panel:
+        try:
+            _c_wg = _client_from_panel(panel)
+            if hasattr(_c_wg, "get_wireguard_endpoints"):
+                _is_wg_acc = bool(await _c_wg.get_wireguard_endpoints(email))
+        except Exception:
+            logger.exception("تشخیصِ وایرگارد بودنِ اکانت برایِ متنِ ساب ناموفق بود؛ متنِ عادی")
+    if _is_wg_acc:
+        body = f"🔗 <b>لینک ساب اشتراک</b>\n<code>{sub_link}</code>"
+    else:
+        body = (f"🔗 <b>لینک اشتراک (Subscription):</b>\n<code>{sub_link}</code>\n\n"
+                "این لینک را در کلاینت (v2rayNG، نکوباکس، استریسند و…) اضافه کن.")
     try:
         png = await _qr_png(row.id, sub_link)
         await bot.send_photo(cb.from_user.id, BufferedInputFile(png, filename="sub_qr.png"),
                              caption=body)
     except Exception:
         await bot.send_message(cb.from_user.id, body)
+
+
+# === PATCH_WG_FILENAME_ASCII_V1 ===
+# وایرگارد نامِ فایل (= نامِ تونل) را فقط با [A-Za-z0-9_=+.-] و حداکثر ۱۵ کاراکتر می‌پذیرد.
+# نامِ لوکیشن در پنل گاهی ایموجی/فاصلهٔ فارسی دارد («udvkfuci-🇩🇪 -DE.conf») و ایمپورت خطا می‌داد.
+# این تابع آخرین خطِ دفاعی برایِ همهٔ پنل‌هاست؛ نامِ سالم دست‌نخورده می‌ماند.
+def _wg_safe_file_name(fname: str, fallback: str, used: set) -> str:
+    stem = re.sub(r"\.conf$", "", str(fname or ""), flags=re.I)
+    stem = re.sub(r"[^A-Za-z0-9_=+.\-]", "", stem)
+    stem = re.sub(r"-{2,}", "-", stem).strip("-.")
+    stem = (stem[:15].rstrip("-.")) or fallback[:15]
+    base, i = stem, 1
+    while stem.lower() in used:
+        i += 1
+        stem = base[:15 - len(str(i))] + str(i)
+    used.add(stem.lower())
+    return stem + ".conf"
 
 
 # === PATCH_WG_NATIVE_IN_SINGLE_V1 ===
@@ -3235,8 +3267,9 @@ async def _send_native_wg_files(bot, chat_id: int, client, email: str) -> int:
     if not endpoints:
         return 0
     sent = 0
+    _used_fn: set = set()
     for ep in endpoints:
-        fname = ep.get("file") or f"wireguard_{ep.get('id', sent + 1)}.conf"
+        fname = _wg_safe_file_name(ep.get("file"), f"wg{ep.get('id', sent + 1)}", _used_fn)
         try:
             cfg_text = await client.fetch_wireguard_config_text(
                 email, ep.get("id"), path=ep.get("config_url"))
@@ -3529,8 +3562,9 @@ async def vpn_service_wg_single(cb: CallbackQuery, bot: Bot):
             if endpoints:
                 await cb.message.answer(f"📥 در حالِ دریافتِ {len(endpoints)} فایلِ کانفیگ…")
                 sent = 0
+                _used_fn: set = set()
                 for ep in endpoints:
-                    fname = ep.get("file") or f"wireguard_{ep.get('id', sent + 1)}.conf"
+                    fname = _wg_safe_file_name(ep.get("file"), f"wg{ep.get('id', sent + 1)}", _used_fn)
                     host_id = ep.get("id")
                     cfg_path = ep.get("config_url")
                     try:

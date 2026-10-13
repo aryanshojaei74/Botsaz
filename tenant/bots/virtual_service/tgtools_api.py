@@ -106,8 +106,25 @@ async def get_prices() -> dict:
     return await _request(None, "GET", "/api/purchase/prices") or {}
 
 
-async def lookup_user(username: str) -> dict:
-    return await _request(None, "GET", f"/api/purchase/user/{username.lstrip('@')}") or {}
+async def lookup_user(username: str, api_key: str | None = None) -> dict:
+    # === PATCH_TGTOOLS_LOOKUP_V2 === کلید هم فرستاده می‌شود (اگر endpoint برایِ کلیدِ معتبر پاسخِ دقیق‌تری بدهد)
+    return await _request(api_key, "GET", f"/api/purchase/user/{username.lstrip('@')}") or {}
+
+
+def lookup_verdict(u: dict | None) -> tuple[bool, str]:
+    """(مجاز؟، علتِ خوانا). فقط وقتی «ردِ صریح» باشد False برمی‌گرداند؛ پاسخِ نامفهوم/خالی = مجاز
+    (خریدِ واقعی خودش مقصد را اعتبارسنجی می‌کند و در رد، پول برمی‌گردد)."""
+    if not isinstance(u, dict) or not u:
+        return True, ""
+    found, elig = u.get("found"), u.get("eligible")
+    if found is False or elig is False:
+        reason = ""
+        for k in ("message", "reason", "error", "detail"):
+            if u.get(k):
+                reason = str(u[k])[:200]
+                break
+        return False, reason or str(u)[:300]
+    return True, ""
 
 
 # ───────────── نیازمندِ کلید ─────────────

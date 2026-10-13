@@ -173,6 +173,9 @@ _include(smm_texts_router, "virtual_service")
 from tenant.shared.panel_clients.panelyar import panelyar_router
 tenant_router.include_router(panelyar_router)
 
+# === PATCH_VS_DISCOUNT_V1 === کدِ تخفیف برایِ استارز/تون/گیفت/پرمیوم/شماره + دسته‌هایِ محصولِ هر کد
+from tenant.bots.virtual_service.vs_discount import vsd_router
+tenant_router.include_router(vsd_router)
 # === PATCH_FRAGMENT_WALLET_V1 ===
 from tenant.bots.virtual_service.fragment_stars import fragment_router
 _include(fragment_router, "virtual_service")
@@ -4640,6 +4643,23 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
                 logger.info('ری‌اکشن شروع نامعتبر بود و نادیده گرفته شد')
             else:
                 logger.exception('ری‌اکشن‌زدن رویِ پیامِ /start ناموفق بود')
+
+    # === PATCH_CHPOST_DEEPLINK_ONLY_BTN_V1 ===
+    # گزارشِ ادمین: وقتی کاربر زیرِ پستِ کانال روی دکمهٔ ربات می‌زد، اول پیامِ /start
+    # (استیکر + خوش‌آمد + منوی اصلی + محصولاتِ پین‌شده) می‌آمد و بعد پیامِ همان دکمه.
+    # کاربر فقط پیامِ خودِ دکمه را می‌خواهد. پس برایِ دیپ‌لینکِ دکمهٔ کانال (mbtn_/vhelp_)
+    # همهٔ این‌ها رد می‌شود و مستقیم همان دکمه اجرا می‌شود.
+    # استثنا: حالتِ «کیبورد» برایِ کاربرِ تازه — کیبوردِ منو فقط با پیامِ خوش‌آمد روی صفحه
+    # می‌نشیند؛ آنجا خوش‌آمد حفظ می‌شود تا کاربر بدونِ منو نماند.
+    if mbtn_deeplink_id is not None or vhelp_deeplink_key:
+        _dl_mode = await get_setting(row.id, "menu_mode", "reply")
+        if _dl_mode == "inline" or not was_created:
+            if mbtn_deeplink_id is not None:
+                await mbtn_tap(_FakeCb(msg, f"mbtn:{mbtn_deeplink_id}"), bot, state)
+            if vhelp_deeplink_key:
+                from tenant.bots.vpn.vpn_user import vpn_help_show as _vhs
+                await _vhs(_FakeCb(msg, f"vhelp:{vhelp_deeplink_key}"), bot)
+            return
 
     # === PATCH_TENANT_HOME_STICKER_V1 ===
     # استیکرِ استارت (اگر تنظیم شده و ربات پلنِ حرفه‌ای است) پیش از پیامِ
@@ -27776,6 +27796,9 @@ async def _show_discounts(msg, bot_id: int, edit: bool = False):
             if c.panel_key:
                 from tenant.bots.vpn.vpn_admin import PANEL_LABELS
                 panel_line = f"\n   🛰 مخصوصِ: {PANEL_LABELS.get(c.panel_key, c.panel_key)}"
+            # === PATCH_VS_DISCOUNT_V1 ===
+            if getattr(c, "product_keys", None):
+                panel_line += f"\n   📦 دسته‌ها: {_vsd_keys_label(c.product_keys)}"
 
             lines.append(
                 f"{status} <code>{c.code}</code> — {disc_disp}\n"
@@ -27826,6 +27849,9 @@ def _disc_edit_kb(dc_id: int, dc=None) -> InlineKeyboardMarkup:
                                           callback_data=f"disc:user:clear:{dc_id}", style=ButtonStyle.DANGER)])
     rows.append([InlineKeyboardButton(text="🧾 حداقلِ مبلغ خرید", callback_data=f"disc:edit:min:{dc_id}",
                                       style=ButtonStyle.PRIMARY)])
+    # === PATCH_VS_DISCOUNT_V1 === محدود کردن به دسته‌هایِ محصولِ خدمات مجازی (خالی = همه)
+    rows.append([InlineKeyboardButton(text="📦 دسته‌هایِ محصول (استارز/تون/گیفت/…)",
+                                      callback_data=f"disc:prod:{dc_id}", style=ButtonStyle.PRIMARY)])
     if dc is not None and getattr(dc, "expires_at", None):
         rows.append([InlineKeyboardButton(text="♾️ حذف انقضا",
                                           callback_data=f"disc:expire:clear:{dc_id}", style=ButtonStyle.DANGER)])
@@ -27836,6 +27862,12 @@ def _disc_edit_kb(dc_id: int, dc=None) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="⬅️ بازگشت به لیست", callback_data="tadm:discounts", style=ButtonStyle.DANGER)],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _vsd_keys_label(raw) -> str:
+    """PATCH_VS_DISCOUNT_V1 — برچسبِ دسته‌هایِ محصولِ یک کدِ تخفیف («همهٔ محصولات» اگر خالی)."""
+    from tenant.bots.virtual_service.vs_discount import keys_label
+    return keys_label(raw)
 
 
 async def _disc_detail_text(dc) -> str:
@@ -27862,7 +27894,8 @@ async def _disc_detail_text(dc) -> str:
         f"تعداد استفاده: {uses}\n"
         f"انقضا (شمسی): {exp}\n"
         f"اختصاص به کاربر: {user_disp}\n"
-        f"حداقلِ مبلغ خرید: {min_disp}\n\n"
+        f"حداقلِ مبلغ خرید: {min_disp}\n"
+        f"📦 دسته‌هایِ محصول: {_vsd_keys_label(getattr(dc, 'product_keys', None))}\n\n"
         "از دکمه‌های زیر ویرایش کن:"
     )
 
