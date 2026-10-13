@@ -72,6 +72,8 @@ def setup_logging(level: int = logging.INFO) -> None:
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(level)
     console.setFormatter(fmt)
+    # === PATCH_BENIGN_TG_ERRORS_V2 === فیلترِ خطاهایِ بی‌اهمیتِ تلگرام روی journal هم اعمال شود (قبلاً فقط error.log)
+    console.addFilter(_BenignTelegramFilter())
     root.addHandler(console)
 
     try:
