@@ -18495,7 +18495,9 @@ async def adm_pf_plan(cb: CallbackQuery):
         # فقط return می‌کرد — از دیدِ کاربر یعنی «هیچ اتفاقی نیفتاد».
         await cb.answer("فقط مدیر اصلی", show_alert=True)
         return
-    plan_str = cb.data.split(":")[1]
+    parts = cb.data.split(":")
+    plan_str = parts[1]
+    cat = parts[2] if len(parts) > 2 else ""
     try:
         plan = Plan(plan_str)
     except ValueError:
@@ -18507,54 +18509,41 @@ async def adm_pf_plan(cb: CallbackQuery):
         current_features = PLAN_FEATURES[plan]
 
     # === PATCH_PLAN_FEATURES_BY_BOT_TYPE_V1 ===
-    # دکمه‌های فعال/غیرفعال‌کردنِ قابلیت‌ها حالا زیرِ سرتیترِ نوعِ ربات
-    # مرتبط دسته‌بندی می‌شن (VPN/فروشگاه دیجیتال/SMM/نوبت‌دهی/تبلیغاتی)،
-    # به‌علاوه‌یِ یک بخشِ «عمومی» برایِ قابلیت‌هایی که مخصوصِ نوعِ خاصی
-    # نیستن. callback_data هر دکمه (پس منطقِ toggle) بدونِ تغییره.
+    # قابلیت‌ها به‌جایِ یک صفحهٔ غول‌پیکر (که از حدِ اندازهٔ کیبوردِ تلگرام رد می‌شد و صفحه باز نمی‌شد)
+    # در صفحه‌هایِ جدا به‌ازایِ هر نوعِ ربات نشان داده می‌شوند: pf:<plan> فهرستِ نوع‌ها،
+    # pf:<plan>:<نوع> دکمه‌هایِ همان نوع. callback_dataِ toggle بدونِ تغییر (با یک پسوندِ برگشت).
     from plans import BOT_TYPE_LABELS, BOT_TYPE_ORDER, FEATURE_BOT_TYPES
 
-    def _toggle_btn(feat: Feature) -> None:
-        icon = "✅" if feat in current_features else "⬜️"
-        b.button(
-            text=f"{icon} {FEATURE_LABELS.get(feat, feat.value)}",
-            callback_data=f"pf:tog:{plan_str}:{feat.value}"
-        )
-
-    b = InlineKeyboardBuilder()
-    rows: list[int] = []
+    groups: list[tuple[str, str, list]] = []
     for bt in BOT_TYPE_ORDER:
         bt_feats = [f for f in Feature if FEATURE_BOT_TYPES.get(f) is not None and bt in FEATURE_BOT_TYPES[f]]
-        if not bt_feats:
-            continue
-        b.button(text=f"── {BOT_TYPE_LABELS[bt]} ──", callback_data="pf:hdr")
-        rows.append(1)
-        for feat in bt_feats:
-            _toggle_btn(feat)
-            rows.append(1)
+        if bt_feats:
+            groups.append((bt, BOT_TYPE_LABELS[bt], bt_feats))
     general_feats = [f for f in Feature if FEATURE_BOT_TYPES.get(f) is None]
     if general_feats:
-        b.button(text="── 🌐 عمومی (همهٔ ربات‌ها) ──", callback_data="pf:hdr")
-        rows.append(1)
-        for feat in general_feats:
-            _toggle_btn(feat)
-            rows.append(1)
-    b.button(text="⬅️ بازگشت به پلن‌ها", callback_data="adm:plan_features", style=ButtonStyle.DANGER)
-    rows.append(1)
-    b.adjust(*rows)
+        groups.append(("general", "🌐 عمومی (همهٔ ربات‌ها)", general_feats))
 
     plan_title = {"free": "پایه (رایگان)", "growth": "رشد", "pro": "حرفه‌ای"}.get(plan_str, plan_str)
-    # === PATCH_PLAN_FEATURES_NO_RESPONSE_FIX_V1 ===
-    # علتِ احتمالیِ اصلیِ باگ: اگه کاربر رویِ همون دکمهٔ پلن دوباره بزنه
-    # (یا اگه به هر دلیلی محتوایِ صفحه عیناً با قبل یکی باشه)، تلگرام
-    # خطایِ «message is not modified» می‌ده. قبلاً این edit_text تویِ
-    # try/except نبود، پس این خطا بدونِ‌گرفته‌شدن بالا می‌رفت و خطِ بعدی
-    # (cb.answer()) هیچ‌وقت اجرا نمی‌شد — یعنی دکمه از دیدِ کاربر «هیچ
-    # واکنشی نشون نمی‌داد» (فقط اسپینر تا تایم‌اوت می‌موند).
+    b = InlineKeyboardBuilder()
+    cur = next((g for g in groups if g[0] == cat), None)
+    if cur is None:
+        for key, label, feats in groups:
+            on = sum(1 for f in feats if f in current_features)
+            b.button(text=f"{label} ({on}/{len(feats)})", callback_data=f"pf:{plan_str}:{key}")
+        b.button(text="⬅️ بازگشت به پلن‌ها", callback_data="adm:plan_features", style=ButtonStyle.DANGER)
+        b.adjust(1)
+        text = f"⚙️ <b>قابلیت‌های پلن «{plan_title}»</b>\n\nنوعِ ربات را انتخاب کنید:"
+    else:
+        key, label, feats = cur
+        for feat in feats:
+            icon = "✅" if feat in current_features else "⬜️"
+            b.button(text=f"{icon} {FEATURE_LABELS.get(feat, feat.value)}",
+                     callback_data=f"pf:tog:{plan_str}:{feat.value}:{key}")
+        b.button(text="⬅️ بازگشت", callback_data=f"pf:{plan_str}", style=ButtonStyle.DANGER)
+        b.adjust(1)
+        text = (f"⚙️ <b>{plan_title} — {label}</b>\n\nبرای فعال/غیرفعال کردن روی هر قابلیت بزنید:")
     try:
-        await cb.message.edit_text(
-            f"⚙️ <b>قابلیت‌های پلن «{plan_title}»</b>\n\nبرای فعال/غیرفعال کردن روی هر قابلیت بزنید:",
-            reply_markup=b.as_markup()
-        )
+        await cb.message.edit_text(text, reply_markup=b.as_markup())
     except TelegramBadRequest as e:
         if "message is not modified" not in str(e).lower():
             raise
@@ -18574,9 +18563,10 @@ async def adm_pf_toggle(cb: CallbackQuery):
         # === PATCH_PLAN_FEATURES_NO_RESPONSE_FIX_V1 ===
         await cb.answer("فقط مدیر اصلی", show_alert=True)
         return
-    parts = cb.data.split(":", 3)
+    parts = cb.data.split(":")
     plan_str = parts[2]
     feat_key = parts[3]
+    back_cat = parts[4] if len(parts) > 4 else ""
     try:
         plan = Plan(plan_str)
         feat = Feature(feat_key)
@@ -18605,7 +18595,8 @@ async def adm_pf_toggle(cb: CallbackQuery):
     icon = "✅ فعال" if new_state else "⬜️ غیرفعال"
     feat_label = FEATURE_LABELS.get(feat, feat_key)
     await cb.answer(f"{feat_label}: {icon}", show_alert=False)
-    # رفرش صفحه
+    # رفرش صفحه (برگشت به همان دسته)
+    cb.data = f"pf:{plan_str}:{back_cat}" if back_cat else f"pf:{plan_str}"
     await adm_pf_plan(cb)
 
 
