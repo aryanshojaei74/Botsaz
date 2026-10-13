@@ -127,3 +127,4 @@ async def test_provider_fetch_parses_collections_and_items(env, monkeypatch):
     out = await NS.get_provider("tgtools").fetch("k", limit=10)
     assert len(out) == 1 and out[0].ref == NFT and out[0].collection == "Lol Pop" and out[0].image == "http://i"
     assert round(out[0].price_ton, 4) == round(1.5 * 1.05 + 0.065, 4)
+

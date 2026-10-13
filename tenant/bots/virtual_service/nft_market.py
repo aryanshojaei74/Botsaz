@@ -158,14 +158,49 @@ def _item_json(it: NftItem, *, owner: bool = False, ton_sources=frozenset()) -> 
     return d
 
 
-async def _ton_rate(bot_id: int) -> int:
-    """نرخِ هر TON به تومان، برایِ نمایشِ دوگانهٔ قیمت (مثلِ خودِ مارکت‌هایِ
-    NFT). صفر یعنی ادمین نرخ نگذاشته و قیمتِ TON اصلاً نمایش داده نمی‌شود."""
+_AUTO_RATE_CACHE: dict[int, tuple[float, int]] = {}      # bot_id → (زمان، نرخ)
+_AUTO_RATE_TTL = 120
+
+
+async def _ton_rate_manual(bot_id: int) -> int:
     from tenant import get_setting
     try:
         return int(float(await get_setting(bot_id, "nft_ton_rate", "0") or 0))
     except (TypeError, ValueError):
         return 0
+
+
+async def _ton_rate(bot_id: int) -> int:
+    """نرخِ هر TON به تومان، برایِ نمایشِ دوگانهٔ قیمت و محاسبهٔ قیمتِ منابع. صفر یعنی ادمین نرخ نگذاشته.
+
+    === PATCH_NFT_AUTO_TON_RATE_V1 === اگر «نرخِ خودکار» روشن باشد، قیمتِ لحظه‌ایِ TON (دلار×دلارِ تومانی)
+    به‌علاوهٔ درصدِ سودِ ادمین استفاده می‌شود (کشِ ۲ دقیقه‌ای)؛ اگر گرفته نشد، نرخِ دستی جایگزین است."""
+    from tenant import get_setting
+    if (await get_setting(bot_id, "nft_ton_rate_auto", "0")) == "1":
+        import time as _t
+        hit = _AUTO_RATE_CACHE.get(bot_id)
+        if hit and _t.time() - hit[0] < _AUTO_RATE_TTL:
+            return hit[1]
+        try:
+            from tenant.gateways.stars_rate import ton_toman
+            margin = float(await get_setting(bot_id, "nft_ton_margin", "0") or 0)
+            live = int(await ton_toman(margin))
+        except Exception:                                    # noqa: BLE001
+            logger.exception("nft: نرخِ خودکارِ TON گرفته نشد؛ نرخِ دستی")
+            live = 0
+        if live > 0:
+            _AUTO_RATE_CACHE[bot_id] = (_t.time(), live)
+            return live
+        if hit:
+            return hit[1]            # آخرین نرخِ موفق، بهتر از افتادن روی دستی
+    return await _ton_rate_manual(bot_id)
+
+
+async def _rate_cfg(bot_id: int) -> dict:
+    from tenant import get_setting
+    return {"ton_rate": await _ton_rate(bot_id), "ton_manual": await _ton_rate_manual(bot_id),
+            "ton_auto": (await get_setting(bot_id, "nft_ton_rate_auto", "0")) == "1",
+            "ton_margin": float(await get_setting(bot_id, "nft_ton_margin", "0") or 0)}
 
 
 async def _transfer_fee(bot_id: int) -> int:
@@ -513,7 +548,7 @@ async def api_admin_items(bot_id: int, x_init_data: str | None = Header(default=
         "ok": True,
         "items": [_item_json(i, owner=True) for i in items],
         "fee": await _transfer_fee(bot_id),
-        "ton_rate": await _ton_rate(bot_id),
+        **(await _rate_cfg(bot_id)),
         "auto_ready": bool(conn and conn.can_transfer),
     })
 
@@ -665,8 +700,17 @@ async def api_admin_fee(bot_id: int, payload: dict = Body(...),
                               str(max(0, int(float(payload.get("ton_rate") or 0)))))
         except (TypeError, ValueError):
             pass
-    return JSONResponse({"ok": True, "fee": fee,
-                         "ton_rate": await _ton_rate(bot_id)})
+    # === PATCH_NFT_AUTO_TON_RATE_V1 ===
+    if payload.get("ton_auto") is not None:
+        await set_setting(bot_id, "nft_ton_rate_auto", "1" if payload.get("ton_auto") else "0")
+    if payload.get("ton_margin") is not None:
+        try:
+            await set_setting(bot_id, "nft_ton_margin",
+                              str(max(-50.0, min(200.0, float(payload.get("ton_margin") or 0)))))
+        except (TypeError, ValueError):
+            pass
+    _AUTO_RATE_CACHE.pop(bot_id, None)
+    return JSONResponse({"ok": True, "fee": fee, **(await _rate_cfg(bot_id))})
 
 
 # === PATCH_NFT_SOURCES_V1 === منابعِ مارکت (واسطه‌گری)
@@ -1554,7 +1598,7 @@ function setAdm(t){ hap(); ST.adminTab=t; renderAdmin(); }
 async function loadAdminItems(){
   const b=document.getElementById("ab");
   try{
-    const r=await api("/admin/items"); ST.fee=r.fee; ST.tonRate=r.ton_rate||0;
+    const r=await api("/admin/items"); ST.fee=r.fee; ST.tonRate=r.ton_rate||0; ST.tonManual=r.ton_manual; ST.tonAuto=r.ton_auto; ST.tonMargin=r.ton_margin;
     b.innerHTML=
       `<div class="note rv" style="margin:0 0 10px">انتقالِ خودکار: <b>${r.auto_ready?"✅ فعال":"❌ غیرفعال"}</b>
         ${r.auto_ready?"":"<br/><b>۱)</b> در @BotFather → /mybots → همین ربات → Bot Settings → <b>Secretary Mode</b> → Turn on. <i>(در بعضی نسخه‌ها Business Mode نوشته شده — هر دو یکی‌اند.)</i>"
@@ -1640,14 +1684,20 @@ function editFee(){
     <div class="shead"><b>💸 نرخ‌ها</b><div class="x" onclick="closeSheet()">✕</div></div>
     <div class="note">کارمزد به هر سفارش اضافه می‌شود. نرخِ TON فقط برایِ نمایشِ قیمتِ دوم است؛ صفر یعنی نمایش داده نشود.</div>
     <label class="l">کارمزدِ انتقال (تومان)</label><input class="f" id="f_fee" type="number" value="${ST.fee}"/>
-    <label class="l">نرخِ هر TON (تومان)</label><input class="f" id="f_ton" type="number" value="${ST.tonRate}"/>
+    <label class="l" style="display:flex;gap:8px;align-items:center"><input id="f_auto" type="checkbox" ${ST.tonAuto?"checked":""}/> نرخِ خودکار (قیمتِ لحظه‌ایِ TON)</label>
+    <label class="l">درصدِ سود/حاشیه روی نرخِ لحظه‌ای (٪)</label><input class="f" id="f_margin" type="number" step="0.1" value="${ST.tonMargin||0}"/>
+    <label class="l">نرخِ دستیِ هر TON (تومان) — اگر خودکار خاموش یا در دسترس نبود</label><input class="f" id="f_ton" type="number" value="${ST.tonManual!=null?ST.tonManual:ST.tonRate}"/>
+    <div class="note">نرخِ فعلیِ اعمال‌شده: <b>${ST.tonRate?fa(ST.tonRate)+" تومان":"—"}</b></div>
     <button class="cta" onclick="saveFee()">💾 ذخیره</button>`);
 }
 async function saveFee(){
   try{ const r=await api("/admin/fee",{method:"POST",body:JSON.stringify({
         fee:document.getElementById("f_fee").value,
-        ton_rate:document.getElementById("f_ton").value})});
-    ST.fee=r.fee; ST.tonRate=r.ton_rate||0; closeSheet(); loadAdminItems(); }
+        ton_rate:document.getElementById("f_ton").value,
+        ton_auto:document.getElementById("f_auto").checked,
+        ton_margin:document.getElementById("f_margin").value})});
+    ST.fee=r.fee; ST.tonRate=r.ton_rate||0; ST.tonManual=r.ton_manual; ST.tonAuto=r.ton_auto; ST.tonMargin=r.ton_margin;
+    closeSheet(); loadAdminItems(); }
   catch(e){ toast("ذخیره نشد."); }
 }
 
