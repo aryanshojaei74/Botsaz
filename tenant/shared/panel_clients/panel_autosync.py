@@ -118,12 +118,20 @@ async def sync_panel_once(panel_id: int) -> tuple[int, int]:
 
         # ── ۱) اینباندها/گروه‌های فعالِ پنل ──
         try:
-            inbounds = await client.list_inbounds() or []
+            # === PATCH_AUTOSYNC_EYLAN_V1 === در ایلان «اینباند» = پروتکل (openvpn، wireguard، …) و
+            # انتخابِ پروتکل‌ها با خودِ ادمین است؛ همگام‌سازیِ خودکار نباید آن را با «همهٔ پروتکل‌ها»
+            # بازنویسی کند (قبلاً int('openvpn') خطا می‌داد و هر ساعت لاگ می‌شد).
+            inbounds = [] if _bk(key) == "eylan" else (await client.list_inbounds() or [])
             active = [ib for ib in inbounds if ib.get("enable", True)]
             if _bk(key) in _MARZBAN_FAMILY:
                 active_ids = [str(ib["id"]) for ib in active if ib.get("id")]
             else:
-                active_ids = [str(int(ib["id"])) for ib in active if ib.get("id") is not None]
+                def _iid(v):
+                    try:
+                        return str(int(v))
+                    except (TypeError, ValueError):
+                        return str(v)
+                active_ids = [_iid(ib["id"]) for ib in active if ib.get("id") is not None]
             if active_ids:
                 new_str = ",".join(active_ids)
                 async with Session() as s:
