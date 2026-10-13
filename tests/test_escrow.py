@@ -313,3 +313,33 @@ async def test_login_uses_server_default_api_and_expires(env, monkeypatch):
     m = Msg("1-2-3-4-5", uid=500)
     await ES.adm_code(m, bot, st)
     assert any("زمانِ ورود" in o for o in m.out)
+
+
+@pytest.mark.asyncio
+async def test_party_ok_buttons_only_for_own_party_and_notify_when_both(env):
+    maker, _p = env
+    bot, st = FakeBot(), St()
+    await _make_deal(bot, st, role="seller")                       # فروشنده=1001، خریدار=1002
+    await ES.esc_send(Cb("esc:send"), bot, st)
+    async with maker() as s:
+        d = await s.scalar(select(models.EscrowDeal))
+    await ES.esc_accept(Cb(f"esc:acc:{d.id}", uid=1002), bot)
+    group_kb = [x for x in bot.sent if x[0] == -1001234567890][0][2]
+    data = [b.callback_data for r in group_kb.inline_keyboard for b in r]
+    assert f"esc:ok:{d.id}:b" in data and f"esc:ok:{d.id}:s" in data and f"esc:done:{d.id}" in data
+    alerts = []
+
+    class C3(Cb):
+        async def answer(self, text="", show_alert=False, **k):
+            alerts.append(text)
+    buyer_id, seller_id = ES.roles(d)
+    await ES.esc_ok(C3(f"esc:ok:{d.id}:b", uid=seller_id), bot)       # فروشنده دکمهٔ خریدار را می‌زند
+    assert alerts and "خریدار" in alerts[-1]
+    async with maker() as s:
+        assert not (await s.get(models.EscrowDeal, d.id)).buyer_ok
+    await ES.esc_ok(C3(f"esc:ok:{d.id}:b", uid=buyer_id), bot)
+    await ES.esc_ok(C3(f"esc:ok:{d.id}:s", uid=seller_id), bot)
+    async with maker() as s:
+        d2 = await s.get(models.EscrowDeal, d.id)
+        assert d2.buyer_ok and d2.seller_ok and d2.status == "group_created"   # فقط واسط می‌تواند ببندد
+    assert any(x[0] == 500 and "هر دو طرف تأیید" in x[1] for x in bot.sent)

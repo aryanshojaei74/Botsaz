@@ -2808,6 +2808,9 @@ class EscrowDeal(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # تأییدِ هر طرف در گروه (دکمهٔ «اوکی»)؛ پایان/لغو فقط با واسط
+    buyer_ok: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    seller_ok: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
 
 class BalanceTransfer(Base):

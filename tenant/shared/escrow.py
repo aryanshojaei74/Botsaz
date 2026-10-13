@@ -501,6 +501,17 @@ async def esc_accept(cb: CallbackQuery, bot: Bot):
     await open_deal_group(bot, did)
 
 
+def _deal_kb(did: int, buyer_ok: bool = False, seller_ok: bool = False) -> InlineKeyboardMarkup:
+    """دکمه‌هایِ پیامِ گروه: «اوکی» برایِ خریدار/فروشنده (هرکس فقط مالِ خودش) و پایان/لغو فقط برایِ واسط."""
+    return _kb([
+        [_btn("✅ خریدار تأیید کرد" if buyer_ok else "👍 تأییدِ خریدار", f"esc:ok:{did}:b",
+              ButtonStyle.SUCCESS if buyer_ok else ButtonStyle.PRIMARY),
+         _btn("✅ فروشنده تأیید کرد" if seller_ok else "👍 تأییدِ فروشنده", f"esc:ok:{did}:s",
+              ButtonStyle.SUCCESS if seller_ok else ButtonStyle.PRIMARY)],
+        [_btn("🏁 پایانِ موفقِ معامله (فقط واسط)", f"esc:done:{did}", ButtonStyle.SUCCESS)],
+        [_btn("🚫 لغوِ معامله (فقط واسط)", f"esc:stop:{did}", ButtonStyle.DANGER)]])
+
+
 async def open_deal_group(bot: Bot, did: int) -> bool:
     """گروه را می‌سازد، لینک‌هایِ یک‌بارمصرف می‌دهد و پیام‌ها را می‌فرستد. True اگر موفق."""
     from tenant import get_setting
@@ -530,8 +541,7 @@ async def open_deal_group(bot: Bot, did: int) -> bool:
         m = await bot.send_message(
             chat_id,
             summary + "\n\n📌 قوانین: مبلغ را فقط پس از تأییدِ واسط واریز کنید و تحویلِ کالا/خدمت را همین‌جا اطلاع دهید.",
-            reply_markup=_kb([[_btn("✅ پایانِ موفقِ معامله (فقط واسط)", f"esc:done:{d.id}", ButtonStyle.SUCCESS)],
-                              [_btn("🚫 لغوِ معامله (فقط واسط)", f"esc:stop:{d.id}", ButtonStyle.DANGER)]]))
+            reply_markup=_deal_kb(d.id))
         try:
             await bot.pin_chat_message(chat_id, m.message_id, disable_notification=True)
         except Exception:
@@ -615,6 +625,45 @@ async def _close_deal(cb: CallbackQuery, bot: Bot, status: str, label: str):
         except Exception:
             logger.info("escrow: یک ارسال/ویرایشِ پیام ممکن نشد (بی‌اهمیت)")
     await cb.answer("انجام شد")
+
+
+@escrow_router.callback_query(F.data.regexp(r"^esc:ok:\d+:[bs]$"))
+async def esc_ok(cb: CallbackQuery, bot: Bot):
+    """«اوکی»یِ خریدار/فروشنده؛ فقط خودِ همان نفر می‌تواند بزند. وقتی هر دو زدند به واسط خبر می‌رود."""
+    _, _, did, who = cb.data.split(":")
+    async with Session() as s:
+        d = await s.get(EscrowDeal, int(did), with_for_update=True)
+        if not d:
+            return await cb.answer("پیدا نشد.", show_alert=True)
+        if d.status != "group_created":
+            return await cb.answer("این معامله دیگر باز نیست.", show_alert=True)
+        buyer, seller = roles(d)
+        if cb.from_user.id != (buyer if who == "b" else seller):
+            return await cb.answer("این دکمه فقط برایِ " + ("خریدار" if who == "b" else "فروشنده") + " است.",
+                                   show_alert=True)
+        if who == "b":
+            if d.buyer_ok:
+                return await cb.answer("قبلاً تأیید کرده‌ای ✅", show_alert=True)
+            d.buyer_ok = True
+        else:
+            if d.seller_ok:
+                return await cb.answer("قبلاً تأیید کرده‌ای ✅", show_alert=True)
+            d.seller_ok = True
+        b_ok, s_ok, num, bot_id = bool(d.buyer_ok), bool(d.seller_ok), d.number, d.bot_id
+        await s.commit()
+    try:
+        await cb.message.edit_reply_markup(reply_markup=_deal_kb(int(did), b_ok, s_ok))
+    except Exception:
+        logger.info("escrow: یک ارسال/ویرایشِ پیام ممکن نشد (بی‌اهمیت)")
+    await cb.answer("تأیید شما ثبت شد ✅")
+    try:
+        await cb.message.answer(f"✅ {'خریدار' if who == 'b' else 'فروشنده'} تأیید کرد.")
+        if b_ok and s_ok:
+            await cb.message.answer("🤝 <b>هر دو طرف تأیید کردند.</b> منتظرِ پایانِ معامله توسطِ واسط باشید.")
+    except Exception:
+        logger.info("escrow: یک ارسال/ویرایشِ پیام ممکن نشد (بی‌اهمیت)")
+    if b_ok and s_ok:
+        await _notify_owner(bot, bot_id, f"✅ در معاملهٔ #{num} هر دو طرف تأیید کردند؛ منتظرِ «پایانِ موفق» توسطِ واسط است.")
 
 
 @escrow_router.callback_query(F.data.startswith("esc:done:"))
