@@ -2060,6 +2060,9 @@ async def show_bundle_hub(bot: Bot, msg: Message, bot_id: int, cat_id: int, stat
         await msg.answer("⛔️ این بخش دیگر در دسترس نیست؛ به ادمین اطلاع بده.",
                          reply_markup=await inline_back_kb(bot_id))
         return
+    if getattr(cat, "sale_full", False):      # PATCH_CATEGORY_SALE_FULL_V1 — ورودِ مستقیم با دکمهٔ خرید
+        await msg.answer(sale_full_text(cat.title), reply_markup=await inline_back_kb(bot_id))
+        return
 
     total_buckets = len(bucket_names) + (1 if has_uncat else 0)
     if total_buckets == 0:
@@ -2178,6 +2181,24 @@ async def vpn_plans_pick_panel(cb: CallbackQuery, bot: Bot, state: FSMContext):
                          header=header, mb_id=mb_id)
 
 
+# === PATCH_CATEGORY_SALE_FULL_V1 ===
+def sale_full_text(title: str) -> str:
+    return (f"⛔️ <b>ظرفیتِ فروشِ «{title}» پر شده است.</b>\n\n"
+            "فعلاً از این دسته خرید انجام نمی‌شود؛ لطفاً از دستهٔ/پنلِ دیگری استفاده کن.")
+
+
+async def plan_sale_full_message(bot_id: int, plan_id: int) -> str | None:
+    """اگر پلن زیرِ دسته‌ای با «ظرفیتِ پر» باشد، متنِ اطلاع؛ وگرنه None."""
+    from models import MiniAppCategory
+    async with Session() as s:
+        plan = await s.get(VpnPlan, plan_id)
+        cid = getattr(plan, "miniapp_category_id", None) if plan else None
+        cat = await s.get(MiniAppCategory, cid) if cid else None
+    if cat and cat.bot_id == bot_id and getattr(cat, "sale_full", False):
+        return sale_full_text(cat.title)
+    return None
+
+
 async def show_bundle_all_categories(bot: Bot, msg: Message, bot_id: int, state=None,
                                      mb_id: int | None = None, header: str = "") -> None:
     from tenant import inline_back_kb, inline_back_row, _with_btn_header
@@ -2197,8 +2218,10 @@ async def show_bundle_all_categories(bot: Bot, msg: Message, bot_id: int, state=
 
     if state is not None:
         await state.update_data(vbuy_mb_id=mb_id)
-    rows = [[InlineKeyboardButton(text=f"{c.icon or '🧩'} {c.title}",
-                                  callback_data=f"bndl:cat:{c.id}", style=ButtonStyle.PRIMARY)]
+    rows = [[InlineKeyboardButton(
+                text=f"{c.icon or '🧩'} {c.title}" + (" — 🔴 ظرفیت پر" if getattr(c, "sale_full", False) else ""),
+                callback_data=f"bndl:cat:{c.id}",
+                style=(ButtonStyle.DANGER if getattr(c, "sale_full", False) else ButtonStyle.PRIMARY))]
             for c in cats]
     _br = await inline_back_row(bot_id)
     if _br:
@@ -2215,6 +2238,13 @@ async def bundle_pick_category(cb: CallbackQuery, bot: Bot, state: FSMContext):
         row = await s.scalar(select(BotRow).where(BotRow.token == bot.token))
     if not row:
         await cb.answer()
+        return
+    from models import MiniAppCategory   # PATCH_CATEGORY_SALE_FULL_V1
+    async with Session() as _s:
+        _cat = await _s.get(MiniAppCategory, cat_id)
+    if _cat and _cat.bot_id == row.id and getattr(_cat, "sale_full", False):
+        await cb.answer(f"⛔️ ظرفیتِ فروشِ «{_cat.title}» پر شده؛ لطفاً از دستهٔ دیگری استفاده کن.",
+                        show_alert=True)
         return
     await cb.answer()
     data = await state.get_data()
@@ -2650,6 +2680,10 @@ async def vpn_buy(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return
     if not plan_ok:
         await cb.answer("این پلن دیگر در دسترس نیست.", show_alert=True)
+        return
+    _full_msg = await plan_sale_full_message(row.id, plan_id)      # PATCH_CATEGORY_SALE_FULL_V1
+    if _full_msg:
+        await cb.answer("⛔️ ظرفیتِ فروشِ این دسته پر شده؛ لطفاً از دستهٔ دیگری استفاده کن.", show_alert=True)
         return
     # قدم ۱: پرسیدن اسم دلخواه (اختیاری). اسمِ قبلیِ همین پلن را از state پاک کن.
     await state.set_state(_VpnNameFSM.naming)

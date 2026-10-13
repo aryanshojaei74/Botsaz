@@ -670,7 +670,7 @@ async def miniapp_cats(cb: CallbackQuery, bot: Bot):
         cats = (await s.scalars(select(MiniAppCategory).where(
             MiniAppCategory.bot_id == row.id).order_by(MiniAppCategory.sort_order, MiniAppCategory.id))).all()
     rows = [[InlineKeyboardButton(
-        text=f"{'🟢' if c.active else '⚪️'} {c.icon or '🛰'} {c.title}",
+        text=f"{'🟢' if c.active else '⚪️'} {c.icon or '🛰'} {c.title}" + (" — 🔴 ظرفیت پر" if c.sale_full else ""),
         callback_data=f"miniapp:cat:{c.id}")] for c in cats]
     rows.append([InlineKeyboardButton(text="➕ دستهٔ جدید", callback_data="miniapp:catnew",
                                       style=ButtonStyle.SUCCESS)])
@@ -794,6 +794,10 @@ async def miniapp_cat_detail(cb: CallbackQuery, bot: Bot):
                               style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="📦 کانفیگ‌های VPN آماده (انبار)",
                               callback_data=f"miniapp:catstock:{cat_id}", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(
+            text=("🔴 ظرفیتِ فروش: پر (بزن تا آزاد شود)" if cat.sale_full else "🟢 ظرفیتِ فروش: آزاد (بزن تا پر شود)"),
+            callback_data=f"miniapp:catfull:{cat_id}",
+            style=(ButtonStyle.DANGER if cat.sale_full else ButtonStyle.SUCCESS))],   # PATCH_CATEGORY_SALE_FULL_V1
         [InlineKeyboardButton(text=toggle_txt, callback_data=f"miniapp:cattoggle:{cat_id}",
                               style=toggle_style)],
         [InlineKeyboardButton(text="🗑 حذفِ دسته", callback_data=f"miniapp:catdel:{cat_id}", style=ButtonStyle.DANGER)],
@@ -868,6 +872,10 @@ async def miniapp_cat_rename_save(msg: Message, bot: Bot, state: FSMContext):
         [InlineKeyboardButton(text="✏️ تغییرِ نام", callback_data=f"miniapp:catren:{cat_id}", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="🤖 پلن‌های VPN خودکار", callback_data=f"miniapp:catplans:{cat_id}", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="📦 کانفیگ‌های VPN آماده (انبار)", callback_data=f"miniapp:catstock:{cat_id}", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(
+            text=("🔴 ظرفیتِ فروش: پر (بزن تا آزاد شود)" if cat.sale_full else "🟢 ظرفیتِ فروش: آزاد (بزن تا پر شود)"),
+            callback_data=f"miniapp:catfull:{cat_id}",
+            style=(ButtonStyle.DANGER if cat.sale_full else ButtonStyle.SUCCESS))],   # PATCH_CATEGORY_SALE_FULL_V1
         [InlineKeyboardButton(text=toggle_txt, callback_data=f"miniapp:cattoggle:{cat_id}", style=toggle_style)],
         [InlineKeyboardButton(text="🗑 حذفِ دسته", callback_data=f"miniapp:catdel:{cat_id}", style=ButtonStyle.DANGER)],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="miniapp:cats", style=ButtonStyle.DANGER)],
@@ -1073,6 +1081,26 @@ async def miniapp_cat_toggle(cb: CallbackQuery, bot: Bot):
             cat.active = not cat.active
             await s.commit()
     await miniapp_cats(cb, bot)
+
+
+# === PATCH_CATEGORY_SALE_FULL_V1 ===
+@miniapp_admin_router.callback_query(F.data.startswith("miniapp:catfull:"))
+async def miniapp_cat_full_toggle(cb: CallbackQuery, bot: Bot):
+    """«ظرفیتِ فروش پر/آزاد» — رویِ ربات و مینی‌اپ هر دو اثر دارد."""
+    from tenant import get_bot_row, is_owner_or_admin
+    cat_id = int(cb.data.split(":")[2])
+    row = await get_bot_row(bot)
+    if not row or not await is_owner_or_admin(row.id, cb.from_user.id, row.owner_id):
+        await cb.answer()
+        return
+    async with Session() as s:
+        cat = await s.get(MiniAppCategory, cat_id)
+        if not cat or cat.bot_id != row.id:
+            await cb.answer("پیدا نشد", show_alert=True)
+            return
+        cat.sale_full = not cat.sale_full
+        await s.commit()
+    await miniapp_cat_detail(cb, bot)      # خودش cb.answer می‌زند؛ وضعیت روی برچسبِ دکمه دیده می‌شود
 
 
 @miniapp_admin_router.callback_query(F.data.startswith("miniapp:catdel:"))

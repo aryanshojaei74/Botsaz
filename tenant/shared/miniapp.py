@@ -602,7 +602,8 @@ async def api_categories(bot_id: int, x_init_data: str | None = Header(default=N
         # یا نه؛ اگر دستی تنظیم کرده، انتخابش را بدونِ قید‌وشرط اجرا می‌کنیم.
         hide_setting = await s.scalar(select(Setting).where(
             Setting.bot_id == bot_id, Setting.key == "miniapp_hide_all"))
-    out = [{"id": c.id, "title": c.title, "icon": c.icon or "🛰"} for c in cats]
+    out = [{"id": c.id, "title": c.title, "icon": c.icon or "🛰",
+            "full": bool(getattr(c, "sale_full", False))} for c in cats]    # PATCH_CATEGORY_SALE_FULL_V1
     if hide_setting is not None:
         show_all_servers = hide_setting.value != "1"
     else:
@@ -628,6 +629,10 @@ async def api_plans(bot_id: int, category_id: int, x_init_data: str | None = Hea
         packs = []
         if category_id:
             _cat = await s.get(MiniAppCategory, category_id)
+            if _cat and _cat.bot_id == bot_id and getattr(_cat, "sale_full", False):
+                # === PATCH_CATEGORY_SALE_FULL_V1 === حتی با فراخوانیِ مستقیمِ API هم فروشی نیست
+                return JSONResponse({"ok": True, "plans": [], "packs": [], "custom": [], "full": True,
+                                     "message": f"ظرفیتِ فروشِ «{_cat.title}» پر شده؛ لطفاً دستهٔ دیگری را انتخاب کنید."})
             if _cat and _cat.bot_id == bot_id:
                 packs = await _stock_packs(s, bot_id, _stock_list(_cat))
     out = [{
@@ -2726,6 +2731,14 @@ _PAGE_HTML = r"""<!doctype html>
         html += '<div class="section-title" style="margin-top:14px"><span>'+T.buy+'</span></div>' +
           '<div style="font-size:12px;color:var(--sub);margin:-4px 2px 4px">نوع پلن خود را انتخاب کنید</div>';
         cats.forEach(function(c){
+          /* === PATCH_CATEGORY_SALE_FULL_V1 === ظرفیتِ پر: دیده می‌شود ولی باز نمی‌شود */
+          if (c.full) {
+            html += '<div class="list-item jelly" data-full="'+esc(c.title)+'" style="opacity:.6;border-color:#e5484d">' +
+              '<div class="row"><div class="list-ic">'+ICON.box+'</div>' +
+              '<div><div class="ttl">'+esc(c.title)+'</div>' +
+              '<div style="font-size:11px;color:#e5484d">🔴 ظرفیتِ فروش پر است</div></div></div></div>';
+            return;
+          }
           html += '<div class="list-item jelly" data-cat="'+c.id+'"><div class="row"><div class="list-ic">'+ICON.box+'</div>' +
             '<div class="ttl">'+esc(c.title)+'</div></div>'+ICON.chevron+'</div>';
         });
@@ -2745,6 +2758,13 @@ _PAGE_HTML = r"""<!doctype html>
       };
       document.querySelectorAll('[data-cat]').forEach(function(el){
         el.onclick = function(){ state.category = parseInt(el.getAttribute('data-cat'),10); render(); };
+      });
+      document.querySelectorAll('[data-full]').forEach(function(el){
+        el.onclick = function(){
+          var m = 'ظرفیتِ فروشِ «'+el.getAttribute('data-full')+'» پر شده؛ لطفاً دستهٔ دیگری را انتخاب کنید.';
+          if (window.Telegram && Telegram.WebApp && Telegram.WebApp.showAlert) { Telegram.WebApp.showAlert(m); }
+          else { alert(m); }
+        };
       });
       /* === PATCH_MINIAPP_VSERVICES_V1 === */
       document.querySelectorAll('[data-vs]').forEach(function(el){

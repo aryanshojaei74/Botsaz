@@ -4931,7 +4931,11 @@ async def _send_miniapp_buy_summary(msg: Message, bot: Bot, bot_id: int,
     داخلِ ربات نمایش داده می‌شود را می‌سازیم و می‌فرستیم (نگاه کن به
     tenant/vpn_user.py::_build_buy_summary) — هیچ منطقِ پرداختی این‌جا
     تکرار نمی‌شود."""
-    from tenant.bots.vpn.vpn_user import _build_buy_summary
+    from tenant.bots.vpn.vpn_user import _build_buy_summary, plan_sale_full_message
+    _full_msg = await plan_sale_full_message(bot_id, plan_id)      # PATCH_CATEGORY_SALE_FULL_V1
+    if _full_msg:
+        await msg.answer(_full_msg)
+        return
     text, kb = await _build_buy_summary(bot, bot_id, plan_id, msg.from_user.id, state)
     if not text:
         await msg.answer("این پلن دیگر در دسترس نیست.")

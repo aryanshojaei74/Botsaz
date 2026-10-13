@@ -1264,6 +1264,9 @@ class MiniAppCategory(Base):
     # هیچ کانفیگِ آماده‌ای به این دسته وصل نیست. مقدارِ ویژهٔ "-" یعنی
     # کانفیگ‌هایِ بدونِ دسته‌بندیِ انبار.
     stock_categories: Mapped[str | None] = mapped_column(String(200))
+    # === PATCH_CATEGORY_SALE_FULL_V1 === «ظرفیتِ فروش پر است»: دسته در ربات و مینی‌اپ دیده می‌شود
+    # ولی خرید ندارد و به کاربر گفته می‌شود از دستهٔ دیگری استفاده کند.
+    sale_full: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
