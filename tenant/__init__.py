@@ -165,6 +165,8 @@ tenant_router.include_router(trial_report_admin_router)
 # === PATCH_ESCROW_V1 ===
 from tenant.shared.escrow import escrow_router
 tenant_router.include_router(escrow_router)
+from tenant.shared.balance_transfer import btr_router   # PATCH_BALANCE_TRANSFER_V1
+tenant_router.include_router(btr_router)
 # === PATCH_KYC_V1 ===
 from tenant.shared.kyc_admin import kyc_admin_router
 tenant_router.include_router(kyc_admin_router)
@@ -6858,6 +6860,11 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
     if msg.text == "📋 تاریخچه تراکنش‌ها":
         await _wallet_history_text(msg, bot)
         return
+    # === PATCH_BALANCE_TRANSFER_V1 === (حالتِ کیبوردی)
+    if msg.text == "🔁 انتقال موجودی":
+        from tenant.shared.balance_transfer import start as _btr_start
+        await _btr_start(msg, bot, state)
+        return
     # === PATCH_KYC_WALLET_BUTTON_V1 ===
     # همان باگِ همیشگیِ حالتِ کیبوردی: دکمهٔ احرازِ هویت در show_wallet ساخته
     # می‌شود ولی در ReplyKeyboard فقط متنِ برچسب می‌رسد، نه callback_data.
@@ -7337,6 +7344,13 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
     # متنِ راهنما فقط در صورتِ فعال بودنِ تیکِ «نمایش در کیف پول» دیده می‌شود.
     if await _payguide_visible(bot_id, "wallet"):
         options.append(("💰 راهنمای پرداخت و افزایش موجودی", "payguide:show:wallet", prim))
+    # === PATCH_BALANCE_TRANSFER_V1 === فقط وقتی مالک روشن کرده و کاربر موجودی دارد
+    try:
+        from tenant.shared.balance_transfer import get_mode as _btr_mode, BTN_LABEL as _btr_lbl
+        if await _btr_mode(bot_id) != "off" and int(u.balance or 0) > 0:
+            options.append((_btr_lbl, "btr:start", prim))
+    except Exception:
+        logger.exception("افزودنِ دکمهٔ انتقالِ موجودی به کیف پول ناموفق بود")
     options.append(("📋 تاریخچه تراکنش‌ها", "w:history", prim))
     # === PATCH_GATEWAY_LAYOUT_V1 === ترتیبِ دلخواهِ دکمه‌هایِ درگاه
     from tenant.gateways.gateway_layout import apply_order_options as _gw_ord_o

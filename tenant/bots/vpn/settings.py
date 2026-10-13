@@ -181,3 +181,18 @@ register_settings_items(section_key("hub", KIND), [
         style="primary",
     ),
 ])
+
+
+# === PATCH_BALANCE_TRANSFER_V1 === انتقالِ موجودی بینِ کاربران (مالی و کیف پول)
+async def _balance_transfer(cb, bot):
+    from tenant.shared.balance_transfer import admin_menu
+    await admin_menu(cb, bot)
+
+
+register_settings_items(section_key("finance", KIND), [
+    SettingsItem(
+        label="🔁 انتقال موجودی بینِ کاربران", callback="btr:admin",
+        handler=_balance_transfer,
+        after=("set:swap", "set:crypto", "set:kyc", "set:txlog", "tadm:receiptchannel"),
+    ),
+])

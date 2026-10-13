@@ -2810,6 +2810,21 @@ class EscrowDeal(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
+class BalanceTransfer(Base):
+    """انتقالِ موجودی بینِ دو کاربرِ یک ربات — PATCH_BALANCE_TRANSFER_V1.
+    status: pending (منتظرِ تأییدِ ادمین؛ مبلغ از فرستنده کسر و نگه داشته شده) / done / rejected."""
+    __tablename__ = "balance_transfers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    from_user_id: Mapped[int] = mapped_column(ForeignKey("bot_users.id"), index=True)
+    to_user_id: Mapped[int] = mapped_column(ForeignKey("bot_users.id"), index=True)
+    amount: Mapped[float] = mapped_column(Numeric(12, 0))
+    status: Mapped[str] = mapped_column(String(12), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 # هنگام حذف کامل یک ربات (پاک‌سازی بایگانی) داده‌های همهٔ این جدول‌ها حذف می‌شوند.
 # === PATCH_BOTUSER_DELETE_ORDER_V1 ===
 # BotUser باید آخرِ این لیست باشد، نه اول — چون تقریباً همهٔ جداولِ دیگرِ
@@ -2833,6 +2848,7 @@ TENANT_OWNED_MODELS = [
     # === PATCH_GATE_DEDICATED_LINK_V1 ===
     GateReferralLink,
     EscrowDeal,   # === PATCH_ESCROW_V1 ===
+    BalanceTransfer,   # === PATCH_BALANCE_TRANSFER_V1 ===
     BotUser,
     # === PATCH_TENANT_OWNED_MODELS_MISSING_TABLES_V1 ===
     # این ۴ تا جدول (که همه‌شون تازه این فصل اضافه شدن: پنلِ تبلیغِ
