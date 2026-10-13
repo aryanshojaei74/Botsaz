@@ -155,6 +155,8 @@ from platform_apay import papay_router
 router.include_router(papay_router)
 from platform_promoters import promo_router   # PATCH_PLATFORM_PROMOTER_V1
 router.include_router(promo_router)
+from platform_user_discounts import udisc_router   # PATCH_PLATFORM_USER_DISCOUNT_V1
+router.include_router(udisc_router)
 
 # === PATCH_DICE_GAME_V1 ===
 # آخر از همه ثبت می‌شود تا هندلرِ «نوشتنِ نامِ بازی» فقط وقتی به آن
@@ -5447,6 +5449,11 @@ async def choose_plan(cb: CallbackQuery, state: FSMContext):
             disc, _promo_hit = _pwp(disc, _pinfo)
             promo_id = _pinfo.promoter_id if _promo_hit else None
             promo_pct = _pinfo.percent if _promo_hit else 0
+            # === PATCH_PLATFORM_USER_DISCOUNT_V1 === تخفیفِ دائمیِ اختصاصی؛ بزرگ‌ترین اعمال می‌شود
+            from platform_user_discounts import percent_for as _ud_pct
+            _udp = await _ud_pct(cb.from_user.id)
+            if _udp > disc:
+                disc, promo_id, promo_pct = _udp, None, 0
             base_after_plan_disc, _, _ = plan_price_final(plan)
             price = base_after_plan_disc * (100 - disc) // 100
             if bal < price:
@@ -12268,6 +12275,11 @@ async def buyplan_confirm(cb: CallbackQuery):
         from platform_promoters import promo_for as _promo_for, pct_with_promo as _pwp
         _pinfo = await _promo_for(cb.from_user.id)
         disc, _promo_hit = _pwp(disc, _pinfo)
+        # === PATCH_PLATFORM_USER_DISCOUNT_V1 ===
+        from platform_user_discounts import percent_for as _ud_pct
+        _udp = await _ud_pct(cb.from_user.id)
+        if _udp > disc:
+            disc, _promo_hit = _udp, False
         ptc_mode, ptc_amt = await ptc_discount_for(cb.from_user.id)
         ptc_note = ""
         if ptc_mode == "percent" and ptc_amt > disc:
@@ -20222,6 +20234,9 @@ async def settings_kb() -> InlineKeyboardMarkup:
         [hx_button("💳 پرداخت و کیف پول", callback_data="set:hub_pay")],
         # === PATCH_PLATFORM_PROMOTER_V1 ===
         [hx_button("🤝 معرفِ فروش (تخفیفِ خریدِ اول)", callback_data="set:prm",
+                   style=ButtonStyle.SUCCESS)],
+        # === PATCH_PLATFORM_USER_DISCOUNT_V1 ===
+        [hx_button("🏷 تخفیفِ اختصاصیِ کاربر (دائمی)", callback_data="set:udisc",
                    style=ButtonStyle.SUCCESS)],
         [hx_button("🤖 تنظیمات عمومی ربات", callback_data="set:hub_general")],
         [hx_button(("🟢 مینی‌اپ فروشگاهی برای مستأجرها: فعال" if miniapp_on

@@ -3597,3 +3597,17 @@ class PlatformPromoUse(Base):
     paid_toman: Mapped[int] = mapped_column(Integer, default=0)
     discount_toman: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class PlatformUserDiscount(Base):
+    """=== PATCH_PLATFORM_USER_DISCOUNT_V1 === تخفیفِ دائمیِ اختصاصیِ یک کاربر در رباتِ مادر
+    (مدیر آیدیِ عددی و درصد می‌دهد؛ روی هر خرید/تمدیدِ پلن اعمال می‌شود تا خاموش یا صفر شود)."""
+    __tablename__ = "platform_user_discounts"
+    __table_args__ = (UniqueConstraint("user_telegram_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    percent: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    note: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
