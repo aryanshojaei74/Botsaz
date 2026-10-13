@@ -68,6 +68,8 @@ from tenant.shared.group_betting import betting_expiry_loop as _betting_expiry_l
 from tenant.bots.virtual_service.ozvinoo_vnum import ozvinoo_poll_loop as _ozvinoo_poll_loop
 # === PATCH_P2P_MARKET_V1 === لغوِ خودکارِ معامله‌هایِ بی‌پاسخ + پایانِ اجاره‌هایِ مارکت
 from tenant.bots.virtual_service.nft_p2p import p2p_loop as _p2p_loop
+# === PATCH_NFT_TGTOOLS_V1 === پایشِ خریدهایِ TGTools + همگام‌سازیِ دوره‌ایِ منابعِ مارکت
+from tenant.bots.virtual_service.nft_tgtools import nft_sources_loop as _nft_sources_loop
 # === PATCH_OZVINOO_AUTO_PRICE_SYNC_V1 ===
 # حلقهٔ بالا فقط وضعیتِ سفارش‌ها را چک می‌کند؛ این یکی قیمت‌ها را تازه نگه
 # می‌دارد تا ربات با نرخِ کهنه نفروشد.
@@ -133,6 +135,7 @@ async def _worker_startup():
         _betting_expiry_loop(),
         # === PATCH_P2P_MARKET_V1 ===
         _p2p_loop(),
+        _nft_sources_loop(),
         # === PATCH_BROADCAST_DURABLE_V1 === ادامهٔ ارسال‌هایِ همگانیِ قطع‌شده بعد از ری‌استارت
         _broadcast_loop(),
     ):

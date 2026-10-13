@@ -293,6 +293,98 @@ class PortalsProvider(BaseProvider):
         return out
 
 
+class TgToolsProvider(BaseProvider):
+    """مارکتِ NFTِ TGTools (API رسمی: https://tg-tools.shop/api-docs ← MARKETPLACE).
+
+    === PATCH_NFT_TGTOOLS_V1 ===
+    برخلافِ Tonnel/Portals این API رسمی و پایدار است (کلیدِ X-Api-Key=tgt_…، بدونِ Cloudflare)، و
+    «خریدِ خودکار» هم دارد (POST /api/marketplace/buy/auto) — تحویلِ NFT مستقیم به آدرسِ TONِ خریدار.
+    قیمتِ مبدأ = قیمتِ لیستینگ + کارمزدِ پلتفرم (≈۵٪) + گازِ ثابت؛ این‌جا تخمین زده می‌شود و موقعِ
+    خرید با /marketplace/quote دقیق چک می‌شود (نگهبانِ ضرر در nft_tgtools.py).
+    """
+    key = "tgtools"
+    label = "TGTools"
+    ready = True
+    auth_help = (
+        "کلیدِ API سایتِ TGTools را بگذار (با <code>tgt_</code> شروع می‌شود): "
+        "tg-tools.shop ← داشبورد ← API Key.\n"
+        "اگر قبلاً کلیدِ TGTools را برایِ استارز/پریمیوم در ربات ثبت کرده‌ای، این کادر را خالی بگذار — همان استفاده می‌شود.\n\n"
+        "فیلترِ کالکشن (اختیاری): نامِ کالکشن (مثلاً <code>Lol Pop</code>) یا آدرسش. اگر خالی باشد، "
+        "از چند کالکشنِ برتر آیتم‌هایِ «در حالِ فروش» خوانده می‌شود.\n"
+        "خرید خودکار است: مشتری آدرسِ کیف‌پولِ TONِ خودش را می‌دهد و NFT مستقیم به آن می‌رسد."
+    )
+
+    FEE_PCT = 0.05          # کارمزدِ پلتفرمِ TGTools (از مثالِ مستند)
+    GAS_TON = 0.065         # بافرِ گازِ ثابت
+    _MAX_COLLECTIONS = 12
+
+    @classmethod
+    def est_cost_ton(cls, listing_ton: float) -> float:
+        return float(listing_ton) * (1 + cls.FEE_PCT) + cls.GAS_TON
+
+    @staticmethod
+    def _err(e):
+        from tenant.bots.virtual_service.tgtools_api import TgToolsError
+        if isinstance(e, TgToolsError):
+            if e.status in (401, 403):
+                return SourceAuthError(f"کلیدِ TGTools پذیرفته نشد (HTTP {e.status}).")
+            if e.status == 429:
+                return SourceUnavailable("TGTools فعلاً درخواست‌ها را محدود کرده (429).")
+            return SourceUnavailable(f"خطایِ TGTools: {e.message}")
+        return SourceUnavailable(f"ارتباط با TGTools برقرار نشد ({type(e).__name__}).")
+
+    async def _get(self, auth: str, path: str, params: dict | None = None):
+        from tenant.bots.virtual_service.tgtools_api import _request
+        try:
+            return await _request(auth, "GET", path, params=params)
+        except Exception as e:                               # noqa: BLE001
+            raise self._err(e)
+
+    async def _resolve_collections(self, auth: str, collection: str | None):
+        """[(address, name, image)] — با فیلتر (نام یا آدرس) یا چند کالکشنِ اول."""
+        coll = (collection or "").strip()
+        if coll and (coll.startswith("0:") or (len(coll) >= 40 and " " not in coll)):
+            return [(coll, coll, None)]
+        data = await self._get(auth, "/api/marketplace/collections",
+                               {"offset": 0, "limit": 100 if coll else self._MAX_COLLECTIONS,
+                                **({"search": coll} if coll else {})})
+        items = (data or {}).get("items") if isinstance(data, dict) else data
+        out = [(c.get("address"), c.get("name") or "", c.get("imageUrl"))
+               for c in (items or []) if isinstance(c, dict) and c.get("address")]
+        if coll:
+            exact = [c for c in out if c[1].strip().lower() == coll.lower()]
+            out = exact or out[:3]
+        return out[: self._MAX_COLLECTIONS]
+
+    async def fetch(self, auth: str, *, limit: int = 60,
+                    collection: str | None = None) -> list[RemoteItem]:
+        cols = await self._resolve_collections(auth, collection)
+        out: list[RemoteItem] = []
+        for addr, cname, cimg in cols:
+            if len(out) >= limit:
+                break
+            data = await self._get(
+                auth, f"/api/marketplace/collections/{addr}/items",
+                {"offset": 0, "limit": max(1, min(limit - len(out), 50)),
+                 "sort": "price_asc", "onSaleOnly": "true"})
+            for g in ((data or {}).get("items") if isinstance(data, dict) else data) or []:
+                if not isinstance(g, dict) or g.get("isOnSale") is False:
+                    continue
+                price = g.get("displayPriceTon") or g.get("salePriceTon")
+                ref = g.get("address")
+                try:
+                    price = float(price or 0)
+                except (TypeError, ValueError):
+                    price = 0.0
+                if not ref or price <= 0:
+                    continue
+                out.append(RemoteItem(
+                    ref=ref, title=g.get("name") or cname or "NFT",
+                    price_ton=self.est_cost_ton(price), collection=cname or None,
+                    image=g.get("imageUrl") or cimg))
+        return out
+
+
 class _ComingSoon(BaseProvider):
     ready = False
 
@@ -305,6 +397,7 @@ class _ComingSoon(BaseProvider):
 _PROVIDERS: dict[str, BaseProvider] = {
     "tonnel": TonnelProvider(),
     "portals": PortalsProvider(),   # === PATCH_PORTALS_PROVIDER_V1 ===
+    "tgtools": TgToolsProvider(),   # === PATCH_NFT_TGTOOLS_V1 ===
     "mrkt": _ComingSoon("mrkt", "MRKT"),
 }
 
@@ -342,6 +435,19 @@ def provider_list() -> list[dict]:
 
 
 # ───────────────────────── همگام‌سازی ─────────────────────────
+
+async def _auth_for(src: NftMarketSource) -> str:
+    """توکنِ منبع؛ برایِ TGTools اگر خالی بود، همان کلیدِ ثبت‌شدهٔ استارز/پریمیومِ ربات."""
+    a = _auth_of(src)
+    if a or (src.provider or "") != "tgtools":
+        return a
+    try:
+        from tenant.bots.virtual_service.smm import _tgt_key
+        return await _tgt_key(src.bot_id)
+    except Exception:                                        # noqa: BLE001
+        logger.exception("nft_sources: خواندنِ کلیدِ TGTools ربات ناموفق بود")
+        return ""
+
 
 def _auth_of(src: NftMarketSource) -> str:
     if not src.encrypted_auth:
@@ -386,7 +492,7 @@ async def sync_source(bot_id: int, source_id: int) -> tuple[bool, str, dict]:
         prov = get_provider(src.provider)
         if not prov or not prov.ready:
             return False, "این مارکت هنوز پشتیبانی نمی‌شود.", stats
-        auth = _auth_of(src)
+        auth = await _auth_for(src)
         markup = float(src.markup_percent or 0)
         limit = int(src.max_items or 60)
         coll = (src.collection_filter or "").strip() or None
@@ -477,7 +583,7 @@ async def check_auth(bot_id: int, source_id: int) -> tuple[bool, str]:
         prov = get_provider(src.provider)
         if not prov or not prov.ready:
             return False, "این مارکت هنوز پشتیبانی نمی‌شود."
-        auth = _auth_of(src)
+        auth = await _auth_for(src)
     if not auth:
         return False, "توکن ثبت نشده."
     try:

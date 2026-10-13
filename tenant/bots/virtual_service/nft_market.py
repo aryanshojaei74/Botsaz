@@ -127,7 +127,7 @@ async def _is_owner(row, u) -> bool:
         return int(row.owner_id) == int(u.telegram_id)
 
 
-def _item_json(it: NftItem, *, owner: bool = False) -> dict:
+def _item_json(it: NftItem, *, owner: bool = False, ton_sources=frozenset()) -> dict:
     d = {
         "id": it.id,
         "kind": it.kind,
@@ -144,6 +144,8 @@ def _item_json(it: NftItem, *, owner: bool = False) -> dict:
         "rent_min_days": it.rent_min_days or 1,
         "rent_max_days": it.rent_max_days or 180,
         "status": it.status,
+        # === PATCH_NFT_TGTOOLS_V1 === خریدِ خودکار از TGTools نیاز به آدرسِ TONِ مشتری دارد
+        "needs_ton": bool(it.source_id and it.source_id in ton_sources),
     }
     if owner:
         # === PATCH_NFT_SOURCES_V1 === سود برایِ آیتم‌هایِ واسطه‌گری
@@ -362,8 +364,10 @@ async def _items_body(bot_id: int, tab: str, kind: str, collection: str, color: 
 
     async with Session() as s:
         items = (await s.scalars(q.limit(200))).all()
+    from tenant.bots.virtual_service.nft_tgtools import tgtools_source_ids
+    tsrc = await tgtools_source_ids(bot_id)
     return JSONResponse({"ok": True, "tab": tab,
-                         "items": [_item_json(i) for i in items]})
+                         "items": [_item_json(i, ton_sources=tsrc) for i in items]})
 
 
 @nft_market_router.post("/api/miniapp2/{bot_id}/order")
@@ -393,6 +397,11 @@ async def api_order(bot_id: int, payload: dict = Body(...),
             raise HTTPException(status_code=409, detail="item_unavailable")
         if kind == "buy" and it.mode not in ("buy", "both"):
             raise HTTPException(status_code=409, detail="not_for_sale")
+        # === PATCH_NFT_TGTOOLS_V1 === آیتمِ TGTools: آدرسِ TONِ معتبرِ مشتری لازم است
+        from tenant.bots.virtual_service.nft_tgtools import is_tgtools_item, valid_ton_address
+        ton_addr = str(payload.get("ton_address") or "").strip()[:120]
+        if await is_tgtools_item(it) and not valid_ton_address(ton_addr):
+            raise HTTPException(status_code=400, detail="need_address")
         if kind == "rent" and it.mode not in ("rent", "both"):
             raise HTTPException(status_code=409, detail="not_for_rent")
 
@@ -436,7 +445,7 @@ async def api_order(bot_id: int, payload: dict = Body(...),
         order = NftOrder(bot_id=bot_id, user_id=user.id, item_id=it.id,
                          kind=kind, days=days, amount=total, fee=fee,
                          status="pending", transfer_mode="manual",
-                         expires_at=expires)
+                         expires_at=expires, recipient_ton=ton_addr or None)
         s.add(order)
         await s.commit()
         await s.refresh(order)
@@ -884,6 +893,14 @@ async def _deliver_or_notify(bot_id: int, order_id: int) -> None:
     خطایِ شبکه‌ای نباید پاسخِ مینی‌اپ را ۵۰۰ کند.
     """
     await _report_purchase(bot_id, order_id)
+    try:
+        # === PATCH_NFT_TGTOOLS_V1 === منبعِ TGTools: خریدِ خودکار و تحویل به آدرسِ TONِ مشتری
+        from tenant.bots.virtual_service.nft_tgtools import try_tgtools_buy
+        if await try_tgtools_buy(bot_id, order_id) == "queued":
+            return
+    except Exception as e:                                   # noqa: BLE001
+        logger.warning("خریدِ خودکارِ TGTools برایِ سفارشِ #%s ناموفق بود (%s): %s",
+                       order_id, type(e).__name__, e)
     try:
         from tenant.bots.virtual_service.nft_admin import try_auto_transfer, notify_admin_new_order
         done = await try_auto_transfer(bot_id, order_id)
@@ -1430,6 +1447,9 @@ function openOrder(id){
       ${FEE?`<div class="row"><span>کارمزدِ انتقال</span><b>${fa(FEE)} ت</b></div>`:""}
       <div class="total">مبلغ نهایی: <b>${fa(tot)} تومان</b></div>
       ${FEE?`<div class="note">💡 ${fa(FEE)} تومان کارمزدِ ثابتِ تلگرام برایِ انتقالِ NFT است.</div>`:""}${it.p2p?p2pEscrowNote()+(it.note?`<div class="note">📝 ${esc(it.note)}</div>`:""):""}
+      ${it.needs_ton?`<label class="l">آدرسِ کیف‌پولِ TONِ خودت (NFT مستقیم به آن می‌رسد)</label>
+      <input id="tonaddr" dir="ltr" placeholder="UQ…" autocomplete="off" style="width:100%"/>
+      <div class="note">⚠️ آدرس را دقیق وارد کن؛ NFT به همین آدرس منتقل می‌شود و قابلِ بازگشت نیست.</div>`:""}
       <button class="cta" style="margin-top:10px" onclick="submitOrder(${it.id},'buy',0)">پرداخت و ثبتِ سفارش</button>`);
   } else {
     const tn=ton(it.rent_daily);
@@ -1472,7 +1492,8 @@ async function submitOrder(id,kind,days){
   const btn=document.querySelector(".sbox .cta"); if(btn){ btn.disabled=true; btn.textContent="در حال ثبت…"; }
   try{
     const users=ST.src==="users"&&ST.p2p.enabled;
-    await api(users?"/p2p/order":"/order",{method:"POST",body:JSON.stringify({item_id:id,kind:kind,days:days})});
+    const ta=document.getElementById("tonaddr");
+    await api(users?"/p2p/order":"/order",{method:"POST",body:JSON.stringify({item_id:id,kind:kind,days:days,ton_address:ta?ta.value.trim():""})});
     closeSheet(); hap("heavy");
     toast(users?"✅ سفارش ثبت شد و پولت امن نزدِ ربات است. بعد از انتقالِ فروشنده، از تو تأیید می‌گیریم."
                :"✅ سفارش ثبت شد. پس از تحویل به شما اطلاع داده می‌شود.");
@@ -1487,7 +1508,8 @@ async function submitOrder(id,kind,days){
         <div class="row"><span>موجودیِ شما</span><b>${e.data.balance_fa} ت</b></div>
         <div class="note">برایِ افزایشِ موجودی از طریقِ خودِ ربات اقدام کن.</div>
         <button class="cta" style="margin-top:10px" onclick="openBot()">افزایشِ موجودی</button>`);
-    } else if(e.code===409){ toast((e.data&&e.data.message)||"این آیتم دیگر موجود نیست."); closeSheet(); loadItems(); }
+    } else if(e.code===400&&e.data&&e.data.detail==="need_address"){ toast("آدرسِ کیف‌پولِ TON را درست وارد کن (مثلاً UQ…)."); }
+    else if(e.code===409){ toast((e.data&&e.data.message)||"این آیتم دیگر موجود نیست."); closeSheet(); loadItems(); }
     else toast("خطا در ثبتِ سفارش.");
   }
 }

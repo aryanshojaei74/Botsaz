@@ -3315,6 +3315,9 @@ class NftOrder(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+    # === PATCH_NFT_TGTOOLS_V1 === خریدِ خودکار از TGTools: آدرسِ TONِ دریافت‌کننده + شناسهٔ سفارش در مبدأ
+    recipient_ton: Mapped[str | None] = mapped_column(String(120))
+    source_order_id: Mapped[str | None] = mapped_column(String(40), index=True)
 
 
 class NftBizConn(Base):
