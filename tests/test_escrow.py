@@ -343,3 +343,27 @@ async def test_party_ok_buttons_only_for_own_party_and_notify_when_both(env):
         d2 = await s.get(models.EscrowDeal, d.id)
         assert d2.buyer_ok and d2.seller_ok and d2.status == "group_created"   # فقط واسط می‌تواند ببندد
     assert any(x[0] == 500 and "هر دو طرف تأیید" in x[1] for x in bot.sent)
+
+
+@pytest.mark.asyncio
+async def test_only_mediator_can_close_not_parties_even_if_admin(env):
+    maker, _p = env
+    bot, st = FakeBot(), St()
+    await _make_deal(bot, st, role="seller")
+    await ES.esc_send(Cb("esc:send"), bot, st)
+    async with maker() as s:
+        d = await s.scalar(select(models.EscrowDeal))
+        s.add(models.AdminSupport(bot_id=9, telegram_id=1001))          # فروشنده ادمینِ پشتیبانیِ ربات هم هست
+        s.add(models.AdminSupport(bot_id=9, telegram_id=888))           # ادمینِ عادی که واسط نیست
+        await s.commit()
+    await ES.esc_accept(Cb(f"esc:acc:{d.id}", uid=1002), bot)
+    buyer_id, seller_id = ES.roles(d)
+
+    async def can(uid, uname=None):
+        c = Cb("x", uid=uid)
+        c.from_user = SimpleNamespace(id=uid, username=uname)
+        async with maker() as s:
+            return await ES._can_close(c, await s.get(models.EscrowDeal, d.id))
+    assert not await can(buyer_id) and not await can(seller_id)        # طرف‌ها هرگز
+    assert not await can(888)                                          # واسط‌ها تنظیم شده‌اند → ادمینِ عادی نه
+    assert await can(777) and await can(1, "mediator1") and await can(500)   # واسط (آیدی/یوزرنیم) و مالک

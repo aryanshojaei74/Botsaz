@@ -591,13 +591,21 @@ async def _notify_owner(bot: Bot, bot_id: int, text: str) -> None:
 
 
 async def _can_close(cb: CallbackQuery, d) -> bool:
+    """پایان/لغوِ معامله فقط با واسط. خریدار/فروشندهٔ همان معامله هرگز (حتی اگر ادمینِ ربات باشند)؛
+    اگر واسط‌هایی تنظیم شده باشند فقط خودِ آن‌ها و مالکِ ربات؛ وگرنه مالک و ادمین‌هایِ ربات."""
+    if cb.from_user.id in roles(d):
+        return False
     from tenant import get_bot_row_by_id, is_owner_or_admin
-    row = await get_bot_row_by_id(d.bot_id)
-    if row and await is_owner_or_admin(d.bot_id, cb.from_user.id, row.owner_id):
-        return True
     cfg = await _cfg(d.bot_id)
     uname = (getattr(cb.from_user, "username", None) or "").lower()
-    return str(cb.from_user.id) in cfg["mediators"] or (uname and f"@{uname}" in [m.lower() for m in cfg["mediators"]])
+    if str(cb.from_user.id) in cfg["mediators"] or (uname and f"@{uname}" in [m.lower() for m in cfg["mediators"]]):
+        return True
+    row = await get_bot_row_by_id(d.bot_id)
+    if not row:
+        return False
+    if cfg["mediators"]:
+        return cb.from_user.id == row.owner_id
+    return await is_owner_or_admin(d.bot_id, cb.from_user.id, row.owner_id)
 
 
 async def _close_deal(cb: CallbackQuery, bot: Bot, status: str, label: str):
