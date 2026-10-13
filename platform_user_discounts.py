@@ -22,11 +22,13 @@ logger = _get_logger(__name__)
 
 udisc_router = Router(name="platform_user_discounts")
 MAX_PERCENT = 90
+PLAN_CHOICES = (("growth", "🚀 رشد"), ("pro", "💎 حرفه‌ای"))
 
 
 class UDiscFSM(StatesGroup):
     user_id = State()
     percent = State()
+    plans = State()
 
 
 def _hx(*a, **k):
@@ -47,14 +49,47 @@ def parse_percent(txt: str) -> int | None:
 
 
 # ═══════════ منطق ═══════════
-async def percent_for(uid: int) -> int:
-    """درصدِ تخفیفِ اختصاصیِ فعالِ این کاربر (۰ اگر ندارد/خاموش است)."""
+def plans_list(d) -> list[str]:
+    return [x for x in (getattr(d, "plans", None) or "").split(",") if x]
+
+
+async def percent_for(uid: int, plan: str | None = None) -> int:
+    """درصدِ تخفیفِ اختصاصیِ فعالِ این کاربر (۰ اگر ندارد/خاموش است/برایِ این پلن نیست).
+    plan=None یعنی فقط «آیا اصلاً تخفیفی دارد» (بدونِ فیلترِ پلن)."""
     async with Session() as s:
         d = await s.scalar(select(PlatformUserDiscount).where(PlatformUserDiscount.user_telegram_id == uid))
-    return int(d.percent) if d and d.active and int(d.percent or 0) > 0 else 0
+    if not (d and d.active and int(d.percent or 0) > 0):
+        return 0
+    allowed = plans_list(d)
+    if plan is not None and allowed and str(plan) not in allowed:
+        return 0
+    return int(d.percent)
 
 
-async def set_discount(uid: int, percent: int, note: str | None = None) -> str:
+async def resolve_user(text: str, bot=None) -> int | None:
+    """آیدیِ عددی یا @یوزرنیم → آیدیِ عددی. یوزرنیم اول از دیتابیسِ خودِ ربات، بعد از تلگرام."""
+    t = _fa(text)
+    if t.isdigit():
+        return int(t) if int(t) > 0 else None
+    name = t.lstrip("@").strip()
+    if not name or not all(c.isalnum() or c == "_" for c in name):
+        return None
+    async with Session() as s:
+        from sqlalchemy import func as _f
+        u = await s.scalar(select(PlatformUser).where(_f.lower(PlatformUser.username) == name.lower()))
+    if u:
+        return int(u.telegram_id)
+    if bot is not None:
+        try:
+            ch = await bot.get_chat("@" + name)
+            return int(ch.id) if getattr(ch, "type", "private") == "private" else None
+        except Exception:
+            logger.info("udisc: یوزرنیمِ @%s پیدا نشد", name)
+    return None
+
+
+async def set_discount(uid: int, percent: int, note: str | None = None,
+                       plans: list[str] | None = None) -> str:
     """درصد را ثبت/ویرایش می‌کند؛ صفر = حذف. خروجی: created | updated | removed | none"""
     async with Session() as s:
         d = await s.scalar(select(PlatformUserDiscount).where(PlatformUserDiscount.user_telegram_id == uid))
@@ -64,13 +99,16 @@ async def set_discount(uid: int, percent: int, note: str | None = None) -> str:
             await s.delete(d)
             await s.commit()
             return "removed"
+        pl = ",".join(p for p in (plans or []) if p in dict(PLAN_CHOICES)) or None
         if d:
             d.percent, d.active = percent, True
+            d.plans = pl
             if note:
                 d.note = note[:80]
             await s.commit()
             return "updated"
-        s.add(PlatformUserDiscount(user_telegram_id=uid, percent=percent, active=True, note=(note or None)))
+        s.add(PlatformUserDiscount(user_telegram_id=uid, percent=percent, active=True, note=(note or None),
+                                   plans=pl))
         await s.commit()
         return "created"
 
@@ -131,7 +169,7 @@ async def ud_add(cb: CallbackQuery, state: FSMContext):
     if not _is_admin(cb.from_user.id):
         return await cb.answer("فقط مدیر اصلی", show_alert=True)
     await state.set_state(UDiscFSM.user_id)
-    await _show(cb, "🆔 <b>آیدیِ عددیِ کاربر</b> را بفرست:", _cancel_kb())
+    await _show(cb, "🆔 <b>آیدیِ عددی یا @یوزرنیمِ کاربر</b> را بفرست:", _cancel_kb())
     await cb.answer()
 
 
@@ -139,10 +177,11 @@ async def ud_add(cb: CallbackQuery, state: FSMContext):
 async def ud_user(msg: Message, state: FSMContext):
     if not _is_admin(msg.from_user.id):
         return
-    t = _fa(msg.text)
-    if not t.isdigit() or int(t) <= 0:
-        return await msg.answer("❌ فقط آیدیِ عددیِ کاربر را بفرست.", reply_markup=_cancel_kb())
-    uid = int(t)
+    uid = await resolve_user(msg.text, msg.bot)
+    if not uid:
+        return await msg.answer("❌ کاربر پیدا نشد. آیدیِ عددی یا @یوزرنیم را بفرست "
+                                "(یوزرنیم فقط برایِ کسی که ربات را استارت کرده کار می‌کند).",
+                                reply_markup=_cancel_kb())
     cur = await percent_for(uid)
     async with Session() as s:
         label = await _label(s, uid)
@@ -155,6 +194,18 @@ async def ud_user(msg: Message, state: FSMContext):
         reply_markup=_cancel_kb())
 
 
+def _plans_kb(sel: list[str]) -> InlineKeyboardMarkup:
+    rows = [[_hx(("✅ " if k in sel else "⬜️ ") + lbl, callback_data=f"ud:p:{k}")] for k, lbl in PLAN_CHOICES]
+    rows.append([_hx(("✅ " if not sel else "⬜️ ") + "همهٔ پلن‌ها", callback_data="ud:pall")])
+    rows.append([_hx("💾 ذخیره", callback_data="ud:psave", style=ButtonStyle.SUCCESS)])
+    rows.append([_hx("❌ لغو", callback_data="ud:menu", style=ButtonStyle.DANGER)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+_PLANS_TXT = ("📦 <b>روی کدام پلن‌ها فعال باشد؟</b>\n\n"
+              "یک یا چند پلن را تیک بزن، یا «همهٔ پلن‌ها» (پیش‌فرض). بعد «💾 ذخیره».")
+
+
 @udisc_router.message(UDiscFSM.percent, F.text)
 async def ud_percent(msg: Message, state: FSMContext):
     if not _is_admin(msg.from_user.id):
@@ -163,23 +214,65 @@ async def ud_percent(msg: Message, state: FSMContext):
     if pct is None:
         return await msg.answer(f"❌ عددی بینِ ۰ تا {MAX_PERCENT} بفرست.", reply_markup=_cancel_kb())
     uid = int((await state.get_data()).get("ud_uid") or 0)
+    if pct == 0:                                    # صفر = حذف؛ پرسیدنِ پلن لازم نیست
+        await state.clear()
+        res = await set_discount(uid, 0)
+        await msg.answer(f"🗑 تخفیفِ اختصاصیِ <code>{uid}</code> حذف شد." if res == "removed"
+                         else "ℹ️ این کاربر تخفیفِ اختصاصی نداشت؛ چیزی تغییر نکرد.")
+        txt, kb = await _list_view()
+        return await msg.answer(txt, reply_markup=kb)
+    async with Session() as s:
+        d = await s.scalar(select(PlatformUserDiscount).where(PlatformUserDiscount.user_telegram_id == uid))
+    cur_plans = plans_list(d) if d else []
+    await state.update_data(ud_pct=pct, ud_plans=cur_plans)
+    await state.set_state(UDiscFSM.plans)
+    await msg.answer(_PLANS_TXT, reply_markup=_plans_kb(cur_plans))
+
+
+@udisc_router.callback_query(UDiscFSM.plans, F.data.startswith("ud:p:"))
+async def ud_plan_toggle(cb: CallbackQuery, state: FSMContext):
+    if not _is_admin(cb.from_user.id):
+        return await cb.answer("فقط مدیر اصلی", show_alert=True)
+    key = cb.data.split(":")[2]
+    if key not in dict(PLAN_CHOICES):
+        return await cb.answer()
+    sel = list((await state.get_data()).get("ud_plans") or [])
+    sel = [x for x in sel if x != key] if key in sel else sel + [key]
+    await state.update_data(ud_plans=sel)
+    await cb.message.edit_reply_markup(reply_markup=_plans_kb(sel))
+    await cb.answer()
+
+
+@udisc_router.callback_query(UDiscFSM.plans, F.data == "ud:pall")
+async def ud_plan_all(cb: CallbackQuery, state: FSMContext):
+    if not _is_admin(cb.from_user.id):
+        return await cb.answer("فقط مدیر اصلی", show_alert=True)
+    await state.update_data(ud_plans=[])
+    await cb.message.edit_reply_markup(reply_markup=_plans_kb([]))
+    await cb.answer()
+
+
+@udisc_router.callback_query(UDiscFSM.plans, F.data == "ud:psave")
+async def ud_save(cb: CallbackQuery, state: FSMContext):
+    if not _is_admin(cb.from_user.id):
+        return await cb.answer("فقط مدیر اصلی", show_alert=True)
+    data = await state.get_data()
+    uid, pct, sel = int(data.get("ud_uid") or 0), int(data.get("ud_pct") or 0), list(data.get("ud_plans") or [])
     await state.clear()
-    res = await set_discount(uid, pct)
-    if res == "none":
-        await msg.answer("ℹ️ این کاربر تخفیفِ اختصاصی نداشت؛ چیزی تغییر نکرد.")
-    elif res == "removed":
-        await msg.answer(f"🗑 تخفیفِ اختصاصیِ <code>{uid}</code> حذف شد.")
-    else:
-        await msg.answer(f"✅ تخفیفِ دائمیِ <b>{pct}٪</b> برایِ <code>{uid}</code> "
-                         f"{'ثبت' if res == 'created' else 'به‌روزرسانی'} شد.")
-        try:
-            await msg.bot.send_message(
-                uid, f"🎁 <b>تخفیفِ اختصاصیِ {pct}٪</b> برایِ شما فعال شد!\n"
-                     "از این به بعد روی هر خرید و تمدیدِ پلنِ ربات‌ها اعمال می‌شود.")
-        except Exception:
-            logger.info("udisc: اطلاع به کاربر %s ممکن نشد (ربات را استارت نکرده؟)", uid)
+    res = await set_discount(uid, pct, plans=sel)
+    titles = dict(PLAN_CHOICES)
+    where = "همهٔ پلن‌ها" if not sel else "، ".join(titles[k] for k in sel if k in titles)
+    await cb.message.answer(f"✅ تخفیفِ دائمیِ <b>{pct}٪</b> برایِ <code>{uid}</code> "
+                            f"{'ثبت' if res == 'created' else 'به‌روزرسانی'} شد.\n📦 پلن‌ها: {where}")
+    try:
+        await cb.bot.send_message(
+            uid, f"🎁 <b>تخفیفِ اختصاصیِ {pct}٪</b> برایِ شما فعال شد!\n"
+                 f"از این به بعد روی هر خرید و تمدیدِ پلن ({where}) اعمال می‌شود.")
+    except Exception:
+        logger.info("udisc: اطلاع به کاربر %s ممکن نشد (ربات را استارت نکرده؟)", uid)
     txt, kb = await _list_view()
-    await msg.answer(txt, reply_markup=kb)
+    await cb.message.answer(txt, reply_markup=kb)
+    await cb.answer("ذخیره شد ✅")
 
 
 @udisc_router.callback_query(F.data.startswith("ud:v:"))
@@ -192,12 +285,15 @@ async def ud_view(cb: CallbackQuery):
         label = await _label(s, d.user_telegram_id) if d else ""
     if not d:
         return await cb.answer("پیدا نشد.", show_alert=True)
+    _t = dict(PLAN_CHOICES)
+    _pl = "، ".join(_t[k] for k in plans_list(d) if k in _t) or "همهٔ پلن‌ها"
     txt = (f"🏷 <b>{label}</b>\n🆔 <code>{d.user_telegram_id}</code>\n\n"
-           f"تخفیفِ دائمی: <b>{d.percent}٪</b>\nوضعیت: {'🟢 فعال' if d.active else '⚪️ خاموش'}")
+           f"تخفیفِ دائمی: <b>{d.percent}٪</b>\n📦 پلن‌ها: {_pl}\n"
+           f"وضعیت: {'🟢 فعال' if d.active else '⚪️ خاموش'}")
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [_hx("⛔️ خاموش‌کردن" if d.active else "✅ روشن‌کردن", callback_data=f"ud:t:{rid}",
              style=(ButtonStyle.DANGER if d.active else ButtonStyle.SUCCESS))],
-        [_hx("🎁 تغییرِ درصد", callback_data="ud:add")],
+        [_hx("🎁 تغییرِ درصد / پلن‌ها", callback_data="ud:add")],
         [_hx("🗑 حذف", callback_data=f"ud:d:{rid}", style=ButtonStyle.DANGER)],
         [_hx("⬅️ بازگشت", callback_data="ud:menu", style=ButtonStyle.DANGER)]])
     await _show(cb, txt, kb)

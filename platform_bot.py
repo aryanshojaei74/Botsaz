@@ -5452,7 +5452,7 @@ async def choose_plan(cb: CallbackQuery, state: FSMContext):
             promo_pct = _pinfo.percent if _promo_hit else 0
             # === PATCH_PLATFORM_USER_DISCOUNT_V1 === تخفیفِ دائمیِ اختصاصی؛ بزرگ‌ترین اعمال می‌شود
             from platform_user_discounts import percent_for as _ud_pct
-            _udp = await _ud_pct(cb.from_user.id)
+            _udp = await _ud_pct(cb.from_user.id, plan)
             if _udp > disc:
                 disc, promo_id, promo_pct = _udp, None, 0
             base_after_plan_disc, _, _ = plan_price_final(plan)
@@ -12278,7 +12278,7 @@ async def buyplan_confirm(cb: CallbackQuery):
         disc, _promo_hit = _pwp(disc, _pinfo)
         # === PATCH_PLATFORM_USER_DISCOUNT_V1 ===
         from platform_user_discounts import percent_for as _ud_pct
-        _udp = await _ud_pct(cb.from_user.id)
+        _udp = await _ud_pct(cb.from_user.id, plan)
         if _udp > disc:
             disc, _promo_hit = _udp, False
         ptc_mode, ptc_amt = await ptc_discount_for(cb.from_user.id)

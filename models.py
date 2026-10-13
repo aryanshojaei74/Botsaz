@@ -3610,4 +3610,6 @@ class PlatformUserDiscount(Base):
     percent: Mapped[int] = mapped_column(Integer, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     note: Mapped[str | None] = mapped_column(String(80))
+    # پلن‌هایی که تخفیف روی آن‌ها اعمال می‌شود (growth,pro)؛ خالی/None = همهٔ پلن‌ها
+    plans: Mapped[str | None] = mapped_column(String(60))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
