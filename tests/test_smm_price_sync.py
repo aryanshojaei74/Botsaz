@@ -69,7 +69,11 @@ async def test_sync_updates_rates_and_reports(db):
     # دورِ دوم: تغییری نیست
     r2 = (await PS.sync_bot(9))[0]
     assert not r2["up"] and not r2["down"]
-    assert r2["missing"] == ["حذف‌شده"]
+    assert r2["missing"] == []                               # فقط یک بار گزارش می‌شود
+    async with db() as s:
+        gone = await s.get(models.SmmService, 4)
+    assert gone.is_active is False                           # خودکار از ربات برداشته شد
+    assert "از ارائه‌دهنده حذف شدند" in t and "حذف‌شده" in t and "غیرفعالشان کن" not in t
 
 
 @pytest.mark.asyncio
@@ -127,3 +131,17 @@ async def test_per_panel_toggle_only_affects_auto(db):
     assert await PS.sync_bot(9, auto=True) == []            # پنل خاموش: دورِ خودکار ردش می‌کند
     assert len(await PS.sync_bot(9)) == 1                   # بروزرسانیِ دستی همچنان کار می‌کند
     assert await PS.sync_bot(9, only_pk=5) == []            # فقط پنلِ ۵ (سرویسی ندارد)
+
+
+@pytest.mark.asyncio
+async def test_mass_disappearance_is_held_not_deactivated(db, monkeypatch):
+    async def fetch(bot_id, panel_pk=None, force=False):
+        return [{"service": "101", "rate": "10", "min": 10, "max": 100}]      # بقیه ناپدید شدند
+    from tenant.bots.virtual_service import smm as SM
+    monkeypatch.setattr(SM, "_fetch_services_cached", fetch)
+    monkeypatch.setattr(PS, "_MASS_GONE_MIN", 2)
+    r = (await PS.sync_bot(9))[0]
+    assert r["missing"] == [] and len(r["held"]) == 3
+    async with db() as s:
+        assert (await s.get(models.SmmService, 2)).is_active is True
+    assert "برایِ ایمنی" in PS.report_text(r)

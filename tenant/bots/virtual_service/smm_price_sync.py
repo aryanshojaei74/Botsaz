@@ -24,6 +24,7 @@ NOTIFY_MODES = ("all", "changes", "off")
 NOTIFY_LABELS = {"all": "همیشه (حتی بدونِ تغییر)", "changes": "فقط وقتی تغییر داشت", "off": "خاموش"}
 _SKIP_CATEGORIES = ("شمارهٔ مجازیِ تلگرام",)     # اوزوینو حلقهٔ قیمتِ جدای خودش را دارد
 _MAX_LINES = 40
+_MASS_GONE_MIN = 5          # حداقلِ تعدادِ ناپدیدشده برایِ فعال‌شدنِ محافظِ «لیستِ مشکوک»
 
 
 async def _gs(bot_id: int, key: str, default: str = "") -> str:
@@ -80,7 +81,7 @@ async def sync_bot(bot_id: int, *, auto: bool = False, only_pk="all") -> list[di
         if auto and not await panel_auto_on(bot_id, panel_pk):
             continue
         _u, _k, pname = await SM._panel_creds(bot_id, panel_pk)
-        rep = {"panel": pname, "ok": False, "checked": 0, "up": [], "down": [], "missing": []}
+        rep = {"panel": pname, "ok": False, "checked": 0, "up": [], "down": [], "missing": [], "held": []}
         try:
             services = await SM._fetch_services_cached(bot_id, panel_pk, force=True)
         except Exception as e:
@@ -96,6 +97,7 @@ async def sync_bot(bot_id: int, *, auto: bool = False, only_pk="all") -> list[di
             rows = (await s.scalars(select(SmmService).where(
                 SmmService.bot_id == bot_id, pk_cond,
                 SmmService.is_manual == False))).all()  # noqa: E712
+            gone: list = []
             for v in rows:
                 if (v.category or "") in _SKIP_CATEGORIES:
                     continue
@@ -103,7 +105,7 @@ async def sync_bot(bot_id: int, *, auto: bool = False, only_pk="all") -> list[di
                 it = by_id.get(str(v.service_id))
                 if not it:
                     if v.is_active:
-                        rep["missing"].append(v.name)
+                        gone.append(v)
                     continue
                 new_rate, old_rate = _num(it.get("rate")), _num(v.panel_rate)
                 try:
@@ -127,6 +129,15 @@ async def sync_bot(bot_id: int, *, auto: bool = False, only_pk="all") -> list[di
                 ch = {"name": v.name, "sid": v.service_id, "old": old_rate, "new": new_rate,
                       "old_sell": old_sell, "new_sell": new_sell, "manual": float(v.sell_rate or 0) > 0}
                 (rep["up"] if new_rate > old_rate else rep["down"]).append(ch)
+            # سرویسی که از ارائه‌دهنده حذف شده به مشتری فروخته نشود: خودکار غیرفعال می‌شود و فقط یک بار
+            # گزارش می‌رود. محافظ: اگر ناگهان تعدادِ زیادی غیب شدند (خطا/لیستِ ناقصِ پنل) دست نمی‌زنیم.
+            active_n = sum(1 for v in rows if v.is_active and (v.category or "") not in _SKIP_CATEGORIES)
+            if len(gone) >= _MASS_GONE_MIN and len(gone) * 2 > active_n:
+                rep["held"] = [v.name for v in gone]
+            else:
+                for v in gone:
+                    v.is_active = False
+                    rep["missing"].append(v.name)
             await s.commit()
         reports.append(rep)
     await _ss(bot_id, "smm_price_sync_last", str(int(time.time())))
@@ -147,7 +158,7 @@ def report_text(rep: dict) -> str | None:
     head = f"🔄 <b>بررسیِ خودکارِ سرویس‌هایِ پنلِ {rep['panel']} انجام شد</b>\n"
     if not rep["ok"]:
         return head + "\n⚠️ ارائه‌دهنده جواب نداد؛ قیمت‌ها دست نخوردند و دورِ بعد دوباره امتحان می‌شود."
-    if not (rep["up"] or rep["down"] or rep["missing"]):
+    if not (rep["up"] or rep["down"] or rep["missing"] or rep.get("held")):
         return head + f"\n✅ تغییری در قیمت‌ها نبود ({rep['checked']} سرویس بررسی شد)."
     lines = [head, "<b>تغییرات:</b>"]
     for ch in rep["up"]:
@@ -155,8 +166,13 @@ def report_text(rep: dict) -> str | None:
     for ch in rep["down"]:
         lines.append(_line(ch, "🔻") + " (کاهش)")
     if rep["missing"]:
-        lines.append("\n⚠️ این سرویس‌ها دیگر در لیستِ ارائه‌دهنده نیستند (بررسی/غیرفعالشان کن):")
+        lines.append("\n🗑 این سرویس‌ها از ارائه‌دهنده حذف شدند و از ربات شما هم برداشته شدند "
+                     "(از دسترسِ مشتریان خارج شدند):")
         lines += [f"• {n}" for n in rep["missing"]]
+    if rep.get("held"):
+        lines.append(f"\n⚠️ {len(rep['held'])} سرویس یکجا از لیستِ ارائه‌دهنده ناپدید شد؛ احتمالاً لیستِ پنل ناقص "
+                     "برگشته است، پس برایِ ایمنی چیزی از ربات برداشته نشد و دورِ بعد دوباره بررسی می‌شود:")
+        lines += [f"• {n}" for n in rep["held"][:10]]
     if len(lines) > _MAX_LINES:
         extra = len(lines) - _MAX_LINES
         lines = lines[:_MAX_LINES] + [f"… و {extra} مورد دیگر"]
@@ -168,7 +184,7 @@ async def send_reports(bot_id: int, reports: list[dict], mode: str) -> None:
         return
     msgs = []
     for rep in reports:
-        changed = rep["ok"] and (rep["up"] or rep["down"] or rep["missing"])
+        changed = rep["ok"] and (rep["up"] or rep["down"] or rep["missing"] or rep.get("held"))
         if mode == "changes" and not changed:
             continue
         t = report_text(rep)
