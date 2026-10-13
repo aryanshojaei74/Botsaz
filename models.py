@@ -3639,4 +3639,6 @@ class PlatformUserDiscount(Base):
     note: Mapped[str | None] = mapped_column(String(80))
     # پلن‌هایی که تخفیف روی آن‌ها اعمال می‌شود (growth,pro)؛ خالی/None = همهٔ پلن‌ها
     plans: Mapped[str | None] = mapped_column(String(60))
+    # درصدِ جداگانه برایِ هر پلن، مثل «growth:13,pro:20»؛ اگر پر باشد بر percent/plans می‌چربد
+    plan_percents: Mapped[str | None] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

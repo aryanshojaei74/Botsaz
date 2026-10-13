@@ -132,26 +132,33 @@ class _Cb:
 
 
 @pytest.mark.asyncio
-async def test_admin_flow_username_percent_plans_save_and_notify(db):
+async def test_admin_flow_per_plan_percent(db):
     bot, st = _Bot(), _St()
     m1 = _Msg("@ali", bot)
     await UD.ud_user(m1, st)                                   # یوزرنیم پذیرفته می‌شود
     assert "Ali" in m1.out[0] and st.d["ud_uid"] == 55
-    m2 = _Msg("20", bot)
-    await UD.ud_percent(m2, st)                                # درصد → صفحهٔ انتخابِ پلن
-    assert "کدام پلن" in m2.out[0] and st.d["ud_pct"] == 20
-    await UD.ud_plan_toggle(_Cb("ud:p:pro", bot), st)
-    assert st.d["ud_plans"] == ["pro"]
-    cb = _Cb("ud:psave", bot)
-    await UD.ud_save(cb, st)
-    assert await UD.percent_for(55, "pro") == 20 and await UD.percent_for(55, "growth") == 0
-    assert bot.sent and bot.sent[0][0] == 55 and "20" in bot.sent[0][1] and "حرفه‌ای" in bot.sent[0][1]
+    assert "پلن را انتخاب" in m1.out[0]
+    await UD.ud_plan_pick(_Cb("ud:p:growth", bot), st)
+    await UD.ud_percent(_Msg("13", bot), st)
+    await UD.ud_plan_pick(_Cb("ud:p:pro", bot), st)
+    await UD.ud_percent(_Msg("۲۰", bot), st)
+    assert await UD.percent_for(55, "growth") == 13
+    assert await UD.percent_for(55, "pro") == 20
+    assert await UD.percent_for(55) == 20
+    assert bot.sent and bot.sent[0][0] == 55 and "13" in bot.sent[0][1]
+    # صفر فقط همان پلن را حذف می‌کند
+    await UD.ud_plan_pick(_Cb("ud:p:growth", bot), st)
+    await UD.ud_percent(_Msg("0", bot), st)
+    assert await UD.percent_for(55, "growth") == 0 and await UD.percent_for(55, "pro") == 20
+    # «همهٔ پلن‌ها» یک درصد برایِ هر دو
+    await UD.ud_plan_pick(_Cb("ud:p:all", bot), st)
+    await UD.ud_percent(_Msg("5", bot), st)
+    assert await UD.percent_for(55, "growth") == 5 and await UD.percent_for(55, "pro") == 5
     # غیرِ مدیر اثری ندارد
     m3 = _Msg("55", bot, uid=999)
     await UD.ud_user(m3, st)
     assert not m3.out
-    # صفر = حذف بدونِ پرسیدنِ پلن
-    st.d = {"ud_uid": 55}
-    m4 = _Msg("0", bot)
-    await UD.ud_percent(m4, st)
+    # حذفِ همهٔ پلن‌ها ردیف را پاک می‌کند
+    await UD.ud_plan_pick(_Cb("ud:p:all", bot), st)
+    await UD.ud_percent(_Msg("0", bot), st)
     assert await UD.percent_for(55) == 0
