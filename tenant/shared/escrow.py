@@ -59,6 +59,9 @@ class EscAdm(StatesGroup):
     api_id = State()
     api_hash = State()
     session = State()
+    phone = State()
+    code = State()
+    password = State()
     mediators = State()
 
 
@@ -179,6 +182,70 @@ class TelethonProvider:
             return int(f"-100{ch.id}")
         finally:
             await c.disconnect()
+
+
+class TelethonLogin:
+    """ورودِ مرحله‌ای (شماره ← کد ← رمزِ دومرحله‌ای) برای ساختِ StringSession داخلِ خودِ ربات."""
+
+    def __init__(self, api_id: int, api_hash: str):
+        try:
+            from telethon import TelegramClient
+            from telethon.sessions import StringSession
+        except ImportError as e:      # pragma: no cover
+            raise EscrowGroupError("کتابخانهٔ telethon نصب نیست (pip install telethon)") from e
+        self.client = TelegramClient(StringSession(), int(api_id), api_hash)
+        self.phone = ""
+        self.hash = None
+
+    async def send_code(self, phone: str) -> None:
+        await self.client.connect()
+        self.phone = phone
+        sent = await self.client.send_code_request(phone)
+        self.hash = sent.phone_code_hash
+
+    async def sign_in_code(self, code: str) -> str | None:
+        """رشتهٔ نشست را برمی‌گرداند، یا None اگر رمزِ دومرحله‌ای لازم است."""
+        from telethon.errors import SessionPasswordNeededError
+        try:
+            await self.client.sign_in(self.phone, code, phone_code_hash=self.hash)
+        except SessionPasswordNeededError:
+            return None
+        return self.client.session.save()
+
+    async def sign_in_password(self, password: str) -> str:
+        await self.client.sign_in(password=password)
+        return self.client.session.save()
+
+    async def close(self) -> None:
+        try:
+            await self.client.disconnect()
+        except Exception:
+            logger.info("escrow: بستنِ اتصالِ ورود ممکن نشد (بی‌اهمیت)")
+
+
+_LOGINS: dict[tuple[int, int], tuple[object, float]] = {}      # (bot_id, user_id) → (login, زمان)
+_LOGIN_TTL = 600
+
+
+def make_login(api_id: int, api_hash: str):
+    """تست‌ها این تابع را جایگزین می‌کنند."""
+    return TelethonLogin(api_id, api_hash)
+
+
+async def _drop_login(key) -> None:
+    ent = _LOGINS.pop(key, None)
+    if ent:
+        try:
+            await ent[0].close()
+        except Exception:
+            logger.info("escrow: بستنِ اتصالِ ورود ممکن نشد (بی‌اهمیت)")
+
+
+def default_api() -> tuple[str, str]:
+    """api_id/api_hashِ مشترکِ سرور (اختیاری): اگر ست باشد مدیرِ ربات لازم نیست از my.telegram.org بگیرد."""
+    import os
+    i, h = (os.getenv("ESCROW_API_ID") or "").strip(), (os.getenv("ESCROW_API_HASH") or "").strip()
+    return (i, h) if i.isdigit() and h else ("", "")
 
 
 async def get_provider(bot_id: int):
@@ -692,14 +759,12 @@ _ASK = {
     "fee": (EscAdm.fee, "🧾 نرخِ واسطه‌گری را به درصد بفرست (مثلاً <code>10</code> یا <code>2.5</code>؛ حداکثر ۵۰):"),
     "min": (EscAdm.min_amount, "🔽 حداقلِ مبلغِ معامله را به تومان بفرست:"),
     "max": (EscAdm.max_amount, "🔼 حداکثرِ مبلغِ معامله را به تومان بفرست (<code>0</code> = بدونِ سقف):"),
-    "acc": (EscAdm.api_id, "👤 <b>اتصالِ اکانتِ واسط</b>\n\nاین اکانت گروه‌ها را می‌سازد. اول از my.telegram.org بخشِ "
-                           "API development tools، <b>api_id</b> (عدد) را بفرست:"),
     "med": (EscAdm.mediators, "🛡 آیدیِ عددی یا @یوزرنیمِ واسط‌هایی که باید در هر گروه ادمین شوند را با کاما بفرست "
                               "(یا <code>-</code> برایِ هیچ‌کس):"),
 }
 
 
-@escrow_router.callback_query(F.data.regexp(r"^esc:adm:(fee|min|max|acc|med)$"))
+@escrow_router.callback_query(F.data.regexp(r"^esc:adm:(fee|min|max|med)$"))
 async def adm_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
     row = await _gate(cb, bot)
     if not row:
@@ -773,6 +838,152 @@ async def adm_mediators(msg: Message, bot: Bot, state: FSMContext):
     await _adm_done(msg, bot, state, "✅ واسط‌هایِ گروه ذخیره شد.")
 
 
+@escrow_router.callback_query(F.data == "esc:adm:acc")
+async def adm_acc(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _gate(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    await cb.message.answer(
+        "👤 <b>اتصالِ اکانتِ واسط</b>\n\nاین اکانت گروهِ هر معامله را می‌سازد (بهتر است یک اکانتِ جدا و فقط "
+        "برایِ همین کار باشد).\n\n📱 <b>ورود با شماره</b> (پیشنهادی): شماره و کدِ تلگرام را همین‌جا می‌دهی.\n"
+        "🧩 <b>StringSession</b>: اگر از قبل داری.",
+        reply_markup=_kb([
+            [_btn("📱 ورود با شماره", "esc:adm:accgo:login", ButtonStyle.SUCCESS)],
+            [_btn("🧩 دارم StringSession", "esc:adm:accgo:sess")],
+            [_btn("❌ لغو", "set:escrow", ButtonStyle.DANGER)]]))
+    await cb.answer()
+
+
+@escrow_router.callback_query(F.data.regexp(r"^esc:adm:accgo:(login|sess)$"))
+async def adm_acc_go(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _gate(cb, bot)
+    if not row:
+        return
+    mode = cb.data.split(":")[3]
+    await state.update_data(esc_mode=mode)
+    i, h = default_api()
+    if i and mode == "login":
+        await state.update_data(esc_api_id=i, esc_api_hash=h)
+        await state.set_state(EscAdm.phone)
+        await cb.message.answer(_PHONE_ASK, reply_markup=_kb([[_btn("❌ لغو", "esc:adm:accx", ButtonStyle.DANGER)]]))
+    else:
+        await state.set_state(EscAdm.api_id)
+        await cb.message.answer("از my.telegram.org ← API development tools، <b>api_id</b> (عدد) را بفرست:",
+                                reply_markup=_kb([[_btn("❌ لغو", "set:escrow", ButtonStyle.DANGER)]]))
+    await cb.answer()
+
+
+_PHONE_ASK = ("📱 شمارهٔ اکانتِ واسط را با کدِ کشور بفرست (مثلاً <code>+989121234567</code>).\n\n"
+              "تلگرام یک کدِ ورود به همان اکانت می‌فرستد.")
+
+
+@escrow_router.callback_query(F.data == "esc:adm:accx")
+async def adm_acc_cancel(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    for k in [k for k in _LOGINS if k[1] == cb.from_user.id]:
+        await _drop_login(k)
+    await state.clear()
+    await admin_menu(cb, bot, state)
+
+
+@escrow_router.message(EscAdm.phone, F.text)
+async def adm_phone(msg: Message, bot: Bot, state: FSMContext):
+    row = await _gate(msg, bot)
+    if not row:
+        return
+    ph = "+" + "".join(c for c in _fa(msg.text) if c.isdigit())
+    if len(ph) < 8:
+        return await msg.answer("❌ شماره معتبر نیست؛ مثل <code>+989121234567</code> بفرست.")
+    d = await state.get_data()
+    key = (row.id, msg.from_user.id)
+    await _drop_login(key)
+    try:
+        lg = make_login(int(d["esc_api_id"]), d["esc_api_hash"])
+        await lg.send_code(ph)
+    except Exception as e:
+        return await msg.answer(f"❌ ارسالِ کد ناموفق بود:\n<code>{_html.escape(str(e)[:300])}</code>")
+    import time
+    _LOGINS[key] = (lg, time.time())
+    await state.set_state(EscAdm.code)
+    await msg.answer(
+        "📨 کدِ ورود در تلگرامِ آن اکانت (چت «Telegram») آمد.\n\n"
+        "⚠️ کد را <b>با فاصله یا خط‌تیره بین ارقام</b> بفرست، مثلاً <code>1-2-3-4-5</code>؛ اگر پشت‌سرهم "
+        "بفرستی تلگرام آن را باطل می‌کند.",
+        reply_markup=_kb([[_btn("❌ لغو", "esc:adm:accx", ButtonStyle.DANGER)]]))
+
+
+async def _login_get(msg: Message, row):
+    import time
+    key = (row.id, msg.from_user.id)
+    ent = _LOGINS.get(key)
+    if not ent or time.time() - ent[1] > _LOGIN_TTL:
+        await _drop_login(key)
+        return key, None
+    return key, ent[0]
+
+
+async def _finish_login(msg: Message, bot: Bot, state: FSMContext, row, key, sess: str):
+    from tenant import set_setting
+    d = await state.get_data()
+    await set_setting(row.id, "escrow_api_id", str(d["esc_api_id"]))
+    await set_setting(row.id, "escrow_api_hash", d["esc_api_hash"])
+    await set_setting(row.id, "escrow_session", sess)
+    await _drop_login(key)
+    try:
+        who = await TelethonProvider(int(d["esc_api_id"]), d["esc_api_hash"], sess).whoami()
+    except Exception:
+        who = "—"
+    await _adm_done(msg, bot, state, f"✅ اکانتِ واسط وصل شد: {who}")
+
+
+@escrow_router.message(EscAdm.code, F.text)
+async def adm_code(msg: Message, bot: Bot, state: FSMContext):
+    row = await _gate(msg, bot)
+    if not row:
+        return
+    try:
+        await msg.delete()
+    except Exception:
+        logger.info("escrow: یک ارسال/ویرایشِ پیام ممکن نشد (بی‌اهمیت)")
+    key, lg = await _login_get(msg, row)
+    if lg is None:
+        await state.clear()
+        return await msg.answer("⌛️ زمانِ ورود تمام شد؛ از اولِ «اتصالِ اکانتِ واسط» شروع کن.")
+    code = "".join(c for c in _fa(msg.text) if c.isdigit())
+    if len(code) < 4:
+        return await msg.answer("❌ کد را بفرست (مثلاً <code>1-2-3-4-5</code>).")
+    try:
+        sess = await lg.sign_in_code(code)
+    except Exception as e:
+        return await msg.answer(f"❌ کد پذیرفته نشد:\n<code>{_html.escape(str(e)[:300])}</code>\n"
+                                "دوباره بفرست، یا لغو و از نو شروع کن.")
+    if sess is None:
+        await state.set_state(EscAdm.password)
+        return await msg.answer("🔐 این اکانت <b>رمزِ دومرحله‌ای</b> دارد؛ همان را بفرست (پیامت پاک می‌شود).")
+    await _finish_login(msg, bot, state, row, key, sess)
+
+
+@escrow_router.message(EscAdm.password, F.text)
+async def adm_password(msg: Message, bot: Bot, state: FSMContext):
+    row = await _gate(msg, bot)
+    if not row:
+        return
+    pw = msg.text or ""
+    try:
+        await msg.delete()
+    except Exception:
+        logger.info("escrow: یک ارسال/ویرایشِ پیام ممکن نشد (بی‌اهمیت)")
+    key, lg = await _login_get(msg, row)
+    if lg is None:
+        await state.clear()
+        return await msg.answer("⌛️ زمانِ ورود تمام شد؛ از اولِ «اتصالِ اکانتِ واسط» شروع کن.")
+    try:
+        sess = await lg.sign_in_password(pw)
+    except Exception as e:
+        return await msg.answer(f"❌ رمز پذیرفته نشد:\n<code>{_html.escape(str(e)[:300])}</code>")
+    await _finish_login(msg, bot, state, row, key, sess)
+
+
 @escrow_router.message(EscAdm.api_id, F.text)
 async def adm_api_id(msg: Message, bot: Bot, state: FSMContext):
     row = await _gate(msg, bot)
@@ -795,10 +1006,12 @@ async def adm_api_hash(msg: Message, bot: Bot, state: FSMContext):
     if len(h) < 16 or " " in h:
         return await msg.answer("❌ api_hash معتبر نیست.")
     await state.update_data(esc_api_hash=h)
-    await state.set_state(EscAdm.session)
-    await msg.answer(
-        "🧩 <b>StringSession</b> اکانتِ واسط را بفرست.\n\nبا ابزارِ <code>tools/make_telethon_session.py</code> "
-        "(روی کامپیوتر/سرورِ خودت) ساخته می‌شود؛ پس از فرستادن، پیامت پاک می‌شود.")
+    if (await state.get_data()).get("esc_mode") == "login":
+        await state.set_state(EscAdm.phone)
+        await msg.answer(_PHONE_ASK)
+    else:
+        await state.set_state(EscAdm.session)
+        await msg.answer("🧩 <b>StringSession</b> اکانتِ واسط را بفرست؛ پس از فرستادن، پیامت پاک می‌شود.")
     try:
         await msg.delete()
     except Exception:

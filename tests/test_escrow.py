@@ -253,3 +253,63 @@ async def test_admin_gate_blocks_non_virtual_service_and_toggle_needs_account(en
     await tenant.set_setting(9, "escrow_enabled", "0")
     await ES.adm_toggle(C2("esc:adm:toggle", uid=500), SimpleNamespace(token="9:T"))   # بدونِ اکانت روشن نمی‌شود
     assert any("اکانتِ واسط" in a for a in alerts)
+
+
+class FakeLogin:
+    def __init__(self, twofa=False):
+        self.twofa, self.closed, self.phone = twofa, False, None
+
+    async def send_code(self, phone):
+        self.phone = phone
+
+    async def sign_in_code(self, code):
+        assert code == "12345"
+        return None if self.twofa else "S" * 60
+
+    async def sign_in_password(self, pw):
+        assert pw == "pass"
+        return "T" * 60
+
+    async def close(self):
+        self.closed = True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("twofa", [False, True])
+async def test_in_bot_login_flow(env, monkeypatch, twofa):
+    ES._LOGINS.clear()
+    lg = FakeLogin(twofa)
+    monkeypatch.setattr(ES, "make_login", lambda i, h: lg)
+
+    async def who(self):
+        return "Mediator"
+    monkeypatch.setattr(ES.TelethonProvider, "whoami", who)
+    bot, st = SimpleNamespace(token="9:T"), St()
+    await ES.adm_acc_go(Cb("esc:adm:accgo:login", uid=500), bot, st)
+    assert st.s == ES.EscAdm.api_id
+    await ES.adm_api_id(Msg("12345", uid=500), bot, st)
+    await ES.adm_api_hash(Msg("a" * 32, uid=500), bot, st)
+    assert st.s == ES.EscAdm.phone
+    await ES.adm_phone(Msg("۰۹۱۲۱۲۳۴۵۶۷", uid=500), bot, st)
+    assert st.s == ES.EscAdm.code and lg.phone == "+09121234567"
+    await ES.adm_code(Msg("1-2-3-4-5", uid=500), bot, st)
+    if twofa:
+        assert st.s == ES.EscAdm.password
+        await ES.adm_password(Msg("pass", uid=500), bot, st)
+    assert lg.closed and not ES._LOGINS
+    assert await tenant.get_setting(9, "escrow_session", "") == ("T" if twofa else "S") * 60
+    assert await tenant.get_setting(9, "escrow_api_id", "") == "12345"
+
+
+@pytest.mark.asyncio
+async def test_login_uses_server_default_api_and_expires(env, monkeypatch):
+    ES._LOGINS.clear()
+    monkeypatch.setenv("ESCROW_API_ID", "777")
+    monkeypatch.setenv("ESCROW_API_HASH", "h" * 32)
+    st, bot = St(), SimpleNamespace(token="9:T")
+    await ES.adm_acc_go(Cb("esc:adm:accgo:login", uid=500), bot, st)
+    assert st.s == ES.EscAdm.phone and st.d["esc_api_id"] == "777"
+    # کدِ بدونِ ورودِ فعال → منقضی
+    m = Msg("1-2-3-4-5", uid=500)
+    await ES.adm_code(m, bot, st)
+    assert any("زمانِ ورود" in o for o in m.out)
