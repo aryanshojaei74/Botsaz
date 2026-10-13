@@ -159,6 +159,8 @@ _VC_DEFAULTS = {
     "vc_min_gb": "5", "vc_max_gb": "100", "vc_step_gb": "5",
     "vc_min_days": "30", "vc_max_days": "90", "vc_step_days": "30",
     "vc_max_count": "5",
+    # === PATCH_VC_SIMPLE_MODE_V1 === حالتِ ساده: کاربر فقط عددِ حجم را می‌فرستد؛ مدت ثابتِ ادمین است
+    "vc_simple": "0", "vc_simple_days": "30",
     "vc_price_gb": "1000", "vc_price_day": "500",
     # === PATCH_RESELLER_GB_PRICING_V1 === خالی یعنی «تنظیم نشده»
     "rs_price_gb": "0", "rs_price_day": "0",
@@ -187,6 +189,7 @@ _VC_PANEL_KEYS = [
     "vc_enabled", "vc_min_gb", "vc_max_gb", "vc_step_gb",
     "vc_min_days", "vc_max_days", "vc_step_days",
     "vc_max_count", "vc_price_gb", "vc_price_day", "vc_pricing_mode",
+    "vc_simple", "vc_simple_days",
     "renew_enabled", "renew_price_gb", "renew_price_day",
     "renew_min_gb", "renew_max_gb", "renew_step_gb",
     "renew_min_days", "renew_max_days", "renew_step_days",
@@ -509,6 +512,7 @@ class VpnCustomFSM(StatesGroup):
     prices = State()
     tier_wizard = State()   # افزودن تعرفهٔ مدت‌دار با دکمه‌های شیشه‌ای، فیلد به فیلد
     ip_limit = State()      # === PATCH_PANEL_DEFAULT_IP_LIMIT_V1 ===
+    simple_days = State()   # === PATCH_VC_SIMPLE_MODE_V1 ===
 
 
 # === PATCH_PANEL_CUSTOM_LABEL_V1 ===
@@ -1889,6 +1893,13 @@ async def _vc_kb(cfg: dict, panel_key: str, bot_id: int = 0) -> InlineKeyboardMa
         [InlineKeyboardButton(text=toggle, callback_data=f"tvpn:custom_toggle:{panel_key}",
                               style=await _ibs(bot_id, "ibtn:vpn_toggle"))],
         [InlineKeyboardButton(text=mode_toggle, callback_data=f"tvpn:custom_mode:{panel_key}", style=ButtonStyle.PRIMARY)],
+        # === PATCH_VC_SIMPLE_MODE_V1 ===
+        [InlineKeyboardButton(
+            text=("📝 حالتِ ساده (فقط حجم): ✅ روشن" if cfg.get("vc_simple") == "1"
+                  else "📝 حالتِ ساده (فقط حجم): ⬜️ خاموش"),
+            callback_data=f"tvpn:custom_simple:{panel_key}", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text=f"📅 مدتِ ثابتِ حالتِ ساده: {cfg.get('vc_simple_days') or 30} روز",
+                              callback_data=f"tvpn:custom_simpledays:{panel_key}", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="📦 بازهٔ حجم (گیگ)", callback_data=f"tvpn:custom_gb:{panel_key}", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="📅 بازهٔ مدت (روز)", callback_data=f"tvpn:custom_days:{panel_key}", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="🔢 حداکثر تعداد", callback_data=f"tvpn:custom_count:{panel_key}", style=ButtonStyle.PRIMARY)],
@@ -1932,6 +1943,8 @@ def _vc_text(cfg: dict, panel_key: str = "", tier_count: int = 0) -> str:
         f"📦 حجم: از {cfg['vc_min_gb']} تا {cfg['vc_max_gb']} گیگ (گام {cfg['vc_step_gb']})\n"
         f"📅 مدت: از {cfg['vc_min_days']} تا {cfg['vc_max_days']} روز (گام {cfg['vc_step_days']})\n"
         f"🔢 حداکثر تعداد در هر سفارش: {cfg['vc_max_count']}\n"
+        + (f"📝 حالتِ ساده: <b>روشن</b> — کاربر فقط عددِ حجم را می‌فرستد؛ مدتِ ثابت: {cfg.get('vc_simple_days') or 30} روز\n"
+           if cfg.get("vc_simple") == "1" else "") +
         f"💵 قیمت هر گیگ: {int(cfg['vc_price_gb']):,} تومان\n"
         f"💵 قیمت هر روز: {int(cfg['vc_price_day']):,} تومان\n"
         f"{_rs_price_line}"
@@ -2159,6 +2172,56 @@ async def vpn_custom_toggle(cb: CallbackQuery, bot: Bot):
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     await cb.answer()
+
+
+# === PATCH_VC_SIMPLE_MODE_V1 ===
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:custom_simple:"))
+async def vpn_custom_simple_toggle(cb: CallbackQuery, bot: Bot):
+    panel_key = cb.data.split(":")[2]
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    cur = await _vc_get(row.id, "vc_simple", panel_key)
+    await _vc_set(row.id, "vc_simple", "0" if cur == "1" else "1", panel_key)
+    cfg = await _vc_all(row.id, panel_key)
+    try:
+        await cb.message.edit_text(_vc_text(cfg, panel_key, len(await vc_tiers_get(row.id, panel_key))),
+                                   reply_markup=await _vc_kb(cfg, panel_key, row.id))
+    except Exception:
+        logger.info("vc simple: ویرایشِ پنل ممکن نشد (بی‌اهمیت)")
+    await cb.answer("حالتِ ساده " + ("روشن شد" if cur != "1" else "خاموش شد"))
+
+
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:custom_simpledays:"))
+async def vpn_custom_simpledays(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    panel_key = cb.data.split(":")[2]
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    await state.set_state(VpnCustomFSM.simple_days)
+    await state.update_data(vc_panel_key=panel_key)
+    cfg = await _vc_all(row.id, panel_key)
+    await cb.answer()
+    await cb.message.answer(f"📅 مدتِ ثابتِ سرویس‌هایی که با «حالتِ ساده» خریداری می‌شوند را به روز بفرست (عدد):\n"
+                            f"فعلی: {cfg.get('vc_simple_days') or 30}", reply_markup=cancel_kb())
+
+
+@vpn_admin_router.message(VpnCustomFSM.simple_days, F.text)
+async def vpn_custom_simpledays_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner_msg(msg, bot)
+    if not row:
+        return
+    data = await state.get_data()
+    panel_key = data.get("vc_panel_key", "")
+    n = fa_to_int(msg.text.strip())
+    if n is None or not (1 <= n <= 3650):
+        await msg.answer("عددِ معتبر (۱ تا ۳۶۵۰) بفرست:", reply_markup=cancel_kb())
+        return
+    await _vc_set(row.id, "vc_simple_days", str(n), panel_key)
+    await state.clear()
+    cfg = await _vc_all(row.id, panel_key)
+    await msg.answer("✅ ذخیره شد.\n\n" + _vc_text(cfg, panel_key, len(await vc_tiers_get(row.id, panel_key))),
+                     reply_markup=await _vc_kb(cfg, panel_key, row.id))
 
 
 @vpn_admin_router.callback_query(F.data.startswith("tvpn:custom_mode:"))

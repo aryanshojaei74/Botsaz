@@ -4246,10 +4246,13 @@ def _vc_cfg_kb(cfg: dict, gb: int, days: int, count: int, no_plans: bool = False
         return InlineKeyboardButton(text=t, callback_data=cb)
     locked_gb   = mn_gb == mx_gb
     locked_days = mn_d  == mx_d
+    simple = cfg.get("vc_simple") == "1"      # === PATCH_VC_SIMPLE_MODE_V1 ===
 
     rows = []
     # حجم
-    if locked_gb:
+    if simple:
+        rows.append([_btn(f"✏️ تغییرِ حجم — {gb} گیگ · {days} روز", "vc:gb:manual", ButtonStyle.PRIMARY)])
+    elif locked_gb:
         # === PATCH_VC_LOCKED_BTN_COLOR_V1 ===
         # گزارشِ ادمین (ایلیا): وقتی حجم/روز «ثابت» است (min == max)، دکمهٔ قفل‌شده
         # بدونِ رنگ ساخته می‌شد، درحالی‌که همان ردیف در حالتِ عادی آبی (PRIMARY) است؛
@@ -4262,7 +4265,9 @@ def _vc_cfg_kb(cfg: dict, gb: int, days: int, count: int, no_plans: bool = False
                      _btn(f"📦 {gb} گیگ", "vc:gb:manual", ButtonStyle.PRIMARY),
                      _btn("➕", "vc:gb+", ButtonStyle.SUCCESS)])
     # مدت
-    if locked_days:
+    if simple:
+        pass
+    elif locked_days:
         # === PATCH_VC_LOCKED_BTN_COLOR_V1 === (توضیح: بالاتر، ردیفِ حجم)
         rows.append([_btn(f"📅 مدت: {days} روز  🔒", "vc:noop", ButtonStyle.PRIMARY)])
     else:
@@ -4272,7 +4277,7 @@ def _vc_cfg_kb(cfg: dict, gb: int, days: int, count: int, no_plans: bool = False
                      _btn(f"📅 {days} روز", "vc:d:manual", ButtonStyle.PRIMARY),
                      _btn("➕", "vc:d+", ButtonStyle.SUCCESS)])
     # تعداد
-    if mx_c > 1:
+    if mx_c > 1 and not simple:
         # === PATCH_VC_MANUAL_ENTRY_HEADER_V1 ===
         rows.append([_btn("🎯 انتخاب تعداد دلخواه", "vc:c:manual", ButtonStyle.PRIMARY)])
         rows.append([_btn("➖", "vc:c-", ButtonStyle.DANGER),
@@ -4414,6 +4419,33 @@ async def vc_open(cb: CallbackQuery, bot: Bot, state: FSMContext):
     gb    = int(cfg["vc_min_gb"])
     days  = int(cfg["vc_min_days"])
     count = 1
+    # === PATCH_VC_SIMPLE_MODE_V1 === حالتِ ساده: مدتِ ثابتِ ادمین؛ کاربر فقط عددِ حجم را می‌فرستد
+    if cfg.get("vc_simple") == "1":
+        try:
+            days = max(1, int(cfg.get("vc_simple_days") or 30))
+        except (TypeError, ValueError):
+            days = 30
+        cfg = await _vc_all_for_user(row.id, cb.from_user.id, cur_panel_key, days=days)
+        gb = int(cfg["vc_min_gb"])
+        mn, mx, st = int(cfg["vc_min_gb"]), int(cfg["vc_max_gb"]), int(cfg["vc_step_gb"])
+        await state.update_data(vc_gb=gb, vc_days=days, vc_count=count, vc_bot_id=row.id,
+                                vc_panel_key=cur_panel_key, vc_disc_code=None, vc_stage=None,
+                                vc_manual_field="gb", vc_manual_prompt_id=cb.message.message_id,
+                                vc_manual_orig_id=cb.message.message_id, vc_manual_inplace=True)
+        await state.set_state(VpnConfiguratorFSM.entering_manual)
+        await cb.answer()
+        txt = (f"📌 حجمِ درخواستیِ خود را (به گیگابایت) بفرستید.\n"
+               f"🔔 قیمت هر گیگ حجم {int(cfg['vc_price_gb']):,} تومان می‌باشد.\n"
+               f"🔔 حداقل حجم {mn} گیگابایت و حداکثر {mx} گیگابایت می‌باشد"
+               + (f" (مضرب {st})" if st > 1 else "") + ".\n"
+               f"⏳ مدتِ سرویس: {days} روز")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 بازگشت", callback_data="vc:back")]])
+        try:
+            await cb.message.edit_text(txt, reply_markup=kb)
+        except Exception:
+            sent = await bot.send_message(cb.message.chat.id, txt, reply_markup=kb)
+            await state.update_data(vc_manual_prompt_id=sent.message_id, vc_manual_orig_id=sent.message_id)
+        return
     await state.set_state(VpnConfiguratorFSM.selecting)
     await state.update_data(vc_gb=gb, vc_days=days, vc_count=count,
                             vc_bot_id=row.id, vc_panel_key=cur_panel_key)
