@@ -5920,12 +5920,22 @@ def _vs_gift_item_label(o) -> str:
     return item
 
 
-def _vs_row_style(status: str):
-    if status in _VS_DONE_STATUSES:
+_VS_ROW_DONE = {"completed", "done", "delivered"}
+_VS_ROW_BAD = {"failed", "canceled", "cancelled", "refunded", "rejected", "expired", "returned"}
+
+
+def _vs_row_style(status: str, typ: str = "s"):
+    """رنگِ ردیفِ لیستِ سفارشات (PATCH_ORDER_LIST_COLORS_V2): تکمیل سبز، نیمه‌تمام آبی،
+    لغو/خطا/برگشت قرمز، و «در حالِ انجام» (ثبت‌شده، منتظر تأیید، در حالِ ارسال، …) بدونِ رنگ.
+    «sent» برایِ سفارشِ SMM یعنی در حالِ انجام، ولی برایِ گیفت/استارز یعنی ارسال‌شده (تکمیل)."""
+    st = (status or "").lower()
+    if st in _VS_ROW_DONE or (st == "sent" and typ == "g"):
         return ButtonStyle.SUCCESS
-    if status in _VS_OPEN_STATUSES:
+    if st == "partial":
         return ButtonStyle.PRIMARY
-    return ButtonStyle.DANGER   # failed/canceled/refunded/rejected/expired → قرمز
+    if st in _VS_ROW_BAD:
+        return ButtonStyle.DANGER
+    return None
 
 
 async def _vs_unified_page(bot_id: int, page: int, only_failed: bool):
@@ -5986,7 +5996,7 @@ async def _smm_vs_paginated_content(bot_id: int, page: int, *, only_failed: bool
             cb_view = f"smm:vs:nview:{kind}:{page}:{o.id}"
         if len(mid) > 22:
             mid = mid[:19] + "…"
-        row_style = _vs_row_style(o.status)
+        row_style = _vs_row_style(o.status, typ)
         kb_rows.append([
             InlineKeyboardButton(text=code, callback_data=cb_view, style=row_style),
             InlineKeyboardButton(text=mid, callback_data=cb_view, style=row_style),
@@ -8865,12 +8875,7 @@ async def _smm_myorders_paginated_content(bot_id: int, user_id: int, page: int,
             link_short = (o.link or "—")
             if len(link_short) > 16:
                 link_short = link_short[:13] + "…"
-            row_style = {
-                "completed": ButtonStyle.SUCCESS,
-                "sent": ButtonStyle.PRIMARY,
-                "awaiting_admin": ButtonStyle.PRIMARY,
-                "partial": ButtonStyle.PRIMARY,   # PATCH_SMM_PARTIAL_V1
-            }.get((o.status or "").lower(), ButtonStyle.DANGER)
+            row_style = _vs_row_style(o.status, "s")   # === PATCH_ORDER_LIST_COLORS_V2 ===
             # === PATCH_SMM_DIRECT_ENTRY_HOME_BACK_V1 ===
             cb = f"smmu:oview:{o.id}:{page}{_suffix}{':w' if warranty else ''}"
             rows.append([
@@ -16704,7 +16709,8 @@ async def srx_orders_list(cb: CallbackQuery, bot: Bot):
     if not orders:
         lines.append("سفارشِ در انتظاری نیست.")
     for o in orders[start:end]:
-        lines.append(f"🔖 {o.tracking_code or '#' + str(o.id)} — {o.star_count:,}⭐️ — {o.dest_label} — {o.price_toman:,} تومان")
+        lines.append(f"🔖 {o.tracking_code or '#' + str(o.id)} — {o.star_count:,}⭐️ — {o.dest_label} — {o.price_toman:,} تومان"
+                     + (" — 🕶 ناشناس" if o.anonymous else " — 👤 با نام"))
     rows = []
     for o in orders[start:end]:
         rows.append([InlineKeyboardButton(text=f"{o.tracking_code or '#' + str(o.id)} — {o.star_count:,}⭐️",
@@ -16744,7 +16750,8 @@ async def srx_order_detail(cb: CallbackQuery, bot: Bot):
     await cb.message.edit_text(
         f"#{await order_no(GiftOrder, order_id)} — {o.star_count:,}⭐️ ری‌اکشن\n"
         f"🔗 پست: {o.dest_label}\n💰 {o.price_toman:,} تومان\n"
-        + ("🕶 ناشناس: نامِ فرستنده را مخفی کن\n" if o.anonymous else "")
+        + ("🕶 <b>ثبت: ناشناس</b> — نامِ فرستنده را مخفی کن\n" if o.anonymous
+           else "👤 <b>ثبت: با نامِ مشتری</b> (ناشناس نیست)\n")
         + f"🔖 کد: {o.tracking_code}",
         reply_markup=kb)
     await cb.answer()
@@ -16934,7 +16941,7 @@ async def srx_anon_choice(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await _notify_gift_order_trust_success(bot, row, order_id)
     await msg.answer(
         f"✅ پرداختت ثبت شد — سفارشت برایِ ثبتِ دستیِ ری‌اکشن فرستاده شد.\n"
-        f"⭐️ تعداد: {qty:,}\n🔗 پست: {raw}\n" + ("🕶 ثبت: ناشناس\n" if anon else "") +
+        f"⭐️ تعداد: {qty:,}\n🔗 پست: {raw}\n" + ("🕶 ثبت: ناشناس\n" if anon else "👤 ثبت: با نامِ تو\n") +
         f"🔖 کد پیگیری: <code>{trk}</code>", parse_mode="HTML")
 
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[[
@@ -16947,7 +16954,10 @@ async def srx_anon_choice(cb: CallbackQuery, bot: Bot, state: FSMContext):
         bot, row,
         f"⭐️ سفارشِ ری‌اکشنِ استارزی — #{await order_no(GiftOrder, order_id)}\n"
         f"تعداد: {qty:,} ری‌اکشن\n💰 {price:,} تومان\n"
-        f"🔗 پست: {raw}\n🔖 کد: {trk}\n\n"
+        f"🔗 پست: {raw}\n"
+        + ("🕶 <b>ثبت: ناشناس</b> — هنگامِ ثبت، گزینهٔ مخفی‌کردنِ نام را بزن\n" if anon
+           else "👤 <b>ثبت: با نامِ مشتری</b> (ناشناس نیست)\n")
+        + f"🔖 کد: {trk}\n\n"
         f"باید خودت دستی ری‌اکشن‌ها را رویِ این پست ثبت کنی، بعد «✅ انجام شد» را بزن.",
         admin_kb)
 
