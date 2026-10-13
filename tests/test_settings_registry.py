@@ -123,6 +123,7 @@ def test_keyboard_item_lookup(reg):
 # callback_dataهایِ زنده در چتِ کاربران — نباید تغییر کنند
 LIVE_CALLBACKS = {
     "set:profile_footer", "tadm:apikey", "tadm:groupsettings", "miniapp:nft",
+    "set:escrow",   # PATCH_ESCROW_V1
 }
 
 
@@ -143,7 +144,7 @@ def test_virtual_menu_order_matches_previous_layout(vs):
     out = [cb for _, cb in regmod.merge_into(base, items)]
     assert out == ["set:homemenutext", "set:profile_footer", "tadm:apikey",
                    "tadm:backup:menu", "tadm:groupsettings", "miniapp:panel",
-                   "miniapp:nft", "tadm:chpost"]
+                   "miniapp:nft", "tadm:chpost", "set:escrow"]
 
 
 def test_virtual_menu_without_backup_or_miniapp(vs):
@@ -153,7 +154,7 @@ def test_virtual_menu_without_backup_or_miniapp(vs):
     assert out.index("set:profile_footer") == 1
     assert out.index("tadm:apikey") == 2
     assert out.index("tadm:groupsettings") == 3
-    assert out[-1] == "tadm:chpost"
+    assert out[-2:] == ["tadm:chpost", "set:escrow"]
 
 
 def test_api_item_is_owner_only_and_others_are_not(vs):

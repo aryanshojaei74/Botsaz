@@ -162,6 +162,9 @@ tenant_router.include_router(tx_channel_admin_router)
 # === PATCH_TRIAL_REPORT_CHANNEL_V1 ===
 from tenant.shared.trial_report_admin import trial_report_admin_router
 tenant_router.include_router(trial_report_admin_router)
+# === PATCH_ESCROW_V1 ===
+from tenant.shared.escrow import escrow_router
+tenant_router.include_router(escrow_router)
 # === PATCH_KYC_V1 ===
 from tenant.shared.kyc_admin import kyc_admin_router
 tenant_router.include_router(kyc_admin_router)
@@ -5592,6 +5595,10 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
     elif action == "nft_market":
         # === PATCH_NFT_MARKET_BTN_ACTION_V1 ===
         await _open_nft_market(msg, bot_id, header=action_header)
+    elif action == "escrow":
+        # === PATCH_ESCROW_V1 ===
+        from tenant.shared.escrow import show_menu as _escrow_menu
+        await _escrow_menu(msg, bot, bot_id, header=action_header)
     elif action == "store_miniapp":
         # === PATCH_STORE_MINIAPP_BTN_ACTION_V1 ===
         await _open_store_miniapp(msg, bot_id, header=action_header)
@@ -13989,6 +13996,10 @@ _SIMPLE_ACTIONS: dict[str, tuple[str, str, frozenset | None]] = {
     "nft_market":  ("🖼 مینی‌اپ حرفه‌ای (مارکتِ NFT)",
                     "این دکمه حالا مارکتِ خرید و اجارهٔ NFT و یوزرنیم را باز می‌کند.",
                     frozenset({"virtual_service"})),
+    # === PATCH_ESCROW_V1 ===
+    "escrow":      ("🤝 معامله با واسطه (واسطه‌گری)",
+                    "این دکمه حالا بخشِ «معامله با واسطه» را باز می‌کند (باید از تنظیمات روشن باشد).",
+                    frozenset({"virtual_service"})),
     # خدمات مجازی تلگرام
     "vs_member":   ("👥 افزایش ممبر کانال/گروه تلگرام", "این دکمه حالا سرویس «افزایش ممبر» را نمایش می‌دهد.",
                     frozenset({"virtual_service"})),
@@ -14618,6 +14629,8 @@ def _thb_kb_action_pick(mb, bot_field: str = "", plan: str = "", category: str =
             # === PATCH_NFT_MARKET_BTN_ACTION_V1 ===
             # این یکی علاوه بر زمینه، پلن هم می‌خواهد (فقط حرفه‌ای).
             if _akey == "nft_market" and not has_feature(plan, Feature.NFT_MARKET):
+                continue
+            if _akey == "escrow" and not has_feature(plan, Feature.ESCROW):   # PATCH_ESCROW_V1
                 continue
             # === PATCH_STORE_MINIAPP_GATE_V1 === فقط وقتی مینی‌اپ روشن و محلِ نمایشش «کیبورد» است
             if _akey == "store_miniapp" and not store_miniapp_ok:

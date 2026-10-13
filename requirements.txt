@@ -29,3 +29,5 @@ cryptography
 # === PATCH_VPN_API_V1 === web_panel.py (Form) و صفحه‌هایِ وب به این پکیج نیاز دارند؛ قبلاً در لیست نبود
 python-multipart
 pyfragment
+
+telethon

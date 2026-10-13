@@ -46,6 +46,7 @@ class Feature(str, Enum):
     KYC_VERIFY           = "kyc_verify"             # احرازِ هویتِ کاربران
     TX_LOG_CHANNEL       = "tx_log_channel"         # کانالِ لاگِ تراکنش‌ها
     TRIAL_REPORT_CHANNEL = "trial_report_channel"   # کانالِ گزارشِ اکانتِ تست (PATCH_TRIAL_REPORT_CHANNEL_V1)
+    ESCROW               = "escrow"                 # واسطه‌گری (معامله با واسطه) — PATCH_ESCROW_V1
     BULK_WALLET          = "bulk_wallet"            # شارژ/کسرِ همگانیِ کیف پول
     PHONE_VERIFY         = "phone_verify"           # تاییدِ شماره و کانالِ ثبتِ شماره‌ها
     AUTO_APPROVE_RECEIPT = "auto_approve_receipt"   # تاییدِ خودکارِ رسید
@@ -223,6 +224,7 @@ FEATURE_LABELS = {
     Feature.KYC_VERIFY: "🛡 احراز هویت کاربران",
     Feature.TX_LOG_CHANNEL: "📊 کانال لاگ تراکنش‌ها",
     Feature.TRIAL_REPORT_CHANNEL: "🔑 کانال گزارش اکانت تست",
+    Feature.ESCROW: "🤝 واسطه‌گری (معامله با واسطه + ساختِ گروه)",
     Feature.BULK_WALLET: "💸 شارژ/کسر همگانی کیف پول",
     Feature.PHONE_VERIFY: "📱 تایید شماره پیش از پرداخت",
     Feature.AUTO_APPROVE_RECEIPT: "🤖 تایید خودکار رسید",
@@ -328,6 +330,7 @@ _GROWTH_EXTRA = {
     Feature.GATEWAY_ABANGATEWAY,
     Feature.KYC_VERIFY, Feature.TX_LOG_CHANNEL, Feature.BULK_WALLET,
     Feature.TRIAL_REPORT_CHANNEL,      # PATCH_TRIAL_REPORT_CHANNEL_V1 — رشد و حرفه‌ای
+    Feature.ESCROW,                    # PATCH_ESCROW_V1 — رشد و حرفه‌ای
     Feature.PHONE_VERIFY, Feature.AUTO_APPROVE_RECEIPT,
     Feature.WALLET_RECEIPT_BTNS,
     Feature.DICE_GAME, Feature.BOT_BACKUP, Feature.ONBOARDING_WIZARD,
@@ -598,6 +601,7 @@ FEATURE_BOT_TYPES: dict[Feature, frozenset | None] = {
     Feature.OPENVPN_CONFIG: frozenset({"vpn_sales"}),
     # گزارشِ اکانتِ تستِ VPN فقط برایِ رباتِ فروشِ VPN معنا دارد (PATCH_TRIAL_REPORT_CHANNEL_V1)
     Feature.TRIAL_REPORT_CHANNEL: frozenset({"vpn_sales"}),
+    Feature.ESCROW: frozenset({"virtual_service"}),     # PATCH_ESCROW_V1
     # --- مخصوصِ فروشگاهِ دیجیتال ---
     Feature.PRODUCT_SHOP: frozenset({"digital_shop"}),
     # === PATCH_COMMUNITY_MGMT_V1 ===

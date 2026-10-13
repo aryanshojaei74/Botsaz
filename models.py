@@ -2784,6 +2784,32 @@ class PartnerStockOrder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class EscrowDeal(Base):
+    """=== PATCH_ESCROW_V1 === معاملهٔ با واسط (خدماتِ مجازی): خریدار/فروشنده، مبلغ، نرخِ واسطه، گروهِ ساخته‌شده."""
+    __tablename__ = "escrow_deals"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    number: Mapped[int] = mapped_column(Integer, index=True)            # شمارهٔ معامله در همین ربات
+    initiator_tg: Mapped[int] = mapped_column(BigInteger, index=True)
+    counterparty_tg: Mapped[int] = mapped_column(BigInteger, index=True)
+    initiator_role: Mapped[str] = mapped_column(String(10))             # seller / buyer
+    title: Mapped[str] = mapped_column(String(80))
+    amount_toman: Mapped[int] = mapped_column(BigInteger, default=0)
+    fee_percent: Mapped[float] = mapped_column(Float, default=0)
+    fee_toman: Mapped[int] = mapped_column(BigInteger, default=0)
+    fee_payer: Mapped[str] = mapped_column(String(10), default="buyer")  # buyer / seller / split
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    group_chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    group_title: Mapped[str | None] = mapped_column(String(160))
+    invite_buyer: Mapped[str | None] = mapped_column(String(200))
+    invite_seller: Mapped[str | None] = mapped_column(String(200))
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 # هنگام حذف کامل یک ربات (پاک‌سازی بایگانی) داده‌های همهٔ این جدول‌ها حذف می‌شوند.
 # === PATCH_BOTUSER_DELETE_ORDER_V1 ===
 # BotUser باید آخرِ این لیست باشد، نه اول — چون تقریباً همهٔ جداولِ دیگرِ
@@ -2806,6 +2832,7 @@ TENANT_OWNED_MODELS = [
     SmmOrder,
     # === PATCH_GATE_DEDICATED_LINK_V1 ===
     GateReferralLink,
+    EscrowDeal,   # === PATCH_ESCROW_V1 ===
     BotUser,
     # === PATCH_TENANT_OWNED_MODELS_MISSING_TABLES_V1 ===
     # این ۴ تا جدول (که همه‌شون تازه این فصل اضافه شدن: پنلِ تبلیغِ

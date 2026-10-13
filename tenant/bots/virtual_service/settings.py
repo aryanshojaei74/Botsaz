@@ -46,7 +46,20 @@ async def _nft_miniapp(cb, bot):
     await miniapp_nft_entry(cb, bot)
 
 
+async def _escrow_admin(cb, bot, state):
+    # === PATCH_ESCROW_V1 === لِیزی تا import دایره‌ای پیش نیاید
+    from tenant.shared.escrow import admin_menu
+    await admin_menu(cb, bot, state)
+
+
 register_settings_items(KIND, [
+    # === PATCH_ESCROW_V1 === واسطه‌گری (معامله با واسطه)
+    SettingsItem(
+        label="🤝 واسطه‌گری (معامله با واسطه)", callback="set:escrow",
+        handler=_escrow_admin, needs_state=True,
+        visible=_has("ESCROW"),
+        after=("miniapp:nft", "tadm:groupsettings"),
+    ),
     # درخواستِ آقایِ فدایی: متنِ اختصاصیِ پایینِ «مشخصاتِ شما»
     SettingsItem(
         label="👤 متنِ اختصاصیِ «مشخصاتِ شما»",
