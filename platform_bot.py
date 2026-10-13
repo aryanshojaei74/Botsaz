@@ -4129,7 +4129,10 @@ async def start(msg: Message, command: CommandObject, state: FSMContext, bot: Bo
     async with Session() as s:
         await get_user(s, msg.from_user.id, msg.from_user.full_name, referrer, username=msg.from_user.username)
         await s.commit()
+        sa = await get_sub_admin(s, msg.from_user.id)
+        u_row = await s.scalar(select(PlatformUser).where(PlatformUser.telegram_id == msg.from_user.id))
     # === PATCH_PLATFORM_PROMOTER_V1 === لینکِ معرفِ فروش: t.me/ربات?start=pr_کد
+    # (باگِ قبلی: دو خطِ sa/u_row اشتباهاً داخلِ این if رفته بودند و /start بدونِ آرگومان NameError می‌داد)
     if command.args and command.args.startswith("pr_"):
         try:
             from platform_promoters import attach as _promo_attach, PREFIX as _PP
@@ -4137,8 +4140,6 @@ async def start(msg: Message, command: CommandObject, state: FSMContext, bot: Bo
             await msg.answer(_ptxt)
         except Exception:
             logger.exception("اتصالِ کدِ معرف ناموفق بود")
-        sa = await get_sub_admin(s, msg.from_user.id)
-        u_row = await s.scalar(select(PlatformUser).where(PlatformUser.telegram_id == msg.from_user.id))
     show_admin = sa is not None
     # === PATCH_PLATFORM_ONBOARDING_V1 ===
     # همان الگویِ tenant_start در tenant/__init__.py: قبل از هرچیزِ دیگر
