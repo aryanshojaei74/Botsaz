@@ -71,6 +71,7 @@ async def get_cfg(bot_id: int) -> dict:
         "price": await _i("mtr_price_gb", 2000, 1, 100_000_000),
         "days": await _i("mtr_days", 30, 1, 3650),
         "title": ((await get_setting(bot_id, "mtr_title", "") or "").strip() or "بستهٔ ویژه")[:60],
+        "panel_key": (await get_setting(bot_id, "mtr_panel_key", "") or "").strip(),   # "" = اولین پنلِ فعال
     }
 
 
@@ -374,7 +375,7 @@ async def mtr_go(cb: CallbackQuery, bot: Bot):
 
 async def _create(cb: CallbackQuery, bot: Bot, row, cfg: dict):
     from tenant.bots.vpn import vpn_user as VU
-    from tenant.bots.vpn.vpn_admin import get_any_enabled_panel
+    from tenant.bots.vpn.vpn_admin import get_any_enabled_panel, get_panel
     async with Session() as s:
         u = await s.scalar(select(BotUser).where(BotUser.bot_id == row.id, BotUser.telegram_id == cb.from_user.id))
         if not u:
@@ -388,7 +389,13 @@ async def _create(cb: CallbackQuery, bot: Bot, row, cfg: dict):
     if gb < 1:
         await cb.answer(f"حداقل {fmt(cfg['price'])} موجودی لازم است؛ اول کیف پولت را شارژ کن.", show_alert=True)
         return
-    panel = await get_any_enabled_panel(row.id)
+    panel = None
+    if cfg.get("panel_key"):          # پنلِ انتخابیِ ادمین؛ اگر حذف/غیرفعال شده بود به اولین پنلِ فعال برمی‌گردیم
+        panel = await get_panel(row.id, cfg["panel_key"])
+        if panel is not None and not panel.enabled:
+            panel = None
+    if panel is None:
+        panel = await get_any_enabled_panel(row.id)
     if not panel:
         await cb.answer("فعلاً سروری برایِ ساخت در دسترس نیست.", show_alert=True)
         return
@@ -441,6 +448,13 @@ async def _admin_row(cb, bot):
     return row
 
 
+async def _panel_name(bot_id: int, key: str) -> str:
+    if not key:
+        return "خودکار (اولین پنلِ فعال)"
+    from tenant.bots.vpn.vpn_admin import panel_label
+    return await panel_label(bot_id, key)
+
+
 async def _admin_view(bot_id: int):
     cfg = await get_cfg(bot_id)
     async with Session() as s:
@@ -456,13 +470,14 @@ async def _admin_view(bot_id: int):
            f"وضعیت: <b>{'✅ فعال' if cfg['enabled'] else '❌ خاموش'}</b>\n"
            f"🏷 عنوان: <b>{cfg['title']}</b>\n"
            f"💰 قیمتِ هر گیگ: <b>{cfg['price']:,} تومان</b>\n"
-           f"⏳ مدت: <b>{cfg['days']} روز</b>\n\n"
+           f"⏳ مدت: <b>{cfg['days']} روز</b>\n"
+           f"🔌 پنلِ ساختِ سرویس: <b>{await _panel_name(bot_id, cfg['panel_key'])}</b>\n\n"
            f"📊 فعال: <b>{act}</b> | ⛔️ قطعِ موجودی: <b>{nocr}</b> | 💵 مجموعِ کسرشده: <b>{fmt(billed)}</b>\n\n"
            "ℹ️ حجمِ هر سرویس به‌صورتِ «گیگِ کامل» اضافه می‌شود (مثلاً موجودی ۱۰٬۰۰۰ با قیمتِ ۲٬۰۰۰ ⇒ ۵ گیگ).")
     rows = [[_btn("⛔️ خاموش‌کردن" if cfg["enabled"] else "✅ روشن‌کردن", "mtr:adm:toggle",
                   ButtonStyle.DANGER if cfg["enabled"] else ButtonStyle.SUCCESS)],
             [_btn("💰 قیمتِ هر گیگ", "mtr:adm:price"), _btn("⏳ مدت (روز)", "mtr:adm:days")],
-            [_btn("🏷 عنوان", "mtr:adm:title")],
+            [_btn("🏷 عنوان", "mtr:adm:title"), _btn("🔌 پنلِ ساخت", "mtr:adm:panel")],
             [_btn("📋 فهرستِ سرویس‌ها", "mtr:adm:list", ButtonStyle.PRIMARY)],
             [_btn("⬅️ بازگشت", "tadm:sec:settings", ButtonStyle.DANGER)]]
     return txt, _kb(rows)
@@ -493,6 +508,52 @@ async def adm_toggle(cb: CallbackQuery, bot: Bot):
         return
     cfg = await get_cfg(row.id)
     await set_setting(row.id, "mtr_enabled", "0" if cfg["enabled"] else "1")
+    await admin_menu(cb, bot)
+
+
+@mtr_router.callback_query(F.data == "mtr:adm:panel")
+async def adm_panel_pick(cb: CallbackQuery, bot: Bot):
+    row = await _admin_row(cb, bot)
+    if not row:
+        return
+    from models import VpnPanel
+    from tenant.bots.vpn.vpn_admin import panel_label
+    cfg = await get_cfg(row.id)
+    async with Session() as s:
+        panels = (await s.scalars(select(VpnPanel).where(VpnPanel.bot_id == row.id, VpnPanel.enabled == True)  # noqa: E712
+                                  .order_by(VpnPanel.id))).all()
+    rows = [[_btn(("✅ " if not cfg["panel_key"] else "") + "🤖 خودکار (اولین پنلِ فعال)", "mtr:adm:setpanel:auto")]]
+    for p in panels:
+        rows.append([_btn(("✅ " if cfg["panel_key"] == p.panel_key else "") + await panel_label(row.id, p.panel_key),
+                          f"mtr:adm:setpanel:{p.id}")])
+    rows.append([_btn("⬅️ بازگشت", "mtr:adm", ButtonStyle.DANGER)])
+    txt = ("🔌 <b>سرویسِ بستهٔ اعتباری روی کدام پنل ساخته شود؟</b>\n\n"
+           "پنلی را انتخاب کن که کاربرانِ این بسته رویش ساخته می‌شوند. اگر «خودکار» باشد، اولین پنلِ فعال استفاده می‌شود."
+           + ("\n\n⚠️ هنوز پنلِ فعالی در ربات ثبت نشده است." if not panels else ""))
+    try:
+        await cb.message.edit_text(txt, reply_markup=_kb(rows), parse_mode="HTML")
+    except Exception:
+        await bot.send_message(cb.from_user.id, txt, reply_markup=_kb(rows), parse_mode="HTML")
+    await cb.answer()
+
+
+@mtr_router.callback_query(F.data.regexp(r"^mtr:adm:setpanel:(auto|\d+)$"))
+async def adm_panel_set(cb: CallbackQuery, bot: Bot):
+    from models import VpnPanel
+    from tenant import set_setting
+    row = await _admin_row(cb, bot)
+    if not row:
+        return
+    arg = cb.data.split(":")[3]
+    key = ""
+    if arg != "auto":
+        async with Session() as s:
+            p = await s.get(VpnPanel, int(arg))
+        if not p or p.bot_id != row.id or not p.enabled:
+            await cb.answer("این پنل پیدا نشد یا فعال نیست.", show_alert=True)
+            return
+        key = p.panel_key
+    await set_setting(row.id, "mtr_panel_key", key)
     await admin_menu(cb, bot)
 
 

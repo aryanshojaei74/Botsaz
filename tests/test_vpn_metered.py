@@ -187,7 +187,7 @@ async def test_user_paused_service_is_not_touched_and_expired_or_deleted_end(db)
 @pytest.mark.asyncio
 async def test_config_defaults_and_entry_row(db):
     cfg = await M.get_cfg(9)
-    assert cfg == {"enabled": False, "price": 2000, "days": 30, "title": "بستهٔ ویژه"}
+    assert cfg == {"enabled": False, "price": 2000, "days": 30, "title": "بستهٔ ویژه", "panel_key": ""}
     assert await M.user_entry_row(9) is None
     await tenant.set_setting(9, "mtr_enabled", "1")
     await tenant.set_setting(9, "mtr_price_gb", "3500")
@@ -288,3 +288,45 @@ async def test_activation_blocked_when_balance_below_one_gb(db, create_env):
     answers = []
     await M.mtr_go(_cb(answers), SimpleNamespace(token="9:T"))
     assert create_env == [] and any("موجودی" in (a or "") for a in answers)
+
+
+@pytest.mark.asyncio
+async def test_chosen_panel_is_used_and_falls_back_when_disabled(db, create_env, monkeypatch):
+    from types import SimpleNamespace
+    import tenant.bots.vpn.vpn_admin as VA
+    from tenant.bots.vpn import vpn_user as VU
+    used = []
+
+    class _B(SimpleNamespace):
+        token = "9:T"
+
+        async def send_message(self, *a, **k):
+            return None
+
+    async def get_panel(bot_id, key):
+        used.append(key)
+        return SimpleNamespace(panel_key=key, enabled=(key == "pasargad"))
+    monkeypatch.setattr(VA, "get_panel", get_panel)
+    seen = []
+
+    async def email(bot_id, panel_key, *a, **k):
+        seen.append(panel_key)
+        return "mail1"
+    monkeypatch.setattr(VU, "_make_config_email", email)
+    async with db() as s:
+        m = await s.get(models.MeteredAccount, 1)
+        m.status = "ended"
+        await s.commit()
+    await tenant.set_setting(9, "mtr_enabled", "1")
+    await tenant.set_setting(9, "mtr_panel_key", "pasargad")
+    tenant._SETTING_CACHE.clear(); tenant._BOT_ROW_CACHE.clear()
+    await M.mtr_go(_cb([]), _B())
+    assert seen == ["pasargad"]
+    async with db() as s:                                    # حالا پنلِ انتخابی غیرفعال است ⇒ اولین پنلِ فعال (x)
+        for m in (await s.scalars(select(models.MeteredAccount))).all():
+            m.status = "ended"
+        await s.commit()
+    await tenant.set_setting(9, "mtr_panel_key", "marzban")
+    tenant._SETTING_CACHE.clear()
+    await M.mtr_go(_cb([]), _B())
+    assert seen[-1] == "x"
