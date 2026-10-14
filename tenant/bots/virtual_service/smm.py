@@ -3525,9 +3525,11 @@ async def _existing_service_ids(s, bot_id: int, panel_pk, only=None) -> tuple[se
     if only:
         q = q.where(SmmService.service_id.in_([str(x) for x in only]))
     rows = (await s.execute(q)).all()
-    all_ids = {str(r[0]) for r in rows}
     same_panel = {str(r[0]) for r in rows if r[1] == panel_pk}
-    return all_ids, same_panel
+    # === PATCH_SMM_SAME_ID_OTHER_PANEL_V1 === شناسهٔ سرویس فقط «در همان پنل» یکتاست؛ دو ارائه‌دهندهٔ مختلف
+    # کاملاً عادی است که شناسهٔ یکسان (مثلاً ۲۲۳) داشته باشند. (قبلاً رد می‌شد و به ادمین می‌گفت «قبلاً از
+    # پنلِ دیگری اضافه شده»؛ قیدِ یکتاییِ دیتابیس هم در init_db به (bot_id, panel_pk, service_id) تغییر کرد.)
+    return same_panel, same_panel
 
 
 async def _do_bulk_add(cb: CallbackQuery, bot: Bot, forced_cat: int | None = None):
@@ -4527,14 +4529,10 @@ async def _smm_finalize_add(cb: CallbackQuery, bot: Bot, bot_id: int, sid: str, 
         await cb.answer("سرویس یافت نشد", show_alert=True)
         return
     async with Session() as s:
-        # === PATCH_SMM_ADD_DUP_FIX_V1 === یکتاییِ دیتابیس رویِ (bot_id, service_id) است، نه پنل
+        # === PATCH_SMM_SAME_ID_OTHER_PANEL_V1 === یکتایی فقط درونِ همان پنل
         existing = await s.scalar(select(SmmService).where(
-            SmmService.bot_id == bot_id, SmmService.service_id == sid))
-        if existing is not None and existing.panel_pk != panel_pk:
-            await cb.answer(
-                "⚠️ سرویسی با همین شناسه قبلاً از پنلِ دیگری اضافه شده؛ "
-                "یک شناسه فقط یک‌بار در هر ربات ثبت می‌شود.", show_alert=True)
-            return
+            SmmService.bot_id == bot_id, SmmService.service_id == sid,
+            SmmService.panel_pk == panel_pk))
         if not existing:
             s.add(SmmService(
                 bot_id=bot_id, service_id=sid, name=smm_api.persianize_name(svc["name"]),
@@ -9162,9 +9160,12 @@ async def smmu_reorder(cb: CallbackQuery, bot: Bot, state: FSMContext):
         o = await s.get(SmmOrder, oid)
         v = None
         if o and o.bot_id == row.id and o.user_telegram_id == cb.from_user.id:
-            v = await s.scalar(select(SmmService).where(
-                SmmService.bot_id == row.id, SmmService.service_id == o.service_id,
-                SmmService.is_active == True).order_by(SmmService.id).limit(1))
+            # === PATCH_SMM_SAME_ID_OTHER_PANEL_V1 === شناسهٔ سرویس ممکن است در چند پنل تکرار شود؛ اول ردیفِ دقیقِ سفارش
+            v = (await s.get(SmmService, o.smm_service_pk)) if o.smm_service_pk else None
+            if not (v and v.bot_id == row.id and v.is_active):
+                v = await s.scalar(select(SmmService).where(
+                    SmmService.bot_id == row.id, SmmService.service_id == o.service_id,
+                    SmmService.is_active == True).order_by(SmmService.id).limit(1))
     if not v:
         return await cb.answer("این سرویس دیگر در دسترس نیست.", show_alert=True)
     await cb.answer()

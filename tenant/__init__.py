@@ -167,6 +167,8 @@ from tenant.shared.escrow import escrow_router
 tenant_router.include_router(escrow_router)
 from tenant.shared.balance_transfer import btr_router   # PATCH_BALANCE_TRANSFER_V1
 tenant_router.include_router(btr_router)
+from tenant.shared.period_stats import pst_router   # PATCH_PERIOD_STATS_V1
+tenant_router.include_router(pst_router)
 # === PATCH_KYC_V1 ===
 from tenant.shared.kyc_admin import kyc_admin_router
 tenant_router.include_router(kyc_admin_router)
@@ -6541,6 +6543,7 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
     if await is_owner_or_admin(bot_id, msg.from_user.id, row.owner_id):
         from tenant.shared.support_ticket import tadm_tickets, supp_contact_menu
         from tenant.shared.trust_report import trust_report_menu
+        from tenant.shared.period_stats import pst_menu as _pst_menu_kb
         _needs_state = {"🪙 درگاه ارز دیجیتال (NOWPayments)",
                         "🟦 درگاه سواپ‌ولت (SwapPay)", "👥 مدیریت کاربران", "📣 ارسال پیام همگانی"}
         _label_to_handler = {
@@ -6553,6 +6556,7 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
             "⭐ پرداخت با استارز تلگرام": set_stars_start,
             "🏷 کدهای تخفیف": tadm_discounts,
             "📊 آمار کلی ربات": tadm_stats,
+            "📈 آمار زمانی (سفارش/شارژ/زیرمجموعه)": _pst_menu_kb,   # PATCH_PERIOD_STATS_V1
             "🎖 کانال اعتمادسازی": trust_report_menu,
             "👥 مدیریت کاربران": tadm_users,
             "👮 مدیریت ادمین‌های پشتیبان": tadm_admins,
@@ -11348,7 +11352,10 @@ async def _sec_stats_kb(bot_id: int, plan: str) -> InlineKeyboardMarkup | ReplyK
         "tadm:newuser_notify_toggle": ButtonStyle.PRIMARY,
     }
     # ردیف‌بندی ثابتِ درخواستی: دو ردیف اول دوتایی، و هر اعلان در ردیف مستقل.
-    groups = [opts[0:2], opts[2:3], opts[3:4], opts[4:5], opts[5:6]]
+    # === PATCH_PERIOD_STATS_V1 === «آمار زمانی» (سفارش/شارژ/زیرمجموعه) ردیفِ جدایِ خودش را دارد
+    _pst = [("📈 آمار زمانی (سفارش/شارژ/زیرمجموعه)", "pst:menu")] if ok(Feature.BOT_STATS) else []
+    styles["pst:menu"] = ButtonStyle.SUCCESS
+    groups = [opts[0:2], _pst, opts[2:3], opts[3:4], opts[4:5], opts[5:6]]
     if await get_setting(bot_id, "menu_mode", "reply") != "inline":
         rows = [[KeyboardButton(text=lbl, style=styles.get(cbd, _tadm_opt_style(lbl)))
                  for lbl, cbd in group] for group in groups if group]

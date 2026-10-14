@@ -431,6 +431,19 @@ async def init_db() -> None:
         # مهاجرت ویژه: بازسازی قید یکتای vpn_panels برای پشتیبانی از چند پنل هم‌زمان
         if DATABASE_URL.startswith("sqlite"):
             await conn.run_sync(_migrate_vpn_panels_unique)
+        # === PATCH_SMM_SAME_ID_OTHER_PANEL_V1 ===
+        # قیدِ یکتاییِ قدیمیِ smm_services روی (bot_id, service_id) بود؛ ولی چند ارائه‌دهنده شناسهٔ سرویسِ
+        # یکسان دارند. حالا یکتایی فقط درونِ همان پنل است (panel_pk خالی = پنلِ پیش‌فرضِ قدیمی).
+        if conn.dialect.name == "postgresql":
+            for _sql in ("ALTER TABLE smm_services DROP CONSTRAINT IF EXISTS uq_smm_services_bot_service",
+                         "DROP INDEX IF EXISTS uq_smm_services_bot_service",
+                         "CREATE UNIQUE INDEX IF NOT EXISTS uq_smm_services_bot_panel_service "
+                         "ON smm_services (bot_id, COALESCE(panel_pk, 0), service_id)"):
+                try:
+                    async with conn.begin_nested():
+                        await conn.exec_driver_sql(_sql)
+                except Exception as e:  # noqa: BLE001
+                    print("smm uniq migration skip:", e)
         # ایندکس ترکیبی برای پرتکرارترین کوئری هر پیام (جستجوی کاربرِ یک ربات).
         # این کوئری (WHERE bot_id=... AND telegram_id=...) روی هر تک پیام/دکمه
         # اجرا می‌شود، پس نبودِ ایندکسِ ترکیبی مستقیماً روی سرعتِ کل ربات اثر
