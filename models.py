@@ -2816,6 +2816,22 @@ class EscrowDeal(Base):
     seller_ok: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
 
+class RefPrizeClaim(Base):
+    """جایزهٔ امتیازِ رفرال که کاربر باید انتخابش کند یا ادمین دستی ارسالش کند — PATCH_REFPOINT_PRIZES_V1.
+    status: choose (کاربر هنوز انتخاب نکرده) / pending (منتظرِ ارسالِ دستیِ ادمین) / done / failed."""
+    __tablename__ = "ref_prize_claims"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("bot_users.id"), index=True)
+    label: Mapped[str | None] = mapped_column(String(160))
+    kind: Mapped[str | None] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(10), default="choose", index=True)
+    note: Mapped[str | None] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 class BalanceTransfer(Base):
     """انتقالِ موجودی بینِ دو کاربرِ یک ربات — PATCH_BALANCE_TRANSFER_V1.
     status: pending (منتظرِ تأییدِ ادمین؛ مبلغ از فرستنده کسر و نگه داشته شده) / done / rejected."""
@@ -2855,6 +2871,7 @@ TENANT_OWNED_MODELS = [
     GateReferralLink,
     EscrowDeal,   # === PATCH_ESCROW_V1 ===
     BalanceTransfer,   # === PATCH_BALANCE_TRANSFER_V1 ===
+    RefPrizeClaim,   # === PATCH_REFPOINT_PRIZES_V1 ===
     BotUser,
     # === PATCH_TENANT_OWNED_MODELS_MISSING_TABLES_V1 ===
     # این ۴ تا جدول (که همه‌شون تازه این فصل اضافه شدن: پنلِ تبلیغِ

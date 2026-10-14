@@ -18,6 +18,9 @@ tenant/referral_gate.py با ملاکِ شمارشِ «points» گیت شده‌
   refpoint_reward_vol | refpoint_reward_days | refpoint_reward_text
 """
 from __future__ import annotations
+import contextvars
+import json
+from datetime import datetime as _dtm
 from html import escape as _esc_html
 
 from aiogram import Bot, F, Router
@@ -32,7 +35,7 @@ from sqlalchemy.exc import IntegrityError
 
 from config import Session
 from plans import has_feature, Feature  # PATCH_PLAN_FEATURE_GATING_V1
-from models import BotUser, Config, RefPointWallet, Setting
+from models import BotUser, Config, RefPointWallet, RefPrizeClaim, Setting
 
 from tenant.bots.vpn.vpn_user import fmt_vol as _fmt_vol  # PATCH_UNLIMITED_LABEL_V1
 
@@ -49,6 +52,9 @@ REWARD_LABELS = {
     "product": "🛍 محصولِ فروشگاه",
     # === PATCH_REFPOINT_SMM_REWARD_V1 ===
     "smm": "📣 سرویسِ خدماتِ مجازی",
+    # === PATCH_REFPOINT_PRIZES_V1 ===
+    "gift": "🎁 گیفتِ تلگرامی (استارزی)",
+    "stars": "⭐ استارز تلگرام",
 }
 
 # === PATCH_REFPOINT_PANEL_KIND_PICKER_V1 ===
@@ -64,7 +70,16 @@ CFG_KIND_LABELS = {
 #  تنظیمات
 # ═══════════════════════════════════════════
 
+# === PATCH_REFPOINT_PRIZES_V1 === وقتی یکی از جایزه‌هایِ «فهرست» تحویل می‌شود، تنظیماتِ همان جایزه
+# (عکسِ لحظهٔ افزودن) به‌جایِ تنظیماتِ زندهٔ refpoint_reward_* خوانده می‌شود؛ پس همهٔ تابع‌هایِ تحویلِ قبلی
+# (کانفیگ/محصول/SMM/…) بدونِ تغییر برایِ هر جایزهٔ فهرست هم کار می‌کنند.
+_CFG_OVERRIDE: contextvars.ContextVar = contextvars.ContextVar("refpoint_cfg_override", default=None)
+
+
 async def _get(bot_id: int, key: str, default: str = "") -> str:
+    _ov = _CFG_OVERRIDE.get()
+    if _ov is not None and key in _ov:
+        return _ov[key] if _ov[key] is not None else default
     async with Session() as s:
         row = await s.scalar(select(Setting).where(
             Setting.bot_id == bot_id, Setting.key == key))
@@ -113,6 +128,8 @@ async def reward_summary(bot_id: int) -> str:
         vol, days = 0, 0
     if kind in ("stock", "auto"):
         return f"{_fmt_vol(vol)}" + (f" / {days} روز" if days else "")
+    if kind == "stars":
+        return f"{await _get(bot_id, 'refpoint_reward_stars', '0')} استارز"
     return REWARD_LABELS.get(kind, "جایزه").split(" ", 1)[-1]
 
 
@@ -202,9 +219,14 @@ async def spend_points(bot_id: int, user_id: int, cost: int) -> bool:
 #  تحویلِ جایزه
 # ═══════════════════════════════════════════
 
-async def deliver_reward(bot: Bot, bot_id: int, u: BotUser, msg: Message) -> bool:
-    """جایزهٔ تنظیم‌شده را به کاربر می‌دهد. False یعنی تحویل نشد."""
+async def _deliver_single(bot: Bot, bot_id: int, u: BotUser, msg: Message) -> bool:
+    """یک جایزه را (طبقِ تنظیماتِ جاری/override) به کاربر می‌دهد. False یعنی تحویل نشد."""
     kind = await _get(bot_id, "refpoint_reward_kind", "stock")
+    # === PATCH_REFPOINT_PRIZES_V1 ===
+    if kind == "gift":
+        return await _deliver_gift(bot, bot_id, u, msg)
+    if kind == "stars":
+        return await _deliver_stars(bot, bot_id, u, msg)
     if kind == "text":
         text = await _get(bot_id, "refpoint_reward_text", "")
         await msg.answer("🎁 جایزه‌ات:\n\n" + (text or "—"))
@@ -248,6 +270,214 @@ async def deliver_reward(bot: Bot, bot_id: int, u: BotUser, msg: Message) -> boo
 
     # kind == "auto" — ساختِ کانفیگ روی پنلِ متصل
     return await _deliver_auto(bot, bot_id, u, msg, vol, days)
+
+
+# ═══════════════════════════════════════════
+#  گیفت/استارز + فهرستِ جایزه‌ها (کاربر یکی را انتخاب می‌کند) — PATCH_REFPOINT_PRIZES_V1
+# ═══════════════════════════════════════════
+_POOL_KEY = "refpoint_prizes"          # JSON: [{"label": str, "cfg": {refpoint_reward_*: value}}]
+_CFG_PREFIX = "refpoint_reward_"
+MAX_PRIZES = 8
+
+
+async def pool_get(bot_id: int) -> list[dict]:
+    raw = await _get(bot_id, _POOL_KEY, "")
+    try:
+        data = json.loads(raw) if raw else []
+    except (TypeError, ValueError):
+        return []
+    return [d for d in data if isinstance(d, dict) and isinstance(d.get("cfg"), dict)][:MAX_PRIZES]
+
+
+async def _pool_set(bot_id: int, pool: list[dict]) -> None:
+    await _set(bot_id, _POOL_KEY, json.dumps(pool, ensure_ascii=False))
+
+
+async def snapshot_current_cfg(bot_id: int) -> dict:
+    """همهٔ تنظیماتِ refpoint_reward_* فعلی (عکسِ لحظه‌ای)."""
+    async with Session() as s:
+        rows = (await s.scalars(select(Setting).where(
+            Setting.bot_id == bot_id, Setting.key.like(_CFG_PREFIX + "%")))).all()
+    return {r.key: r.value for r in rows}
+
+
+def entry_title(entry: dict) -> str:
+    cfg = entry.get("cfg") or {}
+    kind = cfg.get("refpoint_reward_kind", "stock")
+    return (entry.get("label") or REWARD_LABELS.get(kind, kind))[:60]
+
+
+async def _admin_targets(bot_id: int) -> list[int]:
+    from models import AdminSupport, Bot as _B
+    async with Session() as s:
+        b = await s.get(_B, bot_id)
+        adm = (await s.scalars(select(AdminSupport).where(AdminSupport.bot_id == bot_id))).all()
+    out = [b.owner_id] if b else []
+    return list({*out, *[a.telegram_id for a in adm]})
+
+
+async def _notify_admins_prize(bot: Bot, bot_id: int, claim_id: int, u: BotUser, label: str, note: str = "") -> None:
+    who = f"@{u.username}" if u.username else (u.full_name or str(u.telegram_id))
+    text = (f"🏅 <b>جایزهٔ امتیازِ رفرال — ارسالِ دستی</b>\n\n👤 {_esc_html(str(who))} (<code>{u.telegram_id}</code>)\n"
+            f"🎁 {_esc_html(label)}\n"
+            + (f"ℹ️ {_esc_html(note)}\n" if note else "")
+            + "\nبعد از ارسال «✅ ارسال شد» را بزن تا به کاربر خبر برسد.")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text="✅ ارسال شد", callback_data=f"rpg:done:{claim_id}", style=ButtonStyle.SUCCESS)]])
+    for tid in await _admin_targets(bot_id):
+        try:
+            await bot.send_message(tid, text, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            logger.info("refpoint prize: اطلاع به ادمین %s نرسید", tid)
+
+
+async def _manual_claim(bot: Bot, bot_id: int, u: BotUser, msg: Message, kind: str, label: str,
+                        note: str = "") -> bool:
+    """جایزه به‌صورتِ دستی: ثبت + اطلاع به ادمین‌ها؛ به کاربر گفته می‌شود به‌زودی ارسال می‌شود."""
+    async with Session() as s:
+        c = RefPrizeClaim(bot_id=bot_id, user_id=u.id, kind=kind, label=label[:160], status="pending",
+                          note=(note or None))
+        s.add(c)
+        await s.commit()
+        cid = c.id
+    await msg.answer(f"🎁 جایزه‌ات ثبت شد: <b>{_esc_html(label)}</b>\n"
+                     "ادمین به‌زودی برایت ارسال می‌کند و همین‌جا خبر می‌دهیم ✅", parse_mode="HTML")
+    await _notify_admins_prize(bot, bot_id, cid, u, label, note)
+    return True
+
+
+async def _deliver_gift(bot: Bot, bot_id: int, u: BotUser, msg: Message) -> bool:
+    gid = (await _get(bot_id, "refpoint_reward_gift_id", "")).strip()
+    stars = await _get(bot_id, "refpoint_reward_gift_stars", "")
+    emoji = await _get(bot_id, "refpoint_reward_gift_emoji", "🎁")
+    if not gid:
+        await msg.answer("⛔️ هنوز گیفتِ جایزه انتخاب نشده؛ به مالکِ ربات اطلاع بده.")
+        return False
+    label = f"{emoji} گیفتِ تلگرامی" + (f" ({stars}⭐)" if stars else "")
+    if (await _get(bot_id, "refpoint_reward_delivery", "manual")) == "auto":
+        try:
+            await bot.send_gift(user_id=u.telegram_id, gift_id=gid)
+        except Exception as e:                               # noqa: BLE001
+            logger.warning("refpoint gift: ارسالِ خودکار نشد (%s): %s", type(e).__name__, e)
+            return await _manual_claim(bot, bot_id, u, msg, "gift", label,
+                                       note=f"ارسالِ خودکار نشد ({type(e).__name__}) — دستی بفرست")
+        async with Session() as s:
+            s.add(RefPrizeClaim(bot_id=bot_id, user_id=u.id, kind="gift", label=label[:160], status="done",
+                                decided_at=_dtm.utcnow(), note="ارسالِ خودکار"))
+            await s.commit()
+        await msg.answer(f"🎁 گیفتت ارسال شد! {emoji}")
+        return True
+    return await _manual_claim(bot, bot_id, u, msg, "gift", label)
+
+
+async def _deliver_stars(bot: Bot, bot_id: int, u: BotUser, msg: Message) -> bool:
+    n = (await _get(bot_id, "refpoint_reward_stars", "0")).strip()
+    if not n.isdigit() or int(n) <= 0:
+        await msg.answer("⛔️ تعدادِ استارزِ جایزه هنوز تنظیم نشده؛ به مالکِ ربات اطلاع بده.")
+        return False
+    return await _manual_claim(bot, bot_id, u, msg, "stars", f"⭐ {int(n):,} استارز")
+
+
+async def deliver_reward(bot: Bot, bot_id: int, u: BotUser, msg: Message) -> bool:
+    """جایزه را تحویل می‌دهد. اگر «فهرستِ جایزه‌ها» تنظیم شده باشد: با یک جایزه مستقیم، با چند جایزه
+    کاربر یکی را انتخاب می‌کند؛ وگرنه جایزهٔ تکیِ قبلی. False یعنی تحویل نشد."""
+    pool = await pool_get(bot_id)
+    if not pool:
+        return await _deliver_single(bot, bot_id, u, msg)
+    if len(pool) == 1:
+        tok = _CFG_OVERRIDE.set(pool[0]["cfg"])
+        try:
+            return await _deliver_single(bot, bot_id, u, msg)
+        finally:
+            _CFG_OVERRIDE.reset(tok)
+    async with Session() as s:
+        c = RefPrizeClaim(bot_id=bot_id, user_id=u.id, kind="choice", label="انتخابِ جایزه", status="choose")
+        s.add(c)
+        await s.commit()
+        cid = c.id
+    rows = [[InlineKeyboardButton(text=f"🎁 {entry_title(e)}", callback_data=f"rpz:pick:{cid}:{i}",
+                                  style=ButtonStyle.SUCCESS)] for i, e in enumerate(pool)]
+    await msg.answer("🎉 <b>قفلِ جایزه باز شد!</b>\n\nیکی از جایزه‌هایِ زیر را انتخاب کن "
+                     "(فقط یکی قابلِ دریافت است):",
+                     reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    return True
+
+
+@rpt_router.callback_query(F.data.startswith("rpz:pick:"))
+async def rpz_pick(cb: CallbackQuery, bot: Bot):
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    if not row:
+        return await cb.answer()
+    try:
+        _, _, cid_s, idx_s = cb.data.split(":")
+        cid, idx = int(cid_s), int(idx_s)
+    except ValueError:
+        return await cb.answer()
+    async with Session() as s:
+        u = await s.scalar(select(BotUser).where(BotUser.bot_id == row.id, BotUser.telegram_id == cb.from_user.id))
+        c = await s.get(RefPrizeClaim, cid)
+    if not u or not c or c.bot_id != row.id or c.user_id != u.id:
+        return await cb.answer("این جایزه مالِ تو نیست.", show_alert=True)
+    pool = await pool_get(row.id)
+    if not (0 <= idx < len(pool)):
+        return await cb.answer("این گزینه دیگر موجود نیست.", show_alert=True)
+    # قفلِ اتمیک: فقط یک انتخاب
+    async with Session() as s:
+        res = await s.execute(update(RefPrizeClaim).where(
+            RefPrizeClaim.id == cid, RefPrizeClaim.status == "choose").values(status="pending",
+                                                                              label=entry_title(pool[idx])[:160]))
+        await s.commit()
+    if not res.rowcount:
+        return await cb.answer("جایزه‌ات را قبلاً انتخاب کرده‌ای ✅", show_alert=True)
+    await cb.answer("⏳ در حالِ آماده‌سازی…")
+    tok = _CFG_OVERRIDE.set(pool[idx]["cfg"])
+    try:
+        ok = await _deliver_single(bot, row.id, u, cb.message)
+    except Exception:
+        logger.exception("refpoint prize: تحویلِ جایزهٔ انتخابی ناموفق بود")
+        ok = False
+    finally:
+        _CFG_OVERRIDE.reset(tok)
+    async with Session() as s:
+        await s.execute(update(RefPrizeClaim).where(RefPrizeClaim.id == cid).values(
+            status=("done" if ok else "choose"), decided_at=(_dtm.utcnow() if ok else None)))
+        await s.commit()
+    if ok:
+        try:
+            await cb.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            logger.info("refpoint prize: پاک‌کردنِ دکمه‌ها ممکن نشد")
+    else:
+        await cb.message.answer("⚠️ این جایزه الان تحویل نشد؛ می‌توانی دوباره امتحان کنی یا جایزهٔ دیگری بزنی.")
+
+
+@rpt_router.callback_query(F.data.startswith("rpg:done:"))
+async def rpg_done(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        res = await s.execute(update(RefPrizeClaim).where(
+            RefPrizeClaim.id == cid, RefPrizeClaim.bot_id == row.id, RefPrizeClaim.status == "pending"
+        ).values(status="done", decided_at=_dtm.utcnow()))
+        await s.commit()
+        c = await s.get(RefPrizeClaim, cid)
+        u = await s.get(BotUser, c.user_id) if c else None
+    if not res.rowcount:
+        return await cb.answer("قبلاً رسیدگی شده.", show_alert=True)
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+        await cb.message.answer(f"✅ ثبت شد — کاربر مطلع شد. (جایزه: {_esc_html(c.label or '')})")
+    except Exception:
+        logger.info("refpoint prize: ویرایشِ پیامِ ادمین ممکن نشد")
+    if u:
+        try:
+            await bot.send_message(u.telegram_id, f"🎁 جایزه‌ات ارسال شد ✅\n{_esc_html(c.label or '')}", parse_mode="HTML")
+        except Exception:
+            logger.info("refpoint prize: اطلاع به کاربر نرسید")
+    await cb.answer("ثبت شد")
 
 
 async def _deliver_product(bot: Bot, bot_id: int, u: BotUser, msg: Message) -> bool:
@@ -395,6 +625,9 @@ class RptFSM(StatesGroup):
     # === PATCH_REFPOINT_MANUAL_ADD_V1 ===
     manual_user = State()
     manual_amount = State()
+    # === PATCH_REFPOINT_PRIZES_V1 ===
+    stars_amt = State()
+    pool_label = State()
 
 
 def _fa_to_int(text: str) -> int | None:
@@ -479,6 +712,26 @@ async def _panel_text(bot_id: int) -> str:
             lines.append(f"محصولِ انتخاب‌شده: <b>{p.title}</b> (موجودی: {stock_txt})")
         else:
             lines.append("⚠️ هنوز محصولی برایِ جایزه انتخاب نشده؛ از «🛍 انتخابِ محصول» مشخصش کن.")
+    # === PATCH_REFPOINT_PRIZES_V1 ===
+    elif kind == "gift":
+        _gid = await _get(bot_id, "refpoint_reward_gift_id", "")
+        _gst = await _get(bot_id, "refpoint_reward_gift_stars", "")
+        _gem = await _get(bot_id, "refpoint_reward_gift_emoji", "🎁")
+        _dl = await _get(bot_id, "refpoint_reward_delivery", "manual")
+        lines.append(f"گیفتِ انتخاب‌شده: <b>{_gem} {_gst + '⭐' if _gst else ('—' if not _gid else _gid)}</b>")
+        lines.append("🚚 ارسال: <b>" + ("خودکار (خودِ ربات از استارزِ خودش می‌فرستد؛ اگر نشد برایِ تو پیام می‌آید)"
+                                       if _dl == "auto" else "دستی (برایِ تو پیام می‌آید و خودت می‌فرستی)") + "</b>")
+        if not _gid:
+            lines.append("⚠️ هنوز گیفتی انتخاب نشده؛ از «🎁 انتخابِ گیفت» مشخصش کن.")
+    elif kind == "stars":
+        _sn = await _get(bot_id, "refpoint_reward_stars", "0")
+        lines.append(f"تعدادِ استارز: <b>{_sn}</b> — ارسال: دستی (برایِ تو پیام می‌آید و خودت می‌فرستی)")
+        if _sn in ("", "0"):
+            lines.append("⚠️ تعدادِ استارز هنوز تنظیم نشده؛ از «⭐ تعدادِ استارز» مشخصش کن.")
+    _pool = await pool_get(bot_id)
+    if _pool:
+        lines.append(f"\n🧺 <b>فهرستِ جایزه‌ها ({len(_pool)}):</b> " + "، ".join(entry_title(e) for e in _pool)
+                     + "\n(وقتی قفل باز شود، کاربر یکی از اینها را انتخاب می‌کند؛ تنظیماتِ بالا برایِ ساختنِ جایزهٔ تازه است.)")
     lines.append(
         "\n💡 هر زیرمجموعه‌ای که کاربر بیاورد امتیاز می‌گیرد و امتیازها جمع می‌شوند. "
         "بعد در «🏠 مدیریت دکمه‌های صفحه اصلی → قوانین و دسترسی و تستِ این دکمه → "
@@ -508,6 +761,9 @@ async def _panel_kb(bot_id: int, on: bool, kind: str) -> InlineKeyboardMarkup:
                               callback_data="rpt:manual", style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="📝 جایزه: متنِ ثابت",
                               callback_data="rpt:kind:text", style=ButtonStyle.PRIMARY)],
+        # === PATCH_REFPOINT_PRIZES_V1 ===
+        [InlineKeyboardButton(text="🎁 جایزه: گیفتِ تلگرامی", callback_data="rpt:kind:gift", style=ButtonStyle.PRIMARY),
+         InlineKeyboardButton(text="⭐ جایزه: استارز", callback_data="rpt:kind:stars", style=ButtonStyle.PRIMARY)],
     ]
     # === PATCH_REFPOINT_SMM_REWARD_V1 ===
     from models import Bot as _BotRow
@@ -555,6 +811,17 @@ async def _panel_kb(bot_id: int, on: bool, kind: str) -> InlineKeyboardMarkup:
     elif kind == "product":
         rows.append([InlineKeyboardButton(text="🛍 انتخابِ محصول",
                                           callback_data="rpt:pickproduct:0", style=ButtonStyle.PRIMARY)])
+    # === PATCH_REFPOINT_PRIZES_V1 ===
+    elif kind == "gift":
+        _dl = await _get(bot_id, "refpoint_reward_delivery", "manual")
+        rows.append([InlineKeyboardButton(text="🎁 انتخابِ گیفت", callback_data="rpt:pickgift:0",
+                                          style=ButtonStyle.PRIMARY)])
+        rows.append([InlineKeyboardButton(text=("🚚 ارسال: ⚡️ خودکار (بزن تا دستی شود)" if _dl == "auto"
+                                                else "🚚 ارسال: ✋ دستی (بزن تا خودکار شود)"),
+                                          callback_data="rpt:delivery", style=ButtonStyle.PRIMARY)])
+    elif kind == "stars":
+        rows.append([InlineKeyboardButton(text="⭐ تعدادِ استارز", callback_data="rpt:starsamt",
+                                          style=ButtonStyle.PRIMARY)])
     # === PATCH_REFPOINT_SMM_REWARD_V1 ===
     elif kind == "smm":
         rows.append([InlineKeyboardButton(text="📣 انتخابِ سرویس و تعداد",
@@ -562,6 +829,10 @@ async def _panel_kb(bot_id: int, on: bool, kind: str) -> InlineKeyboardMarkup:
     else:
         rows.append([InlineKeyboardButton(text="✏️ متنِ جایزه",
                                           callback_data="rpt:rtext", style=ButtonStyle.PRIMARY)])
+    # === PATCH_REFPOINT_PRIZES_V1 ===
+    _np = len(await pool_get(bot_id))
+    rows.append([InlineKeyboardButton(text=f"🧺 فهرستِ جایزه‌ها ({_np}) — کاربر یکی را انتخاب می‌کند",
+                                      callback_data="rpt:pool", style=ButtonStyle.SUCCESS)])
     # باگ: «tadm:settings» همیشه منویِ شیشه‌ای می‌ساخت، پس در حالتِ
     # کیبوردی بازگشت، منو را اینلاین می‌کرد. «tadm:sec:settings» حالتِ
     # فعلیِ منو را رعایت می‌کند.
@@ -1275,6 +1546,184 @@ async def rpt_set_cfgkind(cb: CallbackQuery, bot: Bot):
     await _set(row.id, "refpoint_reward_cfgkind", key)
     await cb.answer(f"✅ «{CFG_KIND_LABELS[key]}» ذخیره شد")
     await _show_panel(cb.message, row.id)
+
+
+# ═══════════════════════════════════════════
+#  === PATCH_REFPOINT_PRIZES_V1 === ادمین: گیفت، استارز و فهرستِ جایزه‌ها
+# ═══════════════════════════════════════════
+@rpt_router.callback_query(F.data.startswith("rpt:pickgift:"))
+async def rpt_pick_gift(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    page = int(cb.data.split(":")[2])
+    try:
+        gifts = sorted((await bot.get_available_gifts()).gifts, key=lambda g: g.star_count)
+    except Exception as e:                                   # noqa: BLE001
+        await cb.answer()
+        return await cb.message.answer(f"❌ دریافتِ فهرستِ گیفت‌ها از تلگرام ناموفق بود:\n{_esc_html(str(e)[:200])}")
+    per = 8
+    chunk = gifts[page * per:(page + 1) * per]
+    rows = [[InlineKeyboardButton(
+        text=f"{getattr(getattr(g, 'sticker', None), 'emoji', None) or '🎁'} {g.star_count}⭐",
+        callback_data=f"rpt:setgift:{g.id}")] for g in chunk]
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"rpt:pickgift:{page-1}"))
+    if (page + 1) * per < len(gifts):
+        nav.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"rpt:pickgift:{page+1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="rpt:menu", style=ButtonStyle.DANGER)])
+    text = "🎁 کدام گیفت جایزه باشد؟ (ارسالِ خودکار از استارزِ خودِ ربات کم می‌شود)"
+    try:
+        await cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    except Exception:
+        await cb.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await cb.answer()
+
+
+@rpt_router.callback_query(F.data.startswith("rpt:setgift:"))
+async def rpt_set_gift(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    gid = cb.data.split(":", 2)[2]
+    stars, emoji = "", "🎁"
+    try:
+        for g in (await bot.get_available_gifts()).gifts:
+            if g.id == gid:
+                stars, emoji = str(g.star_count), (getattr(getattr(g, "sticker", None), "emoji", None) or "🎁")
+    except Exception:
+        logger.info("refpoint gift: خواندنِ مشخصاتِ گیفت ممکن نشد")
+    await _set(row.id, "refpoint_reward_kind", "gift")
+    await _set(row.id, "refpoint_reward_gift_id", gid)
+    await _set(row.id, "refpoint_reward_gift_stars", stars)
+    await _set(row.id, "refpoint_reward_gift_emoji", emoji)
+    await cb.answer("✅ گیفت ثبت شد")
+    await _show_panel(cb.message, row.id)
+
+
+@rpt_router.callback_query(F.data == "rpt:delivery")
+async def rpt_delivery(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cur = await _get(row.id, "refpoint_reward_delivery", "manual")
+    await _set(row.id, "refpoint_reward_delivery", "manual" if cur == "auto" else "auto")
+    await cb.answer("ذخیره شد")
+    await _show_panel(cb.message, row.id)
+
+
+@rpt_router.callback_query(F.data == "rpt:starsamt")
+async def rpt_stars_amt(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await state.set_state(RptFSM.stars_amt)
+    await cb.message.answer("⭐ تعدادِ استارزِ جایزه را بفرست (عدد):", reply_markup=_cancel_kb())
+    await cb.answer()
+
+
+@rpt_router.message(RptFSM.stars_amt, F.text)
+async def rpt_set_stars_amt(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    n = _fa_to_int(msg.text)
+    if not row or not n or n <= 0 or n > 1_000_000:
+        return await msg.answer("❌ عددِ معتبر بفرست.", reply_markup=_cancel_kb())
+    await state.clear()
+    await _set(row.id, "refpoint_reward_kind", "stars")
+    await _set(row.id, "refpoint_reward_stars", str(n))
+    await msg.answer(f"✅ جایزه: {n:,} استارز")
+    await _show_panel(msg, row.id)
+
+
+async def _pool_view(bot_id: int):
+    pool = await pool_get(bot_id)
+    lines = ["🧺 <b>فهرستِ جایزه‌ها</b>\n",
+             "هر جایزه‌ای که الان در پنلِ بالا تنظیم کرده‌ای را می‌توانی با «➕ افزودنِ جایزهٔ فعلی» به این فهرست اضافه کنی؛ "
+             "بعد برایِ جایزهٔ بعدی تنظیماتِ پنل را عوض کن و دوباره اضافه کن.\n"
+             "• خالی = فقط جایزهٔ تکیِ پنل (مثلِ قبل)\n• یک جایزه = مستقیم تحویل\n"
+             "• چند جایزه = کاربر بعد از بازشدنِ قفل <b>یکی</b> را انتخاب می‌کند\n"]
+    rows = []
+    for i, e in enumerate(pool):
+        lines.append(f"{i + 1}. {_esc_html(entry_title(e))}")
+        rows.append([InlineKeyboardButton(text=f"🗑 حذفِ «{entry_title(e)[:30]}»", callback_data=f"rpt:pooldel:{i}",
+                                          style=ButtonStyle.DANGER)])
+    if not pool:
+        lines.append("— خالی —")
+    if len(pool) < MAX_PRIZES:
+        rows.insert(0, [InlineKeyboardButton(text="➕ افزودنِ جایزهٔ فعلی (تنظیماتِ پنل)", callback_data="rpt:pooladd",
+                                             style=ButtonStyle.SUCCESS)])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="rpt:menu", style=ButtonStyle.DANGER)])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@rpt_router.callback_query(F.data == "rpt:pool")
+async def rpt_pool(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    text, kb = await _pool_view(row.id)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
+
+
+@rpt_router.callback_query(F.data == "rpt:pooladd")
+async def rpt_pool_add(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    if len(await pool_get(row.id)) >= MAX_PRIZES:
+        return await cb.answer(f"حداکثر {MAX_PRIZES} جایزه.", show_alert=True)
+    await state.set_state(RptFSM.pool_label)
+    kind = await _get(row.id, "refpoint_reward_kind", "stock")
+    await cb.message.answer(
+        f"🏷 یک نامِ کوتاه برایِ این جایزه بفرست (کاربر همین را می‌بیند).\nجایزهٔ فعلی: {REWARD_LABELS.get(kind, kind)}",
+        reply_markup=_cancel_kb())
+    await cb.answer()
+
+
+@rpt_router.message(RptFSM.pool_label, F.text)
+async def rpt_pool_label(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    if not row:
+        return
+    label = (msg.text or "").strip()[:60]
+    if not label:
+        return await msg.answer("❌ نامِ معتبر بفرست.", reply_markup=_cancel_kb())
+    await state.clear()
+    pool = await pool_get(row.id)
+    if len(pool) >= MAX_PRIZES:
+        return await msg.answer(f"حداکثر {MAX_PRIZES} جایزه.")
+    pool.append({"label": label, "cfg": await snapshot_current_cfg(row.id)})
+    await _pool_set(row.id, pool)
+    await msg.answer(f"✅ «{_esc_html(label)}» به فهرست اضافه شد.", parse_mode="HTML")
+    text, kb = await _pool_view(row.id)
+    await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@rpt_router.callback_query(F.data.startswith("rpt:pooldel:"))
+async def rpt_pool_del(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    i = int(cb.data.split(":")[2])
+    pool = await pool_get(row.id)
+    if 0 <= i < len(pool):
+        pool.pop(i)
+        await _pool_set(row.id, pool)
+    text, kb = await _pool_view(row.id)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await cb.answer("حذف شد")
 
 
 async def _is_foreign(obj, bot) -> bool:
