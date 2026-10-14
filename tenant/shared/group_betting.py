@@ -1,7 +1,7 @@
 """شرطبندی گروهی برای ربات‌های خدمات مجازی.
 
 این ماژول فقط روی موجودی داخلی همان ربات کار می‌کند. مبلغ سازنده هنگام
-ایجاد شرط رزرو می‌شود و پذیرش/تسویه در تراکنش اتمیک انجام می‌گیرد.
+ایجاد بازی رزرو می‌شود و پذیرش/تسویه در تراکنش اتمیک انجام می‌گیرد.
 """
 from __future__ import annotations
 
@@ -92,7 +92,7 @@ def _pending_text(bet: Bet) -> str:
         "🎲 <b>بازی</b>\n\n"
         f"👤 سازنده: {_name(bet.creator_telegram_id, bet.creator_username, bet.creator_name)}\n"
         f"{participant_line}"
-        f"💰 مبلغ شرط هر نفر: <b>{_rial(bet.amount)}</b>\n"
+        f"💰 مبلغ بازی هر نفر: <b>{_rial(bet.amount)}</b>\n"
         f"{fee_line}"
         f"🏆 جایزهٔ نهایی برنده: <b>{_rial(payout)}</b>\n\n"
         "⏳ وضعیت: در انتظار پیوستن"
@@ -102,12 +102,12 @@ def _pending_text(bet: Bet) -> str:
 def _settled_text(bet: Bet) -> str:
     winner = _name(bet.winner_telegram_id, bet.winner_username, bet.winner_name)
     loser = _name(bet.loser_telegram_id, bet.loser_username, bet.loser_name)
-    fee_line = f"💸 کارمزد شرط: <b>{_rial(bet.fee_amount)}</b> ({_money(bet.fee_pct):g}٪)\n" if _money(bet.fee_amount) else ""
+    fee_line = f"💸 کارمزد بازی: <b>{_rial(bet.fee_amount)}</b> ({_money(bet.fee_pct):g}٪)\n" if _money(bet.fee_amount) else ""
     return (
         "🎲 <b>نتیجهٔ بازی مشخص شد</b> 🎉\n\n"
         f"🏆 برنده: <b>{winner}</b>\n"
         f"❌ بازنده: <b>{loser}</b>\n"
-        f"💰 مبلغ شرط: <b>{_rial(bet.amount)}</b> برای هر نفر\n"
+        f"💰 مبلغ بازی: <b>{_rial(bet.amount)}</b> برای هر نفر\n"
         f"{fee_line}"
         f"🎁 مبلغ نهایی دریافتی برنده: <b>{_rial(bet.payout_amount)}</b>\n\n"
         "✅ موجودی بازیکنان طبق نتیجهٔ ثبت‌شده تسویه شد."
@@ -138,13 +138,13 @@ async def bet_info_button(cb: CallbackQuery):
 
 
 def _cancelled_text(bet: Bet, expired: bool = False) -> str:
-    reason = "⏰ این شرط منقضی شد و مبلغ رزروشده به سازنده برگشت." if expired else "❌ شرط توسط سازنده لغو شد و مبلغ رزروشده برگشت."
-    return f"🎲 <b>شرط لغو شد</b>\n\n{reason}"
+    reason = "⏰ این بازی منقضی شد و مبلغ رزروشده به سازنده برگشت." if expired else "❌ بازی توسط سازنده لغو شد و مبلغ رزروشده برگشت."
+    return f"🎲 <b>بازی لغو شد</b>\n\n{reason}"
 
 
 
 async def expire_pending_bets_once() -> int:
-    """شرط‌هایِ درانتظارِ گذشته از زمان را یک‌بار اتمیک منقضی و مسترد می‌کند."""
+    """بازی‌هایِ درانتظارِ گذشته از زمان را یک‌بار اتمیک منقضی و مسترد می‌کند."""
     now = datetime.utcnow()
     async with Session() as s:
         ids = (await s.scalars(
@@ -173,7 +173,7 @@ async def expire_pending_bets_once() -> int:
                     telegram_id=creator.telegram_id, amount=bet.amount, kind="refund"))
                 s.add(WalletTxn(
                     bot_id=bet.bot_id, user_id=creator.id, amount=bet.amount,
-                    kind="bet_refund", note=f"انقضای شرط #{bet.id}"))
+                    kind="bet_refund", note=f"انقضای بازی #{bet.id}"))
             expired_rows.append({
                 "id": bet.id, "bot_id": bet.bot_id, "chat_id": bet.chat_id,
                 "message_id": bet.message_id, "amount": bet.amount,
@@ -198,31 +198,31 @@ async def expire_pending_bets_once() -> int:
             if item["message_id"]:
                 await bot.edit_message_text(
                     chat_id=item["chat_id"], message_id=item["message_id"],
-                    text=("🎲 <b>شرط لغو شد</b>\n\n"
-                          "⏰ زمان شرط به پایان رسید و مبلغ رزروشده به سازنده برگشت."),
+                    text=("🎲 <b>بازی لغو شد</b>\n\n"
+                          "⏰ زمان بازی به پایان رسید و مبلغ رزروشده به سازنده برگشت."),
                     parse_mode="HTML", reply_markup=None)
             try:
                 from tenant_group_guard import tenant_group_log
                 await tenant_group_log(
                     bot, row, item["chat_id"], "bet_cancelled",
                     actor=item["creator_telegram_id"],
-                    details=f"شرط #{item['id']} به‌دلیل پایان زمان لغو شد؛ مبلغ {_rial(item['amount'])} مسترد شد")
+                    details=f"بازی #{item['id']} به‌دلیل پایان زمان لغو شد؛ مبلغ {_rial(item['amount'])} مسترد شد")
             except Exception:
-                logger.exception("ثبت لاگ انقضای شرط ناموفق بود؛ bet_id=%s", item["id"])
+                logger.exception("ثبت لاگ انقضای بازی ناموفق بود؛ bet_id=%s", item["id"])
         except Exception:
-            logger.exception("ویرایش پیام شرط منقضی‌شده ناموفق بود؛ bet_id=%s", item["id"])
+            logger.exception("ویرایش پیام بازی منقضی‌شده ناموفق بود؛ bet_id=%s", item["id"])
         finally:
             await bot.session.close()
     return len(expired_rows)
 
 
 async def betting_expiry_loop(interval_sec: int = 15):
-    """loop مستقلِ worker برای تعیین‌تکلیف خودکار شرط‌هایِ منقضی‌شده."""
+    """loop مستقلِ worker برای تعیین‌تکلیف خودکار بازی‌هایِ منقضی‌شده."""
     while True:
         try:
             count = await expire_pending_bets_once()
             if count:
-                logger.info("betting_expiry_loop: %s شرط منقضی و مسترد شد", count)
+                logger.info("betting_expiry_loop: %s بازی منقضی و مسترد شد", count)
         except Exception:
             logger.exception("betting_expiry_loop: اجرای دور انقضا ناموفق بود")
         await asyncio.sleep(interval_sec)
@@ -237,9 +237,9 @@ async def incomplete_bet_command(msg: Message, bot: Bot):
     if not _group_feature_allowed(row):
         return
     if (await _get_setting(row.id, "group_betting_enabled", "0")) != "1":
-        await msg.reply("❌ قابلیت شرط‌بندی در این ربات فعال نیست.")
+        await msg.reply("❌ قابلیت بازی در این ربات فعال نیست.")
         return
-    await msg.reply("برای ساخت شرط عمومی، مبلغ را هم بنویس؛ مثلاً: «شرطبندی ۱۰۰۰۰»\nبرای شرط روی یک نفر، همین دستور را روی پیام او ریپلای کن.")
+    await msg.reply("برای ساخت بازی عمومی، مبلغ را هم بنویس؛ مثلاً: «بازی ۱۰۰۰۰»\nبرای بازی روی یک نفر، همین دستور را روی پیام او ریپلای کن.")
 
 @betting_router.message(
     F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}),
@@ -250,14 +250,14 @@ async def create_bet(msg: Message, bot: Bot):
     if not _group_feature_allowed(row):
         return
     if (await _get_setting(row.id, "group_betting_enabled", "0")) != "1":
-        await msg.reply("❌ قابلیت شرط‌بندی در این ربات فعال نیست.")
+        await msg.reply("❌ قابلیت بازی در این ربات فعال نیست.")
         return
     target = msg.reply_to_message.from_user if msg.reply_to_message and msg.reply_to_message.from_user else None
     if target and target.is_bot:
-        await msg.reply("❌ نمی‌شود با ربات شرط‌بندی کرد.")
+        await msg.reply("❌ نمی‌شود با ربات بازی کرد.")
         return
     if target and target.id == msg.from_user.id:
-        await msg.reply("❌ نمی‌شود روی پیام خودت شرط‌بندی ساخت.")
+        await msg.reply("❌ نمی‌شود روی پیام خودت بازی ساخت.")
         return
     match = _BET_RE.match((msg.text or "").strip())
     amount = int(_digits(match.group(1))) if match else 0
@@ -265,10 +265,10 @@ async def create_bet(msg: Message, bot: Bot):
     max_raw = _digits(await _get_setting(row.id, "group_betting_max", "0"))
     max_amount = int(max_raw) if max_raw else 0
     if amount < min_amount:
-        await msg.reply(f"❌ حداقل مبلغ شرط {_rial(min_amount)} است.")
+        await msg.reply(f"❌ حداقل مبلغ بازی {_rial(min_amount)} است.")
         return
     if max_amount and amount > max_amount:
-        await msg.reply(f"❌ حداکثر مبلغ شرط {_rial(max_amount)} است.")
+        await msg.reply(f"❌ حداکثر مبلغ بازی {_rial(max_amount)} است.")
         return
     fee_enabled = (await _get_setting(row.id, "group_betting_fee_enabled", "0")) == "1"
     fee_pct = Decimal(str(await _get_setting(row.id, "group_betting_fee_pct", "0") or 0)) if fee_enabled else Decimal("0")
@@ -301,10 +301,10 @@ async def create_bet(msg: Message, bot: Bot):
         s.add(bet)
         await s.flush()
         s.add(BetLedger(bot_id=row.id, bet_id=bet.id, user_id=locked.id, telegram_id=msg.from_user.id, amount=-amount, kind="reserve"))
-        s.add(WalletTxn(bot_id=row.id, user_id=locked.id, amount=-amount, kind="bet_reserve", note=f"رزرو شرط #{bet.id}"))
+        s.add(WalletTxn(bot_id=row.id, user_id=locked.id, amount=-amount, kind="bet_reserve", note=f"رزرو بازی #{bet.id}"))
         await s.commit()
         bet_id = bet.id
-    sent = await msg.reply("⏳ در حال ساخت شرط...")
+    sent = await msg.reply("⏳ در حال ساخت بازی...")
     async with Session() as s:
         b = await s.get(Bet, bet_id)
         if b:
@@ -322,9 +322,9 @@ async def create_bet(msg: Message, bot: Bot):
         from tenant_group_guard import tenant_group_log
         await tenant_group_log(bot, row, msg.chat.id, "bet_created", actor=msg.from_user.id,
                                target=(target.id if target else None),
-                               details=f"شرط #{bet_id}؛ مبلغ {_rial(amount)}؛ {'عمومی' if not target else 'با شرکت‌کنندهٔ تعیین‌شده'}")
+                               details=f"بازی #{bet_id}؛ مبلغ {_rial(amount)}؛ {'عمومی' if not target else 'با شرکت‌کنندهٔ تعیین‌شده'}")
     except Exception:
-        logger.exception("ثبت لاگ ایجاد شرط ناموفق بود")
+        logger.exception("ثبت لاگ ایجاد بازی ناموفق بود")
 
 
 @betting_router.callback_query(F.data.startswith("bet:join:"))
@@ -340,16 +340,16 @@ async def join_bet(cb: CallbackQuery, bot: Bot):
     async with Session() as s:
         bet = await s.get(Bet, bet_id, with_for_update=True)
         if not bet or bet.bot_id != row.id:
-            await cb.answer("این شرط پیدا نشد.", show_alert=True)
+            await cb.answer("این بازی پیدا نشد.", show_alert=True)
             return
         if bet.status != "pending":
-            await cb.answer("این شرط دیگر در انتظار پیوستن نیست.", show_alert=True)
+            await cb.answer("این بازی دیگر در انتظار پیوستن نیست.", show_alert=True)
             return
         if bet.creator_telegram_id == cb.from_user.id:
-            await cb.answer("سازنده نمی‌تواند خودش به شرط بپیوندد.", show_alert=True)
+            await cb.answer("سازنده نمی‌تواند خودش به بازی بپیوندد.", show_alert=True)
             return
         if bet.target_telegram_id and bet.target_telegram_id != cb.from_user.id:
-            await cb.answer("این شرط برای کاربری است که پیامش ریپلای شده.", show_alert=True)
+            await cb.answer("این بازی برای کاربری است که پیامش ریپلای شده.", show_alert=True)
             return
         if bet.expires_at and bet.expires_at <= datetime.utcnow():
             bet.status = "expired"
@@ -357,13 +357,13 @@ async def join_bet(cb: CallbackQuery, bot: Bot):
             if creator:
                 creator.balance = Decimal(str(creator.balance)) + Decimal(str(bet.amount))
                 s.add(BetLedger(bot_id=bet.bot_id, bet_id=bet.id, user_id=creator.id, telegram_id=creator.telegram_id, amount=bet.amount, kind="refund"))
-                s.add(WalletTxn(bot_id=bet.bot_id, user_id=creator.id, amount=bet.amount, kind="bet_refund", note=f"انقضای شرط #{bet.id}"))
+                s.add(WalletTxn(bot_id=bet.bot_id, user_id=creator.id, amount=bet.amount, kind="bet_refund", note=f"انقضای بازی #{bet.id}"))
             await s.commit()
             try:
                 await cb.message.edit_text(_cancelled_text(bet, True), reply_markup=None, parse_mode="HTML")
             except Exception:
                 logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
-            await cb.answer("شرط منقضی شده است.", show_alert=True)
+            await cb.answer("بازی منقضی شده است.", show_alert=True)
             return
         opponent = await s.get(BotUser, joiner.id, with_for_update=True)
         if not opponent or _money(opponent.balance) < _money(bet.amount):
@@ -371,7 +371,7 @@ async def join_bet(cb: CallbackQuery, bot: Bot):
             return
         creator = await s.get(BotUser, bet.creator_user_id, with_for_update=True)
         if not creator:
-            await cb.answer("سازندهٔ شرط پیدا نشد.", show_alert=True)
+            await cb.answer("سازندهٔ بازی پیدا نشد.", show_alert=True)
             return
         opponent.balance = Decimal(str(opponent.balance)) - Decimal(str(bet.amount))
         winner_is_creator = __import__("secrets").randbelow(2) == 0
@@ -397,11 +397,11 @@ async def join_bet(cb: CallbackQuery, bot: Bot):
         bet.settled_at = datetime.utcnow()
         s.add(BetLedger(bot_id=bet.bot_id, bet_id=bet.id, user_id=opponent.id, telegram_id=cb.from_user.id, amount=-bet.amount, kind="stake"))
         s.add(BetLedger(bot_id=bet.bot_id, bet_id=bet.id, user_id=winner_user.id, telegram_id=winner_tg, amount=bet.payout_amount, kind="prize"))
-        s.add(WalletTxn(bot_id=bet.bot_id, user_id=opponent.id, amount=-bet.amount, kind="bet_stake", note=f"پیوستن به شرط #{bet.id}"))
-        s.add(WalletTxn(bot_id=bet.bot_id, user_id=winner_user.id, amount=bet.payout_amount, kind="bet_prize", note=f"جایزهٔ شرط #{bet.id}"))
+        s.add(WalletTxn(bot_id=bet.bot_id, user_id=opponent.id, amount=-bet.amount, kind="bet_stake", note=f"پیوستن به بازی #{bet.id}"))
+        s.add(WalletTxn(bot_id=bet.bot_id, user_id=winner_user.id, amount=bet.payout_amount, kind="bet_prize", note=f"جایزهٔ بازی #{bet.id}"))
         if _money(bet.fee_amount):
             s.add(BetLedger(bot_id=bet.bot_id, bet_id=bet.id, user_id=winner_user.id, telegram_id=winner_tg, amount=-bet.fee_amount, kind="fee"))
-            s.add(WalletTxn(bot_id=bet.bot_id, user_id=winner_user.id, amount=0, kind="bet_fee", note=f"کارمزد شرط #{bet.id}: {_money(bet.fee_amount):,} تومان"))
+            s.add(WalletTxn(bot_id=bet.bot_id, user_id=winner_user.id, amount=0, kind="bet_fee", note=f"کارمزد بازی #{bet.id}: {_money(bet.fee_amount):,} تومان"))
         winner_balance_after = _money(winner_user.balance)
         loser_balance_after = _money(loser_user.balance)
         await s.commit()
@@ -415,10 +415,10 @@ async def join_bet(cb: CallbackQuery, bot: Bot):
         from tenant_group_guard import tenant_group_log
         await tenant_group_log(bot, row, bet.chat_id, "bet_settled", actor=cb.from_user.id,
                                target=bet.winner_telegram_id,
-                               details=f"شرط #{bet.id}؛ برنده {bet.winner_telegram_id}؛ جایزه {_rial(bet.payout_amount)}")
+                               details=f"بازی #{bet.id}؛ برنده {bet.winner_telegram_id}؛ جایزه {_rial(bet.payout_amount)}")
     except Exception:
-        logger.exception("ثبت لاگ تسویه شرط ناموفق بود")
-    await cb.answer("شرط تسویه شد.")
+        logger.exception("ثبت لاگ تسویه بازی ناموفق بود")
+    await cb.answer("بازی تسویه شد.")
 
 
 @betting_router.callback_query(F.data.startswith("bet:cancel:"))
@@ -431,20 +431,20 @@ async def cancel_bet(cb: CallbackQuery, bot: Bot):
     async with Session() as s:
         bet = await s.get(Bet, bet_id, with_for_update=True)
         if not bet or bet.bot_id != row.id:
-            await cb.answer("این شرط پیدا نشد.", show_alert=True)
+            await cb.answer("این بازی پیدا نشد.", show_alert=True)
             return
         if bet.creator_telegram_id != cb.from_user.id:
-            await cb.answer("فقط سازنده می‌تواند شرط را لغو کند.", show_alert=True)
+            await cb.answer("فقط سازنده می‌تواند بازی را لغو کند.", show_alert=True)
             return
         if bet.status != "pending":
-            await cb.answer("این شرط قبلاً تعیین‌تکلیف شده است.", show_alert=True)
+            await cb.answer("این بازی قبلاً تعیین‌تکلیف شده است.", show_alert=True)
             return
         creator = await s.get(BotUser, bet.creator_user_id, with_for_update=True)
         bet.status = "cancelled"
         if creator:
             creator.balance = Decimal(str(creator.balance)) + Decimal(str(bet.amount))
             s.add(BetLedger(bot_id=bet.bot_id, bet_id=bet.id, user_id=creator.id, telegram_id=creator.telegram_id, amount=bet.amount, kind="refund"))
-            s.add(WalletTxn(bot_id=bet.bot_id, user_id=creator.id, amount=bet.amount, kind="bet_refund", note=f"لغو شرط #{bet.id}"))
+            s.add(WalletTxn(bot_id=bet.bot_id, user_id=creator.id, amount=bet.amount, kind="bet_refund", note=f"لغو بازی #{bet.id}"))
         await s.commit()
         text = _cancelled_text(bet)
     try:
@@ -454,10 +454,10 @@ async def cancel_bet(cb: CallbackQuery, bot: Bot):
     try:
         from tenant_group_guard import tenant_group_log
         await tenant_group_log(bot, row, bet.chat_id, "bet_cancelled", actor=cb.from_user.id,
-                               details=f"شرط #{bet.id} لغو و مبلغ {_rial(bet.amount)} مسترد شد")
+                               details=f"بازی #{bet.id} لغو و مبلغ {_rial(bet.amount)} مسترد شد")
     except Exception:
-        logger.exception("ثبت لاگ لغو شرط ناموفق بود")
-    await cb.answer("شرط لغو شد.")
+        logger.exception("ثبت لاگ لغو بازی ناموفق بود")
+    await cb.answer("بازی لغو شد.")
 
 
 class BetSettingsFSM(StatesGroup):
@@ -475,7 +475,7 @@ async def _bet_settings_view(bot_id: int):
     maximum = int(_digits(await _get_setting(bot_id, "group_betting_max", "0")) or 0)
     ttl = int(_digits(await _get_setting(bot_id, "group_betting_ttl", "300")) or 300)
     text = (
-        "🎲 <b>تنظیمات شرط‌بندی گروه</b>\n\n"
+        "🎲 <b>تنظیمات بازی گروه</b>\n\n"
         f"وضعیت: {'✅ فعال' if enabled else '❌ غیرفعال'}\n"
         f"کارمزد: {'✅ ' + str(fee) + '٪' if fee_enabled else '❌ غیرفعال'}\n"
         f"حداقل مبلغ: {_rial(minimum)}\n"
@@ -483,7 +483,7 @@ async def _bet_settings_view(bot_id: int):
         f"زمان انتظار: <b>{ttl}</b> ثانیه"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=("🔴 خاموش‌کردن شرط‌بندی" if enabled else "🟢 روشن‌کردن شرط‌بندی"), callback_data="gset:bet_toggle")],
+        [InlineKeyboardButton(text=("🔴 خاموش‌کردن بازی" if enabled else "🟢 روشن‌کردن بازی"), callback_data="gset:bet_toggle")],
         [InlineKeyboardButton(text=f"💸 درصد کارمزد ({fee}٪)", callback_data="gset:bet_fee")],
         [InlineKeyboardButton(text="🔢 حداقل مبلغ", callback_data="gset:bet_min"), InlineKeyboardButton(text="🔢 حداکثر مبلغ", callback_data="gset:bet_max")],
         [InlineKeyboardButton(text=f"⏱ زمان انتظار ({ttl} ثانیه)", callback_data="gset:bet_ttl")],
@@ -536,22 +536,22 @@ async def _start_setting(cb: CallbackQuery, bot: Bot, state: FSMContext, target_
 
 @betting_router.callback_query(F.data == "gset:bet_fee")
 async def betting_fee_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
-    await _start_setting(cb, bot, state, BetSettingsFSM.fee_pct, "💸 درصد کارمزد شرط را بفرست (۰ تا ۹۹؛ برای خاموشی ۰):")
+    await _start_setting(cb, bot, state, BetSettingsFSM.fee_pct, "💸 درصد کارمزد بازی را بفرست (۰ تا ۹۹؛ برای خاموشی ۰):")
 
 
 @betting_router.callback_query(F.data == "gset:bet_min")
 async def betting_min_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
-    await _start_setting(cb, bot, state, BetSettingsFSM.min_amount, "🔢 حداقل مبلغ شرط را به تومان بفرست:")
+    await _start_setting(cb, bot, state, BetSettingsFSM.min_amount, "🔢 حداقل مبلغ بازی را به تومان بفرست:")
 
 
 @betting_router.callback_query(F.data == "gset:bet_max")
 async def betting_max_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
-    await _start_setting(cb, bot, state, BetSettingsFSM.max_amount, "🔢 حداکثر مبلغ شرط را به تومان بفرست (۰ یعنی نامحدود):")
+    await _start_setting(cb, bot, state, BetSettingsFSM.max_amount, "🔢 حداکثر مبلغ بازی را به تومان بفرست (۰ یعنی نامحدود):")
 
 
 @betting_router.callback_query(F.data == "gset:bet_ttl")
 async def betting_ttl_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
-    await _start_setting(cb, bot, state, BetSettingsFSM.ttl, "⏱ زمان انتظار شرط را به ثانیه بفرست (۶۰ تا ۸۶۴۰۰):")
+    await _start_setting(cb, bot, state, BetSettingsFSM.ttl, "⏱ زمان انتظار بازی را به ثانیه بفرست (۶۰ تا ۸۶۴۰۰):")
 
 
 async def _save_setting_input(msg: Message, bot: Bot, state: FSMContext, state_obj: State, key: str, parse, error: str):

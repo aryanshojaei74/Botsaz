@@ -1,4 +1,4 @@
-"""کیف‌پول و شرط‌بندی گروهیِ بات‌ساز اصلی.
+"""کیف‌پول و بازی گروهیِ بات‌ساز اصلی.
 
 این ماژول از تنظیمات platform و مدل PlatformUser استفاده می‌کند و فقط روی
 گروهی فعال می‌شود که به محافظ گروه وصل شده باشد و ادمین قابلیت را روشن کرده
@@ -109,9 +109,9 @@ async def platform_incomplete_bet_command(msg: Message):
     if not await _group_allowed(msg.chat.id):
         return
     if not await _bet_enabled():
-        await msg.reply("❌ قابلیت شرط‌بندی در بات‌ساز اصلی فعال نیست.")
+        await msg.reply("❌ قابلیت بازی در بات‌ساز اصلی فعال نیست.")
         return
-    await msg.reply("برای ساخت شرط عمومی، مبلغ را هم بنویس؛ مثلاً: «شرطبندی ۱۰۰۰۰»\nبرای شرط روی یک نفر، همین دستور را روی پیام او ریپلای کن.")
+    await msg.reply("برای ساخت بازی عمومی، مبلغ را هم بنویس؛ مثلاً: «بازی ۱۰۰۰۰»\nبرای بازی روی یک نفر، همین دستور را روی پیام او ریپلای کن.")
 
 @platform_group_money_router.message(
     F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}),
@@ -219,7 +219,7 @@ def _bet_pending_text(bet: PlatformBet) -> str:
         "🎲 <b>بازی</b>\n\n"
         f"👤 سازنده: {_name(bet.creator_telegram_id, bet.creator_username, bet.creator_name)}\n"
         f"{participant_line}"
-        f"💰 مبلغ شرط هر نفر: <b>{_rial(bet.amount)}</b>\n"
+        f"💰 مبلغ بازی هر نفر: <b>{_rial(bet.amount)}</b>\n"
         f"💸 کارمزد: <b>{_rial(fee)}</b> ({_money(bet.fee_pct):g}٪)\n"
         f"🎁 جایزهٔ نهایی: <b>{_rial(bet.payout_amount)}</b>\n\n"
         "⏳ وضعیت: در انتظار پیوستن"
@@ -231,7 +231,7 @@ def _bet_result_text(bet: PlatformBet) -> str:
         "🎲 <b>نتیجهٔ بازی مشخص شد</b> 🎉\n\n"
         f"🏆 برنده: <b>{_name(bet.winner_telegram_id, bet.winner_username, bet.winner_name)}</b>\n"
         f"❌ بازنده: <b>{_name(bet.loser_telegram_id, bet.loser_username, bet.loser_name)}</b>\n"
-        f"💰 مبلغ شرط: <b>{_rial(bet.amount)}</b> برای هر نفر\n"
+        f"💰 مبلغ بازی: <b>{_rial(bet.amount)}</b> برای هر نفر\n"
         f"💸 کارمزد: <b>{_rial(bet.fee_amount)}</b> ({_money(bet.fee_pct):g}٪)\n"
         f"🎁 مبلغ نهایی دریافتی برنده: <b>{_rial(bet.payout_amount)}</b>"
     )
@@ -289,10 +289,10 @@ async def platform_create_bet(msg: Message):
         s.add(bet)
         await s.flush()
         s.add(PlatformBetLedger(bet_id=bet.id, telegram_id=creator.telegram_id, amount=-amount, kind="reserve"))
-        s.add(PlatformTxn(user_telegram_id=creator.telegram_id, amount=-amount, kind="group_bet_reserve", note=f"رزرو شرط #{bet.id}"))
+        s.add(PlatformTxn(user_telegram_id=creator.telegram_id, amount=-amount, kind="group_bet_reserve", note=f"رزرو بازی #{bet.id}"))
         await s.commit()
         bet_id = bet.id
-    sent = await msg.reply("⏳ در حال ساخت شرط...")
+    sent = await msg.reply("⏳ در حال ساخت بازی...")
     async with Session() as s:
         bet = await s.get(PlatformBet, bet_id)
         bet.message_id = sent.message_id
@@ -311,13 +311,13 @@ async def platform_join_bet(cb: CallbackQuery):
         async with Session() as s:
             bet = await s.get(PlatformBet, bet_id, with_for_update=True)
             if not bet or bet.status != "pending":
-                await cb.answer("این شرط دیگر در انتظار نیست.", show_alert=True)
+                await cb.answer("این بازی دیگر در انتظار نیست.", show_alert=True)
                 return
             if bet.creator_telegram_id == cb.from_user.id:
-                await cb.answer("سازنده نمی‌تواند خودش به شرط بپیوندد.", show_alert=True)
+                await cb.answer("سازنده نمی‌تواند خودش به بازی بپیوندد.", show_alert=True)
                 return
             if bet.target_telegram_id and bet.target_telegram_id != cb.from_user.id:
-                await cb.answer("این شرط برای کاربری است که پیامش ریپلای شده.", show_alert=True)
+                await cb.answer("این بازی برای کاربری است که پیامش ریپلای شده.", show_alert=True)
                 return
             if bet.expires_at and bet.expires_at <= datetime.utcnow():
                 bet.status = "expired"
@@ -325,10 +325,10 @@ async def platform_join_bet(cb: CallbackQuery):
                 if creator:
                     creator.balance = Decimal(str(creator.balance)) + Decimal(str(bet.amount))
                     s.add(PlatformBetLedger(bet_id=bet.id, telegram_id=creator.telegram_id, amount=bet.amount, kind="refund"))
-                    s.add(PlatformTxn(user_telegram_id=creator.telegram_id, amount=bet.amount, kind="group_bet_refund", note=f"انقضای شرط #{bet.id}"))
+                    s.add(PlatformTxn(user_telegram_id=creator.telegram_id, amount=bet.amount, kind="group_bet_refund", note=f"انقضای بازی #{bet.id}"))
                 await s.commit()
-                await cb.message.edit_text("⏰ شرط منقضی شد و مبلغ سازنده برگشت.")
-                await cb.answer("شرط منقضی شده است.", show_alert=True)
+                await cb.message.edit_text("⏰ بازی منقضی شد و مبلغ سازنده برگشت.")
+                await cb.answer("بازی منقضی شده است.", show_alert=True)
                 return
             creator = await s.scalar(select(PlatformUser).where(PlatformUser.telegram_id == bet.creator_telegram_id).with_for_update())
             opponent = await s.scalar(select(PlatformUser).where(PlatformUser.telegram_id == cb.from_user.id).with_for_update())
@@ -354,16 +354,16 @@ async def platform_join_bet(cb: CallbackQuery):
             winner.balance = Decimal(str(winner.balance)) + Decimal(str(bet.payout_amount))
             if _money(bet.fee_amount):
                 s.add(PlatformBetLedger(bet_id=bet.id, telegram_id=winner.telegram_id, amount=-bet.fee_amount, kind="fee"))
-                s.add(PlatformTxn(user_telegram_id=winner.telegram_id, amount=0, kind="group_bet_fee", note=f"کارمزد شرط #{bet.id}"))
+                s.add(PlatformTxn(user_telegram_id=winner.telegram_id, amount=0, kind="group_bet_fee", note=f"کارمزد بازی #{bet.id}"))
             s.add(PlatformBetLedger(bet_id=bet.id, telegram_id=opponent.telegram_id, amount=-bet.amount, kind="stake"))
             s.add(PlatformBetLedger(bet_id=bet.id, telegram_id=winner.telegram_id, amount=bet.payout_amount, kind="prize"))
-            s.add(PlatformTxn(user_telegram_id=opponent.telegram_id, amount=-bet.amount, kind="group_bet_stake", note=f"پیوستن به شرط #{bet.id}"))
-            s.add(PlatformTxn(user_telegram_id=winner.telegram_id, amount=bet.payout_amount, kind="group_bet_prize", note=f"جایزهٔ شرط #{bet.id}"))
+            s.add(PlatformTxn(user_telegram_id=opponent.telegram_id, amount=-bet.amount, kind="group_bet_stake", note=f"پیوستن به بازی #{bet.id}"))
+            s.add(PlatformTxn(user_telegram_id=winner.telegram_id, amount=bet.payout_amount, kind="group_bet_prize", note=f"جایزهٔ بازی #{bet.id}"))
             wb, lb = _money(winner.balance), _money(loser.balance)
             await s.commit()
             text, kb = _bet_result_text(bet), _bet_result_kb(bet, wb, lb)
     await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    await cb.answer("شرط تسویه شد.")
+    await cb.answer("بازی تسویه شد.")
 
 
 @platform_group_money_router.callback_query(F.data.startswith("pgb:cancel:"))
@@ -372,7 +372,7 @@ async def platform_cancel_bet(cb: CallbackQuery):
     async with Session() as s:
         bet = await s.get(PlatformBet, bet_id, with_for_update=True)
         if not bet or bet.status != "pending":
-            await cb.answer("این شرط قبلاً تعیین‌تکلیف شده است.", show_alert=True)
+            await cb.answer("این بازی قبلاً تعیین‌تکلیف شده است.", show_alert=True)
             return
         if bet.creator_telegram_id != cb.from_user.id:
             await cb.answer("فقط سازنده می‌تواند لغو کند.", show_alert=True)
@@ -382,9 +382,9 @@ async def platform_cancel_bet(cb: CallbackQuery):
         if creator:
             creator.balance = Decimal(str(creator.balance)) + Decimal(str(bet.amount))
             s.add(PlatformBetLedger(bet_id=bet.id, telegram_id=creator.telegram_id, amount=bet.amount, kind="refund"))
-            s.add(PlatformTxn(user_telegram_id=creator.telegram_id, amount=bet.amount, kind="group_bet_refund", note=f"لغو شرط #{bet.id}"))
+            s.add(PlatformTxn(user_telegram_id=creator.telegram_id, amount=bet.amount, kind="group_bet_refund", note=f"لغو بازی #{bet.id}"))
         await s.commit()
-    await cb.message.edit_text("❌ شرط لغو شد و مبلغ رزروشده به سازنده برگشت.")
+    await cb.message.edit_text("❌ بازی لغو شد و مبلغ رزروشده به سازنده برگشت.")
     await cb.answer("لغو شد")
 
 
@@ -428,11 +428,11 @@ async def _settings_screen(kind: str):
         mn = _int(await _pset("platform_group_betting_min", "1000"), 1000)
         mx = _int(await _pset("platform_group_betting_max", "0"))
         ttl = _int(await _pset("platform_group_betting_ttl", "300"), 300)
-        text = f"🎲 <b>تنظیمات شرط‌بندی گروه</b>\n\nوضعیت: {'✅ فعال' if enabled else '❌ غیرفعال'}\nکارمزد: {'✅ ' + fee + '٪' if fee_on else '❌ غیرفعال'}\nحداقل: {_rial(mn)}\nحداکثر: {_rial(mx) if mx else 'نامحدود'}\nزمان انتظار: {ttl} ثانیه"
+        text = f"🎲 <b>تنظیمات بازی گروه</b>\n\nوضعیت: {'✅ فعال' if enabled else '❌ غیرفعال'}\nکارمزد: {'✅ ' + fee + '٪' if fee_on else '❌ غیرفعال'}\nحداقل: {_rial(mn)}\nحداکثر: {_rial(mx) if mx else 'نامحدود'}\nزمان انتظار: {ttl} ثانیه"
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [hx_button("🔴 خاموش‌کردن" if enabled else "🟢 روشن‌کردن", callback_data="pgbset:toggle", style=ButtonStyle.DANGER if enabled else ButtonStyle.SUCCESS)],
-            [hx_button("💸 کارمزد شرط", callback_data="pgbset:fee")],
-            [hx_button("🔢 حداقل شرط", callback_data="pgbset:min"), hx_button("🔢 حداکثر شرط", callback_data="pgbset:max")],
+            [hx_button("💸 کارمزد بازی", callback_data="pgbset:fee")],
+            [hx_button("🔢 حداقل بازی", callback_data="pgbset:min"), hx_button("🔢 حداکثر بازی", callback_data="pgbset:max")],
             [hx_button("⏱ زمان انتظار", callback_data="pgbset:ttl")],
             [hx_button("⬅️ بازگشت به هوش مصنوعی", callback_data="gg:ai", style=ButtonStyle.DANGER)],
         ])
@@ -507,22 +507,22 @@ async def main_transfer_max_start(cb: CallbackQuery, state: FSMContext):
 
 @platform_group_money_router.callback_query(F.data == "pgbset:fee")
 async def main_bet_fee_start(cb: CallbackQuery, state: FSMContext):
-    await _start_input(cb, state, PlatformGroupSettingsFSM.bet_fee, "💸 درصد کارمزد شرط را بفرست (۰ تا ۹۹؛ صفر یعنی خاموش):")
+    await _start_input(cb, state, PlatformGroupSettingsFSM.bet_fee, "💸 درصد کارمزد بازی را بفرست (۰ تا ۹۹؛ صفر یعنی خاموش):")
 
 
 @platform_group_money_router.callback_query(F.data == "pgbset:min")
 async def main_bet_min_start(cb: CallbackQuery, state: FSMContext):
-    await _start_input(cb, state, PlatformGroupSettingsFSM.bet_min, "🔢 حداقل مبلغ شرط را به تومان بفرست:")
+    await _start_input(cb, state, PlatformGroupSettingsFSM.bet_min, "🔢 حداقل مبلغ بازی را به تومان بفرست:")
 
 
 @platform_group_money_router.callback_query(F.data == "pgbset:max")
 async def main_bet_max_start(cb: CallbackQuery, state: FSMContext):
-    await _start_input(cb, state, PlatformGroupSettingsFSM.bet_max, "🔢 حداکثر مبلغ شرط را به تومان بفرست (۰ یعنی نامحدود):")
+    await _start_input(cb, state, PlatformGroupSettingsFSM.bet_max, "🔢 حداکثر مبلغ بازی را به تومان بفرست (۰ یعنی نامحدود):")
 
 
 @platform_group_money_router.callback_query(F.data == "pgbset:ttl")
 async def main_bet_ttl_start(cb: CallbackQuery, state: FSMContext):
-    await _start_input(cb, state, PlatformGroupSettingsFSM.bet_ttl, "⏱ زمان انتظار شرط را به ثانیه بفرست (۶۰ تا ۸۶۴۰۰):")
+    await _start_input(cb, state, PlatformGroupSettingsFSM.bet_ttl, "⏱ زمان انتظار بازی را به ثانیه بفرست (۶۰ تا ۸۶۴۰۰):")
 
 
 async def _save_input(msg: Message, state: FSMContext, state_obj: State, key: str, min_value: int, max_value: int, unit: str):

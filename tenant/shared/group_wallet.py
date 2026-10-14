@@ -7,7 +7,7 @@ group_wallet.py — دستورهایِ کیف‌پول داخلِ گروه (PATC
   ۲) «انتقال <عدد>» — کاربر رویِ پیامِ یه کاربرِ دیگه ریپلای می‌کنه و
      می‌فرسته «انتقال 1000»؛ همون مقدار از موجودیِ خودش کم و به اون یکی
      اضافه می‌شه (بدونِ هیچ شانس/برد‌وباختی — این فقط جابه‌جاییِ مستقیمه،
-     نه شرط‌بندی).
+     نه بازی).
 
 این دو دستور فقط داخلِ گروه/سوپرگروه کار می‌کنن (نه پی‌وی)، و فقط وقتی
 ربات بتونه صاحبِ گروه رو به یه ربات ثبت‌شده رو پلتفرم map کنه (یعنی خودِ
@@ -101,7 +101,7 @@ def _transfer_result_text(sender, receiver, amount: int, fee_amount: int,
 
 def _transfer_result_keyboard(amount: int, sender_balance: float,
                               receiver_balance: float) -> InlineKeyboardMarkup:
-    """اطلاعات انتقال را مانند نتیجهٔ شرط‌بندی در دکمه‌های شیشه‌ای نشان می‌دهد."""
+    """اطلاعات انتقال را مانند نتیجهٔ بازی در دکمه‌های شیشه‌ای نشان می‌دهد."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="💸 مبلغ انتقال", callback_data="group_transfer:info", style=ButtonStyle.SUCCESS),
@@ -331,7 +331,7 @@ async def _group_settings_content(bot_id: int) -> tuple[str, InlineKeyboardMarku
         rows.append([InlineKeyboardButton(text="🔌 قطعِ اتصالِ دستیار از گروه", callback_data="smmai:disconnectgroup",
                                           style=ButtonStyle.DANGER)])
     rows.append([InlineKeyboardButton(text="🛡 محافظ گروه، دستورات و گزارش‌ها", callback_data="tgg:menu")])
-    rows.append([InlineKeyboardButton(text="🎲 تنظیمات شرط‌بندی", callback_data="gset:betmenu")])
+    rows.append([InlineKeyboardButton(text="🎲 تنظیمات بازی", callback_data="gset:betmenu")])
     rows.append([InlineKeyboardButton(
         text=("💸 غیرفعال‌کردنِ کارمزدِ انتقال" if fee_enabled else "💸 فعال‌کردنِ کارمزدِ انتقال"),
         callback_data="gset:feetoggle")])
