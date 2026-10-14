@@ -22756,6 +22756,27 @@ async def tadm_cfg_add_wg_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await cb.answer()
 
 
+_WG_LINKS_PROMPT = ("🔗 لینک‌هایِ سابِ وایرگارد را بفرست — هر خط (یا هر فاصله) یعنی یک کانفیگِ جدا. "
+                   "می‌توانی چند پیام پشتِ‌سرِهم بفرستی؛ بعد «⬅️ بازگشت» را بزن.")
+
+
+# === PATCH_WG_BULK_SUBLINKS_V1 ===
+def _wg_link_bulk_on(data: dict) -> bool:
+    """وایرگارد/اوپن‌وی‌پی‌ان در حالتِ «لینکِ ساب»: چند لینک در یک‌بار (هر لینک = یک کانفیگِ جدا)."""
+    return data.get("cfg_kind") in FILE_KINDS and data.get("cfg_wg_mode") == "link"
+
+
+def _split_sub_links(text: str) -> tuple[list[str], list[str]]:
+    """(لینک‌هایِ معتبرِ http/https، موردهایِ نامعتبر) از یک متنِ چندخطی/فاصله‌جدا."""
+    good, bad = [], []
+    for tok in (text or "").split():
+        tok = tok.strip().strip(",;،؛")
+        if not tok:
+            continue
+        (good if _wg_payload_is_link(tok) else bad).append(tok)
+    return good, bad
+
+
 # ─────────────── فرم دکمه‌ایِ افزودنِ کانفیگِ دستی/تکی (آماده یا نامحدود) ───────────────
 
 _CFG_FORM_FIELDS = {
@@ -22852,7 +22873,8 @@ def _cfg_form_kb(data: dict) -> InlineKeyboardMarkup:
         # === PATCH_WIREGUARD_SUBLINK_V1 ===
         wg_mode = data.get("cfg_wg_mode")
         if wg_mode == "link":
-            wg_label = "🔗 لینکِ ساب: ✅ ثبت شد" if data.get("cfg_payload_val") else "🔗 لینکِ ساب: —"
+            _nl = len(data.get("cfg_bulk_links") or [])
+            wg_label = f"🔗 لینک‌هایِ ساب: {_nl} عدد" if _nl else "🔗 لینک‌هایِ ساب: —"   # PATCH_WG_BULK_SUBLINKS_V1
         else:
             n = len(data.get("cfg_wg_files") or [])
             wg_label = f"📎 فایل‌ها: {n} فایل" if n else "📎 فایل/لینک: —"
@@ -22939,7 +22961,8 @@ async def cfg_form_field_pick(cb: CallbackQuery, state: FSMContext, bot: Bot):
             await cb.answer()
             return
         if wg_mode == "link":
-            prompt = "🔗 لینکِ سابِ وایرگارد رو بفرست:"
+            _nl = len(data.get("cfg_bulk_links") or [])
+            prompt = _WG_LINKS_PROMPT + (f"\n\n(الان {_nl} لینک ثبت شده.)" if _nl else "")
         else:
             n = len(data.get("cfg_wg_files") or [])
             already = f"\n\n(الان {n} فایل انتخاب شده.)" if n else ""
@@ -23011,9 +23034,18 @@ async def cfg_form_field_value(msg: Message, state: FSMContext):
     # فاصله جدا شده). لینک‌ها هیچ فاصله/خطِ جدیدی داخلِ خودشان ندارند، پس
     # جداکردن با whitespace امن است. مثلِ فایل‌هایِ وایرگارد، بعد از هر
     # پیام در همین فیلد می‌مانیم تا ادمین بتواند چند پیام پشتِ‌سرِهم بفرستد.
-    if field == "payload" and data.get("cfg_bulk"):
+    if field == "payload" and (data.get("cfg_bulk") or _wg_link_bulk_on(data)):
         links = list(data.get("cfg_bulk_links") or [])
-        new = [x.strip() for x in (msg.text or "").split() if x.strip()]
+        _wg_bulk = _wg_link_bulk_on(data)       # === PATCH_WG_BULK_SUBLINKS_V1 ===
+        if _wg_bulk:
+            new, _bad = _split_sub_links(msg.text or "")
+            if _bad and not new:
+                await msg.answer("❗️ لینکِ معتبر پیدا نشد. هر لینک باید با <code>http://</code> یا "
+                                 "<code>https://</code> شروع شود (هر خط یک لینک).")
+                return
+        else:
+            new = [x.strip() for x in (msg.text or "").split() if x.strip()]
+            _bad = []
         if not new:
             await msg.answer("❗️ هیچ لینکی پیدا نشد. لینک‌ها را با خطِ جدید یا فاصله جدا کن.")
             return
@@ -23029,6 +23061,8 @@ async def cfg_form_field_value(msg: Message, state: FSMContext):
         except Exception:
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
         dup_line = f"\n⚠️ {dup} لینکِ تکراری نادیده گرفته شد." if dup else ""
+        if _bad:
+            dup_line += f"\n⚠️ {len(_bad)} موردِ نامعتبر (بدونِ http/https) نادیده گرفته شد."
         new_text = (f"🔗 لینک‌های ساب را بفرست — هر خط (یا هر فاصله) یعنی یک کانفیگِ جدا.\n\n"
                     f"✅ الان <b>{len(links)}</b> لینک ثبت شده.{dup_line}\n\n"
                     "می‌تونی باز هم بفرستی، یا «⬅️ بازگشت» را بزن.")
@@ -23108,13 +23142,16 @@ async def cfg_form_wg_mode_pick(cb: CallbackQuery, state: FSMContext):
         await cb.answer()
         return
     await state.update_data(cfg_wg_mode=mode, cfg_form_awaiting="payload")
+    _link_rows = []
     if mode == "link":
-        prompt = "🔗 لینکِ سابِ وایرگارد رو بفرست:"
+        prompt = _WG_LINKS_PROMPT
+        _link_rows = [[InlineKeyboardButton(text="🗑 پاک‌کردن همه", callback_data="cfgf:bulkclear", style=ButtonStyle.DANGER)]]
     else:
         prompt = ("📎 فایل(های) <code>.conf</code> وایرگارد را یکی‌یکی بفرست — هر فایل یعنی یک "
                   "کانفیگِ جدا در انبار. هرچند فایل که خواستی بفرست، بعد «⬅️ بازگشت» را بزن.")
     try:
         await cb.message.edit_text(prompt, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            *_link_rows,
             [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="cfgf:backform", style=ButtonStyle.DANGER)],
             [InlineKeyboardButton(text="❌ لغو", callback_data="cfg:add:cancel", style=ButtonStyle.DANGER)]]))
         await state.update_data(cfg_form_prompt_chat_id=cb.message.chat.id,
@@ -23235,8 +23272,9 @@ async def cfg_form_submit(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return
     # === PATCH_WIREGUARD_CONFIG_V1 / PATCH_WIREGUARD_SUBLINK_V1 ===
     if is_wg and wg_mode == "link":
-        if not payload_val:
-            await cb.answer("❗️ اول «لینکِ ساب» را پر کن.", show_alert=True)
+        # === PATCH_WG_BULK_SUBLINKS_V1 === لینک‌ها در cfg_bulk_links جمع می‌شوند (سازگار با لینکِ تکیِ قدیمی)
+        if not (list(data.get("cfg_bulk_links") or []) or payload_val):
+            await cb.answer("❗️ اول «لینک‌هایِ ساب» را پر کن.", show_alert=True)
             return
     elif is_wg:
         if not wg_files:
@@ -23259,19 +23297,30 @@ async def cfg_form_submit(cb: CallbackQuery, bot: Bot, state: FSMContext):
     display = data.get("cfg_display", "glass")
     category = data.get("cfg_category")
     codes: list[int] = []
+    wg_dup_skipped = 0
     async with Session() as s:
         mx = await s.scalar(select(func.max(Config.code)).where(Config.bot_id == row.id))
         next_code = (mx + 1) if mx else CONFIG_CODE_START
         if is_wg and wg_mode == "link":
-            # === PATCH_WIREGUARD_SUBLINK_V1 ===
-            # یه ردیفِ تنها، با payload=لینک (نه فایل) ولی همچنان kind="wireguard"
-            # تا موقعِ تحویل، از _wg_payload_is_link تشخیص داده بشه و به‌عنوانِ
-            # لینک (نه فایل) به خریدار فرستاده بشه.
-            s.add(Config(bot_id=row.id, code=next_code, volume_gb=vol,
-                         days=days, payload=payload_val, status="in_stock",
-                         price=price, price_per_day=0, user_count=users,
-                         display_mode=display, category=category, kind=_save_kind))
-            codes.append(next_code)
+            # === PATCH_WIREGUARD_SUBLINK_V1 / PATCH_WG_BULK_SUBLINKS_V1 ===
+            # هر لینک یک ردیفِ مستقلِ Config با payload=لینک (نه فایل) ولی kind="wireguard"/"openvpn"
+            # تا موقعِ تحویل، از _wg_payload_is_link تشخیص داده بشه و به‌عنوانِ لینک به خریدار فرستاده بشه.
+            _links = list(data.get("cfg_bulk_links") or [])
+            if payload_val and payload_val not in _links:
+                _links.append(payload_val)
+            existing_payloads = set((await s.scalars(select(Config.payload).where(
+                Config.bot_id == row.id, Config.kind == _save_kind,
+                Config.status == "in_stock", Config.payload.in_(_links)))).all()) if _links else set()
+            for link in _links:
+                if link in existing_payloads:
+                    wg_dup_skipped += 1
+                    continue          # لینکِ تکراریِ هنوز-فروخته‌نشده‌یِ انبار دوباره ثبت نمی‌شود
+                s.add(Config(bot_id=row.id, code=next_code, volume_gb=vol,
+                             days=days, payload=link, status="in_stock",
+                             price=price, price_per_day=0, user_count=users,
+                             display_mode=display, category=category, kind=_save_kind))
+                codes.append(next_code)
+                next_code += 1
         elif is_wg:
             for file_id in wg_files:
                 s.add(Config(bot_id=row.id, code=next_code, volume_gb=vol,
@@ -23297,6 +23346,9 @@ async def cfg_form_submit(cb: CallbackQuery, bot: Bot, state: FSMContext):
                          price=price, price_per_day=0,
                          user_count=users, display_mode=display, category=category))
             codes.append(next_code)
+        if not codes:        # همهٔ لینک‌ها تکراریِ انبار بودند → چیزی ثبت نشد
+            await cb.answer("⚠️ همهٔ این لینک‌ها از قبل در انبار هستند؛ چیزی ثبت نشد.", show_alert=True)
+            return
         await s.commit()
         # کاربرانی که این بستهٔ دقیق را در لیست انتظار داشتند
         reqs = (await s.scalars(select(StockRequest).where(
@@ -23319,8 +23371,10 @@ async def cfg_form_submit(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if len(codes) > 1:  # === PATCH_CFG_BULK_SUBLINKS_V1 === (قبلاً فقط وایرگارد)
         codes_line = f"\n🗂 کدها: {codes[0]} تا {codes[-1]} ({len(codes)} کانفیگ)"
     note = ""
+    if wg_dup_skipped:
+        note += f"\n⚠️ {wg_dup_skipped} لینکِ تکراری (از قبل در انبار) نادیده گرفته شد."
     if waiting_ids:
-        note = f"\n\n🔔 {len(waiting_ids)} کاربر در لیست انتظار این بسته بودند؛ به آن‌ها اطلاع داده شد."
+        note += f"\n\n🔔 {len(waiting_ids)} کاربر در لیست انتظار این بسته بودند؛ به آن‌ها اطلاع داده شد."
     try:
         await cb.message.edit_reply_markup(reply_markup=None)
     except Exception:
