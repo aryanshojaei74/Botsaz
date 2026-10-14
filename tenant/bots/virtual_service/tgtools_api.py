@@ -111,12 +111,17 @@ async def lookup_user(username: str, api_key: str | None = None) -> dict:
     return await _request(api_key, "GET", f"/api/purchase/user/{username.lstrip('@')}") or {}
 
 
-def lookup_verdict(u: dict | None) -> tuple[bool, str]:
+def lookup_verdict(u: dict | None, kind: str = "stars") -> tuple[bool, str]:
     """(مجاز؟، علتِ خوانا). فقط وقتی «ردِ صریح» باشد False برمی‌گرداند؛ پاسخِ نامفهوم/خالی = مجاز
     (خریدِ واقعی خودش مقصد را اعتبارسنجی می‌کند و در رد، پول برمی‌گردد)."""
     if not isinstance(u, dict) or not u:
         return True, ""
-    found, elig = u.get("found"), u.get("eligible")
+    # === PATCH_TGTOOLS_ELIGIBLE_PREMIUM_ONLY_V1 ===
+    # گزارشِ فدایی (#4776): @ihshr در خودِ سایت «Ready» بود ولی ما ردش می‌کردیم، چون پاسخ found=True
+    # با eligible=False می‌داد. «eligible» مربوط به گیفتِ پریمیوم است (مثلاً کاربر از قبل پریمیوم دارد)
+    # و برایِ خریدِ استارز معنایی ندارد؛ پس برایِ استارز فقط found=False ردِ قطعی است.
+    found = u.get("found")
+    elig = u.get("eligible") if kind == "premium" else None
     if found is False or elig is False:
         reason = ""
         for k in ("message", "reason", "error", "detail"):

@@ -14,8 +14,15 @@ def test_explicit_found_false_blocks_with_reason():
 
 
 def test_explicit_eligible_false_blocks():
-    ok, why = tg.lookup_verdict({"found": True, "eligible": False, "reason": "restricted"})
+    ok, why = tg.lookup_verdict({"found": True, "eligible": False, "reason": "restricted"}, kind="premium")
     assert ok is False and why == "restricted"
+
+
+def test_stars_ignore_eligible_false():
+    """باگِ #4776: found=True + eligible=False (مخصوصِ پریمیوم) نباید خریدِ استارز را رد کند."""
+    u = {"username": "ihshr", "found": True, "displayName": "MhYar", "eligible": False}
+    assert tg.lookup_verdict(u) == (True, "")
+    assert tg.lookup_verdict({"found": False, "message": "No users"})[0] is False
 
 
 def test_found_true_allowed():
