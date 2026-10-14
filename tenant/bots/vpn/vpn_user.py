@@ -1661,6 +1661,14 @@ async def show_vpn_plans(bot: Bot, msg: Message, bot_id: int, state=None, panel_
         return
     # اگه هیچ پلن ثابتی نیست و فقط فروش آنلاین (vc) فعاله → مستقیم صفحه +/−
     if not plans and vc_enabled:
+        # === PATCH_VC_SIMPLE_MODE_V1 === حالتِ ساده: مستقیم پرسشِ «حجم را بفرست»
+        if state is not None:
+            _simple = await _vc_simple_start(bot_id, msg.from_user.id, cur_panel_key, state)
+            if _simple:
+                from tenant import _with_btn_header
+                sent = await msg.answer(_with_btn_header(_simple[0], header), reply_markup=_simple[1])
+                await state.update_data(vc_manual_prompt_id=sent.message_id, vc_manual_orig_id=sent.message_id)
+                return
         cfg   = await _vc_all_for_user(bot_id, msg.from_user.id, cur_panel_key)
         gb    = int(cfg["vc_min_gb"])
         days  = int(cfg["vc_min_days"])
@@ -4407,6 +4415,31 @@ async def _vc_render(bot: Bot, bot_id: int, telegram_id: int, gb: int, days: int
 
 
 
+async def _vc_simple_start(bot_id: int, telegram_id: int, panel_key: str, state):
+    """=== PATCH_VC_SIMPLE_MODE_V1 === حالتِ ساده را آماده می‌کند: مدتِ ثابتِ ادمین، state برایِ دریافتِ عددِ حجم.
+    خروجی: (متنِ پرسش، کیبورد) یا None اگر حالتِ ساده برایِ این پنل خاموش است."""
+    cfg = await _vc_all_for_user(bot_id, telegram_id, panel_key)
+    if cfg.get("vc_simple") != "1":
+        return None
+    try:
+        days = max(1, int(cfg.get("vc_simple_days") or 30))
+    except (TypeError, ValueError):
+        days = 30
+    cfg = await _vc_all_for_user(bot_id, telegram_id, panel_key, days=days)
+    mn, mx, st = int(cfg["vc_min_gb"]), int(cfg["vc_max_gb"]), int(cfg["vc_step_gb"])
+    await state.update_data(vc_gb=mn, vc_days=days, vc_count=1, vc_bot_id=bot_id,
+                            vc_panel_key=panel_key, vc_disc_code=None, vc_stage=None,
+                            vc_manual_field="gb", vc_manual_inplace=True)
+    await state.set_state(VpnConfiguratorFSM.entering_manual)
+    txt = (f"📌 حجمِ درخواستیِ خود را (به گیگابایت) بفرستید.\n"
+           f"🔔 قیمت هر گیگ حجم {int(cfg['vc_price_gb']):,} تومان می‌باشد.\n"
+           f"🔔 حداقل حجم {mn} گیگابایت و حداکثر {mx} گیگابایت می‌باشد"
+           + (f" (مضرب {st})" if st > 1 else "") + ".\n"
+           f"⏳ مدتِ سرویس: {days} روز")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 بازگشت", callback_data="vc:back")]])
+    return txt, kb
+
+
 @vpn_user_router.callback_query(F.data.startswith("vc:open"))
 async def vc_open(cb: CallbackQuery, bot: Bot, state: FSMContext):
     """باز کردن رابط +/− خرید آنلاین — panel_key از callback می‌آید."""
@@ -4423,26 +4456,12 @@ async def vc_open(cb: CallbackQuery, bot: Bot, state: FSMContext):
     days  = int(cfg["vc_min_days"])
     count = 1
     # === PATCH_VC_SIMPLE_MODE_V1 === حالتِ ساده: مدتِ ثابتِ ادمین؛ کاربر فقط عددِ حجم را می‌فرستد
-    if cfg.get("vc_simple") == "1":
-        try:
-            days = max(1, int(cfg.get("vc_simple_days") or 30))
-        except (TypeError, ValueError):
-            days = 30
-        cfg = await _vc_all_for_user(row.id, cb.from_user.id, cur_panel_key, days=days)
-        gb = int(cfg["vc_min_gb"])
-        mn, mx, st = int(cfg["vc_min_gb"]), int(cfg["vc_max_gb"]), int(cfg["vc_step_gb"])
-        await state.update_data(vc_gb=gb, vc_days=days, vc_count=count, vc_bot_id=row.id,
-                                vc_panel_key=cur_panel_key, vc_disc_code=None, vc_stage=None,
-                                vc_manual_field="gb", vc_manual_prompt_id=cb.message.message_id,
-                                vc_manual_orig_id=cb.message.message_id, vc_manual_inplace=True)
-        await state.set_state(VpnConfiguratorFSM.entering_manual)
+    _simple = await _vc_simple_start(row.id, cb.from_user.id, cur_panel_key, state)
+    if _simple:
+        txt, kb = _simple
+        await state.update_data(vc_manual_prompt_id=cb.message.message_id,
+                                vc_manual_orig_id=cb.message.message_id)
         await cb.answer()
-        txt = (f"📌 حجمِ درخواستیِ خود را (به گیگابایت) بفرستید.\n"
-               f"🔔 قیمت هر گیگ حجم {int(cfg['vc_price_gb']):,} تومان می‌باشد.\n"
-               f"🔔 حداقل حجم {mn} گیگابایت و حداکثر {mx} گیگابایت می‌باشد"
-               + (f" (مضرب {st})" if st > 1 else "") + ".\n"
-               f"⏳ مدتِ سرویس: {days} روز")
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 بازگشت", callback_data="vc:back")]])
         try:
             await cb.message.edit_text(txt, reply_markup=kb)
         except Exception:

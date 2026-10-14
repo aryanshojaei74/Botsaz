@@ -107,3 +107,26 @@ async def test_vc_open_in_simple_mode_asks_only_for_gb_with_admin_days(vcdb):
     assert st.s == VU.VpnConfiguratorFSM.entering_manual
     assert st.d["vc_days"] == 45 and st.d["vc_manual_field"] == "gb"
     assert sent and "3,500" in sent[0] and "5" in sent[0] and "100" in sent[0] and "45 روز" in sent[0]
+
+
+@pytest.mark.asyncio
+async def test_plans_page_without_fixed_plans_goes_straight_to_simple_prompt(vcdb, monkeypatch):
+    import tenant.bots.vpn.vpn_admin as VAm
+    for mod in (VAm,):
+        monkeypatch.setattr(mod, "Session", vcdb, raising=False)
+    async with vcdb() as s:
+        s.add(models.VpnPanel(id=3, bot_id=9, panel_key="pasargad", base_url="https://x", username="u",
+                              password="p", enabled=True))
+        await s.commit()
+    out = []
+
+    class M:
+        from_user = SimpleNamespace(id=1001)
+
+        async def answer(self, text, reply_markup=None, **k):
+            out.append(text)
+            return SimpleNamespace(message_id=77)
+    st = _St()
+    await VU.show_vpn_plans(SimpleNamespace(token="9:T"), M(), 9, state=st)
+    assert out and "حجمِ درخواستیِ خود" in out[0] and "3,500" in out[0] and "45 روز" in out[0]
+    assert st.s == VU.VpnConfiguratorFSM.entering_manual and st.d["vc_manual_prompt_id"] == 77
