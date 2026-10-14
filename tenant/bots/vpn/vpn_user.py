@@ -647,6 +647,11 @@ def _parse_wireguard_uri(uri: str) -> str | None:
         # تا برایِ اسمِ فایل/کپشن استفاده بشه؛ وایرگارد خطِ # رو
         # نادیده می‌گیره پس ایمپورت شکسته نمی‌شه.
         _name = unquote(u.fragment or "").strip()
+        # === PATCH_WG_SUB_FORMAT_PARITY_V1 === قالبِ خروجی دقیقاً مثلِ فایلِ خودِ ساب:
+        # «# Name = X»، و فاصله بعد از ویرگول در DNS/AllowedIPs.
+        def _sp(v):
+            return ", ".join(x.strip() for x in str(v).split(",") if x.strip())
+        dns, allowed_ips = _sp(dns), _sp(allowed_ips)
         lines = ["[Interface]", f"PrivateKey = {private_key}", f"Address = {address}"]
         if dns:
             lines.append(f"DNS = {dns}")
@@ -660,7 +665,7 @@ def _parse_wireguard_uri(uri: str) -> str | None:
             lines.append(f"PersistentKeepalive = {keepalive}")
         text = "\n".join(lines)
         if _name:
-            text = f"# Name: {_name}\n" + text
+            text = f"# Name = {_name}\n" + text
         return text
     except Exception:
         logger.exception("پارسِ wireguard:// ناموفق بود")
@@ -711,7 +716,7 @@ def _wg_endpoint_label(cfg_text: str) -> str | None:
 
 
 # === MARKER_WG_FRIENDLY_NAME_V1 ===
-_WG_NAME_RE = re.compile(r"^\s*#\s*Name:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+_WG_NAME_RE = re.compile(r"^\s*#\s*Name\s*[:=]\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 
 
 def _wg_conf_name(cfg_text: str) -> str | None:

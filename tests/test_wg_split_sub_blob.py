@@ -30,3 +30,14 @@ def test_extract_accepts_name_comment_before_interface():
 def test_split_ignores_crlf_and_junk_prefix():
     out = SF.split_wg_blob(_blob(2).replace("\n", "\r\n"))
     assert len(out) == 2 and all("\r" not in o for o in out)
+
+
+def test_rebuilt_uri_matches_sub_file_format():
+    """URIِ wireguard:// باید همان فایلی را بدهد که خودِ ساب می‌دهد (فاصله بعد از ویرگول، «# Name = »)."""
+    uri = ("wireguard://PRIV@wg.example.ir:9191/?publickey=PUB&address=172.1.4.40/32&mtu=1280"
+           "&dns=8.8.8.8,1.1.1.1&allowedips=0.0.0.0/0,::/0&keepalive=25&presharedkey=PSK#Turkey")
+    out = VU._parse_wireguard_uri(uri)
+    assert out == ("# Name = Turkey\n[Interface]\nPrivateKey = PRIV\nAddress = 172.1.4.40/32\n"
+                   "DNS = 8.8.8.8, 1.1.1.1\nMTU = 1280\n\n[Peer]\nPublicKey = PUB\nPresharedKey = PSK\n"
+                   "AllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = wg.example.ir:9191\nPersistentKeepalive = 25")
+    assert VU._wg_conf_name(out) == "Turkey"
