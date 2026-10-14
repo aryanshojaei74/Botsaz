@@ -276,6 +276,8 @@ _VC_DEF = {
     "vc_min_gb": "5", "vc_max_gb": "100", "vc_step_gb": "5",
     "vc_min_days": "30", "vc_max_days": "90", "vc_step_days": "30",
     "vc_max_count": "5", "vc_price_gb": "1000", "vc_price_day": "500",
+    # === PATCH_VC_SIMPLE_MODE_V1 === (کلیدها باید با vpn_admin._VC_DEFAULTS یکی باشند؛ تست دارد)
+    "vc_simple": "0", "vc_simple_days": "30",
     # === PATCH_RESELLER_GB_PRICING_V1 === خالی یعنی «تنظیم نشده»
     "rs_price_gb": "0", "rs_price_day": "0",
     # حالتِ فروش: "general" (بازهٔ عمومیِ بالا) یا "tiers" (تعرفه‌های مدت‌دار)
@@ -292,6 +294,7 @@ _VC_PANEL_KEYS_U = [
     "vc_enabled", "vc_min_gb", "vc_max_gb", "vc_step_gb",
     "vc_min_days", "vc_max_days", "vc_step_days",
     "vc_max_count", "vc_price_gb", "vc_price_day", "vc_pricing_mode",
+    "vc_simple", "vc_simple_days",   # === PATCH_VC_SIMPLE_MODE_V1 ===
     "renew_enabled", "renew_price_gb", "renew_price_day",
     "renew_min_gb", "renew_max_gb", "renew_step_gb",
     "renew_min_days", "renew_max_days", "renew_step_days",
