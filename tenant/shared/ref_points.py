@@ -1561,7 +1561,8 @@ async def rpt_pick_gift(cb: CallbackQuery, bot: Bot):
         gifts = sorted((await bot.get_available_gifts()).gifts, key=lambda g: g.star_count)
     except Exception as e:                                   # noqa: BLE001
         await cb.answer()
-        return await cb.message.answer(f"❌ دریافتِ فهرستِ گیفت‌ها از تلگرام ناموفق بود:\n{_esc_html(str(e)[:200])}")
+        return await bot.send_message(cb.message.chat.id,
+                                      f"❌ دریافتِ فهرستِ گیفت‌ها از تلگرام ناموفق بود:\n{_esc_html(str(e)[:200])}")
     per = 8
     chunk = gifts[page * per:(page + 1) * per]
     rows = [[InlineKeyboardButton(
