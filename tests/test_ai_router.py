@@ -100,3 +100,26 @@ async def test_group_guard_ask_ai_uses_router_when_configured(monkeypatch):
         return default
     monkeypatch.setattr(GG, "get_pset", pset)
     assert await GG._ask_ai("درگاه آپی چطور فعال میشه؟") == "جوابِ نهایی"
+
+
+def test_key_prefix_autocorrects_wrong_provider_name():
+    rs = R.parse_routes("groq=xai-AAA, groq=gsk_BBB, gemini=sk-or-CCC, groq='AIzaDDD'")
+    assert [(r.name, r.key) for r in rs] == [("xai", "xai-AAA"), ("groq", "gsk_BBB"),
+                                               ("openrouter", "sk-or-CCC"), ("gemini", "AIzaDDD")]
+    assert rs[0].base_url == "https://api.x.ai/v1" and rs[0].model == "grok-3-mini"
+
+
+@pytest.mark.asyncio
+async def test_paid_provider_is_used_only_after_free_ones():
+    seen = []
+
+    def handler(req):
+        seen.append(req.headers["authorization"][7:])
+        k = seen[-1]
+        return httpx.Response(429) if k == "gsk_free" else _ok("ok")
+    r = _router(handler, "xai=xai-paid,groq=gsk_free")
+    await r.chat("s", "q")
+    assert seen == ["gsk_free", "xai-paid"]                # اول رایگان، وقتی ۴۲۹ داد پولی
+    seen.clear()
+    await r.chat("s", "q2")
+    assert seen == ["xai-paid"]                             # رایگان خنک است

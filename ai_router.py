@@ -35,7 +35,20 @@ PRESETS: dict[str, tuple[str, str]] = {
     "sambanova": ("https://api.sambanova.ai/v1", "Meta-Llama-3.3-70B-Instruct"),
     "nvidia": ("https://integrate.api.nvidia.com/v1", "meta/llama-3.3-70b-instruct"),
     "github": ("https://models.inference.ai.azure.com", "gpt-4o-mini"),
+    "xai": ("https://api.x.ai/v1", "grok-3-mini"),
 }
+# ارائه‌دهنده‌هایِ «پولی/اعتباری»: در ترتیبِ تلاش بعد از رایگان‌ها می‌آیند (فقط وقتی رایگان‌ها جواب ندادند خرج می‌شوند)
+PAID = {"xai", "custom"}
+# شناسایی از رویِ پیشوندِ کلید: اگر نامِ نوشته‌شده با کلید نمی‌خواند (مثلاً «groq=xai-…») ارائه‌دهندهٔ واقعی انتخاب می‌شود
+KEY_PREFIX = (("xai-", "xai"), ("gsk_", "groq"), ("sk-or-", "openrouter"), ("csk-", "cerebras"), ("aiza", "gemini"))
+
+
+def detect_provider(key: str) -> str | None:
+    k = (key or "").lower()
+    for pre, name in KEY_PREFIX:
+        if k.startswith(pre):
+            return name
+    return None
 
 COOL_429 = 60           # ثانیه (اگر Retry-After نبود)
 COOL_AUTH = 3600        # کلیدِ باطل/بدونِ دسترسی
@@ -66,7 +79,7 @@ def parse_routes(raw: str) -> list[Route]:
         if not item or "=" not in item:
             continue
         spec, key = item.split("=", 1)
-        spec, key = spec.strip(), key.strip()
+        spec, key = spec.strip(), key.strip().strip("'\"").strip()
         if not key:
             continue
         if "|" in spec:                                   # https://host/v1|model
@@ -75,6 +88,10 @@ def parse_routes(raw: str) -> list[Route]:
             continue
         name, _, model = spec.partition(":")
         name = name.strip().lower()
+        _det = detect_provider(key)
+        if _det and _det != name and name in PRESETS:
+            logger.warning("ai_router: کلیدِ «%s…» به نظر می‌رسد مالِ %s است نه %s؛ %s استفاده شد", key[:4], _det, name, _det)
+            name, model = _det, ""          # مدلِ پیش‌فرضِ ارائه‌دهندهٔ واقعی
         if name not in PRESETS:
             logger.warning("ai_router: نامِ ارائه‌دهندهٔ ناشناس نادیده گرفته شد: %r", name)
             continue
@@ -103,7 +120,8 @@ class Router:
         now = time.monotonic()
         ready = [r for r in rot if r.cool_until <= now]
         cooling = sorted((r for r in rot if r.cool_until > now), key=lambda r: r.cool_until)
-        return ready + cooling
+        # رایگان‌ها اول (round-robin)، بعد پولی‌ها، بعد مسیرهایِ خنک
+        return [r for r in ready if r.name not in PAID] + [r for r in ready if r.name in PAID] + cooling
 
     async def chat(self, system: str, user: str, *, max_tokens: int = 600,
                    temperature: float = 0.0) -> tuple[str, dict, str]:
