@@ -667,6 +667,9 @@ def _parse_wireguard_uri(uri: str) -> str | None:
         return None
 
 
+_WG_INI_RE = re.compile(r"^\s*\[Interface\]", re.IGNORECASE | re.MULTILINE)
+
+
 def _extract_wireguard_configs(links: list[str]) -> list[str]:
     """از لیستِ خامِ لینک‌های یک اکانت، فقط آیتم‌هایِ وایرگارد را (چه INIِ
     خام، چه اسکیمِ wireguard://) استخراج و به فرمتِ .conf تبدیل می‌کند."""
@@ -675,7 +678,7 @@ def _extract_wireguard_configs(links: list[str]) -> list[str]:
         s = (link or "").strip()
         if not s:
             continue
-        if s.startswith("[Interface]"):
+        if _WG_INI_RE.search(s):          # === PATCH_WG_SPLIT_SUB_BLOB_V1 === «# Name:» قبلِ [Interface] هم مجاز
             out.append(s)
         elif s.startswith("wireguard://"):
             parsed = _parse_wireguard_uri(s)
@@ -3312,7 +3315,7 @@ def _wg_safe_file_name(fname: str, fallback: str, used: set) -> str:
 # ارسال‌شده را برمی‌گرداند (۰ = پنل بومی ندارد → مسیرِ قدیمی بی‌تغییر ادامه پیدا می‌کند).
 def _is_wg_link(x: str) -> bool:
     x = (x or "").lstrip()
-    return x.startswith("[Interface]") or x.startswith("wireguard://")
+    return ("[Interface]" in x) or x.startswith("wireguard://")
 
 
 async def _send_native_wg_files(bot, chat_id: int, client, email: str) -> int:
@@ -3459,7 +3462,7 @@ async def vget_single(cb: CallbackQuery, bot: Bot):
         _wg_norm = _extract_wireguard_configs([link])
         if _wg_norm:
             link = _wg_norm[0]
-        if link.strip().startswith("[Interface]"):
+        if _WG_INI_RE.search(link or ""):
             # === PATCH_WG_ENDPOINT_LABEL_V1 ===
             # گزارشِ ادمین: مشتری از رویِ «wireguard_1.conf، wireguard_2.conf، …»
             # نمی‌فهمید کدوم فایل مالِ کدوم لوکیشنه. حالا هاستِ Endpoint

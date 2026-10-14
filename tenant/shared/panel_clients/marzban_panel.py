@@ -921,7 +921,7 @@ class MarzbanPanelClient:
         # یا ابهام رفتارِ قبلی حفظ می‌شود. لینک‌هایِ غیرِ وایرگارد دست‌نخورده‌اند.
         def _is_wg(x):
             x = (x or "").lstrip()
-            return x.startswith("wireguard://") or x.startswith("[Interface]")
+            return x.startswith("wireguard://") or "[Interface]" in x   # PATCH_WG_SPLIT_SUB_BLOB_V1
         sub_url = (cur or {}).get("sub_link") or self._abs_sub_link(
             (cur or {}).get("subscription_url", ""))
         if api_links:
@@ -931,7 +931,7 @@ class MarzbanPanelClient:
             try:
                 sub_links = await self._fetch_links_from_sub(sub_url)
                 sub_wg = [x.strip() for x in sub_links
-                          if (x or "").lstrip().startswith("[Interface]")]
+                          if "[Interface]" in (x or "")]    # PATCH_WG_SPLIT_SUB_BLOB_V1
                 if sub_wg and len(sub_wg) >= len(api_wg):
                     others = [x for x in api_links if not _is_wg(x)]
                     return others + sub_wg

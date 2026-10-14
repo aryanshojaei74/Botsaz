@@ -194,6 +194,29 @@ def looks_like_xray_json(t: str) -> bool:
     return bool(re.match(r"^[\[{]\s*\{?", t)) and '"outbounds"' in t
 
 
+def split_wg_blob(blob: str) -> list[str]:
+    """=== PATCH_WG_SPLIT_SUB_BLOB_V1 === بدنهٔ ساب گاهی چند فایلِ .conf (چند لوکیشن) را پشتِ‌هم می‌دهد.
+    اینجا هر بخشِ «[Interface]» (به‌همراهِ کامنت‌هایِ «# Name: …»یِ درست قبلِ آن) یک کانفیگِ جدا می‌شود."""
+    lines = (blob or "").replace("\r\n", "\n").split("\n")
+    starts = [i for i, ln in enumerate(lines) if ln.strip().lower() == "[interface]"]
+    if len(starts) <= 1:
+        return [(blob or "").strip()] if (blob or "").strip() else []
+    cuts = []
+    for i in starts:
+        j = i
+        while j > 0 and lines[j - 1].lstrip().startswith("#"):
+            j -= 1
+        cuts.append(j)
+    cuts[0] = 0 if not "".join(lines[:cuts[0]]).strip() else cuts[0]
+    out = []
+    for k, c in enumerate(cuts):
+        end = cuts[k + 1] if k + 1 < len(cuts) else len(lines)
+        chunk = "\n".join(lines[c:end]).strip()
+        if chunk:
+            out.append(chunk)
+    return out
+
+
 def parse_sub_body(text: str) -> list[str]:
     """base64 / متنِ خام / فایلِ WireGuard / JSONِ Xray → لیستِ کانفیگ."""
     text = (text or "").strip()
@@ -211,7 +234,7 @@ def parse_sub_body(text: str) -> list[str]:
         decoded = ""
     wg = decoded if "[Interface]" in decoded else (text if "[Interface]" in text else "")
     if wg:
-        return [wg.strip()]
+        return split_wg_blob(wg)
     body = decoded if "://" in decoded else text
     return [ln.strip() for ln in body.splitlines() if ln.strip().startswith(_PREFIXES)]
 
