@@ -1102,6 +1102,8 @@ class ReferralJoin(Base):
     referred_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
     reward_paid: Mapped[float] = mapped_column(Numeric(12, 0), default=0)
     purchase_rewarded: Mapped[bool] = mapped_column(Boolean, default=False)
+    # === PATCH_REFPOINT_REQUIRE_ORDER_V1 === امتیازِ نگه‌داشته‌شده تا دعوت‌کننده اولین سفارشش را ثبت کند
+    points_pending: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

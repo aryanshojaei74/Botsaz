@@ -669,8 +669,8 @@ async def handle_referral_join(bot_id: int, new_user: BotUser, ref_code: str, bo
     # رفرال» را روشن کرده باشد، به کیفِ امتیازِ دعوت‌کننده اضافه می‌شود. این
     # امتیاز بعداً توسطِ دکمه‌های «گیتِ دسترسی با ملاکِ امتیاز» خرج می‌شود.
     try:
-        from tenant.shared.ref_points import award_points
-        await award_points(bot_id, inviter_user_id)
+        from tenant.shared.ref_points import award_for_join   # === PATCH_REFPOINT_REQUIRE_ORDER_V1 ===
+        await award_for_join(bot_id, inviter_user_id, new_user.telegram_id)
     except Exception:
         logger.exception("خطا در افزودنِ امتیازِ رفرال")
 

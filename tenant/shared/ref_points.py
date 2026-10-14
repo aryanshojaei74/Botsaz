@@ -137,7 +137,127 @@ async def reward_summary(bot_id: int) -> str:
 #  کیفِ امتیاز
 # ═══════════════════════════════════════════
 
+# === PATCH_REFPOINT_REQUIRE_ORDER_V1 ===
+# درخواستِ فدایی: «حتماً یه سفارش توی ربات ثبت کنن تا امتیازِ رفرال بگیرن». اگر «شرطِ سفارش» روشن باشد، امتیازِ
+# هر زیرمجموعه تا وقتی دعوت‌کننده حداقل یک سفارشِ واقعی در همین ربات نداشته باشد «در انتظار» می‌ماند
+# (ReferralJoin.points_pending) و با اولین سفارش یک‌جا به کیفش اضافه می‌شود؛ هیچ امتیازی از دست نمی‌رود.
+_NOT_ORDER_STATUSES = ("pending", "rejected", "failed", "refunded", "cancelled", "canceled", "expired",
+                       "awaiting_receipt")
+
+
+async def require_order_enabled(bot_id: int) -> bool:
+    return (await _get(bot_id, "refpoint_require_order", "0")) == "1"
+
+
+async def user_has_order(bot_id: int, user_id: int) -> bool:
+    """آیا این کاربر در این ربات حداقل یک سفارشِ واقعی (نه در انتظار/ردشده/لغو) دارد؟ همهٔ انواعِ سفارش را می‌شمارد."""
+    from sqlalchemy import exists
+    from models import (Order, ProductOrder, MiniAppProductOrder, NftOrder, GiftOrder, SmmOrder)
+    async with Session() as s:
+        u = await s.get(BotUser, user_id)
+        if not u or u.bot_id != bot_id:
+            return False
+        checks = [
+            select(exists().where(Order.bot_id == bot_id, Order.user_id == user_id, Order.status == "paid")),
+            select(exists().where(ProductOrder.bot_id == bot_id, ProductOrder.user_id == user_id,
+                                  ProductOrder.status.notin_(_NOT_ORDER_STATUSES))),
+            select(exists().where(MiniAppProductOrder.bot_id == bot_id, MiniAppProductOrder.user_id == user_id,
+                                  MiniAppProductOrder.status.notin_(_NOT_ORDER_STATUSES))),
+            select(exists().where(NftOrder.bot_id == bot_id, NftOrder.user_id == user_id,
+                                  NftOrder.status.notin_(_NOT_ORDER_STATUSES))),
+            select(exists().where(GiftOrder.bot_id == bot_id, GiftOrder.buyer_user_id == user_id,
+                                  GiftOrder.status.notin_(_NOT_ORDER_STATUSES))),
+            select(exists().where(SmmOrder.bot_id == bot_id, SmmOrder.user_telegram_id == u.telegram_id,
+                                  SmmOrder.status.in_(("awaiting_admin", "sent", "completed", "partial")))),
+        ]
+        for q in checks:
+            if await s.scalar(q):
+                return True
+    return False
+
+
+async def award_for_join(bot_id: int, inviter_user_id: int, referred_tg_id: int) -> int:
+    """امتیازِ یک رفرالِ تازه. با «شرطِ سفارش» و نداشتنِ سفارشِ دعوت‌کننده، امتیاز در انتظار می‌ماند. امتیازِ فوری را برمی‌گرداند."""
+    if not await points_enabled(bot_id):
+        return 0
+    amount = await per_join(bot_id)
+    if amount <= 0:
+        return 0
+    if await require_order_enabled(bot_id) and not await user_has_order(bot_id, inviter_user_id):
+        from models import ReferralJoin
+        async with Session() as s:
+            j = await s.scalar(select(ReferralJoin).where(
+                ReferralJoin.bot_id == bot_id, ReferralJoin.referred_telegram_id == referred_tg_id))
+            if j:
+                j.points_pending = int(j.points_pending or 0) + amount
+                await s.commit()
+        return 0
+    return await award_points(bot_id, inviter_user_id, amount)
+
+
+async def release_pending_points(bot_id: int, user_id: int) -> int:
+    """اگر دعوت‌کننده حالا سفارش دارد، امتیازهایِ در انتظارش را (اتمیک، در یک تراکنش) به کیفش اضافه می‌کند؛ مقدارِ آزادشده را برمی‌گرداند."""
+    from models import ReferralJoin
+    from sqlalchemy import func as _f
+    async with Session() as s:
+        pend = int(await s.scalar(select(_f.coalesce(_f.sum(ReferralJoin.points_pending), 0)).where(
+            ReferralJoin.bot_id == bot_id, ReferralJoin.inviter_user_id == user_id)) or 0)
+    if pend <= 0 or not await user_has_order(bot_id, user_id):
+        return 0
+    for _attempt in (1, 2):
+        try:
+            async with Session() as s:
+                joins = (await s.scalars(select(ReferralJoin).where(
+                    ReferralJoin.bot_id == bot_id, ReferralJoin.inviter_user_id == user_id,
+                    ReferralJoin.points_pending > 0).with_for_update())).all()
+                total = sum(int(j.points_pending or 0) for j in joins)
+                if total <= 0:
+                    return 0
+                w = await s.scalar(select(RefPointWallet).where(
+                    RefPointWallet.bot_id == bot_id, RefPointWallet.user_id == user_id).with_for_update())
+                if not w:
+                    w = RefPointWallet(bot_id=bot_id, user_id=user_id, points=0, total_earned=0)
+                    s.add(w)
+                    await s.flush()
+                w.points = int(w.points or 0) + total
+                w.total_earned = int(w.total_earned or 0) + total
+                for j in joins:
+                    j.points_pending = 0
+                await s.commit()
+                return total
+        except IntegrityError:      # ساختِ هم‌زمانِ کیف؛ یک‌بار دیگر
+            continue
+    return 0
+
+
+async def pending_points(bot_id: int, user_id: int) -> int:
+    from models import ReferralJoin
+    from sqlalchemy import func as _f
+    async with Session() as s:
+        return int(await s.scalar(select(_f.coalesce(_f.sum(ReferralJoin.points_pending), 0)).where(
+            ReferralJoin.bot_id == bot_id, ReferralJoin.inviter_user_id == user_id)) or 0)
+
+
+async def reset_all_points(bot_id: int) -> tuple[int, int]:
+    """=== PATCH_REFPOINT_RESET_ALL_V1 === همهٔ امتیازهایِ این ربات را صفر می‌کند (کیف + در انتظار). (تعدادِ کاربرِ دارایِ امتیاز، مجموعِ امتیاز)."""
+    from models import ReferralJoin
+    from sqlalchemy import func as _f
+    async with Session() as s:
+        n, tot = (await s.execute(select(_f.count(RefPointWallet.id), _f.coalesce(_f.sum(RefPointWallet.points), 0)).where(
+            RefPointWallet.bot_id == bot_id, RefPointWallet.points > 0))).one()
+        await s.execute(update(RefPointWallet).where(RefPointWallet.bot_id == bot_id).values(points=0))
+        await s.execute(update(ReferralJoin).where(ReferralJoin.bot_id == bot_id).values(points_pending=0))
+        await s.commit()
+    return int(n or 0), int(tot or 0)
+
+
 async def get_points(bot_id: int, user_id: int) -> int:
+    # === PATCH_REFPOINT_REQUIRE_ORDER_V1 === اگر امتیازِ در انتظار دارد و حالا سفارش دارد، اول آزادش کن
+    if await require_order_enabled(bot_id):
+        try:
+            await release_pending_points(bot_id, user_id)
+        except Exception:
+            logger.exception("آزادسازیِ امتیازِ در انتظار ناموفق بود")
     async with Session() as s:
         w = await s.scalar(select(RefPointWallet).where(
             RefPointWallet.bot_id == bot_id, RefPointWallet.user_id == user_id))
@@ -661,6 +781,9 @@ async def _panel_text(bot_id: int) -> str:
         (f"🔁 تبدیلِ امتیاز: هر <b>{await convert_cost(bot_id)}</b> امتیاز = یک جایزه"
          if await convert_cost(bot_id) > 0 else "🔁 تبدیلِ امتیاز: <i>خاموش (با «🔁 هزینهٔ تبدیل» روشنش کن)</i>"),
         f"نوعِ جایزه: {REWARD_LABELS.get(kind, kind)}",
+        ("📦 شرطِ سفارش: <b>روشن</b> — امتیازِ رفرال فقط بعد از اولین سفارشِ دعوت‌کننده اضافه می‌شود "
+         "(تا آن موقع «در انتظار» می‌ماند و با اولین سفارش خودکار آزاد می‌شود)"
+         if await require_order_enabled(bot_id) else "📦 شرطِ سفارش: خاموش"),
     ]
     if kind in ("stock", "auto"):
         lines.append(f"بستهٔ جایزه: <b>{vol}</b> گیگ / <b>{days}</b> روز")
@@ -756,9 +879,16 @@ async def _panel_kb(bot_id: int, on: bool, kind: str) -> InlineKeyboardMarkup:
                               callback_data="refrw:pagetext", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="🖼 بنرِ دعوت (عکس + متن)",
                               callback_data="refrw:banner", style=ButtonStyle.PRIMARY)],
+        # === PATCH_REFPOINT_REQUIRE_ORDER_V1 ===
+        [InlineKeyboardButton(text=("📦 شرطِ سفارش: ✅ روشن (بزن تا خاموش شود)" if await require_order_enabled(bot_id)
+                                    else "📦 شرطِ سفارش: ⬜ خاموش (بزن تا روشن شود)"),
+                              callback_data="rpt:reqorder", style=ButtonStyle.PRIMARY)],
         # === PATCH_REFPOINT_MANUAL_ADD_V1 ===
         [InlineKeyboardButton(text="➕ افزودنِ دستیِ امتیاز به یه کاربر",
                               callback_data="rpt:manual", style=ButtonStyle.SUCCESS)],
+        # === PATCH_REFPOINT_RESET_ALL_V1 ===
+        [InlineKeyboardButton(text="🗑 ریستِ تمامِ امتیازات",
+                              callback_data="rpt:reset", style=ButtonStyle.DANGER)],
         [InlineKeyboardButton(text="📝 جایزه: متنِ ثابت",
                               callback_data="rpt:kind:text", style=ButtonStyle.PRIMARY)],
         # === PATCH_REFPOINT_PRIZES_V1 ===
@@ -879,6 +1009,60 @@ async def rpt_toggle(cb: CallbackQuery, bot: Bot):
         logger.exception("خطای نادیده‌گرفته‌شده هنگام پاک‌کردنِ کیبورد")
     await _show_panel(cb.message, row.id)
     await cb.answer("ذخیره شد")
+
+
+@rpt_router.callback_query(F.data == "rpt:reqorder")
+async def rpt_toggle_require_order(cb: CallbackQuery, bot: Bot):
+    """=== PATCH_REFPOINT_REQUIRE_ORDER_V1 === روشن/خاموشِ «شرطِ سفارش»."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await _set(row.id, "refpoint_require_order", "0" if await require_order_enabled(row.id) else "1")
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        logger.exception("خطای نادیده‌گرفته‌شده هنگام پاک‌کردنِ کیبورد")
+    await _show_panel(cb.message, row.id)
+    await cb.answer("ذخیره شد")
+
+
+@rpt_router.callback_query(F.data == "rpt:reset")
+async def rpt_reset_ask(cb: CallbackQuery, bot: Bot):
+    """=== PATCH_REFPOINT_RESET_ALL_V1 === مرحلهٔ تأیید؛ تعدادِ کاربر و مجموعِ امتیاز را نشان می‌دهد."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    from sqlalchemy import func as _f
+    async with Session() as s:
+        n, tot = (await s.execute(select(_f.count(RefPointWallet.id), _f.coalesce(_f.sum(RefPointWallet.points), 0)).where(
+            RefPointWallet.bot_id == row.id, RefPointWallet.points > 0))).one()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ بله، همه را صفر کن", callback_data="rpt:reset:yes", style=ButtonStyle.DANGER)],
+        [InlineKeyboardButton(text="⬅️ انصراف", callback_data="rpt:menu", style=ButtonStyle.PRIMARY)]])
+    txt = (f"⚠️ <b>ریستِ تمامِ امتیازات</b>\n\n"
+           f"امتیازِ <b>{int(n or 0)}</b> کاربر (مجموعاً <b>{int(tot or 0):,}</b> امتیاز) و امتیازهایِ «در انتظار» صفر می‌شود. "
+           "این کار برگشت‌پذیر نیست.\nمطمئنی؟")
+    try:
+        await cb.message.edit_text(txt, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        logger.exception("خطای نادیده‌گرفته‌شده در ویرایشِ پیامِ تأییدِ ریست")
+        await bot.send_message(cb.from_user.id, txt, reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
+
+
+@rpt_router.callback_query(F.data == "rpt:reset:yes")
+async def rpt_reset_do(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    n, tot = await reset_all_points(row.id)
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        logger.exception("خطای نادیده‌گرفته‌شده هنگام پاک‌کردنِ کیبورد")
+    await cb.message.answer(f"✅ ریست شد؛ امتیازِ {n} کاربر ({tot:,} امتیاز) صفر شد.")
+    await _show_panel(cb.message, row.id)
+    await cb.answer("ریست شد")
 
 
 @rpt_router.callback_query(F.data.startswith("rpt:kind:"))
