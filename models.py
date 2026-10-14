@@ -1107,6 +1107,27 @@ class ReferralJoin(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class MeteredAccount(Base):
+    """=== PATCH_METERED_PLAN_V1 === سرویسِ «بستهٔ اعتباری»: مصرف از کیف پول کم می‌شود.
+
+    account_id = PanelAccount.id (عمداً بدونِ FK: حذفِ سرویس توسطِ کاربر/ادمین نباید گیر کند؛ حلقه خودش «ended» می‌کند).
+    last_used_bytes = مصرفی که تا حالا پولش کسر شده؛ billed_toman = جمعِ کسرها.
+    status: active | no_credit (موجودی تمام، سرویس قطع) | ended (منقضی/حذف)."""
+    __tablename__ = "metered_accounts"
+    __table_args__ = (UniqueConstraint("account_id", name="uq_metered_account"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    account_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("bot_users.id"), index=True)
+    price_per_gb: Mapped[int] = mapped_column(Integer, default=0)
+    last_used_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    billed_toman: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class BotReview(Base):
     """نظر/امتیاز کاربر برای ربات."""
     __tablename__ = "bot_reviews"
@@ -2873,6 +2894,7 @@ TENANT_OWNED_MODELS = [
     GateReferralLink,
     EscrowDeal,   # === PATCH_ESCROW_V1 ===
     BalanceTransfer,   # === PATCH_BALANCE_TRANSFER_V1 ===
+    MeteredAccount,    # === PATCH_METERED_PLAN_V1 ===
     RefPrizeClaim,   # === PATCH_REFPOINT_PRIZES_V1 ===
     BotUser,
     # === PATCH_TENANT_OWNED_MODELS_MISSING_TABLES_V1 ===

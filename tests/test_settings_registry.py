@@ -674,7 +674,7 @@ def test_other_kinds_get_no_section_items(vs, vpn):
     vs_reg, _ = vs
     vpn_reg, _ = vpn
     assert vs_reg.registered_items(vs_reg.section_key("admins", "virtual_service")) == []
-    assert [i.callback for i in vpn_reg.registered_items(vpn_reg.section_key("finance", "vpn_sales"))] == ["btr:admin"]
+    assert [i.callback for i in vpn_reg.registered_items(vpn_reg.section_key("finance", "vpn_sales"))] == ["btr:admin", "mtr:adm"]
     assert vs_reg.registered_items(vs_reg.section_key("finance", "digital_shop")) == []
 
 

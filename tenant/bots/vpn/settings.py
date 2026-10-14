@@ -196,3 +196,20 @@ register_settings_items(section_key("finance", KIND), [
         after=("set:swap", "set:crypto", "set:kyc", "set:txlog", "tadm:receiptchannel"),
     ),
 ])
+
+
+# === PATCH_METERED_PLAN_V1 === بستهٔ اعتباری (پرداخت به‌ازایِ مصرف از کیف پول) — فقط پلنِ حرفه‌ای
+async def _metered_admin(cb, bot, state):
+    from tenant.bots.vpn.vpn_metered import admin_menu
+    await state.clear()
+    await admin_menu(cb, bot)
+
+
+register_settings_items(section_key("finance", KIND), [
+    SettingsItem(
+        label="💳 بستهٔ اعتباری (پرداخت به‌ازایِ مصرف)", callback="mtr:adm",
+        handler=_metered_admin, needs_state=True,
+        visible=_has("METERED_PLAN"),
+        after=("btr:admin", "set:swap", "set:crypto", "set:kyc", "set:txlog", "tadm:receiptchannel"),
+    ),
+])

@@ -1821,6 +1821,15 @@ async def show_vpn_plans(bot: Bot, msg: Message, bot_id: int, state=None, panel_
             rows.append([InlineKeyboardButton(
                 text=f"⚙️ حجم/روز دلخواه — {pg:,}تومان/گیگ + {pd:,}تومان/روز",
                 callback_data=f"vc:open:{cur_panel_key}", style=_vc_style)])
+    # === PATCH_METERED_PLAN_V1 === دکمهٔ «بستهٔ اعتباری» (فقط پلنِ حرفه‌ای و وقتی ادمین روشنش کرده)
+    try:
+        from tenant.bots.vpn.vpn_metered import user_entry_row as _mtr_row, feature_ok as _mtr_ok
+        if await _mtr_ok(_row_check):
+            _mr = await _mtr_row(bot_id)
+            if _mr:
+                rows.append(_mr)
+    except Exception:
+        logger.exception("mtr: ساختِ دکمهٔ بستهٔ اعتباری ناموفق")
     _br = await inline_back_row(bot_id)
     if _br:
         rows.append(_br)
@@ -5844,6 +5853,18 @@ async def vpn_service(cb: CallbackQuery, bot: Bot):
     _small.append(InlineKeyboardButton(text="🧩 آموزش اتصال", callback_data="vhelp:menu",
                                        style=await _ibs(_bid, "ibtn:help_conn")))
     kb_rows += [_small[i:i + 2] for i in range(0, len(_small), 2)]
+    # === PATCH_METERED_PLAN_V1 === خطِ توضیحِ بستهٔ اعتباری در صفحهٔ سرویس
+    _mtr_line = ""
+    try:
+        from models import MeteredAccount as _MA
+        async with Session() as _s_m:
+            _ma = await _s_m.scalar(select(_MA).where(_MA.account_id == aid, _MA.bot_id == _bid))
+        if _ma and _ma.status != "ended":
+            _mtr_line = (f"\n💳 <b>بستهٔ اعتباری</b>: {int(_ma.price_per_gb):,} تومان/گیگ — کسرشده تاکنون: "
+                         f"<b>{int(_ma.billed_toman or 0):,}</b> تومان"
+                         + (" — ⛔️ موجودی تمام، با شارژِ کیف پول وصل می‌شود" if _ma.status == "no_credit" else "") + "\n")
+    except Exception:
+        logger.exception("mtr: خطِ بستهٔ اعتباری ساخته نشد")
     kb_rows.append(
         # === PATCH_RESELLER_SVC_BACK_V1 ===
         # برایِ نماینده، «خانه» یعنی پنلِ نمایندگی‌اش نه منوی اصلیِ ربات.
@@ -5862,6 +5883,7 @@ async def vpn_service(cb: CallbackQuery, bot: Bot):
         f"🗂 کد سرویس: <code>{svc_code}</code>\n"
         f"👤 نام کاربری پنل: <code>{email}</code>\n"
         f"📅 تاریخ خرید: {bought}\n"
+        f"{_mtr_line}"
         "┈┅━━⊷⊰✨⊱⊶━━┅┈\n"
         f"{usage_blk}"
     )

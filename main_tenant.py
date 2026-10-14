@@ -500,6 +500,10 @@ async def vpn_expiry_loop():
                     if changed:
                         await s.commit()
                     # === PATCH_EXPIRY_WARN_QUOTA_V1 === شمارندهٔ اخطار هم لازم است
+                    # === PATCH_METERED_PLAN_V1 === سرویس‌هایِ اعتباری: «اتمامِ حجم» یعنی تمامِ موجودی؛ اخطار/حذفِ حجمی نه
+                    from models import MeteredAccount as _MA
+                    _metered_ids = set((await s.scalars(select(_MA.account_id).where(
+                        _MA.bot_id == bot_id, _MA.status.in_(("active", "no_credit"))))).all())
                     acct_list = [(a.id, a.email, a.user_telegram_id, a.plan_title,
                                   a.expiry_notice, a.svc_code, a.volume_gb, a.days,
                                   a.expires_at, int(a.expiry_warn_count or 0),
@@ -634,7 +638,7 @@ async def vpn_expiry_loop():
                         # هشدار (اگر هرکدام صادق باشد) جمع می‌شوند و با هم
                         # در یک پیام فرستاده می‌شوند — هیچ‌کدام گم نمی‌شود.
                         warns = []
-                        if cap > 0:
+                        if cap > 0 and aid not in _metered_ids:   # PATCH_METERED_PLAN_V1
                             left_gb = max(cap - used, 0) / GB
                             if left_gb <= 0:
                                 # === PATCH_TRAFFIC_OUT_CLEANUP_V1 ===

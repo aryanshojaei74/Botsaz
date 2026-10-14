@@ -167,6 +167,8 @@ from tenant.shared.escrow import escrow_router
 tenant_router.include_router(escrow_router)
 from tenant.shared.balance_transfer import btr_router   # PATCH_BALANCE_TRANSFER_V1
 tenant_router.include_router(btr_router)
+from tenant.bots.vpn.vpn_metered import mtr_router   # PATCH_METERED_PLAN_V1
+tenant_router.include_router(mtr_router)
 from tenant.shared.period_stats import pst_router   # PATCH_PERIOD_STATS_V1
 tenant_router.include_router(pst_router)
 # === PATCH_KYC_V1 ===

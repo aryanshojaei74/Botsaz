@@ -141,9 +141,13 @@ async def _process_bot(bot_id: int) -> None:
         # کوئری زد — همه‌ی حساب‌هایی که حجمشون تموم شده رو می‌خونیم و
         # برایِ هرکدوم جدا (بر اساسِ panel_key خودش) چک می‌کنیم که مهلتش
         # گذشته یا نه.
+        # === PATCH_METERED_PLAN_V1 === سرویس‌هایِ «بستهٔ اعتباری» با تمام‌شدنِ موجودی حذف نمی‌شوند
+        from models import MeteredAccount as _MA
+        _metered = select(_MA.account_id).where(_MA.bot_id == bot_id, _MA.status.in_(("active", "no_credit")))
         pending = (await s.scalars(select(PanelAccount).where(
             PanelAccount.bot_id == bot_id,
             PanelAccount.traffic_out_at.is_not(None),
+            PanelAccount.id.notin_(_metered),
         ))).all()
         # مقادیر همین‌جا خوانده می‌شوند؛ بعد از خروج از بلاک منقضی می‌شوند
         pending_rows = [(a.id, a.email, a.user_telegram_id, a.plan_title, a.svc_code,
