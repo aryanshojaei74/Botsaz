@@ -345,6 +345,11 @@ GROUP_GUARD_AI_API_KEYS = [k.strip() for k in os.getenv("GROUP_GUARD_AI_API_KEYS
     [GROUP_GUARD_AI_API_KEY] if GROUP_GUARD_AI_API_KEY else ARVAN_AI_API_KEYS
 )
 
+# === PATCH_AI_ROUTER_V1 === روترِ چندکلیدیِ چندارائه‌دهنده (ai_router.py). مثال:
+#   GROUP_GUARD_AI_ROUTES=groq=gsk_aaa,groq=gsk_bbb,openrouter=sk-or-ccc,gemini=AIza...,cerebras=csk-...,mistral=xxx
+# اگر خالی باشد، رفتارِ قبلی (GROUP_GUARD_AI_BASE_URL/ARVAN_AI_*) حفظ می‌شود.
+GROUP_GUARD_AI_ROUTES = os.getenv("GROUP_GUARD_AI_ROUTES", "")
+
 # === MARKER_TONCENTER_RATELIMIT_V1 ===
 # کلیدِ رایگانِ toncenter (از @tonapibot در تلگرام). اختیاری — اگر خالی
 # بماند، بدونِ کلید کار می‌کند ولی سقفِ نرخِ پایین‌تری دارد.

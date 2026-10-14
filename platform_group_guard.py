@@ -2161,7 +2161,8 @@ async def _build_ai_system_prompt(question: str = "") -> str:
     # فقط بخش‌هایِ مرتبط با سوال (تا سقفِ بودجه). حالتِ قبلی با تنظیمِ group_guard_ai_prompt_mode=full برمی‌گردد.
     _mode = (await get_pset("group_guard_ai_prompt_mode", "smart")).strip().lower()
     if _mode != "full" and question:
-        _budget = 11000 if is_groq else 16000
+        from ai_router import get_router as _gr
+        _budget = 9000 if _gr().configured() else (11000 if is_groq else 16000)   # سهمیهٔ توکنیِ رایگان کم است
         relevant = _gg_select_relevant_topics(question, _budget)
         topics_block = (
             "# بخش‌هایِ مرتبط با سوالِ کاربر (از میانِ دانشِ کاملِ ربات‌هایِ مستأجر)\n"
@@ -2238,6 +2239,17 @@ async def _ask_ai(question: str) -> str:
     from config import GROUP_GUARD_AI_MODEL as ARVAN_AI_MODEL
     from config import GROUP_GUARD_AI_API_KEY as ARVAN_AI_API_KEY
     from config import GROUP_GUARD_AI_API_KEYS as ARVAN_AI_API_KEYS
+    # === PATCH_AI_ROUTER_V1 === اگر مسیرهایِ رایگان تنظیم شده باشد، همه‌چیز از روتر می‌گذرد (فیل‌اوورِ فوری)
+    from ai_router import get_router as _get_router
+    _router = _get_router()
+    if _router.configured():
+        system_prompt = await _build_ai_system_prompt(question)
+        text, usage, route = await _router.chat(system_prompt, question, max_tokens=600)
+        logger.info("group_guard_ai usage: prompt=%s completion=%s total=%s route=%s",
+                    usage.get("prompt_tokens"), usage.get("completion_tokens"), usage.get("total_tokens"), route)
+        import re as _re0
+        text = _re0.sub(r"<think>.*?</think>", "", text, flags=_re0.DOTALL | _re0.IGNORECASE).strip()
+        return text or "پاسخی دریافت نشد."
     if not ARVAN_AI_BASE_URL:
         raise RuntimeError(
             "آدرسِ endpointِ هوش‌مصنوعیِ محافظِ گروه (GROUP_GUARD_AI_BASE_URL) "
@@ -2600,7 +2612,8 @@ async def _check_ai_trigger(msg: Message, bot: Bot) -> bool:
         return False  # نه تریگر گفته شده، نه قبلاً منتظرِ سوال بودیم، نه ریپلایِ روی «جانم» — کاری نداریم
 
     from config import ARVAN_AI_BASE_URL
-    if not ARVAN_AI_BASE_URL:
+    from ai_router import get_router as _get_router_c
+    if not ARVAN_AI_BASE_URL and not _get_router_c().configured():
         try:
             await msg.reply(
                 "⚠️ هوش مصنوعی هنوز کامل تنظیم نشده (ARVAN_AI_BASE_URL روی سرور "
@@ -2670,10 +2683,13 @@ async def gg_ai_menu(cb: CallbackQuery):
     # استفاده می‌کنه (GROUP_GUARD_AI_*)، نه ARVAN_AI_* که الان مالِ Groq/رسیدهاست.
     from config import GROUP_GUARD_AI_BASE_URL as ARVAN_AI_BASE_URL
     from config import GROUP_GUARD_AI_MODEL as ARVAN_AI_MODEL
-    if not ARVAN_AI_BASE_URL:
+    from ai_router import get_router as _get_router_m   # === PATCH_AI_ROUTER_V1 ===
+    _router_m = _get_router_m()
+    if not ARVAN_AI_BASE_URL and not _router_m.configured():
         text = (
             "🤖 <b>هوش مصنوعی</b>\n\n"
-            "هنوز وصل نیست. این متغیرها رو تویِ تنظیماتِ سرور (.env) ست کن:\n\n"
+            "هنوز وصل نیست. یا روترِ رایگان: <code>GROUP_GUARD_AI_ROUTES=groq=KEY,openrouter=KEY,gemini=KEY,…</code>\n"
+            "یا این متغیرها رو تویِ تنظیماتِ سرور (.env) ست کن:\n\n"
             "<code>GROUP_GUARD_AI_BASE_URL</code> — آدرسِ endpoint (تا /v1)\n"
             "<code>GROUP_GUARD_AI_MODEL</code> — اسمِ مدل\n"
             "<code>GROUP_GUARD_AI_API_KEY</code> — کلید\n\n"
@@ -2685,13 +2701,15 @@ async def gg_ai_menu(cb: CallbackQuery):
     else:
         public_on = (await get_pset("group_guard_ai_public_enabled", "off")) == "on"
         trigger = await get_pset("group_guard_ai_trigger_word", "بات ساز")
-        rl_on = (await get_pset("group_guard_ai_ratelimit_enabled", "off")) == "on"
-        rl_count = await get_pset("group_guard_ai_ratelimit_count", "3")
+        rl_on = (await get_pset("group_guard_ai_ratelimit_enabled", "on")) == "on"   # PATCH_GROUP_GUARD_AI_COST_V1
+        rl_count = await get_pset("group_guard_ai_ratelimit_count", "10")
         rl_hours = await get_pset("group_guard_ai_ratelimit_hours", "24")
         rl_txt = f"{rl_count} سوال هر {rl_hours} ساعت" if rl_on else "نامحدود"
         text = (
             "🤖 <b>هوش مصنوعی</b>\n\n"
-            f"متصل به آروان — مدل: <code>{ARVAN_AI_MODEL}</code>\n\n"
+            + (f"متصل به <b>روترِ رایگان</b> — {len(_router_m.routes)} مسیر (جوابِ ناموفق → فوری مسیرِ بعدی):\n"
+               f"<code>{_router_m.status()}</code>\n\n" if _router_m.configured()
+               else f"متصل به آروان — مدل: <code>{ARVAN_AI_MODEL}</code>\n\n") +
             "🔹 <b>پرسیدنِ دستی</b>: سوالت رو دربارهٔ محافظ گروه یا مسیرِ "
             "فعال‌سازیِ قابلیت‌ها تو ربات‌هایِ مستأجر بپرس.\n\n"
             f"🔹 <b>پاسخ‌گوییِ عمومی تو گروه</b>: {'🟢 روشن' if public_on else '🔴 خاموش'}\n"
