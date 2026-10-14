@@ -57,6 +57,23 @@ COOL_5XX = 30
 ATTEMPT_TIMEOUT = 18.0
 
 
+# === انتخابِ خودکارِ مدل: اگر نامِ پیش‌فرضِ مدل دیگر وجود نداشت (۴۰۴)، فهرستِ مدل‌هایِ همان ارائه‌دهنده خوانده می‌شود ===
+_EXCLUDE = ("whisper", "tts", "guard", "embed", "moderation", "orpheus", "playai", "image", "audio",
+            "rerank", "vision-preview", "transcribe", "speech", "dall", "imagen", "veo", "learnlm", "aqa")
+_PREFER = ("llama-3.3-70b", "gpt-oss-120b", "llama-4", "qwen3-32b", "qwen-3-32b", "llama-3.1-70b",
+           "gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash", "mistral-small", "grok-3-mini",
+           "gpt-oss-20b", "llama-3.1-8b", "gemma", "mistral", "grok", "llama", "gpt")
+
+
+def pick_model(ids: list[str]) -> str | None:
+    ok = [i for i in ids if i and not any(x in i.lower() for x in _EXCLUDE)]
+    for pref in _PREFER:
+        for i in ok:
+            if pref in i.lower():
+                return i
+    return ok[0] if ok else None
+
+
 @dataclass
 class Route:
     name: str
@@ -66,6 +83,7 @@ class Route:
     cool_until: float = 0.0
     fails: int = 0
     ok: int = 0
+    discovered: bool = False      # مدل یک‌بار خودکار انتخاب شده؟
 
     @property
     def label(self) -> str:
@@ -135,14 +153,27 @@ class Router:
         async with httpx.AsyncClient(timeout=httpx.Timeout(ATTEMPT_TIMEOUT, connect=5.0),
                                      headers={"Accept-Encoding": "identity"}, **kw) as client:
             for r in self._order():
-                try:
-                    resp = await client.post(
-                        r.base_url + "/chat/completions", json={**payload_base, "model": r.model},
-                        headers={"Authorization": f"Bearer {r.key}", "Content-Type": "application/json"})
-                except (httpx.TimeoutException, httpx.HTTPError) as e:
-                    r.fails += 1
-                    r.cool_until = time.monotonic() + COOL_5XX
-                    errors.append(f"{r.label}: {type(e).__name__}")
+                resp = None
+                for _try in range(2):          # بارِ دوم فقط بعد از انتخابِ خودکارِ مدل
+                    try:
+                        resp = await client.post(
+                            r.base_url + "/chat/completions", json=self._payload(payload_base, r),
+                            headers={"Authorization": f"Bearer {r.key}", "Content-Type": "application/json"})
+                    except (httpx.TimeoutException, httpx.HTTPError) as e:
+                        r.fails += 1
+                        r.cool_until = time.monotonic() + COOL_5XX
+                        errors.append(f"{r.label}: {type(e).__name__}")
+                        resp = None
+                        break
+                    if resp.status_code in (400, 404, 422) and r.name in PRESETS and not r.discovered:
+                        r.discovered = True
+                        new_model = await self._discover_model(client, r)
+                        if new_model and new_model != r.model:
+                            logger.warning("ai_router: مدلِ %s برایِ %s پذیرفته نشد؛ %s انتخاب شد", r.model, r.name, new_model)
+                            r.model = new_model
+                            continue
+                    break
+                if resp is None:
                     continue
                 st = resp.status_code
                 if st == 200:
@@ -172,6 +203,26 @@ class Router:
                     r.cool_until = time.monotonic() + COOL_5XX
                 errors.append(f"{r.label}: HTTP {st}")
         raise RuntimeError("همهٔ مسیرهایِ هوش مصنوعی جواب ندادند: " + " | ".join(errors[-6:]))
+
+    @staticmethod
+    def _payload(base: dict, r: Route) -> dict:
+        """مدل‌هایِ reasoning (gpt-oss) بدونِ این، توکنِ جواب را صرفِ فکرکردن می‌کنند و متنِ خالی برمی‌گردد."""
+        p = {**base, "model": r.model}
+        if "gpt-oss" in r.model.lower() and r.name in ("groq", "cerebras"):
+            p["reasoning_effort"] = "low"
+            p["max_tokens"] = max(int(p.get("max_tokens", 600)), 900)
+        return p
+
+    async def _discover_model(self, client, r: Route) -> str | None:
+        try:
+            resp = await client.get(r.base_url + "/models", headers={"Authorization": f"Bearer {r.key}"})
+            if resp.status_code != 200:
+                return None
+            ids = [str(m.get("id", "")).removeprefix("models/") for m in (resp.json().get("data") or [])]
+            return pick_model(ids)
+        except Exception:                                   # noqa: BLE001
+            logger.debug("ai_router: خواندنِ فهرستِ مدل‌ها ممکن نشد (%s)", r.name)
+            return None
 
     def status(self) -> str:
         now = time.monotonic()

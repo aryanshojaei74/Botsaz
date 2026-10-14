@@ -123,3 +123,29 @@ async def test_paid_provider_is_used_only_after_free_ones():
     seen.clear()
     await r.chat("s", "q2")
     assert seen == ["xai-paid"]                             # رایگان خنک است
+
+
+def test_pick_model_prefers_good_chat_models_and_skips_non_chat():
+    ids = ["whisper-large-v3", "openai/gpt-oss-safeguard-20b", "allam-2-7b", "llama-3.1-8b-instant",
+           "openai/gpt-oss-120b", "playai-tts"]
+    assert R.pick_model(ids) == "openai/gpt-oss-120b"
+    assert R.pick_model(["whisper-1", "tts-1"]) is None
+
+
+@pytest.mark.asyncio
+async def test_404_triggers_model_discovery_and_retry_on_same_route():
+    posted = []
+
+    def handler(req):
+        if req.method == "GET":
+            return httpx.Response(200, json={"data": [{"id": "whisper-large-v3"}, {"id": "openai/gpt-oss-120b"}]})
+        model = __import__("json").loads(req.read())["model"]
+        posted.append(model)
+        return httpx.Response(404) if model == "llama-3.3-70b-versatile" else _ok("جواب با مدلِ تازه")
+    r = _router(handler, "groq=gsk_x")
+    text, _u, route = await r.chat("s", "q")
+    assert text == "جواب با مدلِ تازه" and posted == ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"]
+    assert r.routes[0].model == "openai/gpt-oss-120b"
+    posted.clear()
+    await r.chat("s", "q2")
+    assert posted == ["openai/gpt-oss-120b"]                 # مدلِ پیدا‌شده ماندگار است
