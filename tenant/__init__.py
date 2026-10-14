@@ -5405,6 +5405,7 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
         "buy_vpn_shahan",   # === PATCH_SHAHAN_BUY_BUTTON_V1 ===
         "buy_bundle",   # === PATCH_BUNDLE_BUTTON_V1 ===
         "buy_panel_market",   # === PATCH_PANEL_SHOP_ACTION_V1 ===
+        "buy_metered",   # === PATCH_METERED_BTN_ACTION_V1 ===
         "submenu", "web_app",
         "wallet",
     }
@@ -5610,6 +5611,10 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
     elif action == "store_miniapp":
         # === PATCH_STORE_MINIAPP_BTN_ACTION_V1 ===
         await _open_store_miniapp(msg, bot_id, header=action_header)
+    elif action == "buy_metered":
+        # === PATCH_METERED_BTN_ACTION_V1 === بازبینیِ لحظه‌ایِ پلن (مثلِ بقیهٔ اکشن‌هایِ پلنی)
+        from tenant.bots.vpn.vpn_metered import show_for_message as _mtr_show
+        await _mtr_show(msg, bot, row, header=action_header)
     elif action == "buy_panel_market":
         # === PATCH_PANEL_SHOP_ACTION_V1 ===
         if not has_feature(row.plan, Feature.VPN_PANEL_MARKET):
@@ -14018,6 +14023,10 @@ _SIMPLE_ACTIONS: dict[str, tuple[str, str, frozenset | None]] = {
     "buy_panel_market": ("🏷 فروش پنل (ثبت و فروش پنل)",
                          "این دکمه حالا پنل‌هایی که از «🏷 ثبت و فروش پنل» ثبت کرده‌ای را به کاربر می‌فروشد.",
                          frozenset({"vpn_sales"})),
+    # === PATCH_METERED_BTN_ACTION_V1 === بستهٔ اعتباری (پرداخت به‌ازایِ مصرف) — فقط حرفه‌ای
+    "buy_metered": ("💳 بستهٔ اعتباری (پرداخت به‌ازای مصرف)",
+                    "این دکمه حالا «بستهٔ اعتباری» (پرداخت به‌ازایِ مصرف از کیف پول) را نشان می‌دهد (باید از «مالی و کیف پول» روشن باشد).",
+                    frozenset({"vpn_sales"})),
     "nft_market":  ("🖼 مینی‌اپ حرفه‌ای (مارکتِ NFT)",
                     "این دکمه حالا مارکتِ خرید و اجارهٔ NFT و یوزرنیم را باز می‌کند.",
                     frozenset({"virtual_service"})),
@@ -14132,6 +14141,7 @@ def _thb_action_label(mb) -> str:
         "ticket": "تیکت پشتیبانی",
         "buy_unlimited": "خرید کانفیگ نامحدود",
         "buy_config": "خرید کانفیگ",
+        "buy_metered": "💳 بستهٔ اعتباری",   # PATCH_METERED_BTN_ACTION_V1
         "buy_vpn_sanai": "خرید از پنل سنایی",
         "buy_vpn_pasargad": "خرید از پنل پاسارگاد",
         "buy_vpn_pasarguard": "🛡️ خرید از پنل PasarGuard",
@@ -14633,6 +14643,11 @@ def _thb_kb_action_pick(mb, bot_field: str = "", plan: str = "", category: str =
                 rows.append([InlineKeyboardButton(
                     text="🏷 فروش پنل (ثبت و فروش پنل) — تبدیل به این",
                     callback_data=f"thb:setsimple:buy_panel_market:{mb.id}", style=ButtonStyle.SUCCESS)])
+            # === PATCH_METERED_BTN_ACTION_V1 ===
+            if has_feature(plan, Feature.METERED_PLAN):
+                rows.append([InlineKeyboardButton(
+                    text="💳 بستهٔ اعتباری (پرداخت به‌ازای مصرف) — تبدیل به این",
+                    callback_data=f"thb:setsimple:buy_metered:{mb.id}", style=ButtonStyle.SUCCESS)])
             if has_feature(plan, Feature.COMBO_BUTTON):
                 rows.append([InlineKeyboardButton(
                     text="🧩 خرید ترکیبی (چند دسته/پنل با هم)",
@@ -14660,8 +14675,8 @@ def _thb_kb_action_pick(mb, bot_field: str = "", plan: str = "", category: str =
             # === PATCH_STORE_MINIAPP_GATE_V1 === فقط وقتی مینی‌اپ روشن و محلِ نمایشش «کیبورد» است
             if _akey == "store_miniapp" and not store_miniapp_ok:
                 continue
-            if _akey == "buy_panel_market":
-                continue   # PATCH_PANEL_SHOP_ACTION_V1: در دستهٔ «فروش» نشان داده می‌شود
+            if _akey in ("buy_panel_market", "buy_metered"):
+                continue   # PATCH_PANEL_SHOP_ACTION_V1 / PATCH_METERED_BTN_ACTION_V1: در دستهٔ «فروش» نشان داده می‌شوند
             rows.append([InlineKeyboardButton(text=f"{_alabel} — تبدیل به این",
                                               callback_data=f"thb:setsimple:{_akey}:{mb.id}", style=ButtonStyle.PRIMARY)])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت به دسته‌ها", callback_data=f"thb:cat:action:{mb.id}", style=ButtonStyle.DANGER)])

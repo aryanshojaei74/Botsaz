@@ -287,22 +287,19 @@ async def user_entry_row(bot_id: int, plan: str | None = None):
     return [_btn(f"💳 {cfg['title']} — {cfg['price']:,} تومان/گیگ (پرداخت به‌ازایِ مصرف)", "mtr:open", ButtonStyle.PRIMARY)]
 
 
-@mtr_router.callback_query(F.data == "mtr:open")
-async def mtr_open(cb: CallbackQuery, bot: Bot):
-    row = await _row(bot)
-    if not row or not await feature_ok(row):
-        await cb.answer("این قابلیت فعال نیست.", show_alert=True)
-        return
+async def _open_view(row, tg_id: int, header: str = ""):
+    """(متن، کیبورد) صفحهٔ معرفیِ بسته برایِ این کاربر؛ یا (متنِ خطا، None)."""
+    if not await feature_ok(row):
+        return "⛔️ این قابلیت در پلنِ فعلیِ ربات در دسترس نیست.", None
     cfg = await get_cfg(row.id)
     if not cfg["enabled"]:
-        await cb.answer("این بسته فعال نیست.", show_alert=True)
-        return
+        return "این بسته فعلاً فعال نیست.", None
     async with Session() as s:
-        u = await s.scalar(select(BotUser).where(BotUser.bot_id == row.id, BotUser.telegram_id == cb.from_user.id))
+        u = await s.scalar(select(BotUser).where(BotUser.bot_id == row.id, BotUser.telegram_id == tg_id))
     bal = int(Decimal(str(u.balance or 0))) if u else 0
     gb = min(affordable_gb(bal, cfg["price"]), MAX_GB)
     cur = await _active_of(row.id, u.id) if u else None
-    txt = (f"💳 <b>{cfg['title']}</b>\n\n"
+    txt = (header or "") + (f"💳 <b>{cfg['title']}</b>\n\n"
            f"💰 قیمت: <b>{cfg['price']:,} تومان</b> به‌ازایِ هر گیگ — فقط به‌اندازهٔ مصرفِ واقعی\n"
            f"⏳ مدت: <b>{cfg['days']} روز</b>\n"
            f"👛 موجودیِ کیف پولت: <b>{fmt(bal)}</b> (≈ {gb} گیگ)\n\n"
@@ -318,10 +315,26 @@ async def mtr_open(cb: CallbackQuery, bot: Bot):
         txt += f"\n\n⚠️ برایِ شروع حداقل <b>{fmt(cfg['price'])}</b> موجودی لازم است."
     rows.append([_btn("🔋 شارژ کیف پول", "w:back", ButtonStyle.SUCCESS)])
     rows.append([_btn("⬅️ بازگشت", "vsvc:home", ButtonStyle.DANGER)])
+    return txt, _kb(rows)
+
+
+async def show_for_message(msg: Message, bot: Bot, row, header: str = "") -> None:
+    """=== PATCH_METERED_BTN_ACTION_V1 === ورودِ «عملکردِ دکمه» (buy_metered) از منویِ اصلی."""
+    txt, kb = await _open_view(row, msg.from_user.id, header)
+    await msg.answer(txt, reply_markup=kb, parse_mode="HTML")
+
+
+@mtr_router.callback_query(F.data == "mtr:open")
+async def mtr_open(cb: CallbackQuery, bot: Bot):
+    row = await _row(bot)
+    txt, kb = await _open_view(row, cb.from_user.id) if row else ("یافت نشد.", None)
+    if kb is None:
+        await cb.answer(txt, show_alert=True)
+        return
     try:
-        await cb.message.edit_text(txt, reply_markup=_kb(rows), parse_mode="HTML")
+        await cb.message.edit_text(txt, reply_markup=kb, parse_mode="HTML")
     except Exception:
-        await bot.send_message(cb.from_user.id, txt, reply_markup=_kb(rows), parse_mode="HTML")
+        await bot.send_message(cb.from_user.id, txt, reply_markup=kb, parse_mode="HTML")
     await cb.answer()
 
 

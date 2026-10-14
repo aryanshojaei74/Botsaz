@@ -56,6 +56,8 @@ async def db(monkeypatch):
     maker = async_sessionmaker(engine, expire_on_commit=False)
     for mod in (config, tenant, M):
         monkeypatch.setattr(mod, "Session", maker)
+    tenant._SETTING_CACHE.clear()
+    tenant._BOT_ROW_CACHE.clear()
     async with maker() as s:
         s.add(models.Bot(id=9, owner_id=1, token="9:T", username="b", field="vpn_sales", plan="pro", status="active"))
         s.add(models.BotUser(id=1, bot_id=9, telegram_id=1001, full_name="Ali", balance=10_000))
@@ -330,3 +332,50 @@ async def test_chosen_panel_is_used_and_falls_back_when_disabled(db, create_env,
     tenant._SETTING_CACHE.clear()
     await M.mtr_go(_cb([]), _B())
     assert seen[-1] == "x"
+
+
+def test_button_action_registered_and_gated_in_picker():
+    fields = tenant._SIMPLE_ACTIONS["buy_metered"][2]
+    assert fields == frozenset({"vpn_sales"})
+    from types import SimpleNamespace
+    mb = SimpleNamespace(id=7)
+
+    def datas(plan, field):
+        kb = tenant._thb_kb_action_pick(mb, bot_field=field, plan=plan, category="sell")
+        return [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert "thb:setsimple:buy_metered:7" in datas("pro", "vpn_sales")
+    assert "thb:setsimple:buy_metered:7" not in datas("growth", "vpn_sales")
+    assert "thb:setsimple:buy_metered:7" not in datas("pro", "virtual_service")
+    kb_tool = tenant._thb_kb_action_pick(mb, bot_field="vpn_sales", plan="pro", category="tool")
+    assert all("buy_metered" not in b.callback_data for r in kb_tool.inline_keyboard for b in r)
+
+
+@pytest.mark.asyncio
+async def test_button_action_shows_page_and_respects_toggle_and_plan(db):
+    from types import SimpleNamespace
+    sent = []
+
+    class Msg:
+        from_user = SimpleNamespace(id=1001)
+
+        async def answer(self, text, reply_markup=None, **k):
+            sent.append((text, reply_markup))
+    async with db() as s:
+        row = await s.get(models.Bot, 9)
+    await M.show_for_message(Msg(), None, row, header="سرتیتر\n\n")
+    assert "فعال نیست" in sent[-1][0] and sent[-1][1] is None            # خاموش
+    await tenant.set_setting(9, "mtr_enabled", "1")
+    tenant._SETTING_CACHE.clear()
+    await M.show_for_message(Msg(), None, row, header="سرتیتر\n\n")
+    txt, kb = sent[-1]
+    assert txt.startswith("سرتیتر") and "2,000" in txt
+    datas = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert "mtr:mine" in datas and "w:back" in datas                      # فیکسچر یک بستهٔ فعال دارد
+    async with db() as s:
+        (await s.get(models.MeteredAccount, 1)).status = "ended"
+        await s.commit()
+    await M.show_for_message(Msg(), None, row)
+    assert "mtr:go" in [b.callback_data for r in sent[-1][1].inline_keyboard for b in r]
+    row.plan = "growth"                                                    # پلن پایین آمد
+    await M.show_for_message(Msg(), None, row)
+    assert "در دسترس نیست" in sent[-1][0] and sent[-1][1] is None
