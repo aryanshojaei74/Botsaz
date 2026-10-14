@@ -2484,6 +2484,9 @@ async def smm_panels_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     # === PATCH_TGTOOLS_AUTO_SECTION_V1 === TGTools هم «اتصالِ خودکار» است، نه دستی
     rows.append([InlineKeyboardButton(text="🤖 اتصال به TGTools (استارزِ خودکار)",
                                       callback_data="ssl:tgt")])
+    # === PATCH_ACC_GIFT_V1 ===
+    rows.append([InlineKeyboardButton(text="👤 گیفتِ خودکار با اکانتِ پشتیبانی",
+                                      callback_data="ssl:acc")])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:products", style=ButtonStyle.DANGER)])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -12984,8 +12987,8 @@ async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
             f"🔖 کد: {trk}\n\nاین گیفت را باید خودت دستی برایِ خریدار بفرستی، "
             f"بعد «✅ انجام شد» را بزن.", admin_kb)
         # === PATCH_TGTOOLS_GIFT_V1 === گیفتِ کاتالوگی + «گیفتِ خودکارِ TGTools» روشن ⇒ همین حالا خودکار می‌خرد
-        if not g.is_manual and await _tgt_gift_on(row.id):
-            _tgt_spawn_gift(bot, row, order_id)
+        if not g.is_manual and await _auto_gift_on(row.id):     # PATCH_ACC_GIFT_V1
+            _gift_auto_spawn(bot, row, order_id)
         return
 
     # === PATCH_GIFT_QUANTITY_V1 ===
@@ -13361,10 +13364,11 @@ async def gift_cardpay_approve(cb: CallbackQuery, bot: Bot):
     manual_mode = await _get_setting(row.id, "gift_manual_delivery", "0") == "1"
     # === PATCH_TGTOOLS_GIFT_V1 === رسید تأیید شد؛ گیفتِ کاتالوگی و گیفتِ خودکارِ TGTools روشن ⇒ خودکار بخر (نه «دستی فرستادم»)
     if (not (o.gift_id or "").startswith(("manual", "premium_", "starsell_", "srx_", "tonsell_"))
-            and o.deliver_via != "bot" and await _tgt_gift_on(row.id)):
-        await cb.answer("🤖 خریدِ خودکار با TGTools شروع شد…")
-        await _admin_msg_close(cb, f"🤖 سفارش #{await order_no(GiftOrder, order_id)}: خریدِ خودکار با TGTools شروع شد؛ نتیجه اینجا اعلام می‌شود.")
-        _tgt_spawn_gift(bot, row, order_id)
+            and o.deliver_via != "bot" and await _auto_gift_on(row.id)):     # PATCH_ACC_GIFT_V1
+        _via_lbl = "اکانتِ پشتیبانی" if await _acc_gift_on(row.id) else "TGTools"
+        await cb.answer(f"🤖 ارسالِ خودکار با {_via_lbl} شروع شد…")
+        await _admin_msg_close(cb, f"🤖 سفارش #{await order_no(GiftOrder, order_id)}: ارسالِ خودکار با {_via_lbl} شروع شد؛ نتیجه اینجا اعلام می‌شود.")
+        _gift_auto_spawn(bot, row, order_id)
         return
     if (o.gift_id or "").startswith("manual") or manual_mode or o.deliver_via == "support":
         async with Session() as s:
@@ -18109,6 +18113,15 @@ async def _gift_admin_kb(bot_id: int, order_id: int, gift_id: str | None) -> Inl
                                               style=ButtonStyle.PRIMARY)])
     except Exception:
         logger.exception("tgtools: ساختِ دکمهٔ گیفت ناموفق")
+    # === PATCH_ACC_GIFT_V1 === ارسال با اکانتِ پشتیبانی (فقط اگر اکانت وصل است و گیفت کاتالوگی است)
+    try:
+        if not str(gift_id or "").startswith(("manual", "premium_", "starsell_", "srx_", "tonsell_")):
+            from tenant.bots.virtual_service import acc_gift as _acc
+            if await _acc.has_account(bot_id):
+                rows.append([InlineKeyboardButton(text="👤 ارسال با اکانتِ پشتیبانی", callback_data=f"gift:acc:{order_id}",
+                                                  style=ButtonStyle.PRIMARY)])
+    except Exception:
+        logger.exception("acc_gift: ساختِ دکمهٔ گیفت ناموفق")
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -18122,7 +18135,7 @@ def _tgt_spawn_gift(bot: Bot, row, order_id: int, by_admin: bool = False, resume
     t.add_done_callback(_tgt_tasks.discard)
 
 
-async def _tgt_revert_manual_gift(bot: Bot, row, order_id: int, reason: str, *, warn: bool = False) -> None:
+async def _tgt_revert_manual_gift(bot: Bot, row, order_id: int, reason: str, *, warn: bool = False, who: str = "TGTools") -> None:
     from tenant import _notify_admins
     async with Session() as s:
         o = await s.get(GiftOrder, order_id, with_for_update=True)
@@ -18133,10 +18146,10 @@ async def _tgt_revert_manual_gift(bot: Bot, row, order_id: int, reason: str, *, 
         gift_id, dest, trk = o.gift_id, o.dest_label, o.tracking_code
         qty, done = int(o.quantity or 1), int(o.sent_qty or 0)
         await s.commit()
-    part = f"\n📦 تا الان با TGTools {done} از {qty} عدد فرستاده شده؛ فقط «باقی‌مانده» را دستی بفرست." if done else ""
+    part = f"\n📦 تا الان با {who} {done} از {qty} عدد فرستاده شده؛ فقط «باقی‌مانده» را دستی بفرست." if done else ""
     await _notify_manual_order(
         bot, row,
-        f"{'⚠️' if warn else '🤖'} خریدِ خودکارِ گیفت — سفارش #{await order_no(GiftOrder, order_id)}\n\n{reason}{part}\n\n"
+        f"{'⚠️' if warn else '🤖'} {'ارسالِ خودکارِ گیفت با ' + who if who != 'TGTools' else 'خریدِ خودکارِ گیفت'} — سفارش #{await order_no(GiftOrder, order_id)}\n\n{reason}{part}\n\n"
         f"🎯 مقصد: {dest}\n🔖 کد: {trk}\n\n"
         "این سفارش به «در انتظارِ ادمین» برگشت؛ دستی بفرست و «✅ انجام شد» را بزن.",
         await _gift_admin_kb(row.id, order_id, gift_id))
@@ -18160,7 +18173,7 @@ async def _tgt_gift_status(key: str, tx, first: dict | None = None) -> tuple[str
     return "pending", cur
 
 
-async def _tgt_gift_finish(bot: Bot, row, order_id: int) -> None:
+async def _tgt_gift_finish(bot: Bot, row, order_id: int, who: str = "TGTools") -> None:
     from tenant import _notify_admins
     async with Session() as s:
         o = await s.get(GiftOrder, order_id, with_for_update=True)
@@ -18173,7 +18186,7 @@ async def _tgt_gift_finish(bot: Bot, row, order_id: int) -> None:
         trk = o.tracking_code
         await s.commit()
     await _notify_gift_order_trust_success(bot, row, order_id)
-    await _notify_manual_order(bot, row, f"✅ گیفتِ سفارش #{await order_no(GiftOrder, order_id)} با TGTools تحویل داده شد.")
+    await _notify_manual_order(bot, row, f"✅ گیفتِ سفارش #{await order_no(GiftOrder, order_id)} با {who} تحویل داده شد.")
     if buyer_tg_id:
         try:
             await bot.send_message(
@@ -18280,6 +18293,194 @@ async def tgtools_fulfil_gift(bot: Bot, row, order_id: int, *, by_admin: bool = 
             logger.exception("tgtools: برگرداندنِ گیفت به دستی هم ناموفق بود")
     finally:
         _tgt_running.discard(order_id)
+
+
+# ═══════════════════════════════════════════
+#  گیفتِ خودکار با اکانتِ پشتیبانی — PATCH_ACC_GIFT_V1
+# ═══════════════════════════════════════════
+async def _acc_gift_on(bot_id: int) -> bool:
+    from tenant.bots.virtual_service import acc_gift as _acc
+    return (await _get_setting(bot_id, "acc_gift", "0")) == "1" and await _acc.has_account(bot_id)
+
+
+async def _auto_gift_on(bot_id: int) -> bool:
+    return await _acc_gift_on(bot_id) or await _tgt_gift_on(bot_id)
+
+
+def _gift_auto_spawn(bot: Bot, row, order_id: int, *, acc_first: bool | None = None, by_admin: bool = False) -> None:
+    """اکانتِ پشتیبانی اولویت دارد؛ اگر خاموش بود TGTools. (acc_first=None ⇒ بر اساسِ تنظیمات؛ ارسالِ زمان‌بندی‌شده.)"""
+    async def _go():
+        use_acc = acc_first if acc_first is not None else await _acc_gift_on(row.id)
+        if use_acc:
+            await acc_fulfil_gift(bot, row, order_id, by_admin=by_admin)
+        else:
+            await tgtools_fulfil_gift(bot, row, order_id, by_admin=by_admin)
+    t = asyncio.create_task(_go())
+    _tgt_tasks.add(t)
+    t.add_done_callback(_tgt_tasks.discard)
+
+
+async def acc_fulfil_gift(bot: Bot, row, order_id: int, *, by_admin: bool = False) -> None:
+    from tenant.bots.virtual_service import acc_gift as _acc
+    from tenant.bots.virtual_service import tgtools_api as _tg
+    if order_id in _tgt_running:
+        return
+    _tgt_running.add(order_id)
+    fallback_tgt = False
+    try:
+        async with Session() as s:     # ادعایِ اتمیکِ سفارش (جلوگیری از تحویلِ دوبار: دستی + خودکار)
+            o = await s.get(GiftOrder, order_id, with_for_update=True)
+            if (not o or o.bot_id != row.id or str(o.gift_id).startswith("manual")
+                    or str(o.gift_id).startswith(("premium_", "starsell_", "srx_", "tonsell_"))
+                    or o.status != "awaiting_admin"):
+                return
+            o.status = "auto_processing"
+            gift_id, qty, done = o.gift_id, int(o.quantity or 1), int(o.sent_qty or 0)
+            dest_label, dest_tg = o.dest_label, int(o.dest_telegram_id or 0)
+            comment, scope, anon = (o.comment or ""), int(o.comment_scope or 0), bool(o.anonymous)
+            await s.commit()
+        username = _tg.extract_username(dest_label)
+        for i in range(done, qty):
+            msg = _gift_comment_for(comment[:128], scope, i)
+            try:
+                await _acc.send_gift(row.id, username=username, tg_id=dest_tg or None, gift_id=gift_id,
+                                     text=msg or None, hide_name=anon)
+            except _acc.AccGiftError as e:
+                if not e.definite:
+                    await _tgt_revert_manual_gift(
+                        bot, row, order_id,
+                        f"{e.message}\n⛔ قبل از هر کاری در خودِ اکانتِ پشتیبانی (گیفت‌هایِ ارسال‌شده) چک کن؛ "
+                        f"اگر عددِ {i + 1}ام آنجا ارسال شده، دستی نفرست.", warn=True, who="اکانتِ پشتیبانی")
+                    return
+                # خطایِ قطعی: ارسال نشده. اگر TGTools هم روشن است، همان‌جا ادامه بده؛ وگرنه دستی.
+                if await _tgt_gift_on(row.id):
+                    fallback_tgt = True
+                    await _notify_manual_order(
+                        bot, row, f"⚠️ اکانتِ پشتیبانی گیفتِ سفارش #{await order_no(GiftOrder, order_id)} را نفرستاد "
+                                  f"({e.message}) — ادامه با TGTools.")
+                else:
+                    await _tgt_revert_manual_gift(bot, row, order_id, e.message, who="اکانتِ پشتیبانی")
+                break
+            async with Session() as s:      # عددِ i ام تحویل شد (بلافاصله ثبت؛ تا ارسالِ تکراری نشود)
+                o2 = await s.get(GiftOrder, order_id, with_for_update=True)
+                if o2:
+                    o2.sent_qty = i + 1
+                    await s.commit()
+        else:
+            await _tgt_gift_finish(bot, row, order_id, who="اکانتِ پشتیبانی")
+            return
+        if fallback_tgt:
+            async with Session() as s:
+                o3 = await s.get(GiftOrder, order_id, with_for_update=True)
+                if o3 and o3.status == "auto_processing":
+                    o3.status = "awaiting_admin"
+                    await s.commit()
+    except Exception:
+        logger.exception("acc_gift: خطایِ پیش‌بینی‌نشده در گیفتِ سفارش %s", order_id)
+        try:
+            await _tgt_revert_manual_gift(
+                bot, row, order_id,
+                "خطایِ داخلی رخ داد. اگر مطمئن نیستی گیفت ارسال شده یا نه، اول در اکانتِ پشتیبانی چک کن.",
+                warn=True, who="اکانتِ پشتیبانی")
+        except Exception:
+            logger.exception("acc_gift: برگرداندنِ گیفت به دستی هم ناموفق بود")
+    finally:
+        _tgt_running.discard(order_id)
+    if fallback_tgt:
+        _tgt_spawn_gift(bot, row, order_id)
+
+
+@smm_router.callback_query(F.data.startswith("gift:acc:"))
+async def gift_acc_go(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    from tenant.bots.virtual_service import acc_gift as _acc
+    order_id = int(cb.data.split(":")[2])
+    if not await _acc.has_account(row.id):
+        await cb.answer("اکانتِ پشتیبانی وصل نیست (🤝 واسطه‌گری ← اتصالِ اکانت).", show_alert=True)
+        return
+    async with Session() as s:
+        o = await s.get(GiftOrder, order_id)
+    if (not o or o.bot_id != row.id or o.status != "awaiting_admin"
+            or str(o.gift_id).startswith(("manual", "premium_", "starsell_", "srx_", "tonsell_"))):
+        await cb.answer("این سفارش قبلاً رسیدگی شده یا برایِ ارسال با اکانت مناسب نیست.", show_alert=True)
+        return
+    await cb.answer("👤 در حالِ ارسال با اکانتِ پشتیبانی… نتیجه اینجا اعلام می‌شود.", show_alert=True)
+    _gift_auto_spawn(bot, row, order_id, acc_first=True, by_admin=True)
+    try:
+        await cb.message.delete()
+    except Exception:
+        logger.info("حذفِ پیامِ سفارشِ گیفت پس از ارسالِ خودکار ممکن نشد")
+
+
+async def _acc_menu_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    from tenant.bots.virtual_service import acc_gift as _acc
+    on = (await _get_setting(bot_id, "acc_gift", "0")) == "1"
+    has = await _acc.has_account(bot_id)
+    lines = ["👤 <b>گیفتِ خودکار با اکانتِ پشتیبانی</b>\n"]
+    rows: list = []
+    if not has:
+        lines.append("❌ اکانتِ پشتیبانی وصل نیست.\nاز «🤝 واسطه‌گری ← 👤 اتصالِ اکانتِ واسط» همان اکانت را وصل کن "
+                     "(همان اکانت گیفت‌ها را هم می‌فرستد).")
+    else:
+        st = await _acc.status(bot_id)
+        if st.get("ok"):
+            uname = f" @{st['username']}" if st.get("username") else ""
+            lines.append(f"✅ اکانت: <b>{_html_escape(st['name'])}</b>{uname}")
+            lines.append(f"⭐ موجودیِ استارز: <b>{st['stars']:,}</b>" if st.get("stars") is not None
+                         else "⭐ موجودیِ استارز: نامشخص")
+        else:
+            lines.append(f"⚠️ اتصال: {_html_escape(st.get('error') or '')}")
+        lines.append(f"\n🚀 ارسالِ خودکار: <b>{'روشن ✅' if on else 'خاموش'}</b>")
+        rows.append([InlineKeyboardButton(text=("🚀 ارسالِ خودکار: روشن ✅" if on else "🚀 ارسالِ خودکار: خاموش"),
+                                          callback_data="ssl:acc:toggle",
+                                          style=(ButtonStyle.SUCCESS if on else ButtonStyle.PRIMARY))])
+        rows.append([InlineKeyboardButton(text="🔄 به‌روزرسانیِ موجودی", callback_data="ssl:acc")])
+    lines.append("\n• گیفت‌هایِ کاتالوگیِ «تحویلِ دستی / اکانتِ پشتیبانی» (و بعد از تاییدِ رسیدِ کارت) درجا با همین اکانت "
+                 "فرستاده می‌شوند؛ نامِ فرستنده (ناشناس) و کامنتِ مشتری هم رعایت می‌شود.\n"
+                 "• مقصد با یوزرنیم پیدا می‌شود؛ مشتریِ بدونِ یوزرنیم فقط وقتی که اکانت قبلاً با او در تماس بوده.\n"
+                 "• موجودیِ استارزِ اکانت کم باشد یا هر خطایی شود، سفارش به «تحویلِ دستی» برمی‌گردد و خبرت می‌کنم "
+                 "(اگر TGTools هم روشن باشد، ادامه با آن).\n"
+                 "• گیفتِ سفارشی/NFT، پرمیوم و استارز با این مسیر ارسال نمی‌شوند.")
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="smm:panels", style=ButtonStyle.DANGER)])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@smm_router.callback_query(F.data == "ssl:acc")
+async def ssl_acc_menu(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    text, kb = await _acc_menu_content(row.id)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception as e:
+        if "not modified" not in str(e).lower():
+            await bot.send_message(cb.from_user.id, text, reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
+
+
+@smm_router.callback_query(F.data == "ssl:acc:toggle")
+async def ssl_acc_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _tgt_owner_strict(cb, bot)
+    if not row:
+        return
+    from tenant.bots.virtual_service import acc_gift as _acc
+    if not await _acc.has_account(row.id):
+        await cb.answer("اول اکانتِ پشتیبانی را وصل کن.", show_alert=True)
+        return
+    cur = (await _get_setting(row.id, "acc_gift", "0")) == "1"
+    await _set_setting(row.id, "acc_gift", "0" if cur else "1")
+    await cb.answer("خاموش شد؛ گیفت‌ها مثلِ قبل دستی هستند (دکمهٔ «👤 ارسال با اکانتِ پشتیبانی» همچنان هست)." if cur
+                    else "روشن شد — گیفتِ کاتالوگیِ «تحویلِ دستی» درجا با اکانتِ پشتیبانی فرستاده می‌شود.",
+                    show_alert=True)
+    text, kb = await _acc_menu_content(row.id)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception as e:
+        if "not modified" not in str(e).lower():
+            await bot.send_message(cb.from_user.id, text, reply_markup=kb, parse_mode="HTML")
 
 
 @smm_router.callback_query(F.data.startswith("gift:tgt:"))
