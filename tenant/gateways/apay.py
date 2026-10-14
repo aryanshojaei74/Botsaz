@@ -613,7 +613,9 @@ async def ask_admin_pending() -> int:
     now = datetime.utcnow()
     async with Session() as s:
         rows = (await s.scalars(select(ApayCharge).where(
-            ApayCharge.status.in_(("waiting", "cancelled", "expired")),
+            # === PATCH_APAY_NO_ASK_ON_CANCEL_V1 === فاکتورِ «لغوشده توسطِ کاربر» دیگر از ادمین نمی‌پرسد
+            # (خودِ مشتری لغو کرده؛ اگر قبلش واریز کرده بود، وب‌هوک/پایشِ خودکار کیف پول را شارژ می‌کند).
+            ApayCharge.status.in_(("waiting", "expired")),
             ApayCharge.admin_asked_at.is_(None),
             ApayCharge.created_at <= now - timedelta(minutes=ASK_AFTER_MIN),
             ApayCharge.created_at >= now - timedelta(hours=6)))).all()

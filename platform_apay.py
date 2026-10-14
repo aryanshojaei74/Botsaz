@@ -802,7 +802,7 @@ async def ask_admin_pending() -> int:
     now = datetime.utcnow()
     async with Session() as s:
         ids = (await s.scalars(select(PlatformApayCharge.id).where(
-            PlatformApayCharge.status.in_(("waiting", "cancelled", "expired")),
+            PlatformApayCharge.status.in_(("waiting", "expired")),   # PATCH_APAY_NO_ASK_ON_CANCEL_V1: لغوِ خودِ کاربر → نپرس
             PlatformApayCharge.admin_asked_at.is_(None),
             PlatformApayCharge.created_at <= now - timedelta(minutes=AP.ASK_AFTER_MIN),
             PlatformApayCharge.created_at >= now - timedelta(hours=6)))).all()

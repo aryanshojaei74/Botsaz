@@ -328,3 +328,23 @@ async def test_partner_manual_confirm_approves_order_not_wallet(partner, monkeyp
         u = await s.scalar(select(models.PlatformUser).where(models.PlatformUser.telegram_id == 42))
     assert ok and o.status == "approved" and float(u.balance) == 0
     assert not (await PA.manual_settle(2, 777))[0]
+
+
+@pytest.mark.asyncio
+async def test_no_admin_ask_when_user_cancelled(db, monkeypatch):
+    """PATCH_APAY_NO_ASK_ON_CANCEL_V1 — کاربر خودش لغو کرده؛ دیگر «واریز شد؟» به ادمین نمی‌رود."""
+    maker, _st, _p = db
+    import sys, types
+    sent = []
+
+    class FakeBot:
+        async def send_message(self, chat, text, reply_markup=None):
+            sent.append(chat)
+    monkeypatch.setitem(sys.modules, "main_platform", types.SimpleNamespace(platform_bot=FakeBot()))
+    monkeypatch.setattr(config, "PLATFORM_ADMIN_ID", 777)
+    async with maker() as s:
+        ch = await s.scalar(select(models.PlatformApayCharge))
+        ch.created_at = datetime.utcnow() - timedelta(minutes=6)
+        ch.status = "cancelled"
+        await s.commit()
+    assert await PA.ask_admin_pending() == 0 and not sent

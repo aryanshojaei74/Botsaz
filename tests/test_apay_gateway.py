@@ -374,6 +374,11 @@ async def test_tenant_admin_ask_and_manual_settle(db, monkeypatch):
         ch.status = "cancelled"
         cid = ch.id
         await s.commit()
+    assert await AP.ask_admin_pending() == 0               # لغوِ خودِ کاربر → از ادمین نمی‌پرسد
+    async with maker() as s:
+        ch = await s.get(models.ApayCharge, cid)
+        ch.status = "waiting"
+        await s.commit()
     assert await AP.ask_admin_pending() == 1 and await AP.ask_admin_pending() == 0
     assert sent[0][0] == 1 and "50,000" in sent[0][1] and "500370" in sent[0][1]
     assert sent[0][2].inline_keyboard[0][0].callback_data == f"apadm:ok:{cid}"
