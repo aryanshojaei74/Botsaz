@@ -382,6 +382,7 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
             return False, "این فاکتور قبلاً تسویه شده است.", 0
         ch.status = "paid"
         ch.paid_at = datetime.utcnow()
+        _for_order = getattr(ch, "for_order_id", None)      # PATCH_APAY_DIRECT_PURCHASE_V1
         u = await s.scalar(select(BotUser).where(
             BotUser.bot_id == bot_id, BotUser.telegram_id == ch.user_telegram_id).with_for_update())
         uid = bal = kyc_uid = None
@@ -400,7 +401,7 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
     await _drop_admin_ask(bot_id, ask_chat, ask_msg)       # PATCH_APAY_ASK_CLEANUP_V1
     if uid:
         try:
-            await _notify_paid(bot_id, uid, credit, bal, inv_chat, inv_msg)
+            await _notify_paid(bot_id, uid, credit, bal, inv_chat, inv_msg, for_order=_for_order)
         except Exception:
             logger.exception("apay: اطلاع به کاربر ناموفق بود")
         try:
@@ -411,8 +412,23 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
     return True, "پرداخت تأیید و کیف پول شارژ شد.", credit
 
 
+def resume_button(for_order: int | None):
+    """(متنِ دکمه، callback) برایِ «تکمیلِ خرید» بعد از پرداختِ مستقیم — همان رمزگذاریِ آبان‌گیت‌وی:
+    >۰ سفارشِ فروشگاه (pay:wallet)، <۰ خریدِ دلخواهِ VPN (vc_pack) یا پلنِ VPN (−plan_id)."""
+    if not for_order:
+        return None
+    if for_order > 0:
+        return "🛒 تکمیلِ سفارش و دریافتِ سرویس", f"pay:wallet:{for_order}"
+    from tenant.gateways.abangateway_admin import vc_unpack
+    vc = vc_unpack(for_order)
+    if vc:
+        return "🛡 تکمیلِ خریدِ VPN و دریافتِ سرویس", f"vc:pay:{vc[0]}:{vc[1]}:{vc[2]}"
+    return "🛡 تکمیلِ خریدِ VPN و دریافتِ سرویس", f"vpay:{-for_order}"
+
+
 async def _notify_paid(bot_id: int, tg_id: int, amount: int, new_balance: float,
-                       inv_chat: int | None = None, inv_msg: int | None = None) -> None:
+                       inv_chat: int | None = None, inv_msg: int | None = None,
+                       for_order: int | None = None) -> None:
     from aiogram import Bot
     from aiogram.client.default import DefaultBotProperties
     from aiogram.enums import ParseMode
@@ -423,8 +439,19 @@ async def _notify_paid(bot_id: int, tg_id: int, amount: int, new_balance: float,
     tbot = Bot(token=brow.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     try:
         try:
-            from tenant.gateways.wallet_receipt import build_wallet_charge_message_for_bot
-            text, kb = await build_wallet_charge_message_for_bot(bot_id, amount, new_balance, "card")
+            _resume = resume_button(for_order)
+            if _resume:
+                # === PATCH_APAY_DIRECT_PURCHASE_V1 === پرداختِ مستقیم: به‌جایِ رسیدِ شارژ، دکمهٔ «تکمیلِ خرید»
+                from aiogram.enums import ButtonStyle
+                from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+                text = (f"✅ <b>{int(amount):,} تومان</b> پرداخت شد.\n"
+                        f"موجودیِ فعلی: <b>{int(new_balance):,}</b> تومان\n\n"
+                        "حالا برایِ نهایی‌شدنِ خرید، دکمهٔ زیر را بزن 👇")
+                kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                    text=_resume[0], callback_data=_resume[1], style=ButtonStyle.SUCCESS)]])
+            else:
+                from tenant.gateways.wallet_receipt import build_wallet_charge_message_for_bot
+                text, kb = await build_wallet_charge_message_for_bot(bot_id, amount, new_balance, "card")
             await tbot.send_message(tg_id, text, reply_markup=kb)
         except Exception:
             await tbot.send_message(tg_id, f"✅ {int(amount):,} تومان به کیفِ پولت اضافه شد.")

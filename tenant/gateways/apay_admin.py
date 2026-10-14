@@ -535,12 +535,126 @@ async def apu_amount(msg: Message, bot: Bot, state: FSMContext):
     if amount > min(max_amount, AP.API_MAX_TOMAN):
         return await msg.answer(f"حداکثرِ مبلغ {min(max_amount, AP.API_MAX_TOMAN):,} تومان است. دوباره بفرست.")
     await state.clear()
+    await _apu_create_charge(msg, bot, row, int(amount), msg.from_user.id)
 
+
+# === PATCH_APAY_DIRECT_PURCHASE_V1 ===
+# پرداختِ مستقیم: مبلغ همان کسریِ سفارش است (نه انتخابِ دستیِ مبلغ)، و بعد از پرداخت دکمهٔ
+# «تکمیلِ خرید» می‌آید — دقیقاً مثلِ آبان‌گیت‌وی. تکمیلِ نهایی (pay:wallet / vpay / vc:pay) خودش دوباره
+# قیمت و موجودی را حساب می‌کند، پس دست‌کاریِ callback امنیتی ایجاد نمی‌کند.
+async def _apu_direct_need(cb: CallbackQuery, row, total_price: int, bal: int):
+    need = int(total_price) - int(bal)
+    if need <= 0:
+        await cb.answer("موجودیِ کیف‌پولت کافی است — همان «✅ پرداخت از کیف پول» را بزن.", show_alert=True)
+        return None
+    min_amount = await AP.get_min_amount(row.id)
+    max_amount = min(await AP.get_max_amount(row.id) or AP.API_MAX_TOMAN, AP.API_MAX_TOMAN)
+    if need < min_amount:
+        need = min_amount          # کمتر از حداقلِ درگاه؛ باقی‌اش در کیف پول می‌ماند
+    if need > max_amount:
+        await cb.answer(f"مبلغِ لازم از سقفِ درگاه ({max_amount:,} تومان) بیشتر است. از روشِ دیگری پرداخت کن.",
+                        show_alert=True)
+        return None
+    return need
+
+
+async def _apu_user_balance(row, tg_id: int) -> int:
+    async with Session() as s:
+        u = await s.scalar(select(BotUser).where(BotUser.bot_id == row.id, BotUser.telegram_id == tg_id))
+    return int(float(u.balance or 0)) if u else 0
+
+
+@apay_router.callback_query(F.data.startswith("w:apay:vpn:"))
+async def apu_start_for_vpn_plan(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """w:apay:vpn:{plan_id}:{قیمتِ_کامل}"""
+    from tenant import get_bot_row
+    from models import VpnPlan
+    row = await get_bot_row(bot)
+    if not row:
+        return await cb.answer()
+    if not await AP.is_available(row.id):
+        return await cb.answer("این درگاه فعال نیست.", show_alert=True)
+    try:
+        _, _, _, plan_id_s, price_s = cb.data.split(":")
+        plan_id, total = int(plan_id_s), int(price_s)
+    except (ValueError, IndexError):
+        return await cb.answer()
+    async with Session() as s:
+        plan = await s.get(VpnPlan, plan_id)
+    if not plan or plan.bot_id != row.id or not plan.active:
+        return await cb.answer("این پلن دیگر در دسترس نیست.", show_alert=True)
+    need = await _apu_direct_need(cb, row, total, await _apu_user_balance(row, cb.from_user.id))
+    if need is None:
+        return
+    await state.clear()
+    await cb.answer("⏳ در حالِ ساختِ فاکتور…")
+    await _apu_create_charge(cb.message, bot, row, need, cb.from_user.id, for_order=-plan_id)
+
+
+@apay_router.callback_query(F.data.startswith("w:apay:vc:"))
+async def apu_start_for_vc(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """w:apay:vc:{gb}:{days}:{count}:{مبلغِ_فاکتور}"""
+    from tenant import get_bot_row
+    from tenant.gateways.abangateway_admin import vc_pack
+    row = await get_bot_row(bot)
+    if not row:
+        return await cb.answer()
+    if not await AP.is_available(row.id):
+        return await cb.answer("این درگاه فعال نیست.", show_alert=True)
+    try:
+        _, _, _, gb_s, days_s, count_s, price_s = cb.data.split(":")
+        gb, days, count, total = int(gb_s), int(days_s), int(count_s), int(price_s)
+    except (ValueError, IndexError):
+        return await cb.answer()
+    if not (0 <= gb <= 4095 and 0 <= days <= 2047 and 1 <= count <= 31) or total <= 0:
+        return await cb.answer()
+    need = await _apu_direct_need(cb, row, total, await _apu_user_balance(row, cb.from_user.id))
+    if need is None:
+        return
+    await state.update_data(vc_gb=gb, vc_days=days, vc_count=count)
+    await cb.answer("⏳ در حالِ ساختِ فاکتور…")
+    await _apu_create_charge(cb.message, bot, row, need, cb.from_user.id, for_order=vc_pack(gb, days, count))
+
+
+@apay_router.callback_query(F.data.regexp(r"^w:apay:\d+$"))
+async def apu_start_for_order(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """w:apay:{order_id} — پرداختِ مستقیمِ یک سفارشِ فروشگاه/محصول."""
+    from tenant import get_bot_row
+    from models import Order
+    row = await get_bot_row(bot)
+    if not row:
+        return await cb.answer()
+    if not await AP.is_available(row.id):
+        return await cb.answer("این درگاه فعال نیست.", show_alert=True)
+    oid = int(cb.data.rsplit(":", 1)[1])
+    async with Session() as s:
+        o = await s.get(Order, oid)
+        if not o or o.bot_id != row.id or o.status != "pending":
+            return await cb.answer("این سفارش دیگر معتبر نیست.", show_alert=True)
+        u = await s.scalar(select(BotUser).where(
+            BotUser.bot_id == row.id, BotUser.telegram_id == cb.from_user.id))
+        if not u or o.user_id != u.id:
+            return await cb.answer("این سفارش مالِ تو نیست.", show_alert=True)
+        total, bal = int(float(o.amount)), int(float(u.balance or 0))
+    need = await _apu_direct_need(cb, row, total, bal)
+    if need is None:
+        return
+    await state.clear()
+    await cb.answer("⏳ در حالِ ساختِ فاکتور…")
+    await _apu_create_charge(cb.message, bot, row, need, cb.from_user.id, for_order=oid)
+
+
+
+
+async def _apu_create_charge(msg: Message, bot: Bot, row, amount: int, tg_id: int,
+                             for_order: int | None = None) -> None:
+    """فاکتورِ آپی می‌سازد و نشان می‌دهد. for_order: پرداختِ مستقیمِ یک سفارش/پلن/خریدِ دلخواه
+    (=== PATCH_APAY_DIRECT_PURCHASE_V1 ===)؛ بعد از پرداخت دکمهٔ «تکمیلِ خرید» می‌آید."""
     try:
         from tenant.shared.kyc import check_charge
         async with Session() as s:
             u = await s.scalar(select(BotUser).where(
-                BotUser.bot_id == row.id, BotUser.telegram_id == msg.from_user.id))
+                BotUser.bot_id == row.id, BotUser.telegram_id == tg_id))
         ok, why = await check_charge(row.id, u, amount)
         if not ok:
             return await msg.answer(why)
@@ -574,10 +688,10 @@ async def apu_amount(msg: Message, bot: Bot, state: FSMContext):
     pay_rial = int(res.get("pay_amount") or 0)
     async with Session() as s:
         s.add(ApayCharge(
-            bot_id=row.id, user_telegram_id=msg.from_user.id, order_id=oid,
+            bot_id=row.id, user_telegram_id=tg_id, order_id=oid,
             payment_id=str(res.get("id") or ""), amount_toman=int(amount), fee_toman=fee,
             pay_amount_rial=pay_rial or None, pay_url=str(res["pay_url"])[:300],
-            status="waiting"))
+            status="waiting", for_order_id=for_order))
         await s.commit()
     try:
         await wait.delete()
@@ -601,6 +715,8 @@ async def apu_amount(msg: Message, bot: Bot, state: FSMContext):
     except Exception:
         logger.exception("apay: ذخیرهٔ شناسهٔ پیامِ فاکتور ناموفق بود")
     AP.watch_tenant_charge(row.id, oid, str(res.get("id") or ""))
+
+
 
 
 @apay_router.callback_query(F.data.startswith("apu:check:"))

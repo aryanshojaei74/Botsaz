@@ -1590,6 +1590,9 @@ class ApayCharge(Base):
     # === PATCH_APAY_ASK_CLEANUP_V1 === پیامِ «واریز شد؟»ی ادمین؛ با تسویهٔ خودکار پاک می‌شود
     admin_ask_chat: Mapped[int | None] = mapped_column(BigInteger)
     admin_ask_msg: Mapped[int | None] = mapped_column(BigInteger)
+    # === PATCH_APAY_DIRECT_PURCHASE_V1 === پرداختِ مستقیمِ سفارش/پلن/خریدِ دلخواه (همان رمزگذاریِ آبان‌گیت‌وی):
+    # >۰ شمارهٔ سفارش، <۰ پلنِ VPN (−plan_id) یا خریدِ دلخواه (vc_pack)
+    for_order_id: Mapped[int | None] = mapped_column(Integer, index=True)
 
 
 # === PATCH_ABANGATEWAY_V1 ===

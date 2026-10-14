@@ -37,7 +37,7 @@ async def db(monkeypatch):
     await tenant.set_setting(5, "apay_enabled", "1")
     notified = []
 
-    async def _np(bot_id, tg, amount, bal, *a):
+    async def _np(bot_id, tg, amount, bal, *a, **k):
         notified.append((tg, amount, bal))
 
     async def _noop(*a, **k):

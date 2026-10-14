@@ -3386,7 +3386,8 @@ def _has_wallet_charge_btn(rows) -> bool:
 
 async def wallet_topup_rows(bot_id: int, colored: bool = False,
                             in_purchase: bool = True, skip_card: bool = False,
-                            skip_abangateway: bool = False) -> list[list[InlineKeyboardButton]]:
+                            skip_abangateway: bool = False,
+                            skip_apay: bool = False) -> list[list[InlineKeyboardButton]]:
     """روش‌هایِ شارژِ کیف پول که واقعاً فعال‌اند.
 
     in_purchase=True یعنی این کیبورد داخلِ صفحهٔ خرید است؛ در این حالت تیکِ
@@ -3492,7 +3493,7 @@ async def wallet_topup_rows(bot_id: int, colored: bool = False,
         from tenant.gateways.apay import is_available as _ap_ok
         _ap_show = (not in_purchase) or \
             await get_setting(bot_id, "apay_show_purchase", "1") == "1"
-        if _ap_show and await _ap_ok(bot_id):
+        if _ap_show and not skip_apay and await _ap_ok(bot_id):
             rows.append([InlineKeyboardButton(
                 text=await gw_btn(bot_id, 'apay', 'شارژ با', '💳'), callback_data="w:apay", style=succ)])
     except Exception:
@@ -3603,7 +3604,8 @@ async def pay_method_kb_full(bot_id: int, oid: int) -> InlineKeyboardMarkup:
         if await get_setting(bot_id, "apay_show_purchase", "1") == "1" and \
                 await _ap_ok2(bot_id):
             rows.append([InlineKeyboardButton(
-                text=await gw_btn(bot_id, 'apay', 'پرداخت با', '💳'), callback_data="w:apay")])
+                text=await gw_btn(bot_id, 'apay', 'پرداخت با', '💳'),
+                callback_data=f"w:apay:{oid}")])     # === PATCH_APAY_DIRECT_PURCHASE_V1 === پرداختِ مستقیمِ همین سفارش
     except Exception:
         logger.exception("بررسیِ دسترسیِ آپی ناموفق بود")
 

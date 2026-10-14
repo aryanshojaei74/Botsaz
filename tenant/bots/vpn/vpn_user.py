@@ -2540,6 +2540,17 @@ async def _build_buy_summary(bot: Bot, bot_id: int, plan_id: int,
                     callback_data=f"w:abangateway:vpn:{plan_id}:{int(final_price)}")
         except Exception:
             logger.exception("بررسیِ دسترسیِ آبان گیت‌وی برایِ خریدِ VPN ناموفق بود")
+    # === PATCH_APAY_DIRECT_PURCHASE_V1 === پرداختِ مستقیمِ آپی برایِ همین پلن (مبلغِ کسری خودکار)
+    _ap_direct_btn = None
+    try:
+        from tenant import get_setting as _gs_ap, gw_btn as _gwb_ap
+        from tenant.gateways.apay import is_available as _ap_ok_d
+        if bal < final_price and await _gs_ap(bot_id, "apay_show_purchase", "1") == "1" and await _ap_ok_d(bot_id):
+            _ap_direct_btn = InlineKeyboardButton(
+                text=await _gwb_ap(bot_id, 'apay', 'پرداخت با', '💳'),
+                callback_data=f"w:apay:vpn:{plan_id}:{int(final_price)}")
+    except Exception:
+        logger.exception("بررسیِ آپی برایِ خریدِ پلنِ VPN ناموفق بود")
     # === PATCH_WALLET_TOPUP_ROWS_V1 ===
     # اگر موجودی کم است، روش‌هایِ شارژِ فعال (کارت، تون‌پیز، ارز دیجیتال، سواپ‌ولت) همین‌جا
     # پیشنهاد می‌شوند — قبلاً کاربر فقط جملهٔ «اول شارژ کن» را می‌دید بدونِ هیچ راهی.
@@ -2548,13 +2559,16 @@ async def _build_buy_summary(bot: Bot, bot_id: int, plan_id: int,
         # === PATCH_WALLET_TOPUP_SKIP_CARD_V1 ===
         # اگر «پرداخت کارت‌به‌کارت»ِ مستقیم بالا اضافه شده، «شارژ کارت‌به‌کارت» تکرار نمی‌شود.
         kb_rows.extend(await wallet_topup_rows(
-            bot_id, skip_card=card_enabled, skip_abangateway=_ab_direct_btn is not None))
+            bot_id, skip_card=card_enabled, skip_abangateway=_ab_direct_btn is not None,
+            skip_apay=_ap_direct_btn is not None))
     # === PATCH_WALLET_CHARGE_BTN_V1 === تیکِ «شارژ کیف‌پول در صفحهٔ خرید» (مستقل از کمبودِ موجودی)
     from tenant import wallet_charge_btn_rows as _wcb, _has_wallet_charge_btn as _hwc
     if not _hwc(kb_rows):
         kb_rows.extend(await _wcb(bot_id))
     if _ab_direct_btn is not None:
         kb_rows.append([_ab_direct_btn])
+    if _ap_direct_btn is not None:
+        kb_rows.append([_ap_direct_btn])
     # === PATCH_VPN_DISCOUNT_TOGGLE_V1 ===
     # باگِ گزارش‌شده: تنظیمِ «استفاده از کد تخفیف در خرید» رو ادمین غیرفعال
     # کرده بود، ولی دکمه‌ی «وارد کردن کد تخفیف» همچنان تو صفحه‌ی خریدِ VPN
@@ -4932,12 +4946,25 @@ async def _vc_preinvoice(bot: Bot, bot_id: int, telegram_id: int, gb: int, days:
                 callback_data=f"w:abangateway:vc:{gb}:{days}:{count}:{int(final_total)}")
     except Exception:
         logger.exception("بررسیِ آبان گیت‌وی برایِ خریدِ دلخواهِ VPN ناموفق بود")
+    # === PATCH_APAY_DIRECT_PURCHASE_V1 === پرداختِ مستقیمِ آپی برایِ همین خریدِ دلخواه
+    _ap_vc_btn = None
+    try:
+        from tenant import get_setting as _gs_apv, gw_btn as _gwb_apv
+        from tenant.gateways.apay import is_available as _ap_ok_v
+        if (bal < final_total and 0 <= gb <= 4095 and 0 <= days <= 2047 and 1 <= count <= 31
+                and await _gs_apv(bot_id, "apay_show_purchase", "1") == "1" and await _ap_ok_v(bot_id)):
+            _ap_vc_btn = InlineKeyboardButton(
+                text=await _gwb_apv(bot_id, 'apay', 'پرداخت با', '💳'),
+                callback_data=f"w:apay:vc:{gb}:{days}:{count}:{int(final_total)}")
+    except Exception:
+        logger.exception("بررسیِ آپی برایِ خریدِ دلخواهِ VPN ناموفق بود")
     # === PATCH_WALLET_TOPUP_ROWS_V1 ===
     if bal < final_total:
         from tenant import wallet_topup_rows
         # === PATCH_WALLET_TOPUP_SKIP_CARD_V1 ===
         kb_rows.extend(await wallet_topup_rows(bot_id, skip_card=card_enabled,
-                                               skip_abangateway=_ab_vc_btn is not None))
+                                               skip_abangateway=_ab_vc_btn is not None,
+                                               skip_apay=_ap_vc_btn is not None))
     elif _ab_vc_btn is None:
         # === PATCH_ABAN_ALWAYS_SHOW_PURCHASE_V1 === با موجودیِ کافی هم آبان‌گیت (اگر تیکِ نمایش در خرید روشن است)
         from tenant import wallet_topup_rows as _wtr_v
@@ -4948,6 +4975,8 @@ async def _vc_preinvoice(bot: Bot, bot_id: int, telegram_id: int, gb: int, days:
         kb_rows.extend(await _wcb2(bot_id))
     if _ab_vc_btn is not None:
         kb_rows.append([_ab_vc_btn])
+    if _ap_vc_btn is not None:
+        kb_rows.append([_ap_vc_btn])
     # === PATCH_VPN_DISCOUNT_TOGGLE_V1 ===
     from tenant import get_setting as _gs
     if await _gs(bot_id, "discount_purchase_enabled", "1") == "1":
