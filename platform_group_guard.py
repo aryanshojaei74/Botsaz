@@ -2156,13 +2156,17 @@ async def _build_ai_system_prompt(question: str = "") -> str:
     extra = await get_pset("group_guard_ai_custom_knowledge", "")
     from config import GROUP_GUARD_AI_BASE_URL as ARVAN_AI_BASE_URL  # === PATCH_GROUP_GUARD_FULL_PROMPT_RESTORE_V1 ===
     is_groq = "groq.com" in (ARVAN_AI_BASE_URL or "").lower()
-    if is_groq:
-        relevant = _gg_select_relevant_topics(question) if question else ""
+    # === PATCH_GROUP_GUARD_AI_COST_V1 ===
+    # هزینه: برایِ غیرِ Groq هر سوال کلِ ~۴۰هزار کاراکترِ دانش (≈۱۵هزار توکن) می‌فرستاد. حالا پیش‌فرض «هوشمند» است:
+    # فقط بخش‌هایِ مرتبط با سوال (تا سقفِ بودجه). حالتِ قبلی با تنظیمِ group_guard_ai_prompt_mode=full برمی‌گردد.
+    _mode = (await get_pset("group_guard_ai_prompt_mode", "smart")).strip().lower()
+    if _mode != "full" and question:
+        _budget = 11000 if is_groq else 16000
+        relevant = _gg_select_relevant_topics(question, _budget)
         topics_block = (
             "# بخش‌هایِ مرتبط با سوالِ کاربر (از میانِ دانشِ کاملِ ربات‌هایِ مستأجر)\n"
             + relevant) if relevant else ""
     else:
-        # ارائه‌دهنده‌ی غیرِ Groq (مثلِ آروان) → کلِ ۹۴ بخشِ موضوعی، بدونِ فیلتر.
         topics_block = (
             "# دانشِ کاملِ ربات‌هایِ مستأجر (همهٔ بخش‌ها)\n"
             + "\n\n".join(text for _kw, text in _GG_AI_TOPICS))
@@ -2175,6 +2179,49 @@ async def _build_ai_system_prompt(question: str = "") -> str:
             + extra.strip()
         )
     return "\n\n".join(parts)
+
+
+# === PATCH_GROUP_GUARD_AI_COST_V1 === کشِ جوابِ سوال‌هایِ تکراری + پاسخِ آماده به سلام/تشکر
+_AI_CACHE: dict[str, tuple[float, str]] = {}
+_AI_CACHE_TTL = 6 * 3600
+_AI_CACHE_MAX = 400
+_CANNED = (
+    (("سلام", "سلام خوبی", "سلام وقت بخیر", "درود", "hi", "hello", "های", "سلام بات ساز"),
+     "🤖 سلام! 👋 سوالت دربارهٔ بات‌ساز رو بپرس."),
+    (("ممنون", "مرسی", "تشکر", "دمت گرم", "خیلی ممنون", "ممنون از شما", "مرسی از شما", "تشکر میکنم",
+      "thanks", "thx", "thank you"),
+     "🤖 خواهش می‌کنم 🌹 اگه سوالِ دیگه‌ای داشتی بپرس."),
+    (("خوبی", "چطوری", "حالت چطوره", "خوبی؟"), "🤖 ممنون، آماده‌ام کمکت کنم! سوالت چیه؟"),
+)
+
+
+def _ai_cache_key(question: str) -> str:
+    return _gg_normalize_for_match(question)[:600]
+
+
+def _ai_cache_get(question: str) -> str | None:
+    hit = _AI_CACHE.get(_ai_cache_key(question))
+    if hit and time.monotonic() - hit[0] < _AI_CACHE_TTL:
+        return hit[1]
+    return None
+
+
+def _ai_cache_put(question: str, answer: str) -> None:
+    if len(_AI_CACHE) >= _AI_CACHE_MAX:
+        for k in sorted(_AI_CACHE, key=lambda k: _AI_CACHE[k][0])[: _AI_CACHE_MAX // 4]:
+            _AI_CACHE.pop(k, None)
+    _AI_CACHE[_ai_cache_key(question)] = (time.monotonic(), answer)
+
+
+def _canned_reply(question: str) -> str | None:
+    """پاسخِ آماده (بدونِ هوش مصنوعی) فقط به سلام/تشکر/احوال‌پرسیِ «خالص»؛ هر چیزی که سوال به نظر برسد None."""
+    t = _gg_normalize_for_match(question).strip(" ؟?!.،,:؛-")
+    if not t:
+        return None
+    for phrases, reply in _CANNED:
+        if t in {_gg_normalize_for_match(w).strip(" ؟?!.،,:؛-") for w in phrases}:
+            return reply
+    return None
 
 
 async def _ask_ai(question: str) -> str:
@@ -2202,7 +2249,7 @@ async def _ask_ai(question: str) -> str:
     payload = {
         "model": ARVAN_AI_MODEL,
         "temperature": 0,
-        "max_tokens": 900,
+        "max_tokens": 600,   # PATCH_GROUP_GUARD_AI_COST_V1 (جوابِ راهنما کوتاه است)
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": question},
@@ -2279,6 +2326,13 @@ async def _ask_ai(question: str) -> str:
     if not choices:
         raise RuntimeError("آروان هیچ نتیجه‌ای برنگردوند.")
     text = ((choices[0].get("message") or {}).get("content") or "").strip()
+    # === PATCH_GROUP_GUARD_AI_COST_V1 === مصرفِ توکن در لاگ ثبت می‌شود تا هزینه قابلِ پایش باشد
+    try:
+        _u = data.get("usage") or {}
+        logger.info("group_guard_ai usage: prompt=%s completion=%s total=%s model=%s",
+                    _u.get("prompt_tokens"), _u.get("completion_tokens"), _u.get("total_tokens"), ARVAN_AI_MODEL)
+    except Exception:
+        logger.debug("group_guard_ai: ثبتِ usage ممکن نشد")
     # === PATCH_GROUP_GUARD_REASONING_MODEL_SAFETY_V1 ===
     # مدل‌هایِ reasoning (مثلِ qwen3.6 روی Groq) قبل از جوابِ نهایی یه بلوکِ
     # <think>...</think> طولانی برمی‌گردونن. اگه این حذف نشه، فکرکردنِ خامِ
@@ -2303,9 +2357,10 @@ _AI_AWAIT_TIMEOUT_SEC = 300  # ۵ دقیقه مهلت برایِ نوشتنِ س
 
 async def _check_ai_rate_limit(user_id: int) -> bool:
     """True یعنی مجازه بپرسه (و این سوال رو هم ثبت می‌کنه)."""
-    if (await get_pset("group_guard_ai_ratelimit_enabled", "off")) != "on":
+    # === PATCH_GROUP_GUARD_AI_COST_V1 === پیش‌فرض: روشن، ۱۰ سوال در ۲۴ ساعت برایِ هر نفر (از پنل قابل‌تغییر)
+    if (await get_pset("group_guard_ai_ratelimit_enabled", "on")) != "on":
         return True
-    count_limit = int(await get_pset("group_guard_ai_ratelimit_count", "3") or "3")
+    count_limit = int(await get_pset("group_guard_ai_ratelimit_count", "10") or "10")
     hours = int(await get_pset("group_guard_ai_ratelimit_hours", "24") or "24")
     window = hours * 3600
     now = time.monotonic()
@@ -2347,6 +2402,19 @@ def _reply_context(msg: Message) -> str:
 
 async def _answer_ai_question(msg: Message, question: str) -> None:
     """چکِ محدودیتِ نرخ + پرسیدنِ واقعی از آروان + ارسالِ جواب/خطا."""
+    # === PATCH_GROUP_GUARD_AI_COST_V1 === سلام/تشکر → پاسخِ آماده بدونِ هزینه
+    _trig_word = (await get_pset("group_guard_ai_trigger_word", "بات ساز")).strip()
+    _q_only = question
+    _tl = _trigger_at_start(question, _trig_word)
+    if _tl is not None:
+        _q_only = _norm_trigger_text(question).lstrip("@#!.,،؛:-—_ ")[_tl:].strip()
+    _canned = _canned_reply(_q_only) if not getattr(msg, "reply_to_message", None) else None
+    if _canned:
+        try:
+            await msg.reply(_canned)
+        except Exception:
+            logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+        return
     if not await _check_ai_rate_limit(msg.from_user.id):
         try:
             await msg.reply(
@@ -2363,8 +2431,12 @@ async def _answer_ai_question(msg: Message, question: str) -> None:
     try:
         # === PATCH_AI_REPLY_CONTEXT_V1 ===
         ctx = _reply_context(msg)
-        answer = await _ask_ai(
-            (ctx + "\n\nسوال/حرفِ خودِ کاربر: " + question) if ctx else question)
+        _full_q = (ctx + "\n\nسوال/حرفِ خودِ کاربر: " + question) if ctx else question
+        answer = _ai_cache_get(_full_q)
+        if answer is None:
+            answer = await _ask_ai(_full_q)
+            if answer and not answer.startswith("پاسخی دریافت نشد"):
+                _ai_cache_put(_full_q, answer)
     except Exception as e:
         err_text = f"❌ خطا در ارتباط با هوش مصنوعی:\n{e}"
         try:
