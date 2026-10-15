@@ -412,7 +412,7 @@ async def sweep_trials(bot: "Bot | None" = None) -> None:
                 await bot.send_message(
                     ev["owner_id"],
                     f"⏳ تستِ پلن «{PLAN_INFO[Plan(ev['plan'])]['title']}» شما چون ظرفِ "
-                    f"<b>{plan_trials.TRIAL_START_DEADLINE_DAYS} روز</b> پس از تاییدِ ادمین "
+                    f"<b>{getattr(plan_trials, 'TRIAL_START_DEADLINE_DAYS', '؟')} روز</b> پس از تاییدِ ادمین "
                     f"برای ساختِ ربات استفاده نشد، <b>غیرفعال</b> شد. "
                     f"در صورت نیاز می‌تونی پلن رو تهیه کنی.",
                     reply_markup=await _trial_expiry_kb(bot),
@@ -641,6 +641,18 @@ DEFAULT_BUTTONS = [
 
 
 # ---------------- کمک‌تابع‌ها ----------------
+def _trial_start_deadline_line() -> str:
+    """=== PATCH_TRIAL_DEADLINE_ATTR_V1 === لاگ: «module 'plan_trials' has no attribute TRIAL_START_DEADLINE_DAYS» —
+    اعلانِ «تستِ پلن فعال شد» به کاربر نمی‌رسید. این ثابت هیچ‌وقت در plan_trials تعریف نشده بود (مهلتِ ساختِ ربات اجرا
+    نمی‌شود)؛ پس فقط وقتی تعریف شده باشد جمله اضافه می‌شود و وگرنه اعلان بدونِ آن می‌رود."""
+    import plan_trials as _pt
+    d = getattr(_pt, "TRIAL_START_DEADLINE_DAYS", None)
+    if not d:
+        return ""
+    return (f"⚠️ فقط <b>{d} روز</b> فرصت داری که از همین الان ربات رو بسازی؛ "
+            "در غیر این صورت تست به‌صورت خودکار غیرفعال می‌شه.\n\n")
+
+
 def rial(n) -> str:
     return f"{int(n):,} تومان"
 
@@ -4826,8 +4838,7 @@ async def adm_trial_gift_days(msg: Message, state: FSMContext, bot: Bot):
             res["tg_id"],
             f"🎁 مدیر برای شما تست پلن «{title}» فعال کرد!\n"
             f"⏳ مدت اعتبار: <b>{res['days']} روز</b> (تا {to_jalali(res['expires_at'])}).\n\n"
-            f"⚠️ فقط <b>{plan_trials.TRIAL_START_DEADLINE_DAYS} روز</b> فرصت داری که از همین الان "
-            f"ربات رو بسازی؛ در غیر این صورت تست به‌صورت خودکار غیرفعال می‌شه.\n\n"
+            f"{_trial_start_deadline_line()}"
             f"همین الان به «🤖 ساخت ربات» برو؛ این پلن به‌صورت رایگان برات فعاله و می‌تونی باهاش ربات بسازی "
             f"(حتی اگه به سقفِ رایگانِ ساختِ ربات رسیده باشی). "
             f"بعد از ساختِ ربات، اگه تا پایانِ مهلت تمدید نکرده باشی، این ربات به‌صورت خودکار غیرفعال/بایگانی می‌شه.",
@@ -4846,8 +4857,7 @@ async def _notify_trial_approved(bot: Bot, res: dict) -> None:
             res["tg_id"],
             f"🎉 درخواست تست پلن «{title}» شما تایید شد!\n"
             f"⏳ مدت اعتبار: <b>{res['days']} روز</b> (تا {to_jalali(res['expires_at'])}).\n\n"
-            f"⚠️ فقط <b>{plan_trials.TRIAL_START_DEADLINE_DAYS} روز</b> فرصت داری که از همین الان "
-            f"ربات رو بسازی؛ در غیر این صورت تست به‌صورت خودکار غیرفعال می‌شه.\n\n"
+            f"{_trial_start_deadline_line()}"
             f"همین الان به «🤖 ساخت ربات» برو؛ این پلن به‌صورت رایگان برات فعاله و می‌تونی باهاش ربات بسازی "
             f"(حتی اگه به سقفِ رایگانِ ساختِ ربات رسیده باشی). "
             f"بعد از ساختِ ربات، اگه تا پایانِ {res['days']} روز تمدید نکرده باشی، این ربات به‌صورت "
