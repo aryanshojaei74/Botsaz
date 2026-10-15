@@ -258,6 +258,7 @@ from tenant.bots.booking import products_menu as _booking_pm  # noqa: F401
 from tenant.bots.community_mgmt import products_menu as _cmty_pm  # noqa: F401
 from tenant.bots.ad_bot import products_menu as _ad_pm  # noqa: F401
 from tenant.bots.funstat import products_menu as _fsb_pm  # noqa: F401  === PATCH_FUNSTAT_BOT_V1 ===
+from tenant.bots import escrow_bot as _escrow_bot_kind  # noqa: F401  === PATCH_ESCROW_BOT_KIND_V1 ===
 tenant_router.include_router(top_customers_router)
 tenant_router.include_router(dice_game_router)  # === PATCH_DICE_GAME_V1 ===
 tenant_router.include_router(tonpays_router)  # === PATCH_TONPAYS_V1 ===
@@ -14034,7 +14035,7 @@ _SIMPLE_ACTIONS: dict[str, tuple[str, str, frozenset | None]] = {
     # === PATCH_ESCROW_V1 ===
     "escrow":      ("🤝 معامله با واسطه (واسطه‌گری)",
                     "این دکمه حالا بخشِ «معامله با واسطه» را باز می‌کند (باید از تنظیمات روشن باشد).",
-                    frozenset({"virtual_service"})),
+                    frozenset({"virtual_service", "escrow_bot"})),   # PATCH_ESCROW_BOT_KIND_V1
     # خدمات مجازی تلگرام
     "vs_member":   ("👥 افزایش ممبر کانال/گروه تلگرام", "این دکمه حالا سرویس «افزایش ممبر» را نمایش می‌دهد.",
                     frozenset({"virtual_service"})),

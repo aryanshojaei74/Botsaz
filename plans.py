@@ -606,7 +606,7 @@ FEATURE_BOT_TYPES: dict[Feature, frozenset | None] = {
     Feature.OPENVPN_CONFIG: frozenset({"vpn_sales"}),
     # گزارشِ اکانتِ تستِ VPN فقط برایِ رباتِ فروشِ VPN معنا دارد (PATCH_TRIAL_REPORT_CHANNEL_V1)
     Feature.TRIAL_REPORT_CHANNEL: frozenset({"vpn_sales"}),
-    Feature.ESCROW: frozenset({"virtual_service"}),     # PATCH_ESCROW_V1
+    Feature.ESCROW: frozenset({"virtual_service", "escrow_bot"}),     # PATCH_ESCROW_V1 / PATCH_ESCROW_BOT_KIND_V1
     Feature.METERED_PLAN: frozenset({"vpn_sales"}),     # PATCH_METERED_PLAN_V1
     # --- مخصوصِ فروشگاهِ دیجیتال ---
     Feature.PRODUCT_SHOP: frozenset({"digital_shop"}),

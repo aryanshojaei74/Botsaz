@@ -243,6 +243,7 @@ FIELDS = {
     "community_mgmt": "🛡 مدیریت گروه و کانال",  # === PATCH_COMMUNITY_MGMT_V1 ===
     "panel_yar": "🗂 پنل‌یار (مدیریتِ پنل‌هایِ VPN)",  # === PATCH_PANEL_YAR_V1 ===
     "funstat": "🔎 Fun Stat (جست‌وجویِ آیدی/یوزرنیم)",  # === PATCH_FUNSTAT_BOT_V1 ===
+    "escrow_bot": "🤝 ربات واسطه‌گری (معامله با واسطه)",  # === PATCH_ESCROW_BOT_KIND_V1 ===
 }
 
 # زمینه‌های فعال (قابل انتخاب توسط کاربر). بقیه «به‌زودی».
@@ -275,7 +276,7 @@ FIELDS["partner"] = "🤝 ربات همکار"
 # زمینه ساخته شده‌اند دست‌نخورده کار می‌کنند (FIELDS ملاکِ نمایشِ نامه، نه
 # ACTIVE_FIELDS) و مالکشان می‌تواند از «🔄 تغییر نوع ربات» به یکی از سه
 # زمینهٔ فعال سوییچ کند.
-ACTIVE_FIELDS = {"vpn_sales", "virtual_service", "ad_bot", "funstat"}  # PATCH_FUNSTAT_BOT_V1
+ACTIVE_FIELDS = {"vpn_sales", "virtual_service", "ad_bot", "funstat", "escrow_bot"}  # PATCH_FUNSTAT_BOT_V1 / PATCH_ESCROW_BOT_KIND_V1
 
 # قیمت پلن‌ها به تومان (بعداً از تنظیمات قابل ویرایش می‌شود)
 PLAN_PRICE = {Plan.GROWTH.value: 5_000_000, Plan.PRO.value: 15_000_000}
@@ -608,7 +609,19 @@ FUNSTAT_TEMPLATE_PITCH = (
     "🔒 فقط دادهٔ عمومی نشون داده می‌شه؛ پیام‌هایِ خصوصی و گروه‌هایِ خصوصی نه."
 )
 
+# === PATCH_ESCROW_BOT_KIND_V1 ===
+ESCROW_BOT_TEMPLATE_PITCH = (
+    "🤝 <b>ربات واسطه‌گری</b> — معاملهٔ امن بینِ خریدار و فروشنده\n\n"
+    "با این ربات، کاربرانِ تو می‌تونن:\n\n"
+    "🧾 یک معامله با یک واسطه (ادمینِ معتمد) تعریف کنن\n"
+    "👥 برایِ هر معامله، گروهِ اختصاصیِ خریدار + فروشنده + واسطه به‌صورتِ خودکار ساخته بشه\n"
+    "🔒 پولِ خریدار تا تأییدِ دو طرف نزدِ ربات امانت می‌مونه و بعد آزاد می‌شه\n"
+    "💸 کارمزدِ واسطه رو خودت تعیین می‌کنی (و می‌تونی از هر طرف بگیری)\n\n"
+    "💡 نیازمندِ پلنِ رشد/حرفه‌ای و اتصالِ یک اکانتِ تلگرامیِ واسط است."
+)
+
 FIELD_PITCH = {
+    "escrow_bot": ESCROW_BOT_TEMPLATE_PITCH,  # PATCH_ESCROW_BOT_KIND_V1
     "funstat": FUNSTAT_TEMPLATE_PITCH,  # PATCH_FUNSTAT_BOT_V1
     "vpn_sales": VPN_TEMPLATE_PITCH,
     "panel_yar": PANEL_YAR_TEMPLATE_PITCH,
@@ -3803,6 +3816,18 @@ def _action_kb_base(field: str = "vpn_sales") -> InlineKeyboardMarkup:
         b.button(text="🧩 بعداً تنظیم می‌کنم", callback_data="act:skip")
         b.adjust(1)
         return b.as_markup()
+    if field == "escrow_bot":
+        # === PATCH_ESCROW_BOT_KIND_V1 ===
+        b.button(text="🤝 معامله با واسطه (واسطه‌گری)", callback_data="act:escrow", style=ButtonStyle.SUCCESS)
+        b.button(text="💰 کیف پول", callback_data="act:wallet")
+        b.button(text="👤 مشخصات کاربری", callback_data="act:profile")
+        b.button(text="🎫 ثبت تیکت", callback_data="act:ticket")
+        b.button(text="👥 زیرمجموعه‌گیری", callback_data="act:referral")
+        b.button(text="🗂 زیرمنو (دکمه‌های بیشتر)", callback_data="act:submenu")
+        b.button(text="📝 نمایش متن/پیام آزاد", callback_data="act:skip")
+        b.button(text="🧩 بعداً تنظیم می‌کنم", callback_data="act:skip")
+        b.adjust(1)
+        return b.as_markup()
     if field == "virtual_service":
         # ربات خدمات مجازی تلگرام
         b.button(text="👥 افزایش ممبر کانال/گروه تلگرام", callback_data="act:vs_member", style=ButtonStyle.SUCCESS)
@@ -3914,6 +3939,7 @@ ACTION_TITLE = {
     "show_shop": "نمایش فروشگاه", "slideshow": "اسلایدشو چندرسانه‌ای",
     "top_customers": "نفرات برتر",
     "funstat_search": "🔎 جست‌وجویِ Fun Stat",  # PATCH_FUNSTAT_BOT_V1
+    "escrow": "🤝 معامله با واسطه (واسطه‌گری)",  # PATCH_ESCROW_BOT_KIND_V1
     "web_app": "🌐 مینی‌اپ (باز کردن لینک به‌صورت وب‌اپ)",
     # خدمات مجازی تلگرام
     "vs_member":   "👥 افزایش ممبر کانال/گروه تلگرام",
@@ -5354,6 +5380,12 @@ async def show_pitch(cb: CallbackQuery, state: FSMContext):
             "مدیریتِ اعضا (بن/اخطار/سکوت) — همه از همین حالا فعال‌اند.\n"
             "🔒 زمان‌بندیِ پست و نظرسنجی فقط در پلن رشد/حرفه‌ای باز می‌شوند "
             "(نیازمند دسترسیِ ادمین در کانال/گروه)."
+        )
+    elif field == "escrow_bot":
+        # === PATCH_ESCROW_BOT_KIND_V1 ===
+        free_note = (
+            "\n\n💡 <b>پلن پایه (رایگان):</b> ربات ساخته می‌شود؛ کیف پول، تیکت و پنل مدیریت فعال است.\n"
+            "🔒 <b>واسطه‌گریِ خودکار</b> (ساختِ گروهِ معامله با اکانتِ واسط) در پلن رشد/حرفه‌ای باز می‌شود."
         )
     elif field == "funstat":
         # === PATCH_FUNSTAT_BOT_V1 ===

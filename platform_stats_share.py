@@ -32,6 +32,7 @@ stats_share_router = Router(name="stats_share")
 _FIELD_FA = {
     "vpn_sales": "فروش VPN",
     "funstat": "Fun Stat",
+    "escrow_bot": "واسطه‌گری",   # PATCH_ESCROW_BOT_KIND_V1
     "virtual_service": "خدمات مجازی",
     "digital_shop": "فروشگاه دیجیتال",
     "booking": "نوبت‌دهی",

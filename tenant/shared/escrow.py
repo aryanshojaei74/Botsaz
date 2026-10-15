@@ -718,7 +718,7 @@ async def _gate(cb_or_msg, bot: Bot):
     row = await (_owner_ok_msg(cb_or_msg, bot) if is_msg else _owner_ok(cb_or_msg, bot))
     if not row:
         return None
-    if getattr(row, "field", None) != "virtual_service" or not has_feature(row.plan, Feature.ESCROW):
+    if getattr(row, "field", None) not in ("virtual_service", "escrow_bot") or not has_feature(row.plan, Feature.ESCROW):  # PATCH_ESCROW_BOT_KIND_V1
         txt = "این قابلیت فقط برایِ رباتِ خدماتِ مجازی (پلنِ رشد به بالا) فعال است."
         await (cb_or_msg.answer(txt) if is_msg else cb_or_msg.answer(txt, show_alert=True))
         return None

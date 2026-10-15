@@ -32,7 +32,7 @@ BTN_PICK_FIELD = "🧭 تعیین نوع ربات"
 
 # همهٔ زمینه‌هایی که پنلِ مدیریت برایشان محتوا دارد (معتبر = دست نزن).
 KNOWN_FIELDS = {"vpn_sales", "digital_shop", "booking", "virtual_service",
-                "ad_bot", "community_mgmt", "funstat"}
+                "ad_bot", "community_mgmt", "funstat", "escrow_bot"}   # PATCH_ESCROW_BOT_KIND_V1
 
 
 def needs_field(field: str | None) -> bool:
