@@ -33,6 +33,20 @@ QUEUED_TEXT = ("✅ پرداختت تایید شد.\n\n📦 سفارشت در <b
 
 class SdFSM(StatesGroup):
     sending = State()
+    hours = State()
+
+
+async def deadline_hours(bot_id: int) -> int:
+    """مهلتِ پیش‌فرضِ تحویل (ساعت) که به مشتری گفته می‌شود و سفارش‌هایِ دیرکرده را در فهرست علامت می‌زند."""
+    from tenant import get_setting
+    try:
+        return max(1, min(720, int(float(await get_setting(bot_id, "stock_delivery_hours", "24") or 24))))
+    except (TypeError, ValueError):
+        return 24
+
+
+def _fa(t: str) -> str:
+    return (t or "").translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")).strip()
 
 
 def _kb(rows):
@@ -87,7 +101,9 @@ async def announce(bot: Bot, delivery_id: int) -> None:
                     logger.info("sd: شمارهٔ سفارش گرفته نشد")
         if u:
             try:
-                await bot.send_message(u.telegram_id, QUEUED_TEXT, parse_mode="HTML")
+                _h = await deadline_hours(d.bot_id)
+                await bot.send_message(u.telegram_id,
+                                       QUEUED_TEXT + f"\n⏱ زمانِ تقریبیِ تحویل: حداکثر <b>{_h} ساعت</b>.", parse_mode="HTML")
             except Exception:
                 logger.exception("sd: پیامِ صفِ تحویل به مشتری نرسید")
         if row:
@@ -271,27 +287,61 @@ async def sd_refund(cb: CallbackQuery, bot: Bot):
 
 
 # ─────────────── منویِ ادمین ───────────────
+def _age_h(d: StockDelivery) -> float:
+    import datetime as _dt
+    return max(0.0, (_dt.datetime.utcnow() - (d.created_at or _dt.datetime.utcnow())).total_seconds() / 3600)
+
+
+async def _counts(bot_id: int) -> tuple[int, int]:
+    async with Session() as s:
+        pend = await s.scalar(select(func.count()).select_from(StockDelivery).where(
+            StockDelivery.bot_id == bot_id, StockDelivery.status == "pending")) or 0
+        done = await s.scalar(select(func.count()).select_from(StockDelivery).where(
+            StockDelivery.bot_id == bot_id, StockDelivery.status == "delivered")) or 0
+    return int(pend), int(done)
+
+
 async def _menu_view(bot_id: int):
     on = await is_on(bot_id)
-    async with Session() as s:
-        pend = (await s.scalars(select(StockDelivery).where(
-            StockDelivery.bot_id == bot_id, StockDelivery.status == "pending")
-            .order_by(StockDelivery.id).limit(15))).all()
-        total_pend = await s.scalar(select(func.count()).select_from(StockDelivery).where(
-            StockDelivery.bot_id == bot_id, StockDelivery.status == "pending")) or 0
-    txt = ("📦 <b>تحویل دستیِ کانفیگ‌هایِ آماده</b>\n\n"
-           "وقتی روشن باشد، بعد از پرداختِ «کانفیگ آمادهٔ انبار» (کیف پول یا تاییدِ رسیدِ کارت) کانفیگ خودکار فرستاده نمی‌شود؛ "
-           "به مشتری «در صفِ تحویل قرار گرفت» می‌گوییم و کانفیگِ تازه را خودت می‌فرستی (انبار دست‌نخورده می‌ماند). "
-           "مناسب وقتی است که کانفیگ‌هایِ آماده با گذشتِ زمان روزشان کم می‌شود.\n\n"
-           f"وضعیت: <b>{'✅ روشن' if on else '❌ خاموش'}</b>\n"
-           f"⏳ سفارش‌هایِ منتظرِ تحویل: <b>{total_pend}</b>\n"
+    hrs = await deadline_hours(bot_id)
+    pend_n, done_n = await _counts(bot_id)
+    txt = ("📬 <b>صفِ تحویل — کانفیگ‌هایِ آماده</b>\n\n"
+           "وقتی تحویلِ دستی روشن باشد، بعد از پرداختِ «کانفیگ آمادهٔ انبار» (کیف پول یا تاییدِ رسیدِ کارت) کانفیگ خودکار فرستاده نمی‌شود؛ "
+           "به مشتری «در صفِ تحویل» می‌گوییم و کانفیگِ تازه را خودت می‌فرستی. انبار دست‌نخورده می‌ماند، پس مشتری کانفیگی با روزِ کم‌شده "
+           "نمی‌گیرد.\n\n"
+           f"وضعیت: <b>{'🟢 دستی (روشن)' if on else '⚪️ خودکار (خاموش)'}</b>\n"
+           f"⏱ مهلتِ پیش‌فرضِ تحویل: <b>{hrs} ساعت</b>\n"
+           f"📬 در انتظار: <b>{pend_n}</b> | 📁 انجام‌شده: <b>{done_n}</b>\n"
            "<i>(پلن‌هایِ خودکار از پنل همچنان فوری تحویل می‌شوند.)</i>")
-    rows = [[_btn("⛔️ خاموش‌کردن" if on else "✅ روشن‌کردن", "sdl:toggle",
-                  ButtonStyle.DANGER if on else ButtonStyle.SUCCESS)]]
-    for d in pend:
-        rows.append([_btn(f"📦 #{d.id} — {_spec(d)} — {d.amount:,} ت", f"sd:send:{d.id}", ButtonStyle.PRIMARY)])
-    rows.append([_btn("⬅️ بازگشت", "tadm:sec:settings", ButtonStyle.DANGER)])
+    rows = [[_btn("🟢 تحویل دستی: روشن (بزن تا خودکار شود)" if on else "⚪️ تحویل خودکار (بزن تا دستی شود)", "sdl:toggle",
+                  ButtonStyle.SUCCESS if on else ButtonStyle.PRIMARY)],
+            [_btn(f"📬 در انتظار تحویل ({pend_n})", "sdl:pend", ButtonStyle.PRIMARY),
+             _btn(f"📁 انجام‌شده‌ها ({done_n})", "sdl:done")],
+            [_btn(f"⏱ مهلتِ پیش‌فرض تحویل: {hrs} ساعت", "sdl:hours")],
+            [_btn("⬅️ بازگشت", "tadm:sec:settings", ButtonStyle.DANGER)]]
     return txt, _kb(rows)
+
+
+async def _list_view(bot_id: int, status: str):
+    hrs = await deadline_hours(bot_id)
+    async with Session() as s:
+        items = (await s.execute(select(StockDelivery, BotUser).join(BotUser, BotUser.id == StockDelivery.user_id).where(
+            StockDelivery.bot_id == bot_id, StockDelivery.status == status)
+            .order_by(StockDelivery.id.desc() if status != "pending" else StockDelivery.id.asc()).limit(20))).all()
+    rows, lines = [], [("📬 <b>در انتظار تحویل</b>" if status == "pending" else "📁 <b>انجام‌شده‌ها (۲۰ موردِ آخر)</b>") + "\n"]
+    for d, u in items:
+        who = u.full_name or str(u.telegram_id)
+        if status == "pending":
+            late = _age_h(d) > hrs
+            lines.append(f"{'🔴' if late else '🟡'} #{d.id} — {_spec(d)} — {d.amount:,} ت — {_html.escape(who)} — {int(_age_h(d))} ساعت پیش"
+                         + (" ⚠️ دیرکرد" if late else ""))
+            rows.append([_btn(f"📦 #{d.id} — {_spec(d)} — ارسال", f"sd:send:{d.id}", ButtonStyle.DANGER if late else ButtonStyle.PRIMARY)])
+        else:
+            lines.append(f"✅ #{d.id} — {_spec(d)} — {d.amount:,} ت — {_html.escape(who)} — {d.sent_count} کانفیگ")
+    if not items:
+        lines.append("✅ چیزی در انتظارِ تحویل نیست." if status == "pending" else "هنوز تحویلی ثبت نشده.")
+    rows.append([_btn("⬅️ بازگشت", "sdl:menu", ButtonStyle.DANGER)])
+    return "\n".join(lines), _kb(rows)
 
 
 async def admin_menu(cb, bot: Bot):
@@ -319,3 +369,45 @@ async def sdl_toggle(cb: CallbackQuery, bot: Bot):
         return
     await set_setting(row.id, "stock_manual_delivery", "0" if await is_on(row.id) else "1")
     await admin_menu(cb, bot)
+
+
+@sd_router.callback_query(F.data.in_({"sdl:pend", "sdl:done"}))
+async def sdl_list(cb: CallbackQuery, bot: Bot):
+    row = await _admin_row(cb, bot)
+    if not row:
+        return
+    txt, kb = await _list_view(row.id, "pending" if cb.data == "sdl:pend" else "delivered")
+    try:
+        await cb.message.edit_text(txt, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await bot.send_message(cb.from_user.id, txt, reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
+
+
+@sd_router.callback_query(F.data == "sdl:hours")
+async def sdl_hours_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _admin_row(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    await state.set_state(SdFSM.hours)
+    await bot.send_message(cb.from_user.id, "⏱ مهلتِ پیش‌فرضِ تحویل را به ساعت بفرست (۱ تا ۷۲۰؛ مثلاً 1 یا 24):",
+                           reply_markup=_kb([[_btn("❌ لغو", "sdl:menu", ButtonStyle.DANGER)]]))
+    await cb.answer()
+
+
+@sd_router.message(SdFSM.hours, F.text)
+async def sdl_hours_save(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import set_setting
+    row = await _admin_row(msg, bot)
+    if not row:
+        await state.clear()
+        return
+    t = _fa(msg.text or "")
+    if not t.isdigit() or not (1 <= int(t) <= 720):
+        await msg.answer("❌ عددِ معتبر بین ۱ تا ۷۲۰ بفرست.")
+        return
+    await set_setting(row.id, "stock_delivery_hours", str(int(t)))
+    await state.clear()
+    txt, kb = await _menu_view(row.id)
+    await msg.answer("✅ ذخیره شد.\n\n" + txt, reply_markup=kb, parse_mode="HTML")

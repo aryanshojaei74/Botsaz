@@ -217,3 +217,24 @@ async def test_card_receipt_approval_manual_mode_releases_reservation_and_queues
     assert cfg.status == "in_stock" and cfg.owner_user_id is None and sent_cfgs == []
     assert o.status == "paid" and d and d.status == "pending" and d.order_id == oid
     assert any("صفِ تحویل" in str(x[1]) for x in bot.sent)
+
+
+@pytest.mark.asyncio
+async def test_menu_lists_counts_deadline_and_marks_overdue(db):
+    import datetime as dt
+    bot = FakeBot()
+    did = await _queued(db, bot)
+    await tenant.set_setting(9, "stock_delivery_hours", "1")
+    tenant._SETTING_CACHE.clear()
+    txt, kb = await SD._menu_view(9)
+    datas = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert "در انتظار: <b>1</b>" in txt and "1 ساعت" in txt and {"sdl:toggle", "sdl:pend", "sdl:done", "sdl:hours"} <= set(datas)
+    async with db() as s:                                       # سفارش ۳ ساعت پیش ⇒ دیرکرد
+        d = await s.get(models.StockDelivery, did)
+        d.created_at = dt.datetime.utcnow() - dt.timedelta(hours=3)
+        await s.commit()
+    t2, k2 = await SD._list_view(9, "pending")
+    assert "دیرکرد" in t2 and f"sd:send:{did}" in [b.callback_data for r in k2.inline_keyboard for b in r]
+    t3, _ = await SD._list_view(9, "delivered")
+    assert "هنوز تحویلی" in t3
+    assert any("24 ساعت" in str(x[1]) for x in bot.sent if x[0] == 1001)     # پیامِ مشتری مهلتِ (پیش‌فرض) را می‌گوید
