@@ -8139,6 +8139,7 @@ async def do_free_trial(msg, bot: "Bot", bot_id: int, u: BotUser,
         if trial_mode in ("manual", "unlimited") and select_mode == "range":
             await _trial_show_range_picker(msg, bot_id, btn_cfg, mb_id)
             return
+        btn_cfg = await _trial_fill_global(bot_id, btn_cfg)    # PATCH_TRIAL_GLOBAL_FALLBACK_V1
         try:
             gb = float(btn_cfg.get("trial_gb", 2) or 2)
         except (ValueError, TypeError):
@@ -16196,9 +16197,31 @@ def _trial_cfg_of(mb) -> dict:
         return {}
 
 
+# === PATCH_TRIAL_GLOBAL_FALLBACK_V1 ===
+# گزارشِ تیکت #849: «دو جا تنظیمِ تستِ رایگان هست؛ اونی که تویِ پنل مدیریت (تنظیمات تست رایگان) هست کار نمی‌کنه».
+# ریشه: دکمهٔ «تست رایگان» تنظیمِ اختصاصیِ خودش را دارد و ویزاردِ دکمه با «✅ ثبت» مقدارهایِ پیش‌فرضِ ثابتِ ۲ گیگ/۳ روز را
+# در دکمه می‌نوشت؛ پس مقدارِ تنظیماتِ کلیِ ربات هیچ‌وقت خوانده نمی‌شد. حالا هر مقداری که روی دکمه صراحتاً ثبت نشده باشد
+# (حجم/مدت) از «تنظیماتِ تستِ رایگان» ربات می‌آید؛ مقدارِ صریحِ دکمه همچنان اولویت دارد.
+async def _trial_fill_global(bot_id: int, cfg: dict | None) -> dict:
+    out = dict(cfg or {})
+    filled = []
+    if "trial_gb" not in out:
+        out["trial_gb"] = str(await get_setting(bot_id, "trial_gb", "2"))
+        filled.append("gb")
+    if "trial_days" not in out and "trial_hours" not in out:     # مدت یک واحد است (روز+ساعت)
+        out["trial_days"] = str(await get_setting(bot_id, "trial_days", "3"))
+        _h = str(await get_setting(bot_id, "trial_hours", "0"))
+        if _h not in ("", "0"):
+            out["trial_hours"] = _h
+        filled.append("duration")
+    if filled:
+        out["_from_global"] = filled
+    return out
+
+
 async def _trial_cfg_update(mb_id: int, **updates) -> dict | None:
     """به‌روزرسانیِ چند کلید از config یک دکمهٔ تست و ذخیرهٔ آن. مقادیرِ None
-    حذف می‌شوند."""
+    حذف می‌شوند. (خروجی برایِ نمایش با مقدارهایِ تنظیماتِ کلی پُر می‌شود؛ ذخیره‌شده فقط مقدارهایِ صریح است.)"""
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
         if not mb:
@@ -16216,7 +16239,7 @@ async def _trial_cfg_update(mb_id: int, **updates) -> dict | None:
                 cfg[k] = v
         mb.config = json.dumps(cfg, ensure_ascii=False) if cfg else None
         await s.commit()
-        return cfg
+        return await _trial_fill_global(mb.bot_id, cfg)
 
 
 def _trial_summary_text(cfg: dict) -> str:
@@ -16262,6 +16285,8 @@ def _trial_summary_text(cfg: dict) -> str:
             lines.append(f"تعداد کاربر: <b>{'♾️ نامحدود' if _u == '0' else _u}</b>")
     _limit = str(cfg.get("trial_claim_limit", 1) or 0)
     lines.append(f"سقفِ دفعات هر کاربر: <b>{'♾️ نامحدود' if _limit == '0' else _limit + ' بار'}</b>")
+    if cfg.get("_from_global"):
+        lines.append("\nℹ️ حجم/مدتی که برایِ این دکمه جدا ثبت نکرده‌ای، از «🎁 تنظیمات تست رایگان VPN» (پنل مدیریت ← تنظیمات) گرفته می‌شود.")
     return "\n".join(lines)
 
 
@@ -16300,7 +16325,7 @@ async def thb_trial_top_menu(cb: CallbackQuery, bot: Bot):
                                           callback_data=f"thb:trclear:{mb_id}", style=ButtonStyle.DANGER)])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت به دکمه",
                                       callback_data=f"thb:pick:{mb_id}", style=ButtonStyle.DANGER)])
-    await cb.message.edit_text(_trial_summary_text(cfg),
+    await cb.message.edit_text(_trial_summary_text(await _trial_fill_global(row.id, cfg)),
                                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     await cb.answer()
 
@@ -16758,12 +16783,9 @@ async def thb_trial_fix_ok(cb: CallbackQuery, bot: Bot):
     if not mb:
         return
     cfg = _trial_cfg_of(mb)
-    # اگر مقداری هنوز ذخیره نشده، پیش‌فرض‌ها را ثبت کن
-    cfg = await _trial_cfg_update(
-        mb_id,
-        trial_gb=str(cfg.get("trial_gb", 2)),
-        trial_days=str(cfg.get("trial_days", 3)),
-        trial_users=str(cfg.get("trial_users", 0))) or {}
+    # === PATCH_TRIAL_GLOBAL_FALLBACK_V1 === دیگر پیش‌فرضِ ثابتِ ۲ گیگ/۳ روز ذخیره نمی‌شود؛ حجم/مدتِ ثبت‌نشده از
+    # تنظیماتِ کلیِ تست خوانده می‌شود. فقط «تعداد کاربر» (که پیش‌فرضِ مستقل دارد) ثبت می‌شود.
+    cfg = await _trial_cfg_update(mb_id, trial_users=str(cfg.get("trial_users", 0))) or {}
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅️ بازگشت به تنظیمات دکمه",
                               callback_data=f"thb:pick:{mb_id}", style=ButtonStyle.DANGER)]])
@@ -29706,7 +29728,9 @@ async def set_trial_menu(cb: CallbackQuery, bot: Bot):
         f"مدت: <b>{duration_label}</b>\n"
         f"یادآوریِ عدمِ استفاده: <b>{unused_label}</b>\n"
         f"شروعِ زمانِ تست: <b>{onhold_lbl}</b>\n\n"
-        "⚠️ هر کاربر فقط یک‌بار می‌تواند از تست رایگان استفاده کند."
+        "⚠️ هر کاربر فقط یک‌بار می‌تواند از تست رایگان استفاده کند.\n\n"
+        "ℹ️ اگر از «تنظیم و مدیریت دکمه‌ها» یک دکمه را روی «تست رایگان VPN» گذاشته‌ای، حجم و مدتِ آن دکمه از همین‌جا "
+        "خوانده می‌شود، مگر اینکه خودِ دکمه مقدارِ اختصاصی داشته باشد."
     )
     try:
         await cb.message.edit_text(text, reply_markup=kb)
