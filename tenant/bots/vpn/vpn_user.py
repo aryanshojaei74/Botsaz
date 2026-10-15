@@ -2050,9 +2050,21 @@ async def _render_bundle_bucket(bot: Bot, msg: Message, bot_id: int, plans: list
     if _br:
         rows.append(_br)
     icon = (cat.icon if cat else icon_override) or "🧩"
-    title = f"{icon} <b>{bucket_title}</b>\n\nیکی را انتخاب کن:"
+    title = _with_icon(await _cat_icons_on(bot_id), icon, f"<b>{bucket_title}</b>") + "\n\nیکی را انتخاب کن:"
     await msg.answer(_with_btn_header(title, header),
                      reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+# === PATCH_VPN_CAT_ICONS_TOGGLE_V1 ===
+# درخواستِ مشتری (#854): آیکنِ کنارِ دکمهٔ دسته‌ها (🛰 / 🏷 / 🧩 …) ظاهرِ دکمه‌ها را خراب می‌کند و در بعضی
+# گوشی‌ها شبیهِ پوشه نمایش داده می‌شود. مالک می‌تواند خاموشش کند؛ پیش‌فرض روشن (بدونِ تغییرِ رفتارِ ربات‌هایِ فعلی).
+async def _cat_icons_on(bot_id: int) -> bool:
+    from tenant import get_setting
+    return (await get_setting(bot_id, "vpn_cat_icons", "1")) != "0"
+
+
+def _with_icon(on: bool, icon: str, text: str) -> str:
+    return f"{icon} {text}" if on and icon else text
 
 
 # === PATCH_VPN_PLAN_SORT_V1 ===
@@ -2135,7 +2147,7 @@ async def show_bundle_hub(bot: Bot, msg: Message, bot_id: int, cat_id: int, stat
     if _br:
         rows.append(_br)
     text = _with_btn_header(
-        f"{cat.icon or '🧩'} <b>{cat.title}</b>\n\nیک دسته را انتخاب کن:", header)
+        _with_icon(await _cat_icons_on(bot_id), cat.icon or '🧩', f"<b>{cat.title}</b>") + "\n\nیک دسته را انتخاب کن:", header)
     await msg.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
@@ -2259,8 +2271,9 @@ async def show_bundle_all_categories(bot: Bot, msg: Message, bot_id: int, state=
 
     if state is not None:
         await state.update_data(vbuy_mb_id=mb_id)
+    _ico_on = await _cat_icons_on(bot_id)
     rows = [[InlineKeyboardButton(
-                text=f"{c.icon or '🧩'} {c.title}" + (" — 🔴 ظرفیت پر" if getattr(c, "sale_full", False) else ""),
+                text=_with_icon(_ico_on, c.icon or '🧩', c.title) + (" — 🔴 ظرفیت پر" if getattr(c, "sale_full", False) else ""),
                 callback_data=f"bndl:cat:{c.id}",
                 style=(ButtonStyle.DANGER if getattr(c, "sale_full", False) else ButtonStyle.PRIMARY))]
             for c in cats]
@@ -2268,7 +2281,7 @@ async def show_bundle_all_categories(bot: Bot, msg: Message, bot_id: int, state=
     if _br:
         rows.append(_br)
     text = _with_btn_header(  # === PATCH_VPN_EDITABLE_TITLES_V1 ===
-        f"🌐 <b>{await _get_page_title(bot_id, 'all_cats')}</b>\n\nیک دسته را انتخاب کن:", header)
+        _with_icon(_ico_on, "🌐", f"<b>{await _get_page_title(bot_id, 'all_cats')}</b>") + "\n\nیک دسته را انتخاب کن:", header)
     await msg.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
@@ -2331,18 +2344,19 @@ async def show_bundle_all_services(bot: Bot, msg: Message, bot_id: int, state=No
     if state is not None:
         await state.update_data(vbuy_mb_id=mb_id)
     from tenant import inline_back_row, _with_btn_header
-    rows = [[InlineKeyboardButton(text=f"🏷 {n}", callback_data=f"bndl:svc:{i}",
+    _ico_on = await _cat_icons_on(bot_id)
+    rows = [[InlineKeyboardButton(text=_with_icon(_ico_on, "🏷", n), callback_data=f"bndl:svc:{i}",
                                   style=ButtonStyle.PRIMARY)]
             for i, n in enumerate(bucket_names)]
     if has_uncat:
         rows.append([InlineKeyboardButton(
-            text="🌐 سایر", callback_data=f"bndl:svc:{len(bucket_names)}",
+            text=_with_icon(_ico_on, "🌐", "سایر"), callback_data=f"bndl:svc:{len(bucket_names)}",
             style=ButtonStyle.PRIMARY)])
     _br = await inline_back_row(bot_id)
     if _br:
         rows.append(_br)
     text = _with_btn_header(  # === PATCH_VPN_EDITABLE_TITLES_V1 ===
-        f"📦 <b>{await _get_page_title(bot_id, 'all_svcs')}</b>\n\nیک دسته را انتخاب کن:", header)
+        _with_icon(_ico_on, "📦", f"<b>{await _get_page_title(bot_id, 'all_svcs')}</b>") + "\n\nیک دسته را انتخاب کن:", header)
     await msg.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 

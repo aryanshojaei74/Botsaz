@@ -42,3 +42,30 @@ async def test_move_plan(monkeypatch, tmp_path):
     assert await va.move_plan(1, "k", ids["b"], "up") is False      # بالاترین
     assert await va.move_plan(1, "k", ids["d"], "up") is True        # از روی c (دستهٔ دیگر) می‌پرد
     assert (await order()).index("d") < (await order()).index("a")
+
+
+async def test_move_category(monkeypatch, tmp_path):
+    import tenant.shared.miniapp_admin as ma
+    from models import MiniAppCategory
+    from sqlalchemy import select
+    eng = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/c.db")
+    async with eng.begin() as c:
+        await c.run_sync(Base.metadata.create_all)
+    S = async_sessionmaker(eng, expire_on_commit=False)
+    monkeypatch.setattr(ma, "Session", S)
+    async with S() as s:
+        for t in "abc":
+            s.add(MiniAppCategory(bot_id=1, title=t))
+        await s.commit()
+
+    async def order():
+        async with S() as s:
+            return [c.title for c in (await s.scalars(select(MiniAppCategory).order_by(MiniAppCategory.sort_order, MiniAppCategory.id))).all()]
+    async with S() as s:
+        ids = {c.title: c.id for c in (await s.scalars(select(MiniAppCategory))).all()}
+    assert await ma.move_category(1, ids["c"], "up") is True
+    assert await order() == ["a", "c", "b"]
+    assert await ma.move_category(1, ids["a"], "up") is False
+    assert await ma.move_category(1, ids["b"], "dn") is False
+    assert await ma.move_category(1, ids["a"], "dn") is True
+    assert await order() == ["c", "a", "b"]

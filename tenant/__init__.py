@@ -29913,6 +29913,21 @@ async def set_buy_onhold(cb: CallbackQuery, bot: Bot):
     await tadm_sec_settings(cb, bot)
 
 
+# === PATCH_VPN_CAT_ICONS_TOGGLE_V1 ===
+@tenant_router.callback_query(F.data == "set:cat_icons")
+async def set_cat_icons(cb: CallbackQuery, bot: Bot):
+    """روشن/خاموش‌کردنِ آیکنِ کنارِ دکمه‌هایِ دسته‌ها در فروشگاه (🛰 / 🏷 / 🧩 …)."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cur = await get_setting(row.id, "vpn_cat_icons", "1")
+    new = "0" if cur != "0" else "1"
+    await set_setting(row.id, "vpn_cat_icons", new)
+    await cb.answer("⛔️ آیکنِ دسته‌ها خاموش شد؛ فقط متن نمایش داده می‌شود." if new == "0"
+                    else "✅ آیکنِ دسته‌ها دوباره روشن شد.", show_alert=True)
+    await tadm_sec_settings(cb, bot)
+
+
 # === PATCH_TRIAL_ON_HOLD_V1 ===
 @tenant_router.callback_query(F.data == "set:trial_onhold")
 async def set_trial_onhold(cb: CallbackQuery, bot: Bot):

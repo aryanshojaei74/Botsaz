@@ -197,7 +197,7 @@ def test_registered_callback_has_a_router_handler(cb):
 VPN_CALLBACKS = {
     "tadm:edit_guides", "tadm:cfgguide", "tadm:cfgnameprompt", "set:trial",
     "set:buy_onhold", "qrbg:menu", "tadm:groupsettings",
-    "vtl:menu",   # PATCH_VPN_TITLES_IN_SETTINGS_V1
+    "vtl:menu", "set:cat_icons",   # PATCH_VPN_TITLES_IN_SETTINGS_V1
     "vrf:cfg",    # PATCH_VPN_REFUND_V1
     "stk:menu",   # PATCH_STOCK_ALARM_V1
 }
@@ -231,7 +231,7 @@ def test_vpn_menu_order_matches_previous_layout(vpn):
     assert out == ["tadm:homebtns", "tadm:btn_colors", "tadm:edit_guides", "tadm:cfgguide",
                    "tadm:cfgnameprompt", "set:trial", "gwname:menu", "set:buy_onhold",
                    "set:welcome", "dga:menu", "qrbg:menu", "pemj:menu:0",
-                   "set:homemenutext", "tadm:backup:menu", "tadm:groupsettings", "miniapp:panel", "vtl:menu", "vrf:cfg", "stk:menu"]
+                   "set:homemenutext", "tadm:backup:menu", "tadm:groupsettings", "miniapp:panel", "vtl:menu", "set:cat_icons", "vrf:cfg", "stk:menu"]
 
 
 def test_vpn_group_settings_only_on_paid_plans(vpn):

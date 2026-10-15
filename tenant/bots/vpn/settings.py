@@ -39,6 +39,20 @@ async def _buy_onhold_label(bot_id: int) -> str:
     return _BUY_ONHOLD_PREFIX + ": " + ("⏸ از اولین اتصال" if on else "▶️ از لحظهٔ خرید")
 
 
+_CAT_ICONS_PREFIX = "🔣 آیکنِ کنارِ دسته‌ها"
+
+
+async def _cat_icons_label(bot_id: int) -> str:
+    from tenant import get_setting
+    on = await get_setting(bot_id, "vpn_cat_icons", "1") != "0"
+    return _CAT_ICONS_PREFIX + ": " + ("✅ روشن" if on else "⛔️ خاموش")
+
+
+async def _cat_icons(cb, bot):
+    from tenant import set_cat_icons
+    await set_cat_icons(cb, bot)
+
+
 async def _edit_guides(cb, bot):
     from tenant import tadm_edit_guides
     await tadm_edit_guides(cb, bot)
@@ -101,6 +115,11 @@ register_settings_items(KIND, [
     SettingsItem(
         label="💸 برگشت وجه سرویس", callback="vrf:cfg",
         handler=_refund_cfg, needs_state=True,
+        after=("vtl:menu",),
+    ),
+    SettingsItem(
+        label=_CAT_ICONS_PREFIX + ": ✅ روشن", callback="set:cat_icons",
+        handler=_cat_icons, label_fn=_cat_icons_label, label_prefix=_CAT_ICONS_PREFIX,
         after=("vtl:menu",),
     ),
     SettingsItem(

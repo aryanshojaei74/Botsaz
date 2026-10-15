@@ -800,6 +800,9 @@ async def miniapp_cat_detail(cb: CallbackQuery, bot: Bot):
             style=(ButtonStyle.DANGER if cat.sale_full else ButtonStyle.SUCCESS))],   # PATCH_CATEGORY_SALE_FULL_V1
         [InlineKeyboardButton(text=toggle_txt, callback_data=f"miniapp:cattoggle:{cat_id}",
                               style=toggle_style)],
+        # ترتیبِ نمایشِ دسته‌ها در فروشگاهِ ربات و مینی‌اپ
+        [InlineKeyboardButton(text="🔼 بالا بردن", callback_data=f"miniapp:catmv:{cat_id}:up", style=ButtonStyle.PRIMARY),
+         InlineKeyboardButton(text="🔽 پایین بردن", callback_data=f"miniapp:catmv:{cat_id}:dn", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="🗑 حذفِ دسته", callback_data=f"miniapp:catdel:{cat_id}", style=ButtonStyle.DANGER)],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="miniapp:cats", style=ButtonStyle.DANGER)],
     ]
@@ -811,6 +814,46 @@ async def miniapp_cat_detail(cb: CallbackQuery, bot: Bot):
         "هرچه اینجا وصل کنی، در همین دسته از مینی‌اپ به کاربر نشان داده می‌شود.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     await cb.answer()
+
+
+async def move_category(bot_id: int, cat_id: int, direction: str) -> bool:
+    """دسته را یک پله بالا/پایین می‌برد. ترتیبِ فعلی اول به 0..n-1 پیوسته می‌شود
+    (دسته‌هایی که sort_order برابر دارند هم درست جابه‌جا شوند). True = جابه‌جا شد."""
+    async with Session() as s:
+        cats = list((await s.scalars(select(MiniAppCategory).where(
+            MiniAppCategory.bot_id == bot_id).order_by(MiniAppCategory.sort_order, MiniAppCategory.id))).all())
+        idx = next((i for i, c in enumerate(cats) if c.id == cat_id), None)
+        if idx is None:
+            return False
+        j = idx - 1 if direction == "up" else idx + 1
+        for i, c in enumerate(cats):
+            c.sort_order = i
+        moved = 0 <= j < len(cats)
+        if moved:
+            cats[idx].sort_order, cats[j].sort_order = cats[j].sort_order, cats[idx].sort_order
+        await s.commit()
+    return moved
+
+
+@miniapp_admin_router.callback_query(F.data.startswith("miniapp:catmv:"))
+async def miniapp_cat_move(cb: CallbackQuery, bot: Bot):
+    from tenant import get_bot_row, is_owner_or_admin
+    _, _, cat_id, direction = cb.data.split(":")
+    row = await get_bot_row(bot)
+    if not row or not await is_owner_or_admin(row.id, cb.from_user.id, row.owner_id):
+        await cb.answer()
+        return
+    async with Session() as s:
+        cat = await s.get(MiniAppCategory, int(cat_id))
+    if not cat or cat.bot_id != row.id:
+        await cb.answer("پیدا نشد", show_alert=True)
+        return
+    moved = await move_category(row.id, cat.id, direction)
+    if not moved:
+        await cb.answer("بالاتر/پایین‌تر از این جایی نیست.")
+        return
+    await cb.answer("✅ جابه‌جا شد")
+    await miniapp_cats(cb, bot)        # لیست تازه با ترتیبِ جدید (ترتیب همان ترتیبِ فروشگاه است)
 
 
 # === PATCH_MINIAPP_CAT_RENAME_V1 ===
