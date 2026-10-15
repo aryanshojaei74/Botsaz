@@ -4591,10 +4591,15 @@ async def vc_adjust(cb: CallbackQuery, bot: Bot, state: FSMContext):
                                  panel_key=_back_panel_key or None,
                                  mb_id=_data_before_clear.get("vbuy_mb_id"))
         return
+    # همان لحظه جواب بده: خواندنِ تنظیمات و ساختِ صفحه ~۲ ثانیه طول می‌کشد و چرخانکِ دکمه نباید تا آن موقع بماند
+    try:
+        await cb.answer()
+    except Exception:
+        logger.debug("vc: پاسخِ زودهنگام ممکن نشد")
     async with Session() as s:
         row = await s.scalar(select(BotRow).where(BotRow.token == bot.token))
     if not row:
-        await cb.answer(); return
+        return
     await _vc_recover_panel_key(state, row.id)     # PATCH_VC_RECOVER_PANEL_KEY_V1
     data  = await state.get_data()
     cur_panel_key = data.get("vc_panel_key", "")
@@ -4620,7 +4625,6 @@ async def vc_adjust(cb: CallbackQuery, bot: Bot, state: FSMContext):
                                          days=days, gb=gb)
         gb = max(int(cfg_new["vc_min_gb"]), min(gb, int(cfg_new["vc_max_gb"])))
     await state.update_data(vc_gb=gb, vc_days=days, vc_count=count)
-    await cb.answer()
     try:
         text, kb = await _vc_render(bot, row.id, cb.from_user.id, gb, days, count,
                                     cur_panel_key, state)

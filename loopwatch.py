@@ -18,6 +18,19 @@ logger = logging.getLogger("loopwatch")
 _started = False
 
 
+def format_stack(frame, tail: int = 6, project: int = 4) -> str:
+    """آخرین `tail` فریم + آخرین `project` فریمِ *کدِ خودمان* (نه site-packages).
+
+    وقتی لوپ داخلِ SQLAlchemy/aiohttp گیر کرده، شش فریمِ آخر همه کتابخانه‌اند و معلوم
+    نیست کدام تابعِ ما آن را صدا زده؛ فریم‌هایِ پروژه‌ای این را روشن می‌کنند."""
+    frames = traceback.extract_stack(frame)
+    last = traceback.format_list(frames[-tail:])
+    mine = [f for f in frames if "site-packages" not in f.filename and "/lib/python" not in f.filename][-project:]
+    if not mine:
+        return "".join(last)
+    return "".join(last) + "  ── کدِ پروژه ──\n" + "".join(traceback.format_list(mine))
+
+
 def start(name: str = "") -> None:
     global _started
     if _started or os.getenv("LOOPWATCH", "1") == "0":
@@ -46,7 +59,7 @@ def start(name: str = "") -> None:
                 state["reported"] = True
                 try:
                     fr = sys._current_frames().get(main_id)
-                    stack = "".join(traceback.format_stack(fr)[-6:]) if fr else "?"
+                    stack = format_stack(fr) if fr else "?"
                 except Exception as e:  # noqa: BLE001
                     stack = f"({type(e).__name__})"
                 logger.warning("event loop blocked %.1fs [%s pid=%s] stack:\n%s", lag, name, os.getpid(), stack)

@@ -23346,8 +23346,12 @@ async def antispam_mw(handler, event, data):
         async with Session() as s:
             pu = await get_user(s, u.id, u.full_name or "")
             # === PATCH_MEMBER_STATS_V1 ===
-            pu.last_active_at = datetime.datetime.utcnow()
-            await s.commit()
+            # فقط اگر آخرین ثبت بیش از ۲ دقیقه پیش بوده بنویس؛ نوشتن روی هر پیام (۷۵ هزار UPDATE با
+            # میانگین ۱۶ms در آمار) ردیفِ کاربر را قفل می‌کرد و دقتِ بیشتر از دقیقه لازم نیست.
+            _now_act = datetime.datetime.utcnow()
+            if pu.last_active_at is None or (_now_act - pu.last_active_at).total_seconds() > 120:
+                pu.last_active_at = _now_act
+                await s.commit()
             already_banned = pu.is_banned
             warnings_now = pu.spam_warnings or 0
 
