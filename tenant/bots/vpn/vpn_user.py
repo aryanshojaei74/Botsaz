@@ -1718,7 +1718,7 @@ async def show_vpn_plans(bot: Bot, msg: Message, bot_id: int, state=None, panel_
     _groups: dict[str | None, list] = {}
     _order: list[str | None] = []
     # === PATCH_VPN_PLAN_SORT_V1 ===
-    for p in sorted(plans, key=_plan_sort_key):
+    for p in plans_ordered(plans):
         cat = (p.category or "").strip() or None
         if cat not in _groups:
             _groups[cat] = []
@@ -1899,7 +1899,7 @@ async def _bundle_gather(bot_id: int, cat_id: int, viewer_id: int | None = None)
     # اسمِ دستهٔ یکسان از دو پنلِ مختلف (یا از پنل و از انبار) با هم یکی
     # می‌شود چون هر دو در همین یک مجموعه جمع می‌شوند — دقیقاً همان ادغامی
     # که خواسته شده بود.
-    bucket_names = sorted(plan_cat_names | set(stock_names))
+    bucket_names = bucket_order(plans, plan_cat_names | set(stock_names))
     return cat, plans, stock_names, bucket_names, has_uncat
 
 
@@ -1987,9 +1987,8 @@ async def _render_bundle_bucket(bot: Bot, msg: Message, bot_id: int, plans: list
     if state is not None:
         await state.update_data(vbuy_reopen=reopen)
     # === PATCH_VPN_PLAN_SORT_V1 ===
-    matched_plans = sorted(
-        [p for p in plans if (p.category or "").strip() == (name or "")],
-        key=_plan_sort_key)
+    matched_plans = plans_ordered(
+        [p for p in plans if (p.category or "").strip() == (name or "")])
     rows = []
     # === PATCH_BUNDLE_TABLE_VIEW_V1 ===
     # گزارش: ادمین «جدولی» را روشن کرده بود ولی کاربر از مسیرِ «خرید سرویس» (صفحهٔ دسته‌ها)
@@ -2068,6 +2067,31 @@ def _with_icon(on: bool, icon: str, text: str) -> str:
 
 
 # === PATCH_VPN_PLAN_SORT_V1 ===
+def plans_ordered(plans):
+    """ترتیبِ نمایشِ پلن‌ها به مشتری.
+
+    اگر مالک حداقل یک‌بار پلن/دسته‌ای را بالا/پایین برده باشد (sort_order > 0 ثبت شده)، ترتیبِ دستیِ او
+    اعمال می‌شود (پلنِ تازه‌ساخته که هنوز جایی نگرفته آخر می‌نشیند)؛ وگرنه همان مرتب‌سازیِ خودکار
+    (حجم ↑، مدت ↑، قیمت ↑) مثلِ قبل."""
+    plans = list(plans)
+    if any((getattr(p, "sort_order", 0) or 0) > 0 for p in plans):
+        return sorted(plans, key=lambda p: ((getattr(p, "sort_order", 0) or 0) or 10 ** 9, p.id or 0))
+    return sorted(plans, key=_plan_sort_key)
+
+
+def bucket_order(plans, names):
+    """ترتیبِ دسته‌ها: در حالتِ دستی به ترتیبِ اولین ظهورِ پلن‌ها (بعدش دسته‌هایِ فقط‌انبار)، وگرنه الفبایی مثلِ قبل."""
+    names = set(names)
+    if not any((getattr(p, "sort_order", 0) or 0) > 0 for p in plans):
+        return sorted(names)
+    seen: list[str] = []
+    for p in plans_ordered(plans):
+        c = (p.category or "").strip()
+        if c and c in names and c not in seen:
+            seen.append(c)
+    return seen + sorted(names - set(seen))
+
+
 def _plan_sort_key(p):
     """ترتیبِ نمایشِ پلن‌ها: حجم ↑، بعد مدت ↑، بعد قیمت ↑.
 
@@ -2321,7 +2345,7 @@ async def _all_services_gather(bot_id: int, viewer_id: int | None = None):
 
     plan_cat_names = {(p.category or "").strip() for p in plans if (p.category or "").strip()}
     has_uncat = any(not (p.category or "").strip() for p in plans)
-    bucket_names = sorted(plan_cat_names | set(stock_names))
+    bucket_names = bucket_order(plans, plan_cat_names | set(stock_names))
     return plans, stock_names, bucket_names, has_uncat
 
 

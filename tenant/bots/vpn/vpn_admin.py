@@ -3540,7 +3540,8 @@ async def vpn_plans(cb: CallbackQuery, bot: Bot):
     from tenant import ibtn_style as _ibs
     async with Session() as s:
         plans = (await s.scalars(select(VpnPlan).where(
-            VpnPlan.bot_id == row.id, VpnPlan.panel_key == key).order_by(VpnPlan.sort_order, VpnPlan.id))).all()
+            VpnPlan.bot_id == row.id, VpnPlan.panel_key == key))).all()
+    plans = _manual_sorted(plans)      # همان ترتیبی که مشتری می‌بیند
     rows_kb = []
     # === PATCH_VPN_PLAN_CATEGORY_V1 ===
     _groups: dict[str | None, list] = {}
@@ -3559,14 +3560,10 @@ async def vpn_plans(cb: CallbackQuery, bot: Bot):
             # بلند باشد که callback_data از سقفِ ۶۴بایتیِ تلگرام رد شود، به‌جایِ
             # خودِ اسم از ایندیکسِ آن در همین لیست استفاده می‌کنیم — امن و
             # بدونِ خطر برای دسته‌هایِ فارسیِ طولانی.
-            _cat_idx = _order.index(cat)
-            _cb_full = f"tvpn:catrename:{key}:{cat}"
-            if len(_cb_full.encode("utf-8")) <= 60:
-                _cb = _cb_full
-            else:
-                _cb = f"tvpn:catrenameidx:{key}:{_cat_idx}"
+            _cat_idx = [c for c in _order if c].index(cat)
+            _cb = f"tvpn:catmenu:{key}:{_cat_idx}"
             rows_kb.append([InlineKeyboardButton(
-                text=f"🏷 ── {cat} ── (برایِ تغییرِ اسم بزن)", callback_data=_cb)])
+                text=f"🏷 ── {cat} ── (ویرایش / ترتیب)", callback_data=_cb)])
         for p in _groups[cat]:
             vol = "نامحدود" if p.volume_gb == 0 else f"{p.volume_gb}G"
             dur = "بی‌انقضا" if p.days == 0 else f"{p.days}d"
@@ -4531,29 +4528,142 @@ async def vpn_plan_toggle2(cb: CallbackQuery, bot: Bot, state: FSMContext):
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
 
 
+def _manual_sorted(plans):
+    """ترتیبِ دستیِ فعلی: sort_order>0 به ترتیب؛ پلن‌هایِ بدونِ جا (0) آخر؛ در حالتِ خودکار همان مرتب‌سازیِ حجم/مدت/قیمت."""
+    from tenant.bots.vpn.vpn_user import plans_ordered
+    return plans_ordered(plans)
+
+
 async def move_plan(bot_id: int, panel_key: str, plan_id: int, direction: str) -> bool:
-    """پلن را در لیستِ همین پنل یک پله بالا/پایین می‌برد (جابه‌جایی با همسایه).
-    ترتیبِ فعلی (sort_order, id) اول به شمارهٔ پیوسته 0..n-1 تبدیل می‌شود تا
-    پلن‌هایی که همه sort_order=0 دارند هم درست جابه‌جا شوند. True = جابه‌جا شد."""
+    """پلن را در لیستِ همین پنل یک پله بالا/پایین می‌برد (جابه‌جایی با همسایه‌ی همان دسته).
+    ترتیبِ فعلی (همان چیزی که مشتری می‌بیند) اول به شمارهٔ ۱..n تثبیت می‌شود، پس بار اول هم
+    دقیقاً از همان ترتیبِ دیده‌شده جابه‌جا می‌شود. True = جابه‌جا شد."""
     async with Session() as s:
-        plans = list((await s.scalars(select(VpnPlan).where(
-            VpnPlan.bot_id == bot_id, VpnPlan.panel_key == panel_key
-        ).order_by(VpnPlan.sort_order, VpnPlan.id))).all())
-        idx = next((i for i, x in enumerate(plans) if x.id == plan_id), None)
-        if idx is None:
-            return False
-        j = idx - 1 if direction == "up" else idx + 1
-        # همسایه را فقط در همین دسته می‌گیریم (لیست به‌تفکیکِ دسته نمایش داده می‌شود)
-        cat = (plans[idx].category or "").strip()
-        while 0 <= j < len(plans) and (plans[j].category or "").strip() != cat:
-            j = j - 1 if direction == "up" else j + 1
-        for i, x in enumerate(plans):
+        plans = _manual_sorted((await s.scalars(select(VpnPlan).where(
+            VpnPlan.bot_id == bot_id))).all())
+        for i, x in enumerate(plans, 1):
             x.sort_order = i
-        moved = 0 <= j < len(plans)
+        mine = [x for x in plans if x.panel_key == panel_key]
+        idx = next((i for i, x in enumerate(mine) if x.id == plan_id), None)
+        if idx is None:
+            await s.commit()
+            return False
+        cat = (mine[idx].category or "").strip()
+        j = idx - 1 if direction == "up" else idx + 1
+        while 0 <= j < len(mine) and (mine[j].category or "").strip() != cat:
+            j = j - 1 if direction == "up" else j + 1
+        moved = 0 <= j < len(mine)
         if moved:
-            plans[idx].sort_order, plans[j].sort_order = plans[j].sort_order, plans[idx].sort_order
+            mine[idx].sort_order, mine[j].sort_order = mine[j].sort_order, mine[idx].sort_order
         await s.commit()
     return moved
+
+
+async def panel_category_order(bot_id: int, panel_key: str) -> list[str]:
+    """اسمِ دسته‌هایِ این پنل به ترتیبِ نمایش به مشتری."""
+    async with Session() as s:
+        plans = _manual_sorted((await s.scalars(select(VpnPlan).where(
+            VpnPlan.bot_id == bot_id, VpnPlan.panel_key == panel_key))).all())
+    out: list[str] = []
+    for p in plans:
+        c = (p.category or "").strip()
+        if c and c not in out:
+            out.append(c)
+    return out
+
+
+async def move_plan_category(bot_id: int, panel_key: str, category: str, direction: str) -> bool:
+    """کلِ دسته (همهٔ پلن‌هایش) را یک پله بالا/پایین می‌برد؛ ترتیبِ داخلِ هر دسته حفظ می‌شود."""
+    async with Session() as s:
+        allp = _manual_sorted((await s.scalars(select(VpnPlan).where(
+            VpnPlan.bot_id == bot_id))).all())
+        for i, x in enumerate(allp, 1):
+            x.sort_order = i
+        mine = [x for x in allp if x.panel_key == panel_key]
+        groups: list[tuple[str, list]] = []
+        for p in mine:
+            c = (p.category or "").strip()
+            g = next((g for g in groups if g[0] == c), None)
+            if g is None:
+                groups.append((c, [p]))
+            else:
+                g[1].append(p)
+        names = [g[0] for g in groups]
+        if category not in names:
+            await s.commit()
+            return False
+        i = names.index(category)
+        # «بدونِ دسته» ("") همیشه جدا از دسته‌هایِ نام‌دار حساب می‌شود و جابه‌جا نمی‌شود
+        named = [k for k, n in enumerate(names) if n]
+        pos = named.index(i)
+        npos = pos - 1 if direction == "up" else pos + 1
+        if not (0 <= npos < len(named)):
+            await s.commit()
+            return False
+        j = named[npos]
+        groups[i], groups[j] = groups[j], groups[i]
+        slots = sorted(x.sort_order for x in mine)          # همان شماره‌ها را به ترتیبِ جدید دوباره پخش می‌کنیم
+        k = 0
+        for _, ps in groups:
+            for p in ps:
+                p.sort_order = slots[k]
+                k += 1
+        await s.commit()
+    return True
+
+
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:catmenu:"))
+async def vpn_cat_menu(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    _, _, key, idx = cb.data.split(":")
+    names = await panel_category_order(row.id, key)
+    try:
+        cat = names[int(idx)]
+    except (ValueError, IndexError):
+        await cb.answer("دسته پیدا نشد (شاید تغییر کرده).", show_alert=True)
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ تغییرِ نامِ دسته", callback_data=f"tvpn:catrenameidx:{key}:{idx}",
+                              style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="🔼 بالا بردنِ دسته", callback_data=f"tvpn:catmv:{key}:{idx}:up",
+                              style=ButtonStyle.PRIMARY),
+         InlineKeyboardButton(text="🔽 پایین بردنِ دسته", callback_data=f"tvpn:catmv:{key}:{idx}:dn",
+                              style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="⬅️ بازگشت به پلن‌ها", callback_data=f"tvpn:plans:{key}",
+                              style=ButtonStyle.DANGER)],
+    ])
+    pos = f"{int(idx) + 1} از {len(names)}"
+    text = (f"🏷 <b>دستهٔ «{cat}»</b>\n\nجایگاه در لیستِ فروش: {pos}\n"
+            "با 🔼/🔽 کلِ دسته (با همهٔ پلن‌هایش) را در لیستِ مشتری جابه‌جا کن؛ "
+            "ترتیبِ پلن‌ها داخلِ دسته را از منویِ هر پلن عوض کن.")
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
+
+
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:catmv:"))
+async def vpn_cat_move(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    _, _, key, idx, direction = cb.data.split(":")
+    names = await panel_category_order(row.id, key)
+    try:
+        cat = names[int(idx)]
+    except (ValueError, IndexError):
+        await cb.answer("دسته پیدا نشد (شاید تغییر کرده).", show_alert=True)
+        return
+    moved = await move_plan_category(row.id, key, cat, direction)
+    if not moved:
+        await cb.answer("بالاتر/پایین‌تر از این جایی نیست.")
+        return
+    await cb.answer("✅ جابه‌جا شد")
+    new_idx = (await panel_category_order(row.id, key)).index(cat)
+    await vpn_cat_menu(cb.model_copy(update={"data": f"tvpn:catmenu:{key}:{new_idx}"}), bot)
 
 
 @vpn_admin_router.callback_query(F.data.startswith("tvpn:planmv:"))

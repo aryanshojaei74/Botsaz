@@ -16,32 +16,46 @@ def test_online_status():
     assert _connection_status_line({}) == ""
 
 
-async def test_move_plan(monkeypatch, tmp_path):
+async def test_move_plan_and_category(monkeypatch, tmp_path):
     eng = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/t.db")
     async with eng.begin() as c:
         await c.run_sync(Base.metadata.create_all)
     S = async_sessionmaker(eng, expire_on_commit=False)
     monkeypatch.setattr(va, "Session", S)
+    from sqlalchemy import select
+    from tenant.bots.vpn.vpn_user import plans_ordered, bucket_order
     async with S() as s:
-        for t, cat in (("a", "x"), ("b", "x"), ("c", "y"), ("d", "x")):
-            s.add(VpnPlan(bot_id=1, panel_key="k", title=t, volume_gb=1, days=1, price=1, category=cat))
+        # حجم‌ها طوری که ترتیبِ خودکار (حجم ↑) a,b,c,d باشد
+        for i, (t, cat) in enumerate((("a", "x"), ("b", "x"), ("c", "y"), ("d", "x")), 1):
+            s.add(VpnPlan(bot_id=1, panel_key="k", title=t, volume_gb=i, days=1, price=1, category=cat))
         await s.commit()
 
-    async def order():
-        from sqlalchemy import select
+    async def titles():
         async with S() as s:
-            return [p.title for p in (await s.scalars(select(VpnPlan).order_by(VpnPlan.sort_order, VpnPlan.id))).all()]
-    assert await order() == ["a", "b", "c", "d"]
-    ids = {}
+            return [p.title for p in plans_ordered((await s.scalars(select(VpnPlan))).all())]
+    async def ids():
+        async with S() as s:
+            return {p.title: p.id for p in (await s.scalars(select(VpnPlan))).all()}
+    assert await titles() == ["a", "b", "c", "d"]            # حالتِ خودکار
+    I = await ids()
+    assert await va.move_plan(1, "k", I["b"], "up") is True
+    assert await titles() == ["b", "a", "c", "d"]
+    assert await va.move_plan(1, "k", I["b"], "up") is False  # بالاترین
+    assert await va.move_plan(1, "k", I["d"], "up") is True   # از روی c (دستهٔ دیگر) می‌پرد
+    assert (await titles()).index("d") < (await titles()).index("a")
+    # دسته‌ها: ترتیبِ فعلی x (اولین) سپس y
+    assert await va.panel_category_order(1, "k") == ["x", "y"]
+    assert await va.move_plan_category(1, "k", "y", "up") is True
+    assert await va.panel_category_order(1, "k") == ["y", "x"]
+    assert await va.move_plan_category(1, "k", "y", "up") is False
     async with S() as s:
-        from sqlalchemy import select
-        for p in (await s.scalars(select(VpnPlan))).all():
-            ids[p.title] = p.id
-    assert await va.move_plan(1, "k", ids["b"], "up") is True
-    assert await order() == ["b", "a", "c", "d"]
-    assert await va.move_plan(1, "k", ids["b"], "up") is False      # بالاترین
-    assert await va.move_plan(1, "k", ids["d"], "up") is True        # از روی c (دستهٔ دیگر) می‌پرد
-    assert (await order()).index("d") < (await order()).index("a")
+        plans = (await s.scalars(select(VpnPlan))).all()
+    assert bucket_order(plans, {"x", "y", "انبار"}) == ["y", "x", "انبار"]
+    # پلنِ تازه (sort_order=0) آخر می‌نشیند، نه اول
+    async with S() as s:
+        s.add(VpnPlan(bot_id=1, panel_key="k", title="new", volume_gb=0, days=1, price=1, category="x"))
+        await s.commit()
+    assert (await titles())[-1] == "new"
 
 
 async def test_move_category(monkeypatch, tmp_path):
