@@ -80,11 +80,22 @@ async def _create_wallet(bot_id: int) -> FragmentWallet:
     address = _friendly_address(wallet)
     encrypted = encrypt_secret(" ".join(mnemonics))
 
+    # === PATCH_FRAGMENT_WALLET_RACE_V1 ===
+    # لاگ: «duplicate key ... fragment_wallets_bot_id_key» — دو درخواستِ هم‌زمان برایِ یک ربات هر دو کیفِ تازه می‌ساختند.
+    # برنده‌نشده کیفِ برنده را برمی‌گرداند (کیفِ دومِ ساخته‌شده دور ریخته می‌شود؛ پولی در آن نیست).
+    from sqlalchemy.exc import IntegrityError as _IE
     async with Session() as s:
         row = FragmentWallet(bot_id=bot_id, address=address, wallet_version="v4r2",
                              encrypted_mnemonic=encrypted)
         s.add(row)
-        await s.commit()
+        try:
+            await s.commit()
+        except _IE:
+            await s.rollback()
+            existing = await s.scalar(select(FragmentWallet).where(FragmentWallet.bot_id == bot_id))
+            if existing is None:
+                raise
+            return existing
         await s.refresh(row)
         return row
 

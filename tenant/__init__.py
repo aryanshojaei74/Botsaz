@@ -1014,13 +1014,24 @@ async def send_home_menu(target, bot_id: int, reply_markup=None, *,
 
 async def set_setting(bot_id: int, key: str, value: str):
     import time as _time
-    async with Session() as s:
-        row = await s.scalar(select(Setting).where(Setting.bot_id == bot_id, Setting.key == key))
-        if row:
-            row.value = value
-        else:
-            s.add(Setting(bot_id=bot_id, key=key, value=value))
-        await s.commit()
+    from sqlalchemy.exc import IntegrityError as _IE
+    # === PATCH_SETTING_UPSERT_RACE_V1 ===
+    # لاگ: «duplicate key value violates unique constraint settings_bot_id_key_key». دو پروسه (ورکر/وب) هم‌زمان
+    # همان کلید را برایِ اولین‌بار می‌نوشتند؛ هر دو «نبود» می‌دیدند و دومی IntegrityError می‌خورد. حالا برنده‌نشده
+    # ردیفِ موجود را به‌روز می‌کند (آخرین مقدار می‌ماند) و خطا بالا نمی‌رود.
+    for _attempt in (1, 2):
+        try:
+            async with Session() as s:
+                row = await s.scalar(select(Setting).where(Setting.bot_id == bot_id, Setting.key == key))
+                if row:
+                    row.value = value
+                else:
+                    s.add(Setting(bot_id=bot_id, key=key, value=value))
+                await s.commit()
+            break
+        except _IE:
+            if _attempt == 2:
+                raise
     _SETTING_CACHE[(bot_id, key)] = (value, _time.monotonic() + _SETTING_CACHE_TTL)
 
 

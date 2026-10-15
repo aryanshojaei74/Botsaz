@@ -306,6 +306,48 @@ try:
 except Exception as _cb_patch_err:
     print(f"[callback] پچِ safe-answer ناموفق بود (نادیده گرفته شد): {_cb_patch_err}")
 
+# === PATCH_INACCESSIBLE_MESSAGE_SHIM_V1 ===
+# لاگِ سرور: «AttributeError: 'InaccessibleMessage' object has no attribute 'delete'» (هر دو سرویسِ tenant و vpn-test).
+# وقتی کاربر روی دکمهٔ پیامی بزند که بیش از ۴۸ ساعت از آن گذشته، تلگرام در callback به‌جایِ Message یک
+# InaccessibleMessage می‌دهد که delete/edit_* و فیلدهایی مثل text ندارد؛ هر هندلری که cb.message.delete() بزند می‌ترکید
+# (و کاربر هیچ واکنشی نمی‌دید). این‌جا همان متدها اضافه می‌شود: delete بی‌صدا False می‌دهد؛ edit_* همان خطایِ
+# «قابلِ ویرایش نیست» را می‌دهد تا fallbackِ موجودِ هندلرها (ارسالِ پیامِ تازه) اجرا شود؛ فیلدهایِ متنی None‌اند.
+try:
+    from aiogram.exceptions import TelegramBadRequest as _TBR_IM
+    from aiogram.methods import DeleteMessage as _DM_IM
+    from aiogram.types import InaccessibleMessage as _IM
+
+    def _im_error(self, what="edit"):
+        return _TBR_IM(method=_DM_IM(chat_id=self.chat.id, message_id=self.message_id),
+                       message=f"Bad Request: message can't be {what}ed (inaccessible)")
+
+    async def _im_delete(self, **kwargs):
+        bot = getattr(self, "bot", None)
+        if bot is None:
+            return False
+        try:
+            return await bot.delete_message(chat_id=self.chat.id, message_id=self.message_id)
+        except _TBR_IM:
+            return False        # پیام آن‌قدر قدیمی است که حذف نمی‌شود؛ مشکلی نیست
+
+    def _make_im_edit(name):
+        async def _edit(self, *args, **kwargs):
+            raise _im_error(self)
+        _edit.__name__ = name
+        return _edit
+
+    for _n in ("edit_text", "edit_caption", "edit_reply_markup", "edit_media"):
+        if not hasattr(_IM, _n):
+            setattr(_IM, _n, _make_im_edit(_n))
+    if not hasattr(_IM, "delete"):
+        _IM.delete = _im_delete
+    for _f in ("text", "caption", "reply_markup", "photo", "document", "video", "animation", "from_user", "entities"):
+        if not hasattr(_IM, _f):
+            setattr(_IM, _f, property(lambda self: None))
+    print("[message] InaccessibleMessage: delete/edit_* بی‌خطر شد.")
+except Exception as _im_patch_err:
+    print(f"[message] پچِ InaccessibleMessage ناموفق بود (نادیده گرفته شد): {_im_patch_err}")
+
 # آیدی عددی ادمین کل پلتفرم (برای تایید ارتقا پلن و...)
 PLATFORM_ADMIN_ID = int(os.getenv("PLATFORM_ADMIN_ID", "0"))
 
