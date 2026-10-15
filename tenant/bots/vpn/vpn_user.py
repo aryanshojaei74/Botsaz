@@ -3371,6 +3371,81 @@ def _wg_safe_file_name(fname: str, fallback: str, used: set) -> str:
     return stem + ".conf"
 
 
+# === PATCH_WG_SUB_DIRECT_V1 ===
+# درخواستِ WhaleSupport: «مستقیم از ساب دانلود کنه، بدونِ هیچ تغییری حتی اسمِ فایل». مشتری‌ها می‌گفتند فایلِ
+# رباتِ دیگر/ساب خوب کار می‌کند ولی فایلِ ربات اختلال/پینگِ بالا دارد؛ پس خودِ پاسخِ ساب‌لینک عیناً (بایت‌به‌بایت)
+# و با همان اسمِ فایلِ ساب (Content-Disposition) فرستاده می‌شود. اگر ساب وایرگارد نداد، مسیرهایِ قبلی بی‌تغییر.
+def wg_files_from_sub_response(body: bytes, disp_name: str | None) -> list[tuple[str, bytes]]:
+    """بدنهٔ پاسخِ ساب → [(نامِ فایل، بایت‌هایِ خام)]. فقط وقتی «[Interface]» داشته باشد؛ وگرنه []."""
+    from tenant.shared.panel_clients.sub_fetch import split_wg_blob
+    import base64 as _b64
+    text = (body or b"").decode("utf-8", "ignore")
+    if "[Interface]" not in text:
+        try:      # بعضی ساب‌ها کلِ فایل را base64 می‌دهند
+            dec = _b64.b64decode(text.strip() + "=" * (-len(text.strip()) % 4)).decode("utf-8", "ignore")
+            if "[Interface]" in dec:
+                body, text = dec.encode("utf-8"), dec
+        except Exception:  # noqa: BLE001
+            logger.debug("بدنهٔ ساب base64 معتبر نبود (طبیعی است اگر متنِ خام باشد)")
+    if "[Interface]" not in text:
+        return []
+    parts = split_wg_blob(text)
+    if len(parts) <= 1:
+        name = (disp_name or "").strip() or "wireguard.conf"
+        if not name.lower().endswith(".conf"):
+            name += ".conf"
+        return [(name.replace("/", "_").replace("\\", "_"), body)]        # تک‌فایل: بایت‌هایِ اصلی، دست‌نخورده
+    out = []
+    for i, part in enumerate(parts, 1):
+        m = _re.search(r"(?im)^\s*#\s*name\s*:\s*(.+)$", part)
+        nm = (m.group(1).strip() if m else "") or f"wireguard_{i}"
+        out.append((nm.replace("/", "_") + ".conf", part.encode("utf-8")))
+    return out
+
+
+async def _fetch_wg_files_from_sub(sub_link: str) -> list[tuple[str, bytes]]:
+    if not (sub_link or "").startswith(("http://", "https://")):
+        return []
+    import aiohttp as _aio
+    for ua in ("WireGuard/1.0", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                                "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"):
+        try:
+            async with _aio.ClientSession(timeout=_aio.ClientTimeout(total=10),
+                                          headers={"User-Agent": ua, "Accept": "*/*"}) as sess:
+                async with sess.get(sub_link, allow_redirects=True) as r:
+                    if r.status != 200:
+                        continue
+                    body = await r.read()
+                    disp = None
+                    try:
+                        disp = r.content_disposition.filename if r.content_disposition else None
+                    except Exception:  # noqa: BLE001
+                        disp = None
+        except Exception:  # noqa: BLE001
+            logger.info("دریافتِ مستقیمِ وایرگارد از ساب ممکن نشد (UA=%s)", ua)
+            continue
+        files = wg_files_from_sub_response(body, disp)
+        if files:
+            return files
+    return []
+
+
+async def _send_sub_wg_files(bot, chat_id: int, sub_link: str) -> int:
+    files = await _fetch_wg_files_from_sub(sub_link)
+    sent = 0
+    for i, (name, data) in enumerate(files, 1):
+        try:
+            await bot.send_document(
+                chat_id, BufferedInputFile(data, filename=name),
+                caption=f"🛡 <b>کانفیگِ WireGuard {i} از {len(files)}</b>\n\n"
+                        "این فایل مستقیم از ساب‌لینکِ شما گرفته شده و هیچ تغییری نکرده — ایمپورتش کن.",
+                parse_mode="HTML")
+            sent += 1
+        except Exception:
+            logger.exception("ارسالِ فایلِ وایرگاردِ ساب ناموفق بود")
+    return sent
+
+
 # === PATCH_WG_NATIVE_IN_SINGLE_V1 ===
 # گزارشِ ادمین: دکمهٔ «ارسال کانفیگِ تکی» برایِ اینباندِ وایرگارد فایل نمی‌فرستاد
 # (یا با اسمِ ساختگی «wireguard.conf / wg1-…» می‌فرستاد)، در حالی که مسیرِ بومیِ پنل
@@ -3637,6 +3712,9 @@ async def _send_wg_files_for_account(bot: Bot, chat_id: int, aid: int) -> int:
             if not a or not panel:
                 return 0
             email, sub_link = a.email, a.sub_link or ""
+        direct = await _send_sub_wg_files(bot, chat_id, sub_link)      # PATCH_WG_SUB_DIRECT_V1
+        if direct:
+            return direct
         client = _client_from_panel(panel)
         try:
             native = await _send_native_wg_files(bot, chat_id, client, email)
@@ -3669,6 +3747,8 @@ async def vpn_service_wg_single(cb: CallbackQuery, bot: Bot):
     await cb.answer("در حال دریافت کانفیگِ وایرگارد…")
     if not panel:
         await cb.message.answer("⛔️ پنلی به این سرویس وصل نیست.")
+        return
+    if await _send_sub_wg_files(bot, cb.from_user.id, _acc_sub_link):     # PATCH_WG_SUB_DIRECT_V1
         return
     try:
         client = _client_from_panel(panel)
