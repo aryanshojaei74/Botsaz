@@ -24,6 +24,7 @@ nft_market.py — «مینی‌اپ ۲»: مارکتِ خرید و اجارهٔ 
 """
 from __future__ import annotations
 
+from sqlalchemy.exc import IntegrityError
 import datetime as _dt
 import html as _html
 import time
@@ -104,8 +105,17 @@ async def _authed(bot_id: int, x_init_data: str | None, x_kb_token: str | None):
                         full_name=_name or str(tg_id),
                         username=tg_user.get("username") or "")
             s.add(u)
-            await s.commit()
-            await s.refresh(u)
+            try:
+                await s.commit()
+            except IntegrityError:
+                # دو درخواستِ هم‌زمانِ کاربرِ جدید: یکی ساخته، دیگری همان را می‌خواند
+                await s.rollback()
+                u = await s.scalar(select(BotUser).where(
+                    BotUser.bot_id == bot_id, BotUser.telegram_id == tg_id))
+                if u is None:
+                    raise
+            else:
+                await s.refresh(u)
         return row, u
 
 
