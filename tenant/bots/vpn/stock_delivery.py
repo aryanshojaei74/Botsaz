@@ -128,6 +128,11 @@ async def _admin_row(cb_or_msg, bot: Bot):
         if not isinstance(cb_or_msg, Message):
             await cb_or_msg.answer("دسترسی ندارید", show_alert=True)
         return None
+    from plans import Feature, has_feature          # زیرِ «انبار کانفیگ‌هایِ دستی» است ⇒ همان گیتِ پلن
+    if not has_feature(row.plan, Feature.MANUAL_INVENTORY):
+        if not isinstance(cb_or_msg, Message):
+            await cb_or_msg.answer("🔒 این بخش در پلنِ فعلی در دسترس نیست.", show_alert=True)
+        return None
     return row
 
 
@@ -318,7 +323,7 @@ async def _menu_view(bot_id: int):
             [_btn(f"📬 در انتظار تحویل ({pend_n})", "sdl:pend", ButtonStyle.PRIMARY),
              _btn(f"📁 انجام‌شده‌ها ({done_n})", "sdl:done")],
             [_btn(f"⏱ مهلتِ پیش‌فرض تحویل: {hrs} ساعت", "sdl:hours")],
-            [_btn("⬅️ بازگشت", "tadm:sec:settings", ButtonStyle.DANGER)]]
+            [_btn("⬅️ بازگشت به انبار", "tadm:cfg", ButtonStyle.DANGER)]]
     return txt, _kb(rows)
 
 

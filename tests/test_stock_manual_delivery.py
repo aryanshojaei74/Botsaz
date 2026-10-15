@@ -238,3 +238,78 @@ async def test_menu_lists_counts_deadline_and_marks_overdue(db):
     t3, _ = await SD._list_view(9, "delivered")
     assert "هنوز تحویلی" in t3
     assert any("24 ساعت" in str(x[1]) for x in bot.sent if x[0] == 1001)     # پیامِ مشتری مهلتِ (پیش‌فرض) را می‌گوید
+
+
+# ───────────── ناوبری (بازگشت/جلو) ─────────────
+async def _routed(router, data: str) -> bool:
+    """آیا حداقل یک هندلرِ callback در این روتر برایِ این data فعال می‌شود؟ (با فیلترهایِ واقعیِ aiogram)"""
+    from aiogram.types import CallbackQuery, User
+    cb = CallbackQuery(id="1", from_user=User(id=1, is_bot=False, first_name="a"), chat_instance="c", data=data)
+    for h in router.callback_query.handlers:
+        ok = True
+        for flt in h.filters:
+            try:
+                res = await flt.call(cb)
+            except Exception:
+                res = False
+            if not res:
+                ok = False
+                break
+        if ok:
+            return True
+    return False
+
+
+def _all_callbacks(kb):
+    return [b.callback_data for r in kb.inline_keyboard for b in r if b.callback_data]
+
+
+@pytest.mark.asyncio
+async def test_every_button_in_queue_screens_is_routed_and_back_leads_to_stock_menu(db):
+    bot = FakeBot()
+    did = await _queued(db, bot)
+    views = [await SD._menu_view(9), await SD._list_view(9, "pending"), await SD._list_view(9, "delivered")]
+    for _, kb in views:
+        for data in _all_callbacks(kb):
+            assert (await _routed(SD.sd_router, data)) or (await _routed(tenant.tenant_router, data)) or data == "tadm:cfg", data
+    menu_kb = views[0][1]
+    assert "tadm:cfg" in _all_callbacks(menu_kb)                      # بازگشت ⇒ انبار کانفیگ‌هایِ دستی
+    assert "sdl:menu" in _all_callbacks(views[1][1]) and "sdl:menu" in _all_callbacks(views[2][1])   # از فهرست‌ها ⇒ منویِ صف
+    assert (await _routed(tenant.tenant_router, "tadm:cfg"))
+    # دکمه‌هایِ پیامِ ادمین (announce) هم مسیر دارند
+    sent_kb = [x[2] for x in bot.sent if x[2] is not None and x[0] == 1][0]
+    for data in _all_callbacks(sent_kb):
+        assert await _routed(SD.sd_router, data), data
+
+
+def test_queue_entry_lives_under_manual_stock_menu_not_finance():
+    kb = tenant.cfg_manage_kb("pro")
+    datas = _all_callbacks(kb)
+    assert "sdl:menu" in datas
+    from tenant.settings_registry import registered_items, section_key
+    assert "sdl:menu" not in [i.callback for i in registered_items(section_key("finance", "vpn_sales"))]
+    assert "sdl:menu" not in [i.callback for i in registered_items("vpn_sales")]
+
+
+@pytest.mark.asyncio
+async def test_menu_navigation_flow_menu_to_list_and_back(db):
+    bot = FakeBot()
+    await _queued(db, bot)
+    edits = []
+
+    class M:
+        async def edit_text(self, t, **k):
+            edits.append((t, k.get("reply_markup")))
+    cb = SimpleNamespace(data="sdl:pend", from_user=SimpleNamespace(id=1), message=M())
+
+    async def ans(*a, **k):
+        return None
+    cb.answer = ans
+    await SD.sdl_list(cb, bot)
+    assert "در انتظار تحویل" in edits[-1][0] and "sdl:menu" in _all_callbacks(edits[-1][1])
+    cb.data = "sdl:menu"
+    await SD.sdl_menu(cb, bot)
+    assert "صفِ تحویل" in edits[-1][0] and "tadm:cfg" in _all_callbacks(edits[-1][1])
+    cb.data = "sdl:done"
+    await SD.sdl_list(cb, bot)
+    assert "انجام‌شده" in edits[-1][0]

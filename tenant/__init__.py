@@ -22018,6 +22018,9 @@ def cfg_manage_kb(plan: str = "") -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📝 یادداشت‌های انبار دستی", callback_data="noop")],
         [InlineKeyboardButton(text="🧾 یادداشت پیش‌فاکتور", callback_data="mcfgnote:invoice"),
          InlineKeyboardButton(text="📦 یادداشت تحویل", callback_data="mcfgnote:delivery")],
+        # === PATCH_STOCK_MANUAL_DELIVERY_V1 === صفِ تحویلِ دستیِ کانفیگ آماده (زیرِ همین انبار)
+        [InlineKeyboardButton(text="📬 صف تحویل (تحویل دستیِ کانفیگ آماده)", callback_data="sdl:menu",
+                              style=ButtonStyle.PRIMARY)],
         # ── کانفیگ آماده ──
         [InlineKeyboardButton(text="🛒 کانفیگ آماده", callback_data="noop")],
         [InlineKeyboardButton(text="➕ افزودن کانفیگ آماده", callback_data="tadm:cfg:add", style=ButtonStyle.SUCCESS)],

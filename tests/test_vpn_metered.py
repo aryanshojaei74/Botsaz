@@ -444,3 +444,54 @@ def test_norm_plans_drops_garbage():
                        {"id": 2, "title": "bad", "price": 0, "days": 5}, {"id": "x"}, "junk"])
     assert [p["id"] for p in M._norm_plans(raw)] == [1]
     assert M._norm_plans("not json") == [] and M._norm_plans(None) == []
+
+
+# ───────────── ناوبری: همهٔ دکمه‌هایِ صفحه‌هایِ بستهٔ اعتباری مسیر دارند ─────────────
+async def _routed_any(data: str) -> bool:
+    from aiogram.types import CallbackQuery, User
+    cb = CallbackQuery(id="1", from_user=User(id=1, is_bot=False, first_name="a"), chat_instance="c", data=data)
+    for router in (M.mtr_router, tenant.tenant_router):
+        for h in router.callback_query.handlers:
+            ok = True
+            for flt in h.filters:
+                try:
+                    res = await flt.call(cb)
+                except Exception:
+                    res = False
+                if not res:
+                    ok = False
+                    break
+            if ok:
+                return True
+        for sub in router.sub_routers:
+            for h in sub.callback_query.handlers:
+                ok = True
+                for flt in h.filters:
+                    try:
+                        res = await flt.call(cb)
+                    except Exception:
+                        res = False
+                    if not res:
+                        ok = False
+                        break
+                if ok:
+                    return True
+    return False
+
+
+@pytest.mark.asyncio
+async def test_all_metered_screen_buttons_are_routed(db):
+    plans = [{"id": 1, "title": "الف", "price": 1500, "days": 15, "max_gb": 0}, {"id": 2, "title": "ب", "price": 3000, "days": 60, "max_gb": 3}]
+    await tenant.set_setting(9, "mtr_enabled", "1")
+    await tenant.set_setting(9, "mtr_plans", _json.dumps(plans, ensure_ascii=False))
+    tenant._SETTING_CACHE.clear(); tenant._BOT_ROW_CACHE.clear()
+    async with db() as s:
+        (await s.get(models.MeteredAccount, 1)).status = "ended"
+        await s.commit()
+        row = await s.get(models.Bot, 9)
+    kbs = [(await M._open_view(row, 1001))[1], (await M._open_view(row, 1001, pid="2"))[1], (await M._admin_view(9))[1]]
+    for kb in kbs:
+        for rw in kb.inline_keyboard:
+            for b in rw:
+                if b.callback_data:
+                    assert await _routed_any(b.callback_data), b.callback_data

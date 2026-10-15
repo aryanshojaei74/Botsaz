@@ -213,18 +213,3 @@ register_settings_items(section_key("finance", KIND), [
         after=("btr:admin", "set:swap", "set:crypto", "set:kyc", "set:txlog", "tadm:receiptchannel"),
     ),
 ])
-
-
-# === PATCH_STOCK_MANUAL_DELIVERY_V1 === تحویل دستیِ کانفیگ‌هایِ آماده
-async def _stock_delivery_admin(cb, bot):
-    from tenant.bots.vpn.stock_delivery import admin_menu
-    await admin_menu(cb, bot)
-
-
-register_settings_items(section_key("finance", KIND), [
-    SettingsItem(
-        label="📦 تحویل دستیِ کانفیگ آماده", callback="sdl:menu",
-        handler=_stock_delivery_admin,
-        after=("mtr:adm", "btr:admin", "set:swap", "set:crypto", "set:kyc", "set:txlog", "tadm:receiptchannel"),
-    ),
-])
