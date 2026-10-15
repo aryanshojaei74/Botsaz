@@ -136,6 +136,7 @@ async def latency_report(n: int) -> None:
         print("ℹ️ تستِ Telegram انجام نشد:", type(e).__name__)
 
 
+_EXPECTED_SLOW = re.compile(r"^(تاس|فوتبال|دارت|بسکتبال|بولینگ|اسلات|dg:play)")
 SLOW_RE = re.compile(r"slow update \(token …(?P<tok>\w+), kind=(?P<kind>[\w?]+), (?P<sec>[\d.]+)s\) → (?P<what>.*?)(?: \||$)")
 
 
@@ -146,10 +147,16 @@ def journal_report(hours: int, top: int) -> None:
     by_tok: dict[str, list[float]] = defaultdict(list)
     allv: list[float] = []
     blocked, panel_to, cf, tg_to = [], 0, 0, 0
-    for line in out.splitlines():
+    expected = 0
+    block_frames: dict[str, int] = defaultdict(int)
+    lines = out.splitlines()
+    for li, line in enumerate(lines):
         m = SLOW_RE.search(line)
         if m:
             sec = float(m["sec"])
+            if _EXPECTED_SLOW.search(m["what"]):      # انیمیشنِ تاس/بازی (انتظارِ عمدیِ ~۴ ثانیه)، کندی نیست
+                expected += 1
+                continue
             by_what[m["what"][:45]].append(sec)
             by_tok[m["tok"]].append(sec)
             allv.append(sec)
@@ -158,6 +165,10 @@ def journal_report(hours: int, top: int) -> None:
             mm = re.search(r"blocked ([\d.]+)s", line)
             if mm:
                 blocked.append(float(mm[1]))
+            # آخرین فریمِ پروژه‌ای در stack = جایی که event loop را گرفته
+            fr = [l.strip() for l in lines[li + 1: li + 14] if 'File "/opt/botsaz' in l and "site-packages" not in l]
+            if fr:
+                block_frames[re.sub(r"^.*File ", "", fr[-1])[:110]] += 1
         if re.search(r"TimeoutError|ReadTimeout|ConnectTimeout|timed out", line):
             panel_to += 1
         if re.search(r"\b52[0-9]\b|cloudflare", line, re.I):
@@ -176,10 +187,14 @@ def journal_report(hours: int, top: int) -> None:
             print(f"  …{k}  {len(v)} بار | بیشینه {max(v):.1f}s")
         if len(allv) > 50:
             ISSUES.append(f"{len(allv)} آپدیتِ کند در {hours} ساعت — ردیفِ اولِ جدولِ بالا را اول بهینه کن.")
+    if expected:
+        print(f"\n(+ {expected} مورد انیمیشنِ بازی/تاس که انتظارِ عمدی دارد و کندی حساب نشد)")
     print(f"\nبلوکه‌شدنِ event loop: {len(blocked)} بار" + (f" | بیشینه {max(blocked):.1f}s" if blocked else ""))
     if blocked:
         ISSUES.append(f"event loop {len(blocked)} بار بلوکه شده (بیشینه {max(blocked):.1f}s) → کارِ سنگینِ همگام در کد؛ "
                       "stack را با: journalctl -u botsaz-tenant | grep -A8 'event loop blocked' ببین.")
+    for k, v in sorted(block_frames.items(), key=lambda kv: -kv[1])[:6]:
+        print(f"  {v:>3} بار در: {k}")
     print(f"خطایِ تایم‌اوت (پنل/شبکه): {panel_to} | نشانهٔ Cloudflare 52x: {cf} | خطایِ شبکهٔ تلگرام: {tg_to}")
     if tg_to > 30:
         ISSUES.append(f"{tg_to} خطای شبکهٔ تلگرام → ارتباط سرور با تلگرام ناپایدار است.")
@@ -237,13 +252,23 @@ def main() -> int:
     ap.add_argument("--no-db", action="store_true")
     a = ap.parse_args()
     system_report()
-    asyncio.run(latency_report(a.n))
-    journal_report(a.hours, a.top)
-    if not a.no_db:
+
+    async def _async_parts():
+        await latency_report(a.n)
+        # journal_report همگام است ولی بینِ دو بخشِ async می‌آید تا ترتیبِ خروجی همان بماند
+        journal_report(a.hours, a.top)
+        if not a.no_db:
+            try:
+                await db_report(a.top)
+            except Exception as e:  # noqa: BLE001
+                print("⚠️ بخشِ دیتابیس ناموفق:", type(e).__name__, e)
         try:
-            asyncio.run(db_report(a.top))
-        except Exception as e:  # noqa: BLE001
-            print("⚠️ بخشِ دیتابیس ناموفق:", type(e).__name__, e)
+            from config import engine
+            await engine.dispose()
+        except Exception:  # noqa: BLE001
+            pass
+
+    asyncio.run(_async_parts())
     verdict()
     return 0
 
