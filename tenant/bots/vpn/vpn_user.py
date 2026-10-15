@@ -127,13 +127,20 @@ class _EditFirst:
     *همان پیام* را ویرایش می‌کند (سریع‌تر و بدونِ پرشِ چت)؛ بقیهٔ فراخوانی‌ها (پیامِ دوم به بعد)
     و هر ویژگیِ دیگری عادی به پیامِ اصلی می‌رود. اگر ویرایش ممکن نبود (پیامِ عکس‌دار/QR،
     قدیمی، کیبوردِ غیرِ اینلاین) همان رفتارِ قبلی: حذفِ پیامِ قدیمی + ارسالِ جدید."""
-    __slots__ = ("_m", "_used")
+    __slots__ = ("_m", "_used", "_u")
 
-    def __init__(self, msg):
+    def __init__(self, msg, user=None):
         self._m = msg
         self._used = False
+        self._u = user      # === PATCH_EDITFIRST_REAL_USER_V1 ===
 
     def __getattr__(self, name):
+        # === PATCH_EDITFIRST_REAL_USER_V1 ===
+        # باگِ گزارش‌شده (WHALE SHOP): بعد از «بازگشت»، صفحه «موجودی کیف پول: ۰ تومان» نشان می‌داد درحالی‌که موجودی داشت.
+        # علت: from_user رپر همان from_user پیامِ ربات (cb.message) بود، یعنی *خودِ ربات*، و موجودی/تخفیفِ ربات خوانده می‌شد.
+        # حالا اگر کاربرِ واقعی (cb.from_user) داده شده باشد، همان برگردانده می‌شود.
+        if name == "from_user" and self._u is not None:
+            return self._u
         return getattr(self._m, name)
 
     async def answer(self, text=None, **kw):
@@ -2137,7 +2144,7 @@ async def bundle_back_to_cats(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return
     await cb.answer()
     data = await state.get_data()
-    await show_bundle_all_categories(bot, _EditFirst(cb.message), row.id, state=state,
+    await show_bundle_all_categories(bot, _EditFirst(cb.message, cb.from_user), row.id, state=state,
                                      mb_id=data.get("vbuy_mb_id"))
 
 
@@ -2151,7 +2158,7 @@ async def bundle_back_to_services(cb: CallbackQuery, bot: Bot, state: FSMContext
         return
     await cb.answer()
     data = await state.get_data()
-    await show_bundle_all_services(bot, _EditFirst(cb.message), row.id, state=state,
+    await show_bundle_all_services(bot, _EditFirst(cb.message, cb.from_user), row.id, state=state,
                                    mb_id=data.get("vbuy_mb_id"))
 
 
@@ -2173,7 +2180,7 @@ async def bundle_pick_bucket(cb: CallbackQuery, bot: Bot, state: FSMContext):
     data = await state.get_data()
     mb_id = data.get("vbuy_mb_id")
     # === PATCH_BUNDLE_BACK_ONE_LEVEL_V1 === بازگشت به همین دسته، نه منوی اصلی
-    await _render_bundle_bucket(bot, _EditFirst(cb.message), row.id, plans, name, mb_id=mb_id,
+    await _render_bundle_bucket(bot, _EditFirst(cb.message, cb.from_user), row.id, plans, name, mb_id=mb_id,
                                 cat=cat, back_cb=f"bndl:cat:{cat_id}",
                                 state=state, reopen=f"bndl:sub:{cat_id}:{idx}")
 
@@ -2205,7 +2212,7 @@ async def vpn_plans_pick_panel(cb: CallbackQuery, bot: Bot, state: FSMContext):
     data = await state.get_data() if state is not None else {}
     mb_id = data.get("vbuy_mb_id")
     header = data.get("vbuy_header", "")
-    await show_vpn_plans(bot, _EditFirst(cb.message), row.id, state=state, panel_key=chosen_key,
+    await show_vpn_plans(bot, _EditFirst(cb.message, cb.from_user), row.id, state=state, panel_key=chosen_key,
                          header=header, mb_id=mb_id)
 
 
@@ -2277,7 +2284,7 @@ async def bundle_pick_category(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await cb.answer()
     data = await state.get_data()
     mb_id = data.get("vbuy_mb_id")
-    await show_bundle_hub(bot, _EditFirst(cb.message), row.id, cat_id, state=state, mb_id=mb_id)
+    await show_bundle_hub(bot, _EditFirst(cb.message, cb.from_user), row.id, cat_id, state=state, mb_id=mb_id)
 
 
 async def _all_services_gather(bot_id: int, viewer_id: int | None = None):
@@ -2346,7 +2353,7 @@ async def bundle_pick_service_bucket(cb: CallbackQuery, bot: Bot, state: FSMCont
     await cb.answer()
     data = await state.get_data()
     mb_id = data.get("vbuy_mb_id")
-    await _render_bundle_bucket(bot, _EditFirst(cb.message), row.id, plans, name, mb_id=mb_id,
+    await _render_bundle_bucket(bot, _EditFirst(cb.message, cb.from_user), row.id, plans, name, mb_id=mb_id,
                                 stock_ok=(name in stock_names) if name else False,
                                 title_override="همهٔ سرویس‌ها", icon_override="📦",
                                 back_cb="bndl:allsvc",   # PATCH_BUNDLE_BACK_ONE_LEVEL_V1
@@ -2731,7 +2738,7 @@ async def vpn_buy(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await state.set_state(_VpnNameFSM.naming)
     await state.update_data(vname_plan_id=plan_id, vcustom_label=None)
     await cb.answer()
-    await _ask_custom_name(_EditFirst(cb.message), plan_id, "plan", row.id)  # === PATCH_CFG_NAME_PROMPT_EDIT_V1 ===
+    await _ask_custom_name(_EditFirst(cb.message, cb.from_user), plan_id, "plan", row.id)  # === PATCH_CFG_NAME_PROMPT_EDIT_V1 ===
 
 
 async def _show_plan_preinvoice(target, bot: Bot, bot_id: int, plan_id: int,
@@ -2755,7 +2762,7 @@ async def vpn_name_skip(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await state.set_state(None)
     await state.update_data(vcustom_label=None)
     await cb.answer()
-    await _show_plan_preinvoice(_EditFirst(cb.message), bot, row.id, plan_id, cb.from_user.id, state)
+    await _show_plan_preinvoice(_EditFirst(cb.message, cb.from_user), bot, row.id, plan_id, cb.from_user.id, state)
 
 
 # === PATCH_VPN_NAME_STEP_EXIT_TEXT_V1 ===
@@ -2898,7 +2905,7 @@ async def vpn_buy_back(cb: CallbackQuery, bot: Bot, state: FSMContext):
         _re = _d.get("vbuy_reopen")
         if _re:
             await cb.answer()
-            _scb = _SilentCB(cb, _EditFirst(cb.message), _re)
+            _scb = _SilentCB(cb, _EditFirst(cb.message, cb.from_user), _re)
             _pp = _re.split(":")
             if _pp[:2] == ["bndl", "sub"]:
                 await bundle_pick_bucket(_scb, bot, state)
@@ -2910,7 +2917,7 @@ async def vpn_buy_back(cb: CallbackQuery, bot: Bot, state: FSMContext):
                 await bundle_back_to_services(_scb, bot, state)
             return
         await show_vpn_plans(
-            bot, _EditFirst(cb.message), bot_id, state=state,   # PATCH_VPN_EDIT_IN_PLACE_V1
+            bot, _EditFirst(cb.message, cb.from_user), bot_id, state=state,   # PATCH_VPN_EDIT_IN_PLACE_V1
             panel_key=_d.get("vbuy_panel_key") or "",
             mb_id=_d.get("vbuy_mb_id"))
     await cb.answer()
@@ -4553,9 +4560,28 @@ async def vc_adjust(cb: CallbackQuery, bot: Bot, state: FSMContext):
         async with Session() as s:
             row = await s.scalar(select(BotRow).where(BotRow.token == bot.token))
         if row:
+            # === PATCH_VC_SIMPLE_BACK_V1 ===
+            # باگِ گزارش‌شده (WHALE SHOP): در حالتِ ساده (فقط عددِ حجم) و بدونِ پلنِ ثابت، «بازگشت» به‌جایِ برگشت، صفحهٔ +/−
+            # (شبیهِ فاکتور) را باز می‌کرد، چون لیستِ پلنی وجود ندارد که به آن برگردد. حالا به منویِ قبلی (یا خانه) برمی‌گردد.
+            try:
+                _cfg_b = await _vc_all_for_user(row.id, cb.from_user.id, _back_panel_key)
+                async with Session() as _sb:
+                    _np = await _sb.scalar(select(func.count()).select_from(VpnPlan).where(
+                        VpnPlan.bot_id == row.id, VpnPlan.active == True,  # noqa: E712
+                        VpnPlan.panel_key == _back_panel_key))
+                if _cfg_b.get("vc_simple") == "1" and not _np:
+                    from tenant import _last_menu_for, smopen_handler
+                    _pm = _last_menu_for(row.id)
+                    if _pm:
+                        await smopen_handler(cb.model_copy(update={"data": f"smopen:{_pm}"}), bot, state)
+                    else:
+                        await vc_home(cb, bot, state)
+                    return
+            except Exception:
+                logger.exception("vc: بازگشتِ حالتِ ساده ناموفق؛ مسیرِ عادی")
             # PATCH_VBUYBACK_KEEP_CONTEXT_V1 — mb_id هم حفظ شود تا فیلترِ
             # دسته‌بندیِ همان دکمه از دست نرود.
-            await show_vpn_plans(bot, _EditFirst(cb.message), row.id, state=None,   # PATCH_VPN_EDIT_IN_PLACE_V1
+            await show_vpn_plans(bot, _EditFirst(cb.message, cb.from_user), row.id, state=None,   # PATCH_VPN_EDIT_IN_PLACE_V1
                                  panel_key=_back_panel_key or None,
                                  mb_id=_data_before_clear.get("vbuy_mb_id"))
         return
@@ -5046,7 +5072,7 @@ async def vc_checkout(cb: CallbackQuery, bot: Bot, state: FSMContext):
     _r = await _gbr(bot)
     if _r:
         await _vc_recover_panel_key(state, _r.id)     # PATCH_VC_RECOVER_PANEL_KEY_V1
-    await _ask_custom_name(_EditFirst(cb.message), 0, "vc", _r.id if _r else 0)
+    await _ask_custom_name(_EditFirst(cb.message, cb.from_user), 0, "vc", _r.id if _r else 0)
 
 
 async def _show_vc_preinvoice(target, bot: Bot, state: FSMContext, telegram_id: int):
@@ -5069,7 +5095,7 @@ async def vc_name_skip(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await state.update_data(vcustom_label=None)
     await state.set_state(VpnConfiguratorFSM.selecting)
     await cb.answer()
-    await _show_vc_preinvoice(_EditFirst(cb.message), bot, state, cb.from_user.id)
+    await _show_vc_preinvoice(_EditFirst(cb.message, cb.from_user), bot, state, cb.from_user.id)
 
 
 @vpn_user_router.message(_VpnNameFSM.naming_vc, F.text)
@@ -6085,9 +6111,9 @@ async def vpn_service_back(cb: CallbackQuery, bot: Bot):
         # اگر از پنلِ نمایندگی آمده، به همان فهرست برگردد نه سرویس‌های شخصی.
         # === PATCH_VPN_EDIT_IN_PLACE_V1 === ویرایشِ همان پیام به‌جایِ حذف+ارسال
         if (bot_id, cb.from_user.id) in _svc_from_reseller:
-            await show_reseller_configs(bot, _EditFirst(cb.message), bot_id, cb.from_user.id)
+            await show_reseller_configs(bot, _EditFirst(cb.message, cb.from_user), bot_id, cb.from_user.id)
         else:
-            await show_my_services(bot, _EditFirst(cb.message), bot_id, cb.from_user.id)
+            await show_my_services(bot, _EditFirst(cb.message, cb.from_user), bot_id, cb.from_user.id)
     await cb.answer()
 
 
@@ -6739,7 +6765,7 @@ async def vpn_label_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await state.set_state(_VpnLabelFSM.waiting)
     await state.update_data(vlabel_aid=aid)
     await cb.answer()
-    await _EditFirst(cb.message).answer(   # PATCH_VPN_EDIT_IN_PLACE_V1
+    await _EditFirst(cb.message, cb.from_user).answer(   # PATCH_VPN_EDIT_IN_PLACE_V1
         "✏️ یک نام دلخواه برای این کانفیگ بفرست.\n"
         "(این نام فقط برای نمایش در «کانفیگ‌های من» استفاده می‌شه — "
         "هر چیزی می‌تونه باشه مثل: خانه، مدرسه، موبایل)\n\n"
@@ -6793,7 +6819,7 @@ async def vpn_rename_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await state.set_state(_VpnRenameFSM.waiting)
     await state.update_data(vrename_aid=aid, vrename_old=email)
     await cb.answer()
-    await _EditFirst(cb.message).answer(   # PATCH_VPN_EDIT_IN_PLACE_V1
+    await _EditFirst(cb.message, cb.from_user).answer(   # PATCH_VPN_EDIT_IN_PLACE_V1
         f"✏️ <b>تغییر نام کانفیگ</b>\n\n"
         f"نام فعلی: <code>{email}</code>\n\n"
         "یه نام دلخواه بفرست (فقط حروف/عدد انگلیسی، بدون فاصله — مثال: <code>MyHome</code>)\n"

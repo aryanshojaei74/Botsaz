@@ -88,3 +88,68 @@ async def test_manual_prompt_edits_page_in_place(monkeypatch):
     assert edits and "بفرست" in edits[0][0] and _datas(edits[0][1]) == ["vc:manual:back"]
     assert not sends and st.d["vc_manual_inplace"] is True and st.d["vc_manual_prompt_id"] == 11
     await engine.dispose()
+
+
+def test_edit_first_exposes_real_user_not_the_bot():
+    """باگِ WHALE SHOP: موجودی صفر نمایش داده می‌شد چون from_user همان خودِ ربات بود."""
+    bot_user, real = SimpleNamespace(id=8354597347, is_bot=True), SimpleNamespace(id=1001, is_bot=False)
+    msg = SimpleNamespace(from_user=bot_user, chat=SimpleNamespace(id=5))
+    assert VU._EditFirst(msg).from_user.id == 8354597347           # رفتارِ قدیمی (بدونِ کاربر)
+    w = VU._EditFirst(msg, real)
+    assert w.from_user.id == 1001 and w.chat.id == 5
+
+
+@pytest.mark.asyncio
+async def test_simple_mode_back_without_plans_goes_to_previous_menu_not_page(monkeypatch):
+    import config
+    import models
+    import tenant
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(models.Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    for mod in (config, VU):
+        monkeypatch.setattr(mod, "Session", maker)
+    async with maker() as s:
+        s.add(models.Bot(id=9, owner_id=1, token="9:T", username="b", field="vpn_sales", plan="pro", status="active"))
+        await s.commit()
+    simple = {"v": "1"}
+
+    async def allcfg(*a, **k):
+        c = _cfg()
+        c["vc_simple"] = simple["v"]
+        return c
+    monkeypatch.setattr(VU, "_vc_all_for_user", allcfg)
+    went = []
+
+    async def fake_smopen(cb, bot, state):
+        went.append(cb.data)
+    monkeypatch.setattr(tenant, "smopen_handler", fake_smopen)
+    monkeypatch.setattr(tenant, "_last_menu_for", lambda bot_id: 42)
+    pages = []
+
+    async def fake_plans(*a, **k):
+        pages.append("plans")
+    monkeypatch.setattr(VU, "show_vpn_plans", fake_plans)
+
+    class St(_FakeState):
+        async def clear(self):
+            self.d = {}
+    cleared = St({"vc_panel_key": ""})
+
+    async def ans(*a, **k):
+        return None
+
+    class Msg:
+        message_id = 3
+        chat = SimpleNamespace(id=1001)
+    cb = SimpleNamespace(data="vc:back", from_user=SimpleNamespace(id=1001), message=Msg(), answer=ans)
+    cb.model_copy = lambda update: SimpleNamespace(**{**cb.__dict__, **update})
+    await VU.vc_adjust(cb, SimpleNamespace(token="9:T"), cleared)
+    assert went == ["smopen:42"] and pages == []
+    simple["v"] = "0"                                              # حالتِ ساده خاموش ⇒ مسیرِ قبلی (لیستِ پلن‌ها)
+    went.clear()
+    await VU.vc_adjust(cb, SimpleNamespace(token="9:T"), St({"vc_panel_key": ""}))
+    assert went == [] and pages == ["plans"]
+    await engine.dispose()
