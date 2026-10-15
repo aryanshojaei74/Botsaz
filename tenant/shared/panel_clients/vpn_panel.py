@@ -589,7 +589,16 @@ class PanelClient:
         """آمار مصرف: up, down, total(سقف), expiryTime, enable, ..."""
         res = await self._request("GET", f"/panel/api/clients/traffic/{email}")
         if res.get("success") and res.get("obj"):
-            return res["obj"]
+            obj = res["obj"]
+            # 3X-UI/سنایی: lastOnline (میلی‌ثانیه) → کلیدِ مشترکِ last_online_ms
+            # (0 یعنی هرگز وصل نشده؛ چیزی ساخته نمی‌شود)
+            try:
+                lo = int(obj.get("lastOnline") or 0) if isinstance(obj, dict) else 0
+            except (TypeError, ValueError):
+                lo = 0
+            if lo > 0 and isinstance(obj, dict) and not obj.get("last_online_ms"):
+                obj["last_online_ms"] = lo
+            return obj
         return None
 
     # ───────── تمدید/ترافیک ─────────

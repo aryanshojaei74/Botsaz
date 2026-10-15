@@ -1283,6 +1283,8 @@ class VpnPlan(Base):
     # دسته‌بندیِ پلن (مثلاً «پلن حرفه‌ای»/«پلن اقتصادی») — پلن‌هایی که دسته‌بندیِ
     # یکسان دارن، تو لیستِ خرید زیرِ یک تیترِ مشترک کنارِ هم نشون داده می‌شن.
     category: Mapped[str | None] = mapped_column(String(30))
+    # ترتیبِ نمایشِ پلن (کمتر = بالاتر)؛ برابر → بر اساسِ id
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     # === PATCH_MINIAPP_V1 ===
     # دسته‌بندیِ نمایشی در مینی‌اپ (جدا از فیلدِ متنیِ قدیمیِ category که

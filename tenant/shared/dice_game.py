@@ -432,7 +432,7 @@ async def _open_game(cb: CallbackQuery, bot: Bot, gid: int, state: FSMContext):
     plp = plan_prizes_of(g)
     async with Session() as s:
         plans = (await s.scalars(select(VpnPlan).where(
-            VpnPlan.bot_id == row.id, VpnPlan.active.is_(True)).order_by(VpnPlan.id))).all()
+            VpnPlan.bot_id == row.id, VpnPlan.active.is_(True)).order_by(VpnPlan.sort_order, VpnPlan.id))).all()
     plan_titles = {p.id: p.title for p in plans}
     faces = faces_of(g.emoji)
     lines = []
@@ -849,7 +849,7 @@ async def dga_plan_pick(cb: CallbackQuery, bot: Bot):
             await cb.answer("بازی پیدا نشد.", show_alert=True)
             return
         plans = (await s.scalars(select(VpnPlan).where(
-            VpnPlan.bot_id == row.id, VpnPlan.active.is_(True)).order_by(VpnPlan.id))).all()
+            VpnPlan.bot_id == row.id, VpnPlan.active.is_(True)).order_by(VpnPlan.sort_order, VpnPlan.id))).all()
     if not plans:
         await cb.answer(
             "هنوز هیچ پلنِ فعالی برای فروشِ VPN تعریف نکرده‌ای. اول از منویِ پنلِ متصل، "

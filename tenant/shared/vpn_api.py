@@ -97,7 +97,7 @@ async def _plans(ctx: AuthCtx, user: BotUser | None) -> list[dict]:
             VpnPanel.bot_id == ctx.bot_id, VpnPanel.enabled == True))).all()}  # noqa: E712
         plans = (await s.scalars(select(VpnPlan).where(
             VpnPlan.bot_id == ctx.bot_id, VpnPlan.active == True, aud  # noqa: E712
-        ).order_by(VpnPlan.id))).all()
+        ).order_by(VpnPlan.sort_order, VpnPlan.id))).all()
     out = []
     for pl in plans:
         if pl.panel_key not in panels:

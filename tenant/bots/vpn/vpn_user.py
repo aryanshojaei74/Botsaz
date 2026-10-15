@@ -1082,7 +1082,13 @@ def _connection_status_line(usage: dict) -> str:
         return ""
     when = _jalali_datetime_from_ms(int(last_ms))
     app = (usage.get("client_app") or "").strip()
-    lines = ["", "🔌 <b>آخرین وضعیت اتصال</b>", f"🕒 زمان: <b>{when}</b>"]
+    # «آنلاین» = آخرین اتصال کمتر از ۳ دقیقه پیش (پنل‌ها lastOnline را حدودِ هر دقیقه به‌روز می‌کنند)
+    import time as _tm
+    _age = _tm.time() - int(last_ms) / 1000
+    _live = 0 <= _age <= 180
+    lines = ["", "🔌 <b>آخرین وضعیت اتصال</b>",
+             "🟢 وضعیت: <b>آنلاین</b>" if _live else "⚪️ وضعیت: <b>آفلاین</b>",
+             f"🕒 آخرین اتصال: <b>{when}</b>"]
     if app:
         lines.append(f"📱 برنامه: <b>{app}</b>")
     return "\n".join(lines)
@@ -1425,7 +1431,7 @@ async def all_categories(bot_id: int, panel_key: str | None = None) -> list[str]
         q = select(VpnPlan).where(VpnPlan.bot_id == bot_id)
         if panel_key:
             q = q.where(VpnPlan.panel_key == panel_key)
-        plans = (await s.scalars(q.order_by(VpnPlan.id))).all()
+        plans = (await s.scalars(q.order_by(VpnPlan.sort_order, VpnPlan.id))).all()
     out: list[str] = []
     has_plain = False
     for p in plans:
@@ -1635,7 +1641,7 @@ async def show_vpn_plans(bot: Bot, msg: Message, bot_id: int, state=None, panel_
             VpnPlan.panel_key == (panel.panel_key if panel else ""))
         if miniapp_category_id is not None:  # PATCH_BUNDLE_BUTTON_V1
             q = q.where(VpnPlan.miniapp_category_id == miniapp_category_id)
-        plans = (await s.scalars(q.order_by(VpnPlan.id))).all()
+        plans = (await s.scalars(q.order_by(VpnPlan.sort_order, VpnPlan.id))).all()
 
     # === PATCH_BTN_VPN_CATEGORY_FILTER_V1 ===
     # هر دکمهٔ خرید می‌تواند فقط دسته‌بندی‌هایِ خاصی را نشان دهد؛ این‌طوری
@@ -6936,7 +6942,7 @@ async def vpn_renew_menu(cb: CallbackQuery, bot: Bot):
             VpnPlan.bot_id == row.id, VpnPlan.active == True,
             VpnPlan.panel_key == (panel.panel_key if panel else ""),
             (await _plan_audience_filter(row.id, cb.from_user.id))[0],  # PATCH_PLAN_AUDIENCE_ENFORCE_V1
-        ).order_by(VpnPlan.id))).all()
+        ).order_by(VpnPlan.sort_order, VpnPlan.id))).all()
 # === PATCH_RENEW_PLAN_MATCH_V1 ===
         # تفکیکِ حجمی از نامحدود: سرویسِ حجمی نباید پلنِ «نامحدود» را
         # به‌عنوان گزینهٔ تمدید ببیند و برعکس. مبنا خودِ سرویسِ کاربر است

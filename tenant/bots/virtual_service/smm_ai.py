@@ -291,7 +291,7 @@ async def _live_bot_context(bot_id: int, row, telegram_id: int | None = None) ->
                 f"- {b.label}" for b in buttons if b.label))
         if field == "vpn_sales":
             plans = (await s.scalars(select(VpnPlan).where(
-                VpnPlan.bot_id == bot_id, VpnPlan.active.is_(True)).order_by(VpnPlan.id).limit(80))).all()
+                VpnPlan.bot_id == bot_id, VpnPlan.active.is_(True)).order_by(VpnPlan.sort_order, VpnPlan.id).limit(80))).all()
             sections.append("پلن‌های فعال VPN:")
             if plans:
                 sections.append("\n".join(

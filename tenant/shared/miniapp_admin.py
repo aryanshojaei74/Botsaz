@@ -1023,7 +1023,7 @@ async def miniapp_cat_plans(cb: CallbackQuery, bot: Bot):
         return
     async with Session() as s:
         plans = (await s.scalars(select(VpnPlan).where(
-            VpnPlan.bot_id == row.id, VpnPlan.active == True).order_by(VpnPlan.id))).all()
+            VpnPlan.bot_id == row.id, VpnPlan.active == True).order_by(VpnPlan.sort_order, VpnPlan.id))).all()
     rows = []
     for p in plans:
         mark = "✅" if p.miniapp_category_id == cat_id else "▫️"

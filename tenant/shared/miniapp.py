@@ -634,7 +634,7 @@ async def api_plans(bot_id: int, category_id: int, x_init_data: str | None = Hea
         q = select(VpnPlan).where(VpnPlan.bot_id == bot_id, VpnPlan.active == True)
         q = q.where(VpnPlan.miniapp_category_id.is_(None)) if category_id == 0 \
             else q.where(VpnPlan.miniapp_category_id == category_id)
-        plans = (await s.scalars(q.order_by(VpnPlan.id))).all()
+        plans = (await s.scalars(q.order_by(VpnPlan.sort_order, VpnPlan.id))).all()
         # === PATCH_MINIAPP_STOCK_CATS_V1 ===
         packs = []
         if category_id:
@@ -1874,7 +1874,7 @@ async def api_admin_catalog(bot_id: int, x_init_data: str | None = Header(defaul
             MiniAppCategory.bot_id == bot_id
         ).order_by(MiniAppCategory.sort_order, MiniAppCategory.id))).all()
         plans = (await s.scalars(select(VpnPlan).where(
-            VpnPlan.bot_id == bot_id).order_by(VpnPlan.id))).all()
+            VpnPlan.bot_id == bot_id).order_by(VpnPlan.sort_order, VpnPlan.id))).all()
 
     vs, seen = [], set()
     for b in btns:

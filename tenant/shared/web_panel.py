@@ -695,7 +695,7 @@ async def _rs_plans(bot_id: int, panels: list[str], apply_all: bool):
             stmt = stmt.where(VpnPlan.panel_key.in_(panels))
         elif not apply_all and not panels:
             return []
-        rows = (await s.scalars(stmt.order_by(VpnPlan.id))).all()
+        rows = (await s.scalars(stmt.order_by(VpnPlan.sort_order, VpnPlan.id))).all()
         return [(p.id, p.title, p.panel_key, int(p.price or 0),
                  p.volume_gb, p.days) for p in rows]
 
@@ -1448,7 +1448,7 @@ async def _rs_renew_plans(bot_id: int, acc, panels: list[str], apply_all: bool):
     async with Session() as s:
         rows = (await s.scalars(select(VpnPlan).where(
             VpnPlan.bot_id == bot_id, VpnPlan.active == True,
-            VpnPlan.panel_key == acc.panel_key).order_by(VpnPlan.id))).all()
+            VpnPlan.panel_key == acc.panel_key).order_by(VpnPlan.sort_order, VpnPlan.id))).all()
         return [(p.id, p.title, int(p.price or 0), p.volume_gb, p.days) for p in rows]
 
 

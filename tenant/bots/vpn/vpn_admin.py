@@ -3540,7 +3540,7 @@ async def vpn_plans(cb: CallbackQuery, bot: Bot):
     from tenant import ibtn_style as _ibs
     async with Session() as s:
         plans = (await s.scalars(select(VpnPlan).where(
-            VpnPlan.bot_id == row.id, VpnPlan.panel_key == key).order_by(VpnPlan.id))).all()
+            VpnPlan.bot_id == row.id, VpnPlan.panel_key == key).order_by(VpnPlan.sort_order, VpnPlan.id))).all()
     rows_kb = []
     # === PATCH_VPN_PLAN_CATEGORY_V1 ===
     _groups: dict[str | None, list] = {}
@@ -3653,7 +3653,7 @@ async def _panel_categories(bot_id: int, key: str) -> list[str]:
     callback_dataیِ کوتاه‌شده."""
     async with Session() as s:
         plans = (await s.scalars(select(VpnPlan).where(
-            VpnPlan.bot_id == bot_id, VpnPlan.panel_key == key).order_by(VpnPlan.id))).all()
+            VpnPlan.bot_id == bot_id, VpnPlan.panel_key == key).order_by(VpnPlan.sort_order, VpnPlan.id))).all()
     order: list[str] = []
     for p in plans:
         cat = (p.category or "").strip()
@@ -4311,6 +4311,9 @@ def _plan_menu_view(p: VpnPlan, key: str) -> tuple[str, InlineKeyboardMarkup]:
         [_b("🔴 غیرفعال‌کردن فروش" if p.active else "🟢 فعال‌کردن فروش",
             f"tvpn:plantg2:{key}:{p.id}",
             style=ButtonStyle.DANGER if p.active else ButtonStyle.SUCCESS)],
+        # ترتیبِ نمایش به مشتری (بالا/پایین بردنِ پلن)
+        [_b("🔼 بالا بردن", f"tvpn:planmv:{key}:{p.id}:up"),
+         _b("🔽 پایین بردن", f"tvpn:planmv:{key}:{p.id}:dn")],
         [_b("🗑 حذف این پلن", f"tvpn:plandel2:{key}:{p.id}", style=ButtonStyle.DANGER)],
         [_b("⬅️ بازگشت به پلن‌ها", f"tvpn:plans:{key}", style=ButtonStyle.DANGER)],
     ])
@@ -4526,6 +4529,50 @@ async def vpn_plan_toggle2(cb: CallbackQuery, bot: Bot, state: FSMContext):
         await cb.message.edit_text(text, reply_markup=kb)
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+
+
+async def move_plan(bot_id: int, panel_key: str, plan_id: int, direction: str) -> bool:
+    """پلن را در لیستِ همین پنل یک پله بالا/پایین می‌برد (جابه‌جایی با همسایه).
+    ترتیبِ فعلی (sort_order, id) اول به شمارهٔ پیوسته 0..n-1 تبدیل می‌شود تا
+    پلن‌هایی که همه sort_order=0 دارند هم درست جابه‌جا شوند. True = جابه‌جا شد."""
+    async with Session() as s:
+        plans = list((await s.scalars(select(VpnPlan).where(
+            VpnPlan.bot_id == bot_id, VpnPlan.panel_key == panel_key
+        ).order_by(VpnPlan.sort_order, VpnPlan.id))).all())
+        idx = next((i for i, x in enumerate(plans) if x.id == plan_id), None)
+        if idx is None:
+            return False
+        j = idx - 1 if direction == "up" else idx + 1
+        # همسایه را فقط در همین دسته می‌گیریم (لیست به‌تفکیکِ دسته نمایش داده می‌شود)
+        cat = (plans[idx].category or "").strip()
+        while 0 <= j < len(plans) and (plans[j].category or "").strip() != cat:
+            j = j - 1 if direction == "up" else j + 1
+        for i, x in enumerate(plans):
+            x.sort_order = i
+        moved = 0 <= j < len(plans)
+        if moved:
+            plans[idx].sort_order, plans[j].sort_order = plans[j].sort_order, plans[idx].sort_order
+        await s.commit()
+    return moved
+
+
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:planmv:"))
+async def vpn_plan_move(cb: CallbackQuery, bot: Bot):
+    _, _, key, plan_id, direction = cb.data.split(":")
+    row, p = await _plan_get(cb, bot, int(plan_id))
+    if not p:
+        return
+    moved = await move_plan(row.id, key, p.id, direction)
+    await cb.answer("✅ جابه‌جا شد" if moved else "بالاتر/پایین‌تر از این جایی نیست.")
+    if moved:
+        # در همان منویِ پلن بمان تا بشود چندبار پشتِ‌سرِهم جابه‌جا کرد
+        async with Session() as s:
+            p = await s.get(VpnPlan, p.id)
+        text, kb = _plan_menu_view(p, key)
+        try:
+            await cb.message.edit_text(text, reply_markup=kb)
+        except Exception:
+            logger.info("بازسازیِ منویِ پلن بعد از جابه‌جایی ممکن نشد")
 
 
 _PLAN_EDIT_PROMPTS = {
