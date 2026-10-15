@@ -160,6 +160,11 @@ async def _tenant_swallow_not_modified(event) -> bool:
     return True                        # یعنی رسیدگی شد؛ به‌عنوانِ خطا لاگ نشود
 
 
+from tenant.shared.chat_gone import swallow_chat_gone as _tenant_swallow_chat_gone
+
+tenant_dp.errors()(_tenant_swallow_chat_gone)
+
+
 # === PATCH_RAPID_REPEAT_THROTTLE_V1 ===
 # وقتی کاربر (از رویِ کندیِ حس‌شده یا عجله) ظرفِ چند ثانیه، ده بار پشتِ‌سرِهم
 # دقیقاً همون اکشن رو تکرار می‌کنه — همون دکمه، همون دستور، یا /start — همه‌شون
