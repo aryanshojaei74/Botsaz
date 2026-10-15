@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as _dt
+import json
 from decimal import Decimal
 
 from aiogram import Bot, F, Router
@@ -36,6 +37,11 @@ class MtrFSM(StatesGroup):
     price = State()
     days = State()
     title = State()
+    # === PATCH_METERED_MULTI_PLAN_V1 === افزودنِ پلنِ جدید (گام‌به‌گام)
+    np_title = State()
+    np_price = State()
+    np_days = State()
+    np_max = State()
 
 
 def _kb(rows):
@@ -58,6 +64,27 @@ def fmt(n) -> str:
 
 
 # ═══════════════════ تنظیمات ═══════════════════
+def _norm_plans(raw: str) -> list[dict]:
+    """پلن‌هایِ ذخیره‌شده (JSON) را اعتبارسنجی/نرمال می‌کند؛ ورودیِ خراب نادیده گرفته می‌شود."""
+    try:
+        data = json.loads(raw or "[]")
+    except (TypeError, ValueError):
+        return []
+    out, seen = [], set()
+    for d in data if isinstance(data, list) else []:
+        try:
+            pid = int(d["id"])
+            plan = {"id": pid, "title": str(d.get("title") or "بسته")[:60], "price": int(d["price"]),
+                    "days": int(d["days"]), "max_gb": max(0, int(d.get("max_gb") or 0))}
+        except (KeyError, TypeError, ValueError):
+            continue
+        if plan["price"] < 1 or plan["days"] < 1 or pid in seen:
+            continue
+        seen.add(pid)
+        out.append(plan)
+    return out
+
+
 async def get_cfg(bot_id: int) -> dict:
     from tenant import get_setting
 
@@ -66,13 +93,27 @@ async def get_cfg(bot_id: int) -> dict:
             return max(lo, min(hi, int(float(await get_setting(bot_id, key, str(default)) or default))))
         except (TypeError, ValueError):
             return default
-    return {
+    cfg = {
         "enabled": (await get_setting(bot_id, "mtr_enabled", "0")) == "1",
         "price": await _i("mtr_price_gb", 2000, 1, 100_000_000),
         "days": await _i("mtr_days", 30, 1, 3650),
         "title": ((await get_setting(bot_id, "mtr_title", "") or "").strip() or "بستهٔ ویژه")[:60],
         "panel_key": (await get_setting(bot_id, "mtr_panel_key", "") or "").strip(),   # "" = اولین پنلِ فعال
     }
+    # === PATCH_METERED_MULTI_PLAN_V1 === چند پلن؛ اگر ادمین پلنی نساخته باشد همان پلنِ تکیِ قبلی (id=0)
+    plans = _norm_plans(await get_setting(bot_id, "mtr_plans", "[]"))
+    if not plans:
+        plans = [{"id": 0, "title": cfg["title"], "price": cfg["price"], "days": cfg["days"], "max_gb": 0}]
+    cfg["plans"] = plans
+    cfg["custom_plans"] = bool(_norm_plans(await get_setting(bot_id, "mtr_plans", "[]")))
+    return cfg
+
+
+def find_plan(cfg: dict, pid) -> dict | None:
+    for p in cfg["plans"]:
+        if str(p["id"]) == str(pid):
+            return p
+    return None
 
 
 async def feature_ok(row) -> bool:
@@ -156,6 +197,7 @@ async def process_one(m_id: int, client, notify) -> str:
             return "expired"
         email, tg_id, price, status = a.email, a.user_telegram_id, int(m.price_per_gb), m.status
         user_disabled = (a.status == "disabled" and status != "no_credit")
+        max_gb, granted_gb = int(m.max_gb or 0), int(a.volume_gb or 0)
     usage = await client.get_usage(email)
     if not usage:
         return "nousage"
@@ -167,6 +209,8 @@ async def process_one(m_id: int, client, notify) -> str:
         u = await s.get(BotUser, m.user_id)
         bal = int(Decimal(str(u.balance or 0))) if u else 0
     extra = plan_topup(bal, price, used, cap)
+    if max_gb > 0:                       # سقفِ مجموعِ حجمِ این پلن
+        extra = min(extra, max(max_gb - granted_gb, 0))
     headroom = max(cap - used, 0)
     if extra >= 1:
         await client.add_traffic(email, extra)
@@ -188,6 +232,20 @@ async def process_one(m_id: int, client, notify) -> str:
             await notify(tg_id, f"✅ موجودی کیف پولت شارژ شد و سرویسِ اعتباری‌ات دوباره فعال شد "
                                 f"(+{extra} گیگ، موجودی: {fmt(bal)}).")
         return "topup_revived" if revived else "topup"
+    if max_gb > 0 and granted_gb >= max_gb and headroom < LOW_HEADROOM_BYTES and status != "ended":
+        # حجمِ کاملِ این بسته مصرف شد (بدونِ ربطِ موجودی) ⇒ پایانِ بسته
+        await client.set_enabled(email, False)
+        async with Session() as s:
+            m = await s.get(MeteredAccount, m_id, with_for_update=True)
+            a = await s.get(PanelAccount, m.account_id)
+            m.status = "ended"
+            m.updated_at = _dt.datetime.utcnow()
+            if a:
+                a.status = "disabled"
+            await s.commit()
+        await notify(tg_id, f"✅ حجمِ بستهٔ اعتباری‌ات ({max_gb} گیگ) کامل مصرف شد و بسته پایان یافت. "
+                            "برایِ ادامه یک بستهٔ جدید فعال کن.")
+        return "plan_done"
     if headroom < LOW_HEADROOM_BYTES and status != "no_credit" and not user_disabled:
         await client.set_enabled(email, False)
         async with Session() as s:
@@ -284,11 +342,15 @@ async def user_entry_row(bot_id: int, plan: str | None = None):
     cfg = await get_cfg(bot_id)
     if not cfg["enabled"]:
         return None
-    return [_btn(f"💳 {cfg['title']} — {cfg['price']:,} تومان/گیگ (پرداخت به‌ازایِ مصرف)", "mtr:open", ButtonStyle.PRIMARY)]
+    if len(cfg["plans"]) > 1:
+        return [_btn("💳 بسته‌هایِ اعتباری (پرداخت به‌ازایِ مصرف)", "mtr:open", ButtonStyle.PRIMARY)]
+    p = cfg["plans"][0]
+    return [_btn(f"💳 {p['title']} — {p['price']:,} تومان/گیگ (پرداخت به‌ازایِ مصرف)", "mtr:open", ButtonStyle.PRIMARY)]
 
 
-async def _open_view(row, tg_id: int, header: str = ""):
-    """(متن، کیبورد) صفحهٔ معرفیِ بسته برایِ این کاربر؛ یا (متنِ خطا، None)."""
+async def _open_view(row, tg_id: int, header: str = "", pid=None):
+    """(متن، کیبورد) صفحهٔ معرفیِ بسته برایِ این کاربر؛ یا (متنِ خطا، None).
+    چند پلن ⇒ فهرستِ پلن‌ها؛ تک‌پلن یا انتخابِ یک پلن (pid) ⇒ صفحهٔ آن پلن."""
     if not await feature_ok(row):
         return "⛔️ این قابلیت در پلنِ فعلیِ ربات در دسترس نیست.", None
     cfg = await get_cfg(row.id)
@@ -297,24 +359,44 @@ async def _open_view(row, tg_id: int, header: str = ""):
     async with Session() as s:
         u = await s.scalar(select(BotUser).where(BotUser.bot_id == row.id, BotUser.telegram_id == tg_id))
     bal = int(Decimal(str(u.balance or 0))) if u else 0
-    gb = min(affordable_gb(bal, cfg["price"]), MAX_GB)
     cur = await _active_of(row.id, u.id) if u else None
-    txt = (header or "") + (f"💳 <b>{cfg['title']}</b>\n\n"
-           f"💰 قیمت: <b>{cfg['price']:,} تومان</b> به‌ازایِ هر گیگ — فقط به‌اندازهٔ مصرفِ واقعی\n"
-           f"⏳ مدت: <b>{cfg['days']} روز</b>\n"
-           f"👛 موجودیِ کیف پولت: <b>{fmt(bal)}</b> (≈ {gb} گیگ)\n\n"
-           "مصرفت کم‌کم از کیف پول کم می‌شود. وقتی موجودی تمام شود سرویس قطع می‌شود و با شارژِ کیف پول "
-           "خودکار دوباره وصل می‌شود. هر وقت خواستی از «سرویس‌هایِ من» می‌توانی غیرفعال یا حذفش کنی.")
+    plans = cfg["plans"]
+    plan = find_plan(cfg, pid) if pid is not None else (plans[0] if len(plans) == 1 else None)
+    if pid is not None and plan is None:
+        return "این پلن دیگر موجود نیست.", None
     rows = []
-    if cur:
-        txt += "\n\n✅ همین الان یک بستهٔ اعتباریِ فعال داری."
-        rows.append([_btn("📂 بسته‌هایِ من", "mtr:mine")])
-    elif gb >= 1:
-        rows.append([_btn(f"✅ فعال‌سازیِ بسته ({gb} گیگ با موجودیِ فعلی)", "mtr:go", ButtonStyle.SUCCESS)])
+    if plan is None:                                    # فهرستِ چند پلن
+        txt = ((header or "") + "💳 <b>بسته‌هایِ اعتباری (پرداخت به‌ازایِ مصرف)</b>\n\n"
+               f"👛 موجودیِ کیف پولت: <b>{fmt(bal)}</b>\n\n"
+               "یکی از بسته‌ها را انتخاب کن؛ فقط به‌اندازهٔ مصرفِ واقعی از کیف پول کم می‌شود:")
+        for p_ in plans:
+            cap = f" · تا {p_['max_gb']} گیگ" if p_["max_gb"] else ""
+            rows.append([_btn(f"{p_['title']} — {p_['price']:,} ت/گیگ · {p_['days']} روز{cap}", f"mtr:pick:{p_['id']}",
+                              ButtonStyle.PRIMARY)])
+        if cur:
+            txt += "\n\n✅ همین الان یک بستهٔ اعتباریِ فعال داری."
+            rows.append([_btn("📂 بسته‌هایِ من", "mtr:mine")])
     else:
-        txt += f"\n\n⚠️ برایِ شروع حداقل <b>{fmt(cfg['price'])}</b> موجودی لازم است."
+        cap_gb = plan["max_gb"] or MAX_GB
+        gb = min(affordable_gb(bal, plan["price"]), cap_gb, MAX_GB)
+        txt = (header or "") + (f"💳 <b>{plan['title']}</b>\n\n"
+               f"💰 قیمت: <b>{plan['price']:,} تومان</b> به‌ازایِ هر گیگ — فقط به‌اندازهٔ مصرفِ واقعی\n"
+               f"⏳ مدت: <b>{plan['days']} روز</b>\n"
+               + (f"📦 سقفِ حجمِ این بسته: <b>{plan['max_gb']} گیگ</b>\n" if plan["max_gb"] else "")
+               + f"👛 موجودیِ کیف پولت: <b>{fmt(bal)}</b> (≈ {gb} گیگ)\n\n"
+               "مصرفت کم‌کم از کیف پول کم می‌شود. وقتی موجودی تمام شود سرویس قطع می‌شود و با شارژِ کیف پول "
+               "خودکار دوباره وصل می‌شود. هر وقت خواستی از «سرویس‌هایِ من» می‌توانی غیرفعال یا حذفش کنی.")
+        if cur:
+            txt += "\n\n✅ همین الان یک بستهٔ اعتباریِ فعال داری."
+            rows.append([_btn("📂 بسته‌هایِ من", "mtr:mine")])
+        elif gb >= 1:
+            rows.append([_btn(f"✅ فعال‌سازیِ بسته ({gb} گیگ با موجودیِ فعلی)",
+                              f"mtr:go:{plan['id']}", ButtonStyle.SUCCESS)])
+        else:
+            txt += f"\n\n⚠️ برایِ شروع حداقل <b>{fmt(plan['price'])}</b> موجودی لازم است."
     rows.append([_btn("🔋 شارژ کیف پول", "w:back", ButtonStyle.SUCCESS)])
-    rows.append([_btn("⬅️ بازگشت", "vsvc:home", ButtonStyle.DANGER)])
+    back = "mtr:open" if (plan is not None and len(plans) > 1) else "vsvc:home"
+    rows.append([_btn("⬅️ بازگشت", back, ButtonStyle.DANGER)])
     return txt, _kb(rows)
 
 
@@ -324,10 +406,11 @@ async def show_for_message(msg: Message, bot: Bot, row, header: str = "") -> Non
     await msg.answer(txt, reply_markup=kb, parse_mode="HTML")
 
 
-@mtr_router.callback_query(F.data == "mtr:open")
+@mtr_router.callback_query(F.data.regexp(r"^mtr:(open|pick:\d+)$"))
 async def mtr_open(cb: CallbackQuery, bot: Bot):
     row = await _row(bot)
-    txt, kb = await _open_view(row, cb.from_user.id) if row else ("یافت نشد.", None)
+    pid = cb.data.split(":")[2] if cb.data.startswith("mtr:pick:") else None
+    txt, kb = await _open_view(row, cb.from_user.id, pid=pid) if row else ("یافت نشد.", None)
     if kb is None:
         await cb.answer(txt, show_alert=True)
         return
@@ -365,7 +448,7 @@ async def mtr_mine(cb: CallbackQuery, bot: Bot):
 _creating: set[tuple[int, int]] = set()
 
 
-@mtr_router.callback_query(F.data == "mtr:go")
+@mtr_router.callback_query(F.data.regexp(r"^mtr:go(:\d+)?$"))
 async def mtr_go(cb: CallbackQuery, bot: Bot):
     row = await _row(bot)
     if not row or not await feature_ok(row):
@@ -375,18 +458,23 @@ async def mtr_go(cb: CallbackQuery, bot: Bot):
     if not cfg["enabled"]:
         await cb.answer("این بسته فعال نیست.", show_alert=True)
         return
+    pid = cb.data.split(":")[2] if cb.data.count(":") == 2 else None
+    plan = find_plan(cfg, pid) if pid is not None else cfg["plans"][0]
+    if plan is None:
+        await cb.answer("این پلن دیگر موجود نیست.", show_alert=True)
+        return
     key = (row.id, cb.from_user.id)
     if key in _creating:
         await cb.answer("در حال ساخت…", show_alert=True)
         return
     _creating.add(key)
     try:
-        await _create(cb, bot, row, cfg)
+        await _create(cb, bot, row, cfg, plan)
     finally:
         _creating.discard(key)
 
 
-async def _create(cb: CallbackQuery, bot: Bot, row, cfg: dict):
+async def _create(cb: CallbackQuery, bot: Bot, row, cfg: dict, plan: dict):
     from tenant.bots.vpn import vpn_user as VU
     from tenant.bots.vpn.vpn_admin import get_any_enabled_panel, get_panel
     async with Session() as s:
@@ -398,9 +486,9 @@ async def _create(cb: CallbackQuery, bot: Bot, row, cfg: dict):
     if await _active_of(row.id, uid):
         await cb.answer("همین الان یک بستهٔ اعتباریِ فعال داری (از «بسته‌هایِ من» مدیریتش کن).", show_alert=True)
         return
-    gb = min(affordable_gb(bal, cfg["price"]), MAX_GB)
+    gb = min(affordable_gb(bal, plan["price"]), plan["max_gb"] or MAX_GB, MAX_GB)
     if gb < 1:
-        await cb.answer(f"حداقل {fmt(cfg['price'])} موجودی لازم است؛ اول کیف پولت را شارژ کن.", show_alert=True)
+        await cb.answer(f"حداقل {fmt(plan['price'])} موجودی لازم است؛ اول کیف پولت را شارژ کن.", show_alert=True)
         return
     panel = None
     if cfg.get("panel_key"):          # پنلِ انتخابیِ ادمین؛ اگر حذف/غیرفعال شده بود به اولین پنلِ فعال برمی‌گردیم
@@ -416,7 +504,7 @@ async def _create(cb: CallbackQuery, bot: Bot, row, cfg: dict):
     email = await VU._make_config_email(row.id, panel.panel_key, row.username, cb.from_user.id, cb.from_user.username)
     client = VU._client_from_panel(panel)
     try:
-        acc = await client.create_account(email, gb=gb, days=cfg["days"], limit_ip=0,
+        acc = await client.create_account(email, gb=gb, days=plan["days"], limit_ip=0,
                                           uuid_str=VU.gen_uuid(), sub_id=VU.gen_sub_id(), on_hold=False)
     except Exception as e:
         logger.warning("mtr: ساختِ سرویس ناموفق (bot=%s): %s", row.id, e)
@@ -428,13 +516,13 @@ async def _create(cb: CallbackQuery, bot: Bot, row, cfg: dict):
         pa = PanelAccount(
             bot_id=row.id, user_telegram_id=cb.from_user.id, email=email, panel_key=panel.panel_key,
             uuid=acc.get("uuid"), sub_id=acc.get("sub_id"), sub_link=acc.get("sub_link") or "",
-            volume_gb=gb, days=cfg["days"], plan_title=cfg["title"], status="active",
+            volume_gb=gb, days=plan["days"], plan_title=plan["title"], status="active",
             svc_code=await VU.new_svc_code(s, row.id),
             expires_at=VU._expires_at_from_ms(acc.get("expiry_ms")), first_conn_notified=False)
         s.add(pa)
         await s.flush()
-        s.add(MeteredAccount(bot_id=row.id, account_id=pa.id, user_id=uid, price_per_gb=cfg["price"],
-                             last_used_bytes=0, billed_toman=0, status="active"))
+        s.add(MeteredAccount(bot_id=row.id, account_id=pa.id, user_id=uid, price_per_gb=plan["price"],
+                             max_gb=plan["max_gb"], last_used_bytes=0, billed_toman=0, status="active"))
         await s.commit()
         aid = pa.id
     try:
@@ -444,7 +532,7 @@ async def _create(cb: CallbackQuery, bot: Bot, row, cfg: dict):
         await bot.send_message(cb.from_user.id, "✅ سرویست ساخته شد؛ از «سرویس‌هایِ من» در دسترس است.")
     await bot.send_message(cb.from_user.id,
                            f"💳 <b>بستهٔ اعتباری فعال شد</b>\n\n📦 حجمِ اولیه: <b>{gb} گیگ</b> (با موجودیِ فعلی)\n"
-                           f"💰 هر گیگ {cfg['price']:,} تومان — فقط مصرفِ واقعی کم می‌شود.\n"
+                           f"💰 هر گیگ {plan['price']:,} تومان — فقط مصرفِ واقعی کم می‌شود.\n"
                            "با شارژِ کیف پول، حجم خودکار اضافه می‌شود.", parse_mode="HTML")
 
 
@@ -481,16 +569,24 @@ async def _admin_view(bot_id: int):
            "کاربر با کیف پولِ شارژشده یک سرویس می‌گیرد؛ مصرفِ واقعی کم‌کم از کیف پول کم می‌شود. موجودی که تمام شد سرویس قطع "
            "و با شارژِ کیف پول خودکار وصل می‌شود. توقف/حذف هم برایِ کاربر هم برایِ شما از صفحهٔ سرویس ممکن است.\n\n"
            f"وضعیت: <b>{'✅ فعال' if cfg['enabled'] else '❌ خاموش'}</b>\n"
-           f"🏷 عنوان: <b>{cfg['title']}</b>\n"
-           f"💰 قیمتِ هر گیگ: <b>{cfg['price']:,} تومان</b>\n"
-           f"⏳ مدت: <b>{cfg['days']} روز</b>\n"
-           f"🔌 پنلِ ساختِ سرویس: <b>{await _panel_name(bot_id, cfg['panel_key'])}</b>\n\n"
+           + (("🧩 <b>پلن‌ها</b>:\n" + "\n".join(
+               f"  {i}. {p_['title']} — {p_['price']:,} ت/گیگ · {p_['days']} روز"
+               + (f" · سقف {p_['max_gb']} گیگ" if p_['max_gb'] else "")
+               for i, p_ in enumerate(cfg['plans'], 1)) + "\n")
+              if cfg['custom_plans'] else
+              (f"🏷 عنوان: <b>{cfg['title']}</b>\n"
+               f"💰 قیمتِ هر گیگ: <b>{cfg['price']:,} تومان</b>\n"
+               f"⏳ مدت: <b>{cfg['days']} روز</b>\n"
+               "<i>(پلنِ تکی؛ با «➕ افزودنِ پلن» می‌توانی چند بستهٔ متفاوت بسازی.)</i>\n"))
+           + f"🔌 پنلِ ساختِ سرویس: <b>{await _panel_name(bot_id, cfg['panel_key'])}</b>\n\n"
            f"📊 فعال: <b>{act}</b> | ⛔️ قطعِ موجودی: <b>{nocr}</b> | 💵 مجموعِ کسرشده: <b>{fmt(billed)}</b>\n\n"
            "ℹ️ حجمِ هر سرویس به‌صورتِ «گیگِ کامل» اضافه می‌شود (مثلاً موجودی ۱۰٬۰۰۰ با قیمتِ ۲٬۰۰۰ ⇒ ۵ گیگ).")
     rows = [[_btn("⛔️ خاموش‌کردن" if cfg["enabled"] else "✅ روشن‌کردن", "mtr:adm:toggle",
                   ButtonStyle.DANGER if cfg["enabled"] else ButtonStyle.SUCCESS)],
-            [_btn("💰 قیمتِ هر گیگ", "mtr:adm:price"), _btn("⏳ مدت (روز)", "mtr:adm:days")],
-            [_btn("🏷 عنوان", "mtr:adm:title"), _btn("🔌 پنلِ ساخت", "mtr:adm:panel")],
+            [_btn("➕ افزودنِ پلن (چند بسته)", "mtr:adm:padd", ButtonStyle.SUCCESS),
+             _btn("🗑 حذفِ پلن", "mtr:adm:pdelmenu", ButtonStyle.DANGER)],
+            [_btn("💰 قیمتِ هر گیگ (پلنِ تکی)", "mtr:adm:price"), _btn("⏳ مدت (پلنِ تکی)", "mtr:adm:days")],
+            [_btn("🏷 عنوان (پلنِ تکی)", "mtr:adm:title"), _btn("🔌 پنلِ ساخت", "mtr:adm:panel")],
             [_btn("📋 فهرستِ سرویس‌ها", "mtr:adm:list", ButtonStyle.PRIMARY)],
             [_btn("⬅️ بازگشت", "tadm:sec:settings", ButtonStyle.DANGER)]]
     return txt, _kb(rows)
@@ -567,6 +663,129 @@ async def adm_panel_set(cb: CallbackQuery, bot: Bot):
             return
         key = p.panel_key
     await set_setting(row.id, "mtr_panel_key", key)
+    await admin_menu(cb, bot)
+
+
+async def _save_plans(bot_id: int, plans: list[dict]) -> None:
+    from tenant import set_setting
+    await set_setting(bot_id, "mtr_plans", json.dumps(plans, ensure_ascii=False))
+
+
+@mtr_router.callback_query(F.data == "mtr:adm:padd")
+async def adm_plan_add(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _admin_row(cb, bot)
+    if not row:
+        return
+    cfg = await get_cfg(row.id)
+    if len(cfg["plans"]) >= 8 and cfg["custom_plans"]:
+        await cb.answer("حداکثر ۸ پلن می‌شود ساخت.", show_alert=True)
+        return
+    await state.clear()
+    await state.set_state(MtrFSM.np_title)
+    await bot.send_message(cb.from_user.id, "➕ <b>پلنِ جدید</b>\n\n🏷 عنوانِ پلن را بفرست (مثلاً «بستهٔ طلایی»):",
+                           parse_mode="HTML", reply_markup=_kb([[_btn("❌ لغو", "mtr:adm", ButtonStyle.DANGER)]]))
+    await cb.answer()
+
+
+async def _np_guard(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import is_owner_or_admin
+    row = await _row(bot)
+    if not row or not await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id) or not await feature_ok(row):
+        await state.clear()
+        return None
+    return row
+
+
+@mtr_router.message(MtrFSM.np_title, F.text)
+async def adm_np_title(msg: Message, bot: Bot, state: FSMContext):
+    if not await _np_guard(msg, bot, state):
+        return
+    t = (msg.text or "").strip()
+    if not t or len(t) > 60:
+        await msg.answer("❌ عنوان باید ۱ تا ۶۰ کاراکتر باشد.")
+        return
+    await state.update_data(np_title=t)
+    await state.set_state(MtrFSM.np_price)
+    await msg.answer("💰 قیمتِ هر گیگ را به تومان بفرست (مثلاً 2500):")
+
+
+@mtr_router.message(MtrFSM.np_price, F.text)
+async def adm_np_price(msg: Message, bot: Bot, state: FSMContext):
+    if not await _np_guard(msg, bot, state):
+        return
+    t = _fa(msg.text or "")
+    if not t.isdigit() or not (1 <= int(t) <= 100_000_000):
+        await msg.answer("❌ عددِ معتبر بفرست.")
+        return
+    await state.update_data(np_price=int(t))
+    await state.set_state(MtrFSM.np_days)
+    await msg.answer("⏳ مدتِ بسته را به روز بفرست (مثلاً 30):")
+
+
+@mtr_router.message(MtrFSM.np_days, F.text)
+async def adm_np_days(msg: Message, bot: Bot, state: FSMContext):
+    if not await _np_guard(msg, bot, state):
+        return
+    t = _fa(msg.text or "")
+    if not t.isdigit() or not (1 <= int(t) <= 3650):
+        await msg.answer("❌ عددِ معتبر بین ۱ تا ۳۶۵۰ بفرست.")
+        return
+    await state.update_data(np_days=int(t))
+    await state.set_state(MtrFSM.np_max)
+    await msg.answer("📦 سقفِ مجموعِ حجمِ این بسته را به گیگ بفرست (مثلاً 20).\n"
+                     "عدد 0 یعنی «بدونِ سقف؛ فقط به‌اندازهٔ موجودیِ کیف پول».")
+
+
+@mtr_router.message(MtrFSM.np_max, F.text)
+async def adm_np_max(msg: Message, bot: Bot, state: FSMContext):
+    row = await _np_guard(msg, bot, state)
+    if not row:
+        return
+    t = _fa(msg.text or "")
+    if not t.isdigit() or not (0 <= int(t) <= MAX_GB):
+        await msg.answer(f"❌ عددِ معتبر بین ۰ تا {MAX_GB} بفرست.")
+        return
+    d = await state.get_data()
+    cfg = await get_cfg(row.id)
+    plans = [p_ for p_ in cfg["plans"]] if cfg["custom_plans"] else []
+    nid = max([p_["id"] for p_ in plans] + [0]) + 1
+    plans.append({"id": nid, "title": d["np_title"], "price": d["np_price"], "days": d["np_days"], "max_gb": int(t)})
+    await _save_plans(row.id, plans)
+    await state.clear()
+    txt, kb = await _admin_view(row.id)
+    await msg.answer("✅ پلن اضافه شد.\n\n" + txt, reply_markup=kb, parse_mode="HTML")
+
+
+@mtr_router.callback_query(F.data == "mtr:adm:pdelmenu")
+async def adm_plan_del_menu(cb: CallbackQuery, bot: Bot):
+    row = await _admin_row(cb, bot)
+    if not row:
+        return
+    cfg = await get_cfg(row.id)
+    if not cfg["custom_plans"]:
+        await cb.answer("پلنِ اضافه‌ای ساخته نشده است.", show_alert=True)
+        return
+    rows = [[_btn(f"🗑 {p_['title']} — {p_['price']:,} ت/گیگ", f"mtr:adm:pdel:{p_['id']}", ButtonStyle.DANGER)]
+            for p_ in cfg["plans"]]
+    rows.append([_btn("⬅️ بازگشت", "mtr:adm", ButtonStyle.PRIMARY)])
+    txt = ("🗑 <b>کدام پلن حذف شود؟</b>\n\nسرویس‌هایی که قبلاً با این پلن ساخته شده‌اند بدونِ تغییر ادامه می‌دهند. "
+           "اگر همهٔ پلن‌ها را حذف کنی، دوباره «پلنِ تکی» (قیمت/مدتِ اصلی) فعال می‌شود.")
+    try:
+        await cb.message.edit_text(txt, reply_markup=_kb(rows), parse_mode="HTML")
+    except Exception:
+        await bot.send_message(cb.from_user.id, txt, reply_markup=_kb(rows), parse_mode="HTML")
+    await cb.answer()
+
+
+@mtr_router.callback_query(F.data.regexp(r"^mtr:adm:pdel:\d+$"))
+async def adm_plan_del(cb: CallbackQuery, bot: Bot):
+    row = await _admin_row(cb, bot)
+    if not row:
+        return
+    pid = int(cb.data.split(":")[3])
+    cfg = await get_cfg(row.id)
+    plans = [p_ for p_ in cfg["plans"] if p_["id"] != pid] if cfg["custom_plans"] else []
+    await _save_plans(row.id, plans)
     await admin_menu(cb, bot)
 
 

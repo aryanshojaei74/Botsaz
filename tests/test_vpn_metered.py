@@ -189,7 +189,8 @@ async def test_user_paused_service_is_not_touched_and_expired_or_deleted_end(db)
 @pytest.mark.asyncio
 async def test_config_defaults_and_entry_row(db):
     cfg = await M.get_cfg(9)
-    assert cfg == {"enabled": False, "price": 2000, "days": 30, "title": "بستهٔ ویژه", "panel_key": ""}
+    assert cfg["enabled"] is False and cfg["price"] == 2000 and cfg["days"] == 30 and cfg["panel_key"] == ""
+    assert cfg["plans"] == [{"id": 0, "title": "بستهٔ ویژه", "price": 2000, "days": 30, "max_gb": 0}] and not cfg["custom_plans"]
     assert await M.user_entry_row(9) is None
     await tenant.set_setting(9, "mtr_enabled", "1")
     await tenant.set_setting(9, "mtr_price_gb", "3500")
@@ -375,7 +376,71 @@ async def test_button_action_shows_page_and_respects_toggle_and_plan(db):
         (await s.get(models.MeteredAccount, 1)).status = "ended"
         await s.commit()
     await M.show_for_message(Msg(), None, row)
-    assert "mtr:go" in [b.callback_data for r in sent[-1][1].inline_keyboard for b in r]
+    assert "mtr:go:0" in [b.callback_data for r in sent[-1][1].inline_keyboard for b in r]
     row.plan = "growth"                                                    # پلن پایین آمد
     await M.show_for_message(Msg(), None, row)
     assert "در دسترس نیست" in sent[-1][0] and sent[-1][1] is None
+
+
+# ───────────── چند پلن + سقفِ حجم (پیشنهادِ مشتری) ─────────────
+import json as _json
+
+
+@pytest.mark.asyncio
+async def test_multi_plans_list_pick_and_activation_uses_chosen_plan(db, create_env):
+    from types import SimpleNamespace
+    plans = [{"id": 1, "title": "اقتصادی", "price": 1500, "days": 15, "max_gb": 0},
+             {"id": 2, "title": "طلایی", "price": 3000, "days": 60, "max_gb": 3}]
+    await tenant.set_setting(9, "mtr_enabled", "1")
+    await tenant.set_setting(9, "mtr_plans", _json.dumps(plans, ensure_ascii=False))
+    tenant._SETTING_CACHE.clear(); tenant._BOT_ROW_CACHE.clear()
+    async with db() as s:
+        (await s.get(models.MeteredAccount, 1)).status = "ended"
+        await s.commit()
+        row = await s.get(models.Bot, 9)
+    r = await M.user_entry_row(9)
+    assert "بسته‌هایِ اعتباری" in r[0].text
+    txt, kb = await M._open_view(row, 1001)
+    datas = [b.callback_data for rw in kb.inline_keyboard for b in rw]
+    assert "mtr:pick:1" in datas and "mtr:pick:2" in datas and "mtr:go:1" not in datas
+    txt2, kb2 = await M._open_view(row, 1001, pid="2")
+    assert "طلایی" in txt2 and "3,000" in txt2 and "3 گیگ" in txt2
+    d2 = [b.callback_data for rw in kb2.inline_keyboard for b in rw]
+    assert "mtr:go:2" in d2 and "mtr:open" in d2
+    answers = []
+    cb = _cb(answers)
+    cb.data = "mtr:go:2"
+
+    class B(SimpleNamespace):
+        token = "9:T"
+
+        async def send_message(self, *a, **k):
+            return None
+    await M.mtr_go(cb, B())
+    assert create_env == [("mail1", 3, 60)]
+    async with db() as s:
+        m = (await s.scalars(select(models.MeteredAccount).where(models.MeteredAccount.status == "active"))).one()
+    assert m.price_per_gb == 3000 and m.max_gb == 3
+
+
+@pytest.mark.asyncio
+async def test_plan_max_gb_caps_topups_and_ends_package(db):
+    async with db() as s:
+        m = await s.get(models.MeteredAccount, 1)
+        m.max_gb = 5
+        u = await s.get(models.BotUser, 1)
+        u.balance = 100_000
+        await s.commit()
+    c, n = FakeClient(used=GIB, cap=5 * GIB), Notes()
+    assert await M.process_one(1, c, n) == "ok" and c.added == 0
+    c2 = FakeClient(used=5 * GIB - 1024, cap=5 * GIB)
+    assert await M.process_one(1, c2, n) == "plan_done"
+    _, m, a, _ = await _state(db)
+    assert m.status == "ended" and c2.toggles == [False] and any("پایان یافت" in t for _, t in n.msgs)
+
+
+def test_norm_plans_drops_garbage():
+    raw = _json.dumps([{"id": 1, "title": "a", "price": 10, "days": 5}, {"id": 1, "title": "dup", "price": 1, "days": 1},
+                       {"id": 2, "title": "bad", "price": 0, "days": 5}, {"id": "x"}, "junk"])
+    assert [p["id"] for p in M._norm_plans(raw)] == [1]
+    assert M._norm_plans("not json") == [] and M._norm_plans(None) == []

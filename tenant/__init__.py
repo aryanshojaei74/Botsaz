@@ -1443,7 +1443,7 @@ async def check_force_join(bot: Bot, bot_id: int, user_id: int, bypass_cache: bo
 
 
 _FORCEJOIN_CACHE: dict[tuple[int, int, object], tuple[bool, float]] = {}
-_FORCEJOIN_CACHE_TTL = 90.0  # ثانیه
+_FORCEJOIN_CACHE_TTL = 30.0  # ثانیه — PATCH_FORCEJOIN_FASTER_RECHECK_V1 (بود ۹۰): خروج از کانال زودتر تشخیص داده شود
 
 # === PATCH_FORCEJOIN_UNCHECKABLE_CACHE_V1 ===
 # کشِ کانال‌هایی که بررسیِ عضویت‌شان شکست می‌خورد (ربات ادمین نیست، کانال

@@ -1121,6 +1121,8 @@ class MeteredAccount(Base):
     account_id: Mapped[int] = mapped_column(Integer, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("bot_users.id"), index=True)
     price_per_gb: Mapped[int] = mapped_column(Integer, default=0)
+    # سقفِ مجموعِ حجمِ این بسته (گیگ)؛ ۰ = فقط به‌اندازهٔ کیف پول — PATCH_METERED_MULTI_PLAN_V1
+    max_gb: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     last_used_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     billed_toman: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(16), default="active", index=True)

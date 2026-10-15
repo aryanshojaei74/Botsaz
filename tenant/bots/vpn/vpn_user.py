@@ -4336,11 +4336,9 @@ def _vc_cfg_kb(cfg: dict, gb: int, days: int, count: int, no_plans: bool = False
     # discount_purchase_enabled اصلاً چک نمی‌شد. چون این تابع sync است
     # (نمی‌تونه await بزنه)، مقدارِ تنظیم رو فراخوان (که async است) از قبل
     # حساب می‌کنه و به‌عنوانِ پارامتر می‌ده.
-    if discount_enabled:
-        if applied_code and discount > 0:
-            rows.append([_btn(f"❌ حذف کد تخفیف ({applied_code})", "vc:disc:del")])
-        else:
-            rows.append([_btn("🎟 وارد کردن کد تخفیف", "vc:disc:add")])
+    # === PATCH_VC_DISCOUNT_ONLY_AT_PAYMENT_V1 ===
+    # پیشنهادِ مشتری: کدِ تخفیف فقط در مرحلهٔ پرداخت (پیش‌فاکتور) نشان داده شود، نه در انتخابِ حجم.
+    # (دکمه‌هایِ vc:disc:add / vc:disc:del در صفحهٔ پیش‌فاکتور همچنان هست.)
     # خرید — یک دکمهٔ واحد؛ ابتدا اسم دلخواه پرسیده می‌شود سپس پیش‌فاکتور
     rows.append([InlineKeyboardButton(text="💳 پرداخت",
                                       callback_data=f"vc:checkout:{gb}:{days}:{count}",
@@ -4442,6 +4440,19 @@ async def _vc_render(bot: Bot, bot_id: int, telegram_id: int, gb: int, days: int
     kb = _vc_cfg_kb(cfg, gb, days, count, no_plans=no_plans,
                     applied_code=applied_code, discount=discount,
                     discount_enabled=_disc_enabled)
+    # === PATCH_VC_BACK_PREV_MENU_V1 ===
+    # پیشنهادِ مشتری: در صفحهٔ انتخابِ حجم، بالایِ «بازگشت به خانه» یک «بازگشت به منویِ قبل» هم باشد
+    # (فقط وقتی صفحه از داخلِ یک زیرمنو/انتخابِ سرور باز شده و منویِ قبلی وجود دارد).
+    if no_plans:
+        try:
+            from tenant import inline_back_row
+            _br = await inline_back_row(bot_id)
+            if _br and len(_br) == 2 and (_br[0].callback_data or "").startswith("smopen:"):
+                _rows = list(kb.inline_keyboard)
+                _rows.insert(max(len(_rows) - 1, 0), [_br[0]])
+                kb = InlineKeyboardMarkup(inline_keyboard=_rows)
+        except Exception:
+            logger.exception("vc: دکمهٔ بازگشت به منویِ قبل ساخته نشد")
     return text, kb
 
 
@@ -4653,11 +4664,21 @@ async def vc_manual_prompt(cb: CallbackQuery, bot: Bot, state: FSMContext):
         prompt = f"🔢 عددِ تعداد را بین {mn} تا {mx} بفرست:"
     await cb.answer()
     # === PATCH_VC_MANUAL_ENTRY_HEADER_V1 ===
-    sent = await cb.message.answer(
-        f"{prompt}\n(یا دکمهٔ زیر را برایِ انصراف بزن)",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 بازگشت", callback_data="vc:manual:back")],
-        ]))
+    # === PATCH_VC_MANUAL_PROMPT_INPLACE_V1 ===
+    # پیشنهادِ مشتری: پرسشِ حجم/روز/تعداد رویِ همان صفحه بنشیند (نه پیامِ جدا زیرِ صفحه) تا فقط گزینهٔ «بازگشت» بماند و
+    # منوی قبلی باز و قابلِ زدن نباشد (زدنش «عملیات قبلی لغو شد» می‌داد). اگر ویرایش ممکن نبود (پیامِ عکس‌دار) مثلِ قبل.
+    _txt = f"{prompt}\n(یا دکمهٔ زیر را برایِ انصراف بزن)"
+    _kb_back = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔙 بازگشت", callback_data="vc:manual:back")],
+    ])
+    sent = None
+    try:
+        await cb.message.edit_text(_txt, reply_markup=_kb_back)
+        sent = cb.message
+    except Exception:
+        logger.info("vc: ویرایشِ درجایِ پرسش ممکن نشد؛ پیامِ جدا فرستاده می‌شود")
+    if sent is None:
+        sent = await bot.send_message(cb.message.chat.id, _txt, reply_markup=_kb_back)
     # === PATCH_VC_MANUAL_INPLACE_FIX_V1 === اگر منویِ شیشه‌ای پرسش را رویِ خودِ صفحه نشانده باشد،
     # شناسهٔ پیامِ پرسش با شناسهٔ صفحه یکی است.
     _inplace = bool(sent is not None and sent.message_id == cb.message.message_id)
