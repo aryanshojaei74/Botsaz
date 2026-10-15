@@ -1130,6 +1130,28 @@ class MeteredAccount(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class StockDelivery(Base):
+    """=== PATCH_STOCK_MANUAL_DELIVERY_V1 === سفارشِ «کانفیگ آماده» که پرداخت شده ولی ادمین باید دستی تحویل بدهد.
+
+    status: pending | delivered | refunded. پولِ سفارش همان لحظه ثبت شده (Order.status=paid)؛ این جدول فقط صفِ تحویل است."""
+    __tablename__ = "stock_deliveries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    order_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("bot_users.id"), index=True)
+    volume_gb: Mapped[int] = mapped_column(Integer, default=0)
+    days: Mapped[int] = mapped_column(Integer, default=0)
+    count: Mapped[int] = mapped_column(Integer, default=1)
+    amount: Mapped[int] = mapped_column(Integer, default=0)
+    label: Mapped[str | None] = mapped_column(String(60))
+    status: Mapped[str] = mapped_column(String(12), default="pending", index=True)
+    delivered_by: Mapped[int | None] = mapped_column(BigInteger)
+    sent_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    done_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class BotReview(Base):
     """نظر/امتیاز کاربر برای ربات."""
     __tablename__ = "bot_reviews"
@@ -2897,6 +2919,7 @@ TENANT_OWNED_MODELS = [
     EscrowDeal,   # === PATCH_ESCROW_V1 ===
     BalanceTransfer,   # === PATCH_BALANCE_TRANSFER_V1 ===
     MeteredAccount,    # === PATCH_METERED_PLAN_V1 ===
+    StockDelivery,     # === PATCH_STOCK_MANUAL_DELIVERY_V1 ===
     RefPrizeClaim,   # === PATCH_REFPOINT_PRIZES_V1 ===
     BotUser,
     # === PATCH_TENANT_OWNED_MODELS_MISSING_TABLES_V1 ===

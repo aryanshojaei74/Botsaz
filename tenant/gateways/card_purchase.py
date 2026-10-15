@@ -784,16 +784,25 @@ async def _auto_approve_config_order(bot: Bot, row, oid: int, check, file_id: st
                 return False
             u = await s.get(BotUser, o.user_id, with_for_update=True)
             amount = float(o.amount)
+            # === PATCH_STOCK_MANUAL_DELIVERY_V1 ===
+            from tenant.bots.vpn import stock_delivery as _sd
+            _sd_manual = await _sd.is_on(row.id)
+            sd_queued_id = None
             if o.pay_method == "mcfg_card":
                 cfg = (await s.get(Config, o.reserved_config_id, with_for_update=True)
                       if o.reserved_config_id else None)
                 if not cfg or cfg.status != "reserved":
                     return False
-                cfg.status = "sold"
-                cfg.owner_user_id = u.id
-                cfg.custom_label = o.custom_label
+                if _sd_manual:
+                    cfg.status = "in_stock"          # رزرو آزاد؛ ادمین کانفیگِ تازه می‌فرستد
+                    cfg.owner_user_id = None
+                    assigned = []
+                else:
+                    cfg.status = "sold"
+                    cfg.owner_user_id = u.id
+                    cfg.custom_label = o.custom_label
+                    assigned = [cfg]
                 o.status = "paid"
-                assigned = [cfg]
             else:
                 cfgs = (await s.scalars(
                     select(Config).where(
@@ -805,10 +814,16 @@ async def _auto_approve_config_order(bot: Bot, row, oid: int, check, file_id: st
                     return False
                 o.status = "paid"
                 assigned = []
-                for cfg in cfgs[:o.count]:
-                    cfg.status = "sold"
-                    cfg.owner_user_id = u.id
-                    assigned.append(cfg)
+                if not _sd_manual:
+                    for cfg in cfgs[:o.count]:
+                        cfg.status = "sold"
+                        cfg.owner_user_id = u.id
+                        assigned.append(cfg)
+            if _sd_manual:
+                _sd_obj = _sd.queue(s, bot_id=row.id, user_id=u.id, order_id=o.id, volume_gb=o.volume_gb,
+                                    days=o.days, count=o.count, amount=amount, label=o.custom_label)
+                await s.flush()
+                sd_queued_id = _sd_obj.id
             await s.commit()
             assigned_ids = [c.id for c in assigned]
             tg_id = u.telegram_id
@@ -819,15 +834,18 @@ async def _auto_approve_config_order(bot: Bot, row, oid: int, check, file_id: st
 
     from tenant.shared.extras import handle_referral_purchase
     await handle_referral_purchase(row.id, tg_id, bot, amount=amount)
-    async with Session() as s3:
-        assigned_cfgs = (await s3.scalars(select(Config).where(Config.id.in_(assigned_ids)))).all()
-        for cfg in assigned_cfgs:
-            await send_config_to_user(bot, tg_id, cfg)
-    try:
-        await bot.send_message(tg_id, "✅ پرداخت شما به‌صورت خودکار تایید شد!",
-                               reply_markup=await inline_back_kb(row.id))
-    except Exception:
-        logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+    if sd_queued_id:        # PATCH_STOCK_MANUAL_DELIVERY_V1: بدونِ ارسالِ کانفیگ؛ ادمین دستی تحویل می‌دهد
+        await _sd.announce(bot, sd_queued_id)
+    else:
+        async with Session() as s3:
+            assigned_cfgs = (await s3.scalars(select(Config).where(Config.id.in_(assigned_ids)))).all()
+            for cfg in assigned_cfgs:
+                await send_config_to_user(bot, tg_id, cfg)
+        try:
+            await bot.send_message(tg_id, "✅ پرداخت شما به‌صورت خودکار تایید شد!",
+                                   reply_markup=await inline_back_kb(row.id))
+        except Exception:
+            logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     detail_lines = [f"🔎 مبلغِ خوانده‌شده: {rial(check.amount)}"]
     if check.card_last4:
         detail_lines.append(f"💳 ۴ رقمِ آخرِ کارت روی رسید: <code>{check.card_last4}</code>")
@@ -916,6 +934,10 @@ async def _rcadm_decide_impl(cb: CallbackQuery, bot: Bot, state: FSMContext):
             return
         u = await s.get(BotUser, o.user_id, with_for_update=True)
         if action == "ok":
+            # === PATCH_STOCK_MANUAL_DELIVERY_V1 ===
+            from tenant.bots.vpn import stock_delivery as _sd
+            _sd_manual = await _sd.is_on(row.id)
+            sd_queued_id = None
             if o.pay_method == "mcfg_card":
                 # === PATCH_CONFIG_STOCK_ROW_LOCK_V1 ===
                 cfg = (await s.get(Config, o.reserved_config_id, with_for_update=True)
@@ -923,11 +945,21 @@ async def _rcadm_decide_impl(cb: CallbackQuery, bot: Bot, state: FSMContext):
                 if not cfg or cfg.status != "reserved":
                     await cb.answer("⚠️ کانفیگِ رزروشده دیگر معتبر نیست. تأیید لغو شد.", show_alert=True)
                     return
-                cfg.status = "sold"
-                cfg.owner_user_id = u.id
-                cfg.custom_label = o.custom_label
+                if _sd_manual:
+                    cfg.status = "in_stock"          # رزرو آزاد؛ ادمین کانفیگِ تازه می‌فرستد
+                    cfg.owner_user_id = None
+                    assigned = []
+                else:
+                    cfg.status = "sold"
+                    cfg.owner_user_id = u.id
+                    cfg.custom_label = o.custom_label
+                    assigned = [cfg]
                 o.status = "paid"
-                assigned = [cfg]
+                if _sd_manual:
+                    _sd_obj = _sd.queue(s, bot_id=row.id, user_id=u.id, order_id=o.id, volume_gb=o.volume_gb,
+                                        days=o.days, count=o.count, amount=float(o.amount or 0), label=o.custom_label)
+                    await s.flush()
+                    sd_queued_id = _sd_obj.id
                 await s.commit()
             else:
                 cfgs = (await s.scalars(
@@ -944,10 +976,16 @@ async def _rcadm_decide_impl(cb: CallbackQuery, bot: Bot, state: FSMContext):
                     return
                 o.status = "paid"
                 assigned = []
-                for cfg in cfgs[:o.count]:
-                    cfg.status = "sold"
-                    cfg.owner_user_id = u.id
-                    assigned.append(cfg)
+                if _sd_manual:
+                    _sd_obj = _sd.queue(s, bot_id=row.id, user_id=u.id, order_id=o.id, volume_gb=o.volume_gb,
+                                        days=o.days, count=o.count, amount=float(o.amount or 0), label=o.custom_label)
+                    await s.flush()
+                    sd_queued_id = _sd_obj.id
+                else:
+                    for cfg in cfgs[:o.count]:
+                        cfg.status = "sold"
+                        cfg.owner_user_id = u.id
+                        assigned.append(cfg)
                 await s.commit()
             from tenant.shared.extras import handle_referral_purchase
             await handle_referral_purchase(row.id, u.telegram_id, bot, amount=float(o.amount or 0))
@@ -964,10 +1002,13 @@ async def _rcadm_decide_impl(cb: CallbackQuery, bot: Bot, state: FSMContext):
                     await cb.message.edit_reply_markup(reply_markup=None)
                 except Exception:
                     logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
-            for cfg in assigned:
-                await send_config_to_user(bot, u.telegram_id, cfg)
-            await bot.send_message(u.telegram_id, "✅ پرداخت شما تایید شد!",
-                                   reply_markup=await inline_back_kb(row.id))
+            if sd_queued_id:        # PATCH_STOCK_MANUAL_DELIVERY_V1
+                await _sd.announce(bot, sd_queued_id)
+            else:
+                for cfg in assigned:
+                    await send_config_to_user(bot, u.telegram_id, cfg)
+                await bot.send_message(u.telegram_id, "✅ پرداخت شما تایید شد!",
+                                       reply_markup=await inline_back_kb(row.id))
             # === PATCH_PURCHASE_ALERT_CARD_COVERAGE_V1 ===
             try:
                 from tenant import _purchase_alert

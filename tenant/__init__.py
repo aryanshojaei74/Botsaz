@@ -169,6 +169,8 @@ from tenant.shared.balance_transfer import btr_router   # PATCH_BALANCE_TRANSFER
 tenant_router.include_router(btr_router)
 from tenant.bots.vpn.vpn_metered import mtr_router   # PATCH_METERED_PLAN_V1
 tenant_router.include_router(mtr_router)
+from tenant.bots.vpn.stock_delivery import sd_router   # PATCH_STOCK_MANUAL_DELIVERY_V1
+tenant_router.include_router(sd_router)
 from tenant.shared.period_stats import pst_router   # PATCH_PERIOD_STATS_V1
 tenant_router.include_router(pst_router)
 # === PATCH_KYC_V1 ===
@@ -9827,6 +9829,7 @@ async def pay_method(cb: CallbackQuery, bot: Bot, state: FSMContext):
         # cb.answer زودتر زده می‌شود تا callback timeout نشود (Telegram ۱۰ ثانیه فرصت می‌دهد)
         await cb.answer()
         assigned = []
+        sd_queued_id = None      # PATCH_STOCK_MANUAL_DELIVERY_V1
         err = None
         async with Session() as s:
             # === PATCH_WALLET_ORDER_ROW_LOCK_V2 ===
@@ -9870,10 +9873,18 @@ async def pay_method(cb: CallbackQuery, bot: Bot, state: FSMContext):
                         o.pay_method = "wallet"
                         s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=-amount,
                                         kind="purchase", note=f"خرید سفارش #{await order_no(Order, oid)}"))
-                        for cfg in cfgs[:o.count]:
-                            cfg.status = "sold"
-                            cfg.owner_user_id = u.id
-                            assigned.append(cfg)
+                        # === PATCH_STOCK_MANUAL_DELIVERY_V1 === تحویل دستی: انبار دست نمی‌خورد، سفارش می‌رود در صفِ تحویل
+                        from tenant.bots.vpn import stock_delivery as _sd
+                        if await _sd.is_on(bot_id):
+                            _sd_obj = _sd.queue(s, bot_id=bot_id, user_id=u.id, order_id=o.id, volume_gb=o.volume_gb,
+                                                days=o.days, count=o.count, amount=amount, label=o.custom_label)
+                            await s.flush()
+                            sd_queued_id = _sd_obj.id
+                        else:
+                            for cfg in cfgs[:o.count]:
+                                cfg.status = "sold"
+                                cfg.owner_user_id = u.id
+                                assigned.append(cfg)
                         await s.commit()
                         # PATCH_DEBUG_USER_CONFIG_REPORT — لاگِ موقتِ تشخیصی، نقطه‌ی مقابلِ
                         # لاگِ admin_user_receipts؛ بعد از پیداشدنِ ریشهٔ باگ حذف کن.
@@ -9893,9 +9904,13 @@ async def pay_method(cb: CallbackQuery, bot: Bot, state: FSMContext):
                 await cb.message.answer(f"❌ {err}")
             return
         try:
-            await cb.message.edit_text("✅ پرداخت موفق! کانفیگ‌ها ارسال می‌شوند...")
+            await cb.message.edit_text("✅ پرداخت موفق! سفارشت در صفِ تحویل قرار می‌گیرد..." if sd_queued_id
+                                       else "✅ پرداخت موفق! کانفیگ‌ها ارسال می‌شوند...")
         except Exception:
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+        if sd_queued_id:
+            from tenant.bots.vpn import stock_delivery as _sd2
+            await _sd2.announce(bot, sd_queued_id)
         for cfg in assigned:
             try:
                 await send_config_to_user(bot, cb.from_user.id, cfg)
@@ -9921,7 +9936,7 @@ async def pay_method(cb: CallbackQuery, bot: Bot, state: FSMContext):
         # اطلاع خودکار خرید به ادمین‌ها (در صورت روشن‌بودن) — قبلاً این شاخه
         # (خرید از انبار با موجودیِ کیف‌پول) برخلافِ مسیرهای مشابه، این اعلان
         # را نمی‌فرستاد.
-        if assigned:
+        if assigned or sd_queued_id:
             try:
                 await _purchase_alert(
                     bot, row, buyer=u,
@@ -10435,6 +10450,7 @@ async def _manual_cfg_pay_impl(cb: CallbackQuery, bot: Bot, state: FSMContext):
     stored_disc_code = _data.get("mcfg_disc_code")
     category = _data.get("mcfg_category")
     assigned = None
+    sd_queued_id = None      # PATCH_STOCK_MANUAL_DELIVERY_V1
     err = None
     async with Session() as s:
         # === PATCH_WALLET_ROW_LOCK_V1 ===
@@ -10470,13 +10486,23 @@ async def _manual_cfg_pay_impl(cb: CallbackQuery, bot: Bot, state: FSMContext):
             err = "موجودی کیف پول کافی نیست. اول شارژ کن."
         else:
             u.balance = float(u.balance) - final_price
-            cfg.status = "sold"
-            cfg.owner_user_id = u.id
-            cfg.custom_label = label
+            # === PATCH_STOCK_MANUAL_DELIVERY_V1 === تحویل دستی: کانفیگ فروخته/رزرو نمی‌شود؛ ادمین کانفیگِ تازه می‌فرستد
+            from tenant.bots.vpn import stock_delivery as _sd
+            _sd_manual = await _sd.is_on(bot_id)
+            if not _sd_manual:
+                cfg.status = "sold"
+                cfg.owner_user_id = u.id
+                cfg.custom_label = label
             o = Order(bot_id=bot_id, user_id=u.id, volume_gb=vol, days=days,
                       count=1, amount=final_price, pay_method="wallet", status="paid",
                       custom_label=label, discount_code=applied_code)
             s.add(o)
+            if _sd_manual:
+                await s.flush()
+                _sd_obj = _sd.queue(s, bot_id=bot_id, user_id=u.id, order_id=o.id, volume_gb=vol, days=days,
+                                    count=1, amount=final_price, label=label)
+                await s.flush()
+                sd_queued_id = _sd_obj.id
             note = f"خرید بستهٔ ویژه {vol}گیگ/{fmt_days(days)}"
             if applied_code:
                 note += f" (کد {applied_code} −{rial(price - final_price)})"
@@ -10487,7 +10513,7 @@ async def _manual_cfg_pay_impl(cb: CallbackQuery, bot: Bot, state: FSMContext):
                 await record_usage(s, code_id=disc_code_id, bot_id=bot_id, telegram_id=cb.from_user.id,
                                    saved_amount=price - final_price)
             await s.commit()
-            assigned = cfg
+            assigned = None if sd_queued_id else cfg
             from tenant.shared.extras import handle_referral_purchase
             await handle_referral_purchase(bot_id, cb.from_user.id, bot, amount=final_price)
     await state.clear()
@@ -10495,10 +10521,14 @@ async def _manual_cfg_pay_impl(cb: CallbackQuery, bot: Bot, state: FSMContext):
         await cb.answer(err, show_alert=True)
         return
     try:
-        await cb.message.edit_text("✅ پرداخت موفق! کانفیگ ارسال می‌شود…")
+        await cb.message.edit_text("✅ پرداخت موفق! سفارشت در صفِ تحویل قرار می‌گیرد…" if sd_queued_id
+                                   else "✅ پرداخت موفق! کانفیگ ارسال می‌شود…")
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     await cb.answer("پرداخت موفق")
+    if sd_queued_id:
+        from tenant.bots.vpn import stock_delivery as _sd2
+        await _sd2.announce(bot, sd_queued_id)
     if assigned:
         try:
             await send_config_to_user(bot, cb.from_user.id, assigned)
