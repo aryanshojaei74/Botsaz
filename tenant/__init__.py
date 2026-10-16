@@ -8649,6 +8649,9 @@ async def _trial_deliver(bot: "Bot", bot_id: int, u: "BotUser", trial_mode: str,
                     VpnPanel.bot_id == bot_id, VpnPanel.panel_key == panel_key,
                     VpnPanel.enabled == True))
             if not panel:
+                if panel_key:
+                    logger.warning("تستِ رایگان: پنلِ انتخاب‌شدهٔ دکمه (%r) فعال/موجود نیست؛ از اولین پنلِ فعال استفاده شد "
+                                   "(bot_id=%s)", panel_key, bot_id)
                 panel = await s.scalar(select(VpnPanel).where(
                     VpnPanel.bot_id == bot_id, VpnPanel.enabled == True))
             bot_row = await s.scalar(select(BotRow).where(BotRow.id == bot_id))
@@ -16791,6 +16794,12 @@ def _trial_fix_view(cfg: dict, mb_id: int) -> tuple[str, InlineKeyboardMarkup]:
     rows = [fields[i:i + 2] for i in range(0, len(fields), 2)]
     _cat = cfg.get("trial_category")
     rows.append([_b(f"🏷 دسته: {_cat if _cat else 'همهٔ دسته‌ها'}", f"thb:trcatpick:{mb_id}:fix")])
+    # === PATCH_TRIAL_RESET_TO_GLOBAL_V1 === (تیکت #849) مقدارِ اختصاصیِ قدیمیِ دکمه (مثلاً ۲۵۰ مگابایت) تنظیماتِ کلی را
+    # می‌پوشاند و مالک راهی برایِ برداشتنش نداشت؛ این دکمه حجم/مدتِ اختصاصی را پاک می‌کند تا «تنظیماتِ تستِ رایگان» حاکم شود.
+    _from_g = set(cfg.get("_from_global") or [])
+    if not ({"gb", "duration"} <= _from_g):
+        rows.append([_b("♻️ حجم و مدت از «تنظیماتِ تستِ رایگان» (پاک‌کردنِ مقدارِ اختصاصیِ دکمه)",
+                        f"thb:trglobal:{mb_id}")])
     rows.append([_b("✅ ثبت تنظیمات تست", f"thb:trfixok:{mb_id}")])
     rows.append([_b("⬅️ بازگشت", f"thb:trialmode:{mb_id}")])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
@@ -16816,6 +16825,21 @@ async def _trial_fix_mb(cb: CallbackQuery, bot: Bot, mb_id: int):
         await cb.answer("یافت نشد", show_alert=True)
         return None
     return mb
+
+
+@tenant_router.callback_query(F.data.startswith("thb:trglobal:"))
+async def thb_trial_use_global(cb: CallbackQuery, bot: Bot):
+    mb_id = int(cb.data.split(":")[2])
+    mb = await _trial_fix_mb(cb, bot, mb_id)
+    if not mb:
+        return
+    cfg = await _trial_cfg_update(mb_id, trial_gb=None, trial_days=None, trial_hours=None) or {}
+    text, kb = _trial_fix_view(cfg, mb_id)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        logger.info("بازسازیِ صفحهٔ تست بعد از «تنظیماتِ کلی» ممکن نشد")
+    await cb.answer("✅ حالا حجم و مدت از «تنظیماتِ تستِ رایگان» خوانده می‌شود", show_alert=True)
 
 
 @tenant_router.callback_query(F.data.startswith("thb:trfixok:"))
