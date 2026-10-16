@@ -12384,8 +12384,8 @@ async def _gift_ask_dest(target: Message, bot_id: int, gift_id: str, qty: int, v
     if via == "s":   # === PATCH_GIFT_VIA_FIRST_V1 === پشتیبانی دستی می‌فرستد؛ محدودیتِ استارت ندارد
         _warn = "ℹ️ ارسال با اکانتِ پشتیبانی است؛ برایِ «شخصِ دیگر» هر آیدیِ عددی یا یوزرنیمی که ربات را استارت کرده، قبول می‌شود."
     else:
-        _warn = ("ℹ️ برایِ «کاربرِ دیگر» می‌توانی یوزرنیم/کانال هم بدهی؛ اگر آن شخص ربات را استارت نکرده باشد، "
-                 "گیفت با اکانتِ پشتیبانی (دستی) برایش فرستاده می‌شود.")
+        _warn = ("ℹ️ اگر می‌خواهی خودِ ربات گیفت را برایِ آن شخص بفرستد، او باید یک‌بار رباتِ ما را استارت کرده باشد؛ "
+                 "وگرنه گیفت توسطِ پشتیبانی به‌صورتِ دستی ارسال می‌شود.")
     await target.answer(
         intro + _warn,
         reply_markup=kb, parse_mode="HTML", link_preview_options=_LPO_ON)
@@ -12685,7 +12685,6 @@ async def gift_dest_username_in(msg: Message, bot: Bot, state: FSMContext):
             return
         # === PATCH_GIFT_ANY_DEST_V1 === (درخواستِ MoBiN) گیرنده لازم نیست عضوِ ربات باشد (کانال/سورپرایز):
         # ربات‌ها نمی‌توانند به کسی که استارت نکرده گیفت بفرستند، پس چنین سفارشی خودکار به «اکانتِ پشتیبانی/دستی» می‌رود.
-        await msg.answer("ℹ️ این شخص ربات را استارت نکرده؛ گیفت با اکانتِ پشتیبانی (دستی) برایش فرستاده می‌شود.")
         await _gift_show_invoice(msg, row.id, gift_id, _did,
                                  await _resolve_dest_label(row.id, _did), qty, via="s", state=state)
         return
@@ -12698,8 +12697,6 @@ async def gift_dest_username_in(msg: Message, bot: Bot, state: FSMContext):
             await msg.answer("❌ یوزرنیم نامعتبر است (۵ تا ۳۲ حرفِ انگلیسی/عدد/زیرخط، بدونِ @). دوباره بفرست.")
             return
         dest_id = await _ensure_placeholder_dest(row.id, uname)
-        await msg.answer(f"ℹ️ @{uname} ربات را استارت نکرده؛ گیفت با اکانتِ پشتیبانی (دستی) برایش فرستاده می‌شود "
-                         "(کانال هم می‌شود).")
         await _gift_show_invoice(msg, row.id, gift_id, dest_id, f"@{uname}", qty, via="s", state=state)
         return
     await _gift_show_invoice(msg, row.id, gift_id, target_user.telegram_id, f"@{uname}", qty, via=via, state=state)
