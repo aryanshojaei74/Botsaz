@@ -2676,6 +2676,9 @@ async def _admin_cb_guard_mw(handler, event, data):
 
 
 tenant_router.callback_query.outer_middleware(_admin_cb_guard_mw)
+# === PATCH_EXACT_AMOUNT_ALERT_V1 === پاپ‌آپِ «دقیقاً مبلغ فاکتور را واریز کنید» برایِ درگاه‌هایِ مبلغِ یکتا
+from tenant.gateways.exact_amount_alert import exact_amount_alert_mw as _exact_amount_alert_mw
+tenant_router.callback_query.outer_middleware(_exact_amount_alert_mw)
 
 
 # === PATCH_NAV_HISTORY_V1 ===
