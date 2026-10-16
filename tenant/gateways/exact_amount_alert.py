@@ -19,7 +19,7 @@ ALERT_TEXT = (
 )
 
 # درگاه‌هایی که مبلغِ یکتا/کارتِ اختصاصیِ هر فاکتور دارند (انتخابِ درگاه در منویِ کیف پول و خرید)
-_PREFIXES = ("w:tonpays", "w:uniquepay", "w:apay", "w:abangateway")
+_PREFIXES = ("w:uniquepay", "w:apay", "w:abangateway")   # تون‌پیز: آلارم لحظهٔ «ساخت فاکتور» (tonpays.py)
 
 
 def is_target(cb_data: str | None) -> bool:

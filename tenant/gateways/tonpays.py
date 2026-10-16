@@ -161,6 +161,7 @@ async def get_user_note(bot_id: int) -> str:
 class TonPaysFSM(StatesGroup):
     api_key = State()   # ادمین: واردکردنِ کلید
     amount = State()    # کاربر: مبلغِ شارژ
+    confirm = State()   # === PATCH_EXACT_AMOUNT_ALERT_V3 === کاربر: تأییدِ «ساخت فاکتور» (با آلارمِ مبلغِ دقیق)
     card = State()      # ادمین: شمارهٔ کارتِ مقصد (دستی)
     holder = State()    # ادمین: نامِ صاحبِ کارت
     display_name = State()  # === PATCH_TONPAYS_DISPLAY_NAME_V1 ===
@@ -1079,28 +1080,12 @@ async def wallet_tonpays_text(msg: Message, bot: Bot, state: FSMContext):
         return
     await state.set_state(TonPaysFSM.amount)
     _note = await get_user_note(row.id)  # PATCH_TONPAYS_USER_NOTE_V1
-    # === PATCH_EXACT_AMOUNT_ALERT_V1 === در منویِ کیبوردی پاپ‌آپ نداریم (دکمه callback نمی‌فرستد)؛ هشدار همین‌جا در متن هم هست
-    _warn = ""
-    if await get_setting_safe(row.id, "pay_exact_alert") != "0":
-        _warn = ("⚠️ <b>دقیقاً مبلغ فاکتور را واریز کنید!</b>\n"
-                 "مبلغ رند یا کم و زیاد، خودکار تأیید نمی‌شود و شارژ معطلِ بررسیِ دستی می‌ماند.\n"
-                 + ("⚠️ فقط با روشِ «کارت به کارت» واریز کنید و از پایا و پل و … استفاده نکنید.\n"
-                    if await is_custom_mode(row.id) else "")
-                 + "\n")
     await msg.answer(
         "💠 <b>شارژ کیف پول با TonPays</b>\n\n"
-        + _warn
         + (f"{_note}\n\n" if _note else "")
         + "مبلغِ موردنظر را به <b>تومان</b> بفرست "
         f"(حداقل <b>{await get_min_amount(row.id):,} تومان</b> — مثلاً 50000):",
         reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
-
-
-@tonpays_router.callback_query(F.data.startswith("tonp:warn:"))
-async def tonp_warn_popup(cb: CallbackQuery):
-    """پاپ‌آپِ «دقیقاً مبلغ فاکتور را واریز کنید» رویِ فاکتور (درخواستِ دیار)."""
-    from tenant.gateways.exact_amount_alert import ALERT_TEXT
-    await cb.answer(ALERT_TEXT, show_alert=True)
 
 
 @tonpays_router.callback_query(F.data == "w:tonpays")
@@ -1207,11 +1192,6 @@ def build_invoice_view(prefix: str, order_id: str, amount: int, final_amount: in
                                           callback_data=f"{prefix}:chg:{order_id}")])
     rows.append([InlineKeyboardButton(text="❌ لغو این فاکتور",
                                       callback_data=f"{prefix}:cancel:{order_id}")])
-    # === PATCH_EXACT_AMOUNT_ALERT_V2 === دکمهٔ هشدار رویِ خودِ فاکتور (پاپ‌آپ فقط با کلیک ممکن است)؛ فقط رباتِ مستأجر (tonp)
-    if prefix == "tonp":
-        rows.insert(0, [InlineKeyboardButton(text="⚠️ دقیقاً مبلغ فاکتور را واریز کنید! (بزن و بخوان)",
-                                             callback_data=f"tonp:warn:{order_id}",
-                                             style=ButtonStyle.DANGER)])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -1251,13 +1231,69 @@ async def tonpays_amount(msg: Message, bot: Bot, state: FSMContext):
     except Exception:
         logger.exception("kyc: بررسیِ سقف ناموفق بود (ton)")
 
+    # === PATCH_EXACT_AMOUNT_ALERT_V3 === (درخواستِ دیار) لحظهٔ «ساخت فاکتور» آلارمِ «دقیقاً مبلغ فاکتور را واریز کنید» بیاید.
+    # تلگرام فقط جوابِ کلیکِ دکمه را پاپ‌آپ می‌کند؛ پس بعد از مبلغ یک دکمهٔ «🧾 ساخت فاکتور» می‌آید و همان کلیک آلارم + فاکتور را می‌دهد.
+    if (await get_setting(row.id, "pay_exact_alert", "1")) != "0":
+        await state.update_data(tonp_amount=int(amount))
+        await state.set_state(TonPaysFSM.confirm)
+        await msg.answer(
+            f"💵 مبلغِ شارژ: <b>{int(amount):,} تومان</b>\n\nبرایِ ساختِ فاکتور دکمهٔ زیر را بزن:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🧾 ساخت فاکتور", callback_data="tonp:mk", style=ButtonStyle.SUCCESS)],
+                [InlineKeyboardButton(text="❌ لغو", callback_data="tonp:mkcancel", style=ButtonStyle.DANGER)]]))
+        return
+    await _create_invoice(bot, row, msg, msg.from_user.id, amount)
+
+
+@tonpays_router.message(TonPaysFSM.confirm, F.text)
+async def tonpays_amount_again(msg: Message, bot: Bot, state: FSMContext):
+    """وسطِ مرحلهٔ تأیید اگر مبلغِ تازه فرستاد، همان مسیرِ مبلغ."""
+    await state.set_state(TonPaysFSM.amount)
+    await tonpays_amount(msg, bot, state)
+
+
+@tonpays_router.callback_query(F.data == "tonp:mk")
+async def tonp_make_invoice(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import get_bot_row
+    from tenant.gateways.exact_amount_alert import ALERT_TEXT
+    row = await get_bot_row(bot)
+    data = await state.get_data()
+    amount = data.get("tonp_amount")
+    if not row or not amount:
+        await cb.answer("مبلغ پیدا نشد؛ دوباره از «شارژ» شروع کن.", show_alert=True)
+        await state.clear()
+        return
+    await state.clear()
+    await cb.answer(ALERT_TEXT, show_alert=True)       # آلارمِ لحظهٔ ساختِ فاکتور
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        logger.debug("tonp: پاک‌کردنِ دکمهٔ ساخت فاکتور ممکن نشد (بی‌اهمیت)")
+    await _create_invoice(bot, row, cb.message, cb.from_user.id, int(amount))
+
+
+@tonpays_router.callback_query(F.data == "tonp:mkcancel")
+async def tonp_make_cancel(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await cb.answer("لغو شد")
+    try:
+        await cb.message.edit_text("❌ لغو شد.")
+    except Exception:
+        logger.debug("tonp: ویرایشِ پیامِ لغو ممکن نشد (بی‌اهمیت)")
+
+
+async def _create_invoice(bot: Bot, row, msg: Message, user_id: int, amount: int):
+    """ساختِ فاکتور و ارسالِ آن. msg فقط برایِ پاسخ دادن (answer/chat)؛ شناسهٔ کاربر جدا می‌آید
+    (در مسیرِ کلیک، msg پیامِ خودِ ربات است)."""
+    from tenant import get_setting, rial
     _custom = await is_custom_mode(row.id)   # PATCH_TONPAYS_CUSTOM_V1
     api_key = await get_key(row.id, _custom)
     order_id = _new_order_id(_custom)
     await msg.answer("⏳ در حال ساختِ فاکتور…")
     try:
         inv = await create_invoice(api_key, amount, order_id, callback_url(),
-                                   buyer_chat_id=msg.from_user.id,
+                                   buyer_chat_id=user_id,
                                    custom=_custom)  # PATCH_TONPAYS_DOCS_V2
     except Exception as e:
         await msg.answer(f"❌ ساختِ فاکتور ناموفق بود.\n{e}")
@@ -1270,7 +1306,7 @@ async def tonpays_amount(msg: Message, bot: Bot, state: FSMContext):
 
     async with Session() as s:
         s.add(TonPaysCharge(
-            bot_id=row.id, user_telegram_id=msg.from_user.id,
+            bot_id=row.id, user_telegram_id=user_id,
             order_id=order_id, invoice_id=invoice_id,
             request_amount=amount, final_amount=final_amount, status="waiting"))
         await s.commit()

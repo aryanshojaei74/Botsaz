@@ -56,10 +56,10 @@ async def _feed(monkeypatch, data, setting="1"):
 
 
 async def test_real_dispatcher_turns_answer_into_popup(monkeypatch):
-    assert await _feed(monkeypatch, "w:tonpays") == [(ea.ALERT_TEXT, True)]
+    assert await _feed(monkeypatch, "w:uniquepay") == [(ea.ALERT_TEXT, True)]
     assert await _feed(monkeypatch, "w:apay:vpn:1:2") == [(ea.ALERT_TEXT, True)]
 
 
 async def test_real_dispatcher_other_gateways_and_off_switch(monkeypatch):
     assert await _feed(monkeypatch, "w:charge") == [(None, None)]
-    assert await _feed(monkeypatch, "w:tonpays", setting="0") == [(None, None)]
+    assert await _feed(monkeypatch, "w:apay", setting="0") == [(None, None)]

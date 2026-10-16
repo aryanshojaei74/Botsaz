@@ -6,9 +6,9 @@ from tenant.gateways import exact_amount_alert as ea
 
 
 def test_targets():
-    for d in ("w:tonpays", "w:apay", "w:apay:vpn:3:1000", "w:abangateway:vc:1:2:3:4", "w:uniquepay"):
+    for d in ("w:apay", "w:apay:vpn:3:1000", "w:abangateway:vc:1:2:3:4", "w:uniquepay"):
         assert ea.is_target(d)
-    for d in ("w:charge", "w:zibal", "w:tonpaysx", None, ""):
+    for d in ("w:charge", "w:zibal", "w:tonpays", None, ""):
         assert not ea.is_target(d)
 
 
@@ -46,7 +46,7 @@ async def _run(monkeypatch, data, setting, handler_text=None, second=False):
 
 @pytest.mark.asyncio
 async def test_first_empty_answer_becomes_alert(monkeypatch):
-    assert await _run(monkeypatch, "w:tonpays", "1") == [(ea.ALERT_TEXT, True)]
+    assert await _run(monkeypatch, "w:uniquepay", "1") == [(ea.ALERT_TEXT, True)]
 
 
 @pytest.mark.asyncio
@@ -60,12 +60,3 @@ async def test_handler_own_text_untouched_and_off_switch(monkeypatch):
 async def test_only_first_answer_is_alert(monkeypatch):
     calls = await _run(monkeypatch, "w:abangateway", "1", second=True)
     assert calls[0] == (ea.ALERT_TEXT, True) and calls[1] == (None, None)
-
-
-def test_invoice_has_warning_button_only_for_tenant_prefix():
-    from tenant.gateways.tonpays import build_invoice_view
-    _, kb = build_invoice_view("tonp", "O1", 50000, 50123, "6037997000000000", "علی", True)
-    first = [b.callback_data for b in kb.inline_keyboard[0]]
-    assert first == ["tonp:warn:O1"]
-    _, kb2 = build_invoice_view("ptonp", "O1", 50000, 50123, "6037997000000000", "علی", True)
-    assert all("warn" not in (b.callback_data or "") for r in kb2.inline_keyboard for b in r)
