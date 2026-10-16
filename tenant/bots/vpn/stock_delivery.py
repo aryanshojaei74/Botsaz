@@ -166,6 +166,46 @@ async def sd_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await cb.answer()
 
 
+def _payload_of(msg: Message):
+    """(kind, payload) از پیامِ ادمین برایِ ثبت در «کانفیگ‌هایِ من»؛ None اگر چیزِ قابلِ ذخیره‌ای نبود."""
+    doc = getattr(msg, "document", None)
+    if doc and (doc.file_name or "").lower().endswith(".conf"):
+        return "wireguard", doc.file_id            # همان قراردادِ کانفیگِ وایرگاردِ انبار: payload = file_id
+    text = (getattr(msg, "text", None) or getattr(msg, "caption", None) or "").strip()
+    if text:
+        return "sublink", text
+    return None
+
+
+async def record_in_my_configs(d: StockDelivery, u: BotUser, msg: Message) -> bool:
+    """هر پیامِ تحویل را به‌عنوانِ یک کانفیگِ فروخته‌شده برایِ مشتری ثبت می‌کند تا در «کانفیگ‌هایِ من» بماند.
+    خطا هرگز تحویل را نمی‌شکند (فقط لاگ)."""
+    got = _payload_of(msg)
+    if not got:
+        return False
+    kind, payload = got
+    from sqlalchemy.exc import IntegrityError
+    from config import CONFIG_CODE_START
+    from models import Config
+    for _attempt in range(3):
+        try:
+            async with Session() as s:
+                mx = await s.scalar(select(func.max(Config.code)).where(Config.bot_id == d.bot_id))
+                s.add(Config(bot_id=d.bot_id, code=(mx + 1) if mx else CONFIG_CODE_START,
+                             volume_gb=int(d.volume_gb or 0), days=int(d.days or 0),
+                             payload=payload, status="sold", owner_user_id=u.id, kind=kind,
+                             custom_label=(d.label or None)))
+                await s.commit()
+            return True
+        except IntegrityError:
+            continue                      # هم‌زمان کدِ تکراری گرفت؛ دوباره
+        except Exception:
+            logger.exception("sd: ثبتِ تحویل در «کانفیگ‌هایِ من» ناموفق بود (delivery=%s)", d.id)
+            return False
+    logger.warning("sd: ثبتِ تحویل در «کانفیگ‌هایِ من» بعد از ۳ تلاش ممکن نشد (delivery=%s)", d.id)
+    return False
+
+
 @sd_router.message(SdFSM.sending)
 async def sd_receive(msg: Message, bot: Bot, state: FSMContext):
     row = await _admin_row(msg, bot)
@@ -194,6 +234,7 @@ async def sd_receive(msg: Message, bot: Bot, state: FSMContext):
         await s.execute(update(StockDelivery).where(StockDelivery.id == d.id, StockDelivery.status == "pending")
                         .values(sent_count=StockDelivery.sent_count + 1))
         await s.commit()
+    await record_in_my_configs(d, u, msg)      # گزارشِ Rocket: تحویلِ دستی در «کانفیگ‌هایِ من» دیده نمی‌شد
     await msg.answer(f"✅ برایِ مشتری ارسال شد. (تعداد تا الان: {d.sent_count + 1})",
                      reply_markup=_kb([[_btn("✅ پایان تحویل", f"sd:done:{d.id}", ButtonStyle.SUCCESS)]]))
 

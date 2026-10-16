@@ -313,3 +313,31 @@ async def test_menu_navigation_flow_menu_to_list_and_back(db):
     cb.data = "sdl:done"
     await SD.sdl_list(cb, bot)
     assert "انجام‌شده" in edits[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_delivered_config_appears_in_my_configs(db):
+    """گزارشِ Rocket: تحویلِ دستی در «کانفیگ‌هایِ من» دیده نمی‌شد."""
+    bot = FakeBot()
+    did = await _queued(db, bot)
+    st = _St()
+    cb, _ = _cb(f"sd:send:{did}", uid=1)
+    await SD.sd_send(cb, bot, st)
+
+    async def reply(t, **k):
+        return None
+    txt = SimpleNamespace(from_user=SimpleNamespace(id=1), chat=SimpleNamespace(id=1), message_id=70,
+                          text="vless://abc#fresh", caption=None, document=None, answer=reply)
+    conf = SimpleNamespace(from_user=SimpleNamespace(id=1), chat=SimpleNamespace(id=1), message_id=71,
+                           text=None, caption=None, answer=reply,
+                           document=SimpleNamespace(file_name="TR.conf", file_id="FILEID1"))
+    photo = SimpleNamespace(from_user=SimpleNamespace(id=1), chat=SimpleNamespace(id=1), message_id=72,
+                            text=None, caption=None, document=None, answer=reply)       # QR بدونِ کپشن ⇒ ثبت نمی‌شود
+    for m in (txt, conf, photo):
+        await SD.sd_receive(m, bot, st)
+    async with db() as s:
+        mine = (await s.scalars(select(models.Config).where(
+            models.Config.owner_user_id == 1, models.Config.status == "sold"))).all()
+    got = {(c.kind, c.payload) for c in mine}
+    assert ("sublink", "vless://abc#fresh") in got and ("wireguard", "FILEID1") in got
+    assert len(mine) == 2
