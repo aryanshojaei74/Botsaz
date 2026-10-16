@@ -1079,8 +1079,17 @@ async def wallet_tonpays_text(msg: Message, bot: Bot, state: FSMContext):
         return
     await state.set_state(TonPaysFSM.amount)
     _note = await get_user_note(row.id)  # PATCH_TONPAYS_USER_NOTE_V1
+    # === PATCH_EXACT_AMOUNT_ALERT_V1 === در منویِ کیبوردی پاپ‌آپ نداریم (دکمه callback نمی‌فرستد)؛ هشدار همین‌جا در متن هم هست
+    _warn = ""
+    if await get_setting_safe(row.id, "pay_exact_alert") != "0":
+        _warn = ("⚠️ <b>دقیقاً مبلغ فاکتور را واریز کنید!</b>\n"
+                 "مبلغ رند یا کم و زیاد، خودکار تأیید نمی‌شود و شارژ معطلِ بررسیِ دستی می‌ماند.\n"
+                 + ("⚠️ فقط با روشِ «کارت به کارت» واریز کنید و از پایا و پل و … استفاده نکنید.\n"
+                    if await is_custom_mode(row.id) else "")
+                 + "\n")
     await msg.answer(
         "💠 <b>شارژ کیف پول با TonPays</b>\n\n"
+        + _warn
         + (f"{_note}\n\n" if _note else "")
         + "مبلغِ موردنظر را به <b>تومان</b> بفرست "
         f"(حداقل <b>{await get_min_amount(row.id):,} تومان</b> — مثلاً 50000):",
