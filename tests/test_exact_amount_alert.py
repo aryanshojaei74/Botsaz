@@ -60,3 +60,12 @@ async def test_handler_own_text_untouched_and_off_switch(monkeypatch):
 async def test_only_first_answer_is_alert(monkeypatch):
     calls = await _run(monkeypatch, "w:abangateway", "1", second=True)
     assert calls[0] == (ea.ALERT_TEXT, True) and calls[1] == (None, None)
+
+
+def test_invoice_has_warning_button_only_for_tenant_prefix():
+    from tenant.gateways.tonpays import build_invoice_view
+    _, kb = build_invoice_view("tonp", "O1", 50000, 50123, "6037997000000000", "علی", True)
+    first = [b.callback_data for b in kb.inline_keyboard[0]]
+    assert first == ["tonp:warn:O1"]
+    _, kb2 = build_invoice_view("ptonp", "O1", 50000, 50123, "6037997000000000", "علی", True)
+    assert all("warn" not in (b.callback_data or "") for r in kb2.inline_keyboard for b in r)

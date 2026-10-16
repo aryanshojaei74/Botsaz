@@ -1096,6 +1096,13 @@ async def wallet_tonpays_text(msg: Message, bot: Bot, state: FSMContext):
         reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
 
 
+@tonpays_router.callback_query(F.data.startswith("tonp:warn:"))
+async def tonp_warn_popup(cb: CallbackQuery):
+    """پاپ‌آپِ «دقیقاً مبلغ فاکتور را واریز کنید» رویِ فاکتور (درخواستِ دیار)."""
+    from tenant.gateways.exact_amount_alert import ALERT_TEXT
+    await cb.answer(ALERT_TEXT, show_alert=True)
+
+
 @tonpays_router.callback_query(F.data == "w:tonpays")
 async def w_tonpays(cb: CallbackQuery, bot: Bot, state: FSMContext):
     """نسخهٔ منویِ شیشه‌ای — همان منطقِ بالا را اجرا می‌کند."""
@@ -1200,6 +1207,11 @@ def build_invoice_view(prefix: str, order_id: str, amount: int, final_amount: in
                                           callback_data=f"{prefix}:chg:{order_id}")])
     rows.append([InlineKeyboardButton(text="❌ لغو این فاکتور",
                                       callback_data=f"{prefix}:cancel:{order_id}")])
+    # === PATCH_EXACT_AMOUNT_ALERT_V2 === دکمهٔ هشدار رویِ خودِ فاکتور (پاپ‌آپ فقط با کلیک ممکن است)؛ فقط رباتِ مستأجر (tonp)
+    if prefix == "tonp":
+        rows.insert(0, [InlineKeyboardButton(text="⚠️ دقیقاً مبلغ فاکتور را واریز کنید! (بزن و بخوان)",
+                                             callback_data=f"tonp:warn:{order_id}",
+                                             style=ButtonStyle.DANGER)])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
