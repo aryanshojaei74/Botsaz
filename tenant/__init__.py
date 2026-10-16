@@ -26644,6 +26644,7 @@ async def _apply_wallet_adjust(msg_or_cb, bot: Bot, uid: int, amount: int,
             # منقضی می‌شود) — پس فقط اسنپ‌شات می‌گیریم و ارسال را بیرون
             # انجام می‌دهیم تا شبکه جلوی کامیت را نگیرد.
             _log_user, _log_new = u, float(new_bal)
+            _old_bal = int(_current_balance)
     except Exception as e:
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
         # === PATCH_WALLET_ADJUST_SAFE_ERROR_MSG_V1 ===
@@ -26654,7 +26655,13 @@ async def _apply_wallet_adjust(msg_or_cb, bot: Bot, uid: int, amount: int,
         except Exception:
             logger.exception("خطای نادیده‌گرفته‌شده (ارسالِ پیامِ خطا هم ناموفق بود)")
         return
-    await answer(f"✅ انجام شد. موجودی جدید: {rial(new_bal)}", reply_markup=await tadmin_kb(row.id))
+    # صراحتِ نتیجه: نوعِ عملیات + موجودیِ قبل/بعد، تا ادمین بلافاصله ببیند کسر شد یا شارژ.
+    _verb = "➕ شارژ شد" if amount >= 0 else "➖ کسر شد"
+    await answer(
+        f"✅ {_verb}: {rial(abs(amount))}\n"
+        f"موجودیِ قبل: {rial(_old_bal)}\n"
+        f"موجودیِ جدید: {rial(new_bal)}",
+        reply_markup=await tadmin_kb(row.id))
     # === PATCH_TX_LOG_ALL_MOVEMENTS_V1 ===
     # افزایش/کاهشِ دستیِ ادمین هم باید در کانالِ لاگ ثبت شود — این تابع
     # تنها مسیرِ هر دو حالت است، پس یک بار صدازدن هر دو را پوشش می‌دهد.
