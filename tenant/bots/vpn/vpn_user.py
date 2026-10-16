@@ -19,7 +19,7 @@ from aiogram import Bot, F, Router
 from aiogram.enums import ButtonStyle
 from aiogram.filters import StateFilter
 from aiogram.types import (
-    BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
+    BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardRemove,
     WebAppInfo,
 )
 from sqlalchemy import func, select, update
@@ -122,6 +122,25 @@ _vpn_action_inflight: set[str] = set()
 
 
 # === PATCH_VPN_EDIT_IN_PLACE_V1 ===
+# === PATCH_FLOW_DROP_REPLY_KB_V1 ===
+# گزارشِ ایلیا: در منویِ کیبوردی، وقتی مشتری دکمهٔ خرید (مثلاً «(C) برنزی») را می‌زند و وارد صفحه‌هایِ مرحله‌ای
+# (انتخابِ سرور، نامِ دلخواه، حجم/روز/تعدادِ دلخواه) می‌شود، منویِ کیبوردیِ قبلی هنوز زیرِ صفحه می‌ماند و شلوغ/گیج‌کننده است.
+# تلگرام فقط با یک پیام می‌گذارد کیبوردِ پایین پاک شود؛ پس یک پیامِ نامرئی با ReplyKeyboardRemove می‌فرستیم و پاکش می‌کنیم.
+# فقط وقتی فراخوان «پیامِ واقعیِ کاربر» باشد (یعنی از یک دکمهٔ کیبوردی آمده، نه از کلیکِ اینلاین) و ربات در حالتِ کیبوردی باشد.
+async def _drop_reply_kb(msg, bot_id: int) -> None:
+    try:
+        if not (isinstance(msg, Message) and msg.text and getattr(msg, "from_user", None)
+                and not msg.from_user.is_bot):
+            return
+        from tenant import get_setting, HOME_MENU_TEXT_HIDDEN_MARK
+        if await get_setting(bot_id, "menu_mode", "reply") == "inline":
+            return
+        m = await msg.answer(HOME_MENU_TEXT_HIDDEN_MARK, reply_markup=ReplyKeyboardRemove())
+        await m.delete()
+    except Exception:
+        logger.info("vpn: برداشتنِ کیبوردِ قبلی ممکن نشد (بی‌اهمیت)")
+
+
 class _EditFirst:
     """رپرِ cb.message: اولین `.answer(text, ...)` به‌جایِ حذفِ پیام و ارسالِ پیامِ تازه،
     *همان پیام* را ویرایش می‌کند (سریع‌تر و بدونِ پرشِ چت)؛ بقیهٔ فراخوانی‌ها (پیامِ دوم به بعد)
@@ -1532,6 +1551,7 @@ async def show_vpn_plans(bot: Bot, msg: Message, bot_id: int, state=None, panel_
     که به این دستهٔ ترکیبی وصل‌اند نشان داده می‌شوند (برایِ «دکمهٔ خریدِ ترکیبی» که
     چند پنل و چند دستهٔ انبار را زیرِ یک دکمه جمع می‌کند).
     """
+    await _drop_reply_kb(msg, bot_id)      # PATCH_FLOW_DROP_REPLY_KB_V1
 # === PATCH_FREE_NO_EXPIRY_PANEL_LOCK_NOTIFY_V1 ===
     from tenant import inline_back_row, inline_back_kb, get_bot_row
     from tenant.bots.vpn.vpn_admin import get_panel, get_any_enabled_panel
@@ -2123,6 +2143,7 @@ async def show_bundle_hub(bot: Bot, msg: Message, bot_id: int, cat_id: int, stat
     صفحه می‌آیند. اگر فقط یک دستهٔ داخلی وجود داشته باشد، همان مرحلهٔ
     میانی هم حذف می‌شود و مستقیم وارد لیستِ خرید می‌شود.
     """
+    await _drop_reply_kb(msg, bot_id)      # PATCH_FLOW_DROP_REPLY_KB_V1
     from tenant import inline_back_kb
     cat, plans, stock_names, bucket_names, has_uncat = await _bundle_gather(bot_id, cat_id, getattr(msg.from_user, 'id', None))
     # === PATCH_BUNDLE_BACK_ONE_LEVEL_V1 ===
@@ -2278,6 +2299,7 @@ async def plan_sale_full_message(bot_id: int, plan_id: int) -> str | None:
 
 async def show_bundle_all_categories(bot: Bot, msg: Message, bot_id: int, state=None,
                                      mb_id: int | None = None, header: str = "") -> None:
+    await _drop_reply_kb(msg, bot_id)      # PATCH_FLOW_DROP_REPLY_KB_V1
     from tenant import inline_back_kb, inline_back_row, _with_btn_header
     from models import MiniAppCategory
     async with Session() as s:
@@ -2351,6 +2373,7 @@ async def _all_services_gather(bot_id: int, viewer_id: int | None = None):
 
 async def show_bundle_all_services(bot: Bot, msg: Message, bot_id: int, state=None,
                                    mb_id: int | None = None, header: str = "") -> None:
+    await _drop_reply_kb(msg, bot_id)      # PATCH_FLOW_DROP_REPLY_KB_V1
     from tenant import inline_back_kb
     plans, stock_names, bucket_names, has_uncat = await _all_services_gather(bot_id, getattr(msg.from_user, 'id', None))
     total_buckets = len(bucket_names) + (1 if has_uncat else 0)
@@ -2731,9 +2754,17 @@ async def _ask_custom_name(target, plan_id: int, kind: str = "plan",
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⏭ بدون نام (ادامه)", callback_data=skip_cb,
                               style=ButtonStyle.SUCCESS)],
-        [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=back_cb,
+        [InlineKeyboardButton(text="⬅️ بازگشت به منوی قبل", callback_data=back_cb,
                               style=ButtonStyle.DANGER)],
     ])
+    if bot_id:      # PATCH_FLOW_DROP_REPLY_KB_V1 — «بازگشت به منو» هم باشد (درخواستِ ایلیا)
+        try:
+            from tenant import inline_back_row
+            _hr = await inline_back_row(bot_id)
+            if _hr:
+                kb.inline_keyboard.append(_hr)
+        except Exception:
+            logger.exception("vpn: افزودنِ ردیفِ بازگشت به منو در صفحهٔ نامِ دلخواه ناموفق بود")
 # === PATCH_CFG_NAME_PROMPT_EDIT_V1 ===
     # متن از تنظیماتِ ربات خوانده می‌شود تا مالک بتواند عوضش کند؛ اگر
     # چیزی ثبت نکرده باشد، همین متنِ پیش‌فرض می‌ماند.
@@ -4477,7 +4508,7 @@ def _vc_cfg_kb(cfg: dict, gb: int, days: int, count: int, no_plans: bool = False
     if no_plans:
         rows.append([_btn("🏠 بازگشت به خانه", "vc:home")])
     else:
-        rows.append([_btn("⬅️ بازگشت", "vc:back")])
+        rows.append([_btn("⬅️ بازگشت به منوی قبل", "vc:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
