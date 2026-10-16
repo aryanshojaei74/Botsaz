@@ -51,7 +51,10 @@ async def exact_amount_alert_mw(handler, event, data):
         return await orig(text, show_alert, *a, **kw)
 
     try:
-        wrapped = event.model_copy(update={"answer": _answer})
+        # model_copy(update={"answer": …}) روی مدل‌هایِ aiogram اثری ندارد (کلید به extra می‌رود و متدِ کلاس برنده می‌شود)؛
+        # باید مستقیم رویِ __dict__ِ کپی نشست تا cb.answer در هندلر همین تابع شود.
+        wrapped = event.model_copy()
+        object.__setattr__(wrapped, "answer", _answer)
     except Exception:
         logger.exception("exact_amount_alert: ساختِ کپیِ رویداد ناموفق بود")
         return await handler(event, data)

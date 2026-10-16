@@ -20,10 +20,8 @@ class _Ev:
     async def answer(self, text=None, show_alert=None, *a, **kw):
         self._calls.append((text, show_alert))
 
-    def model_copy(self, update):
-        n = _Ev(self.data, self._calls)
-        n.answer = update["answer"]
-        return n
+    def model_copy(self, update=None):
+        return _Ev(self.data, self._calls)
 
 
 async def _run(monkeypatch, data, setting, handler_text=None, second=False):
