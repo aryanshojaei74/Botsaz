@@ -2786,6 +2786,17 @@ def _nav_install(bot) -> None:
     async def _wrapped(bot_, method, timeout=None):
         name = type(method).__name__
         mk = getattr(method, "reply_markup", None)
+        # === PATCH_HOME_KB_BUTTON_V1 === جایی که کد کیبوردِ پایین را «پاک» می‌کند، اگر دکمهٔ ثابتِ منو روشن است همان را بگذار
+        if isinstance(mk, ReplyKeyboardRemove) and name.startswith("Send") and isinstance(
+                getattr(method, "chat_id", None), int) and method.chat_id > 0:
+            try:
+                _row0 = await get_bot_row(bot_)
+                _hk0 = await home_kb_markup(_row0.id) if _row0 else None
+                if _hk0 is not None:
+                    method = method.model_copy(update={"reply_markup": _hk0})
+                    mk = _hk0
+            except Exception:
+                logger.debug("home_kb: جایگزینیِ ReplyKeyboardRemove ممکن نشد (بی‌اهمیت)")
         uid = _CUR_UID.get()
         if (name not in ("SendMessage", "EditMessageText") or not isinstance(mk, InlineKeyboardMarkup)
                 or not uid or getattr(method, "chat_id", None) != uid
@@ -4387,6 +4398,24 @@ async def _open_vservice_shop(msg, bot, bot_id: int, action: str, state) -> bool
         return False
 
 
+async def _is_home_kb_press(msg: Message, bot: Bot) -> bool:
+    t = (msg.text or "").strip()
+    if not t or t.startswith("/") or msg.chat.type != "private":
+        return False
+    row = await get_bot_row(bot)
+    if not row or not await home_kb_enabled(row.id):
+        return False
+    old = ((await get_setting(row.id, "home_kb_label_old", "")) or "").strip()
+    return t == await home_kb_label(row.id) or (bool(old) and t == old)
+
+
+@tenant_router.message(_is_home_kb_press)
+async def home_kb_pressed(msg: Message, bot: Bot, state: FSMContext):
+    """دکمهٔ ثابتِ پایینِ چت = همان /start (هر مرحلهٔ نیمه‌کاره هم لغو می‌شود)."""
+    await state.clear()
+    await tenant_start(msg, CommandObject(prefix="/", command="start", args=None), bot, state)
+
+
 @tenant_router.message(CommandStart())
 async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FSMContext):
     await state.clear()
@@ -5009,6 +5038,29 @@ async def _send_start_pinned_products(msg: Message, bot: Bot, bot_id: int,
 # کیبوردِ پایینیِ قدیمی باید یک پیام با ReplyKeyboardRemove فرستاد (تلگرام راهِ دیگری ندارد)؛
 # فقط یک‌بار برایِ هر کاربر انجام می‌شود (kb_cleared) تا دیگر هر /start «نقطه» نپرد.
 # با عوض‌شدنِ حالتِ منو (کیبورد↔شیشه‌ای) پرچم برایِ همه ریست می‌شود.
+# === PATCH_HOME_KB_BUTTON_V1 ===
+# درخواستِ Rocket: در منوی شیشه‌ای یک دکمهٔ ثابتِ پایینِ چت («🏠 منوی اصلی»، با اسمِ دلخواه) باشد که
+# مثلِ /start منوی شیشه‌ای را دوباره بیاورد. پیش‌فرض خاموش؛ مالک از «🏠 متنِ بازگشت به صفحهٔ اصلی» روشنش می‌کند.
+HOME_KB_LABEL_DEFAULT = "🏠 منوی اصلی"
+
+
+async def home_kb_enabled(bot_id: int) -> bool:
+    return (await get_setting(bot_id, "menu_mode", "reply") == "inline"
+            and await get_setting(bot_id, "home_kb_btn", "0") == "1")
+
+
+async def home_kb_label(bot_id: int) -> str:
+    return ((await get_setting(bot_id, "home_kb_label", "")) or "").strip() or HOME_KB_LABEL_DEFAULT
+
+
+async def home_kb_markup(bot_id: int):
+    if not await home_kb_enabled(bot_id):
+        return None
+    from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=await home_kb_label(bot_id))]],
+                               resize_keyboard=True, is_persistent=True)
+
+
 async def clear_reply_kb_once(msg, bot_id: int, tg_id: int) -> None:
     try:
         async with Session() as s:
@@ -5016,8 +5068,13 @@ async def clear_reply_kb_once(msg, bot_id: int, tg_id: int) -> None:
                 BotUser.bot_id == bot_id, BotUser.telegram_id == tg_id))
             if bu is None or bu.kb_cleared:
                 return
-        _rm = await msg.answer(HOME_MENU_TEXT_HIDDEN_MARK, reply_markup=ReplyKeyboardRemove())
-        await _rm.delete()
+        _hk = await home_kb_markup(bot_id)
+        if _hk is not None:
+            # دکمهٔ ثابتِ «منوی اصلی»: پیامِ حاملِ کیبورد نباید پاک شود وگرنه کلاینت کیبورد را هم می‌اندازد
+            await msg.answer(HOME_MENU_TEXT_HIDDEN_MARK, reply_markup=_hk)
+        else:
+            _rm = await msg.answer(HOME_MENU_TEXT_HIDDEN_MARK, reply_markup=ReplyKeyboardRemove())
+            await _rm.delete()
         async with Session() as s:
             bu = await s.scalar(select(BotUser).where(
                 BotUser.bot_id == bot_id, BotUser.telegram_id == tg_id))
@@ -30926,6 +30983,12 @@ async def set_homemenutext_start(cb: CallbackQuery, bot: Bot, state: FSMContext)
         [InlineKeyboardButton(text=("🏠 متنِ استارت رویِ منو (شیشه‌ای): 🟢 روشن — بزن خاموش شود"
                                     if _bw_on else "🏠 متنِ استارت رویِ منو (شیشه‌ای): 🔴 خاموش — بزن روشن شود"),
                               callback_data="set:homemenutext:bw", style=ButtonStyle.PRIMARY)],
+        # === PATCH_HOME_KB_BUTTON_V1 ===
+        [InlineKeyboardButton(text=("⌨️ دکمهٔ ثابتِ پایینِ چت: 🟢 روشن — بزن خاموش شود" if await home_kb_enabled(row.id)
+                                    else "⌨️ دکمهٔ ثابتِ پایینِ چت (منوی اصلی): 🔴 خاموش — بزن روشن شود"),
+                              callback_data="set:homemenutext:kb", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text=f"✏️ اسمِ دکمهٔ پایینِ چت: «{await home_kb_label(row.id)}»",
+                              callback_data="set:homemenutext:kblabel", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="♻️ بازگشت به پیش‌فرض", callback_data="set:homemenutext:reset", style=ButtonStyle.DANGER)],
         [InlineKeyboardButton(text="❌ انصراف", callback_data="tadm:sec:settings", style=ButtonStyle.DANGER)],
     ])
@@ -30989,6 +31052,62 @@ async def set_homemenutext_bw_toggle(cb: CallbackQuery, bot: Bot, state: FSMCont
     await set_setting(row.id, "home_back_welcome", "0" if cur else "1")
     await cb.answer("🔴 خاموش شد" if cur else "🟢 روشن شد")
     await set_homemenutext_start(cb, bot, state)
+
+
+class HomeKbLabelFSM(StatesGroup):
+    label = State()
+
+
+@tenant_router.callback_query(F.data == "set:homemenutext:kb")
+async def set_home_kb_toggle(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    if await get_setting(row.id, "menu_mode", "reply") != "inline":
+        await cb.answer("این دکمه فقط برایِ «منوی شیشه‌ای» است؛ اول نوعِ منو را شیشه‌ای کن.", show_alert=True)
+        return
+    on = await get_setting(row.id, "home_kb_btn", "0") == "1"
+    await set_setting(row.id, "home_kb_btn", "0" if on else "1")
+    await reset_kb_cleared(row.id)      # هر کاربر با /startِ بعدی کیبورد را می‌گیرد (یا برمی‌دارد)
+    await cb.answer("🔴 خاموش شد" if on else
+                    "🟢 روشن شد — هر کاربر با /start بعدی دکمه را زیرِ چت می‌بیند", show_alert=True)
+    await set_homemenutext_start(cb, bot, state)
+
+
+@tenant_router.callback_query(F.data == "set:homemenutext:kblabel")
+async def set_home_kb_label_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await state.set_state(HomeKbLabelFSM.label)
+    await cb.message.answer(
+        f"✏️ <b>اسمِ دکمهٔ ثابتِ پایینِ چت</b>\n\nاسمِ فعلی: <code>{_html.escape(await home_kb_label(row.id))}</code>\n\n"
+        "اسمِ جدید را بفرست (حداکثر ۳۰ کاراکتر؛ ایموجی هم می‌شود). برایِ برگشت به پیش‌فرض «-» بفرست.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="❌ انصراف", callback_data="set:homemenutext", style=ButtonStyle.DANGER)]]),
+        parse_mode="HTML")
+    await cb.answer()
+
+
+@tenant_router.message(HomeKbLabelFSM.label, F.text)
+async def set_home_kb_label_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner_ok_msg(msg, bot)
+    if not row:
+        await state.clear()
+        return
+    new = (msg.text or "").strip()
+    if new == "-":
+        new = ""
+    if len(new) > 30 or new.startswith("/"):
+        await msg.answer("⚠️ حداکثر ۳۰ کاراکتر و نباید با «/» شروع شود. دوباره بفرست:")
+        return
+    await state.clear()
+    old = await home_kb_label(row.id)
+    await set_setting(row.id, "home_kb_label_old", old)      # کیبوردِ قدیمیِ کاربران تا /startِ بعدی هنوز کار کند
+    await set_setting(row.id, "home_kb_label", new)
+    await reset_kb_cleared(row.id)
+    await msg.answer(f"✅ اسمِ دکمه شد «{await home_kb_label(row.id)}». کاربران با /startِ بعدی اسمِ جدید را می‌بینند.",
+                     reply_markup=await tadmin_kb(row.id))
 
 
 @tenant_router.callback_query(F.data == "set:homemenutext:reset")
