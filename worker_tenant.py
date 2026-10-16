@@ -66,6 +66,7 @@ from tenant.gateways.abangateway import abangateway_poll_loop as _abangateway_lo
 # === PATCH_GROUP_BETTING_EXPIRY_LOOP_V1 ===
 from tenant.shared.group_betting import betting_expiry_loop as _betting_expiry_loop
 from tenant.bots.vpn.vpn_metered import metered_loop as _metered_loop   # PATCH_METERED_PLAN_V1
+from tenant.shared.support_ticket import ticket_autoclose_loop as _ticket_autoclose_loop   # PATCH_TICKET_ORDER_SETTINGS_V1
 from tenant.bots.virtual_service.ozvinoo_vnum import ozvinoo_poll_loop as _ozvinoo_poll_loop
 # === PATCH_P2P_MARKET_V1 === لغوِ خودکارِ معامله‌هایِ بی‌پاسخ + پایانِ اجاره‌هایِ مارکت
 from tenant.bots.virtual_service.nft_p2p import p2p_loop as _p2p_loop
@@ -105,6 +106,7 @@ async def _worker_startup():
         # === PATCH_TRIAL_EXPIRE_CLEANUP_V1 ===
         _trial_cleanup_loop(),
         _metered_loop(),   # PATCH_METERED_PLAN_V1
+        _ticket_autoclose_loop(),   # PATCH_TICKET_ORDER_SETTINGS_V1
         _stock_alarm_loop(),
         _vnum_recover_loop(),
         # === PATCH_TRAFFIC_OUT_CLEANUP_V1 ===

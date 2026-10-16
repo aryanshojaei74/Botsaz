@@ -715,6 +715,94 @@ async def tadm_tickets(cb: CallbackQuery, bot: Bot):
     await _show_tickets(cb, bot, status_filter="open", page=0)
 
 
+# === PATCH_TICKET_ORDER_SETTINGS_V1 ===
+_AUTO_CYCLE = (0, 12, 24, 48, 72)
+
+
+@ticket_router.callback_query(F.data.startswith("tkt:cfg:"))
+async def tkt_cfg(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok, get_setting, set_setting
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    what = cb.data.split(":")[2]
+    if what == "ordbtn":
+        cur = (await get_setting(row.id, "order_support_btn", "1")) != "0"
+        await set_setting(row.id, "order_support_btn", "0" if cur else "1")
+        await cb.answer("⛔️ دکمه از زیرِ پیام‌هایِ سفارش برداشته شد" if cur else "✅ دکمه دوباره زیرِ پیام‌هایِ سفارش می‌آید",
+                        show_alert=True)
+    elif what == "ordask":
+        cur = (await get_setting(row.id, "order_ticket_ask_text", "1")) != "0"
+        await set_setting(row.id, "order_ticket_ask_text", "0" if cur else "1")
+        await cb.answer("⛔️ تیکت فوری ثبت می‌شود (بدونِ پرسیدنِ متن)" if cur else "✅ اول متنِ پیامِ مشتری پرسیده می‌شود")
+    elif what == "auto":
+        cur = (await get_setting(row.id, "ticket_autoclose_hours", "0")) or "0"
+        cur = int(cur) if str(cur).isdigit() else 0
+        nxt = _AUTO_CYCLE[(_AUTO_CYCLE.index(cur) + 1) % len(_AUTO_CYCLE)] if cur in _AUTO_CYCLE else 24
+        await set_setting(row.id, "ticket_autoclose_hours", str(nxt))
+        await cb.answer(f"✅ تیکتِ جواب‌داده‌شده بعد از {nxt} ساعتِ بی‌پاسخیِ کاربر بسته می‌شود" if nxt else "⛔️ بستنِ خودکار خاموش شد",
+                        show_alert=True)
+    await _show_tickets(cb, bot, status_filter="open", page=0)
+
+
+async def auto_close_answered_tickets_once() -> int:
+    """تیکت‌هایی که آخرین پاسخ مالِ ادمین است و کاربر در N ساعت جواب نداده‌اند را می‌بندد (فقط رباتی که N>0 دارد)."""
+    import datetime as _dt
+    from aiogram.client.default import DefaultBotProperties
+    from aiogram.enums import ParseMode
+    from models import Bot as BotRow, Setting
+    closed = 0
+    async with Session() as s:
+        cfgs = (await s.execute(select(Setting.bot_id, Setting.value).where(
+            Setting.key == "ticket_autoclose_hours"))).all()
+    for bot_id, val in cfgs:
+        hours = int(val) if str(val or "").isdigit() else 0
+        if hours <= 0:
+            continue
+        cutoff = _dt.datetime.utcnow() - _dt.timedelta(hours=hours)
+        to_notify: list[tuple[int, int]] = []
+        async with Session() as s:
+            tks = (await s.scalars(select(TenantTicket).where(
+                TenantTicket.bot_id == bot_id, TenantTicket.status == "answered"))).all()
+            for t in tks:
+                last = await s.scalar(select(TenantTicketReply).where(
+                    TenantTicketReply.ticket_id == t.id).order_by(TenantTicketReply.id.desc()).limit(1))
+                if last is None or last.sender != "admin" or (last.created_at and last.created_at > cutoff):
+                    continue
+                t.status = "closed"
+                bu = await s.get(BotUser, t.user_id)
+                if bu:
+                    to_notify.append((t.id, bu.telegram_id))
+                closed += 1
+            await s.commit()
+        if to_notify:
+            async with Session() as s:
+                brow = await s.get(BotRow, bot_id)
+            if brow and getattr(brow, "token", None):
+                tb = Bot(token=brow.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+                try:
+                    for tid, tg in to_notify:
+                        try:
+                            await tb.send_message(
+                                tg, f"🎫 تیکت #{tid} چون بیش از {hours} ساعت جوابی نداشت بسته شد.\n"
+                                    "اگر هنوز سؤالی داری، یک تیکتِ تازه ثبت کن 🌹")
+                        except Exception:
+                            logger.info("ticket auto-close: اطلاع به کاربر ممکن نشد (بی‌اهمیت)")
+                finally:
+                    await tb.session.close()
+    return closed
+
+
+async def ticket_autoclose_loop() -> None:
+    import asyncio
+    while True:
+        try:
+            await auto_close_answered_tickets_once()
+        except Exception:
+            logger.exception("ticket auto-close loop failed")
+        await asyncio.sleep(600)
+
+
 @ticket_router.callback_query(F.data.startswith("tkt:filter:"))
 async def tkt_filter(cb: CallbackQuery, bot: Bot):
     parts = cb.data.split(":")  # tkt:filter:{status}[:{page}]
@@ -808,6 +896,25 @@ async def _show_tickets(cb: CallbackQuery, bot: Bot, status_filter: str = "open"
     if nav:
         b_rows.append(nav)
 
+    # === PATCH_TICKET_ORDER_SETTINGS_V1 === (فدایی) کلیدهایِ پیگیریِ سفارش و بستنِ خودکار
+    from tenant import get_setting as _gs
+    _ob = (await _gs(row.id, "order_support_btn", "1")) != "0"
+    _oa = (await _gs(row.id, "order_ticket_ask_text", "1")) != "0"
+    _ah = (await _gs(row.id, "ticket_autoclose_hours", "0")) or "0"
+    _ah = int(_ah) if str(_ah).isdigit() else 0
+    b_rows.append([InlineKeyboardButton(
+        text=("📞 دکمهٔ «پشتیبانی (پیگیریِ سفارش)» زیرِ پیام‌هایِ سفارش: ✅ روشن" if _ob
+              else "📞 دکمهٔ «پشتیبانی (پیگیریِ سفارش)» زیرِ پیام‌هایِ سفارش: ⛔️ خاموش"),
+        callback_data="tkt:cfg:ordbtn", style=ButtonStyle.PRIMARY)])
+    if _ob:
+        b_rows.append([InlineKeyboardButton(
+            text=("💬 گرفتنِ متنِ پیام قبل از ثبتِ تیکتِ سفارش: ✅ روشن" if _oa
+                  else "💬 گرفتنِ متنِ پیام قبل از ثبتِ تیکتِ سفارش: ⛔️ خاموش (فوری ثبت می‌شود)"),
+            callback_data="tkt:cfg:ordask", style=ButtonStyle.PRIMARY)])
+    b_rows.append([InlineKeyboardButton(
+        text=(f"⏳ بستنِ خودکارِ تیکتِ جواب‌داده‌شده و بی‌پاسخِ کاربر: ✅ بعد از {_ah} ساعت" if _ah
+              else "⏳ بستنِ خودکارِ تیکتِ جواب‌داده‌شده و بی‌پاسخِ کاربر: ⛔️ خاموش"),
+        callback_data="tkt:cfg:auto", style=ButtonStyle.PRIMARY)])
     # === PATCH_PARTNER_SETTINGS_BACK_FIX_V1 ===
     _tkt_back_cb = "pp:settings" if row.plan == "partner" else "tadm:sec:admins"
     b_rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=_tkt_back_cb, style=ButtonStyle.DANGER),

@@ -12857,20 +12857,103 @@ def _extract_card_last4(caption: str | None) -> str | None:
     return m.group(1) if m else None
 
 
+# === PATCH_ORDER_TICKET_FLOW_V1 === (فدایی)
+# قبلاً با یک تپ فوراً تیکتی «پیگیریِ سفارش X» (بدونِ هیچ توضیحِ مشتری و بدونِ مشخصاتِ سفارش) ساخته می‌شد، و
+# برایِ رباتِ پرتردد تیکتِ بی‌محتوا می‌ریخت. حالا: کد پیگیری از دکمه می‌آید، متنِ مشتری پرسیده می‌شود، و تیکت
+# هم‌راهِ «مشخصاتِ سفارش» (همان صفحهٔ جزئیاتِ لیستِ سفارش‌ها) برایِ ادمین می‌رود.
+class OrderTicketFSM(StatesGroup):
+    text = State()
+
+
+async def _order_details_html(bot_id: int, trk: str) -> str:
+    """مشخصاتِ سفارش با همان رندرِ جزئیاتِ لیستِ سفارش‌هایِ ادمین؛ خالی اگر کد پیدا نشد."""
+    code = (trk or "").strip().upper()
+    if not code:
+        return ""
+    try:
+        async with Session() as s:
+            sid = await s.scalar(select(SmmOrder.id).where(SmmOrder.bot_id == bot_id, SmmOrder.tracking_code == code))
+            gid = None if sid else await s.scalar(select(GiftOrder.id).where(
+                GiftOrder.bot_id == bot_id, GiftOrder.tracking_code == code))
+        if sid:
+            text, _ = await _smm_vs_order_detail_content(bot_id, int(sid), "noop")
+        elif gid:
+            text, _ = await _vs_gift_detail_content(bot_id, int(gid), "noop")
+        elif re.fullmatch(r"N\d+", code):
+            text, _ = await _vs_nft_detail_content(bot_id, int(code[1:]), "noop")
+        else:
+            return ""
+        return text or ""
+    except Exception:
+        logger.exception("مشخصاتِ سفارش برایِ تیکت خوانده نشد (trk=%s)", trk)
+        return ""
+
+
+async def build_order_ticket_text(bot_id: int, trk: str, user_text: str = "") -> str:
+    import html as _h
+    parts = [f"📞 <b>پیگیریِ سفارش</b> — کدِ پیگیری: <code>{_h.escape(trk)}</code>"]
+    if user_text.strip():
+        parts.append("💬 <b>پیامِ مشتری:</b>\n" + _h.escape(user_text.strip()))
+    det = await _order_details_html(bot_id, trk)
+    if det:
+        parts.append("📋 <b>مشخصاتِ سفارش:</b>\n" + det)
+    else:
+        parts.append("⚠️ مشخصاتِ این کدِ پیگیری پیدا نشد.")
+    return "\n\n".join(parts)
+
+
 @smm_router.callback_query(F.data.startswith("gift:support:"))
 async def gift_support_quick(cb: CallbackQuery, bot: Bot, state: FSMContext):
-    """با یک تپ، یک تیکتِ تازهٔ پرشده با کدِ پیگیری می‌سازد — دقیقاً همان
-    مکانیزمِ ثبتِ تیکتِ معمولی، فقط متنش را خودمان از قبل می‌نویسیم."""
+    """دکمهٔ «📞 پشتیبانی (پیگیریِ این سفارش)»: متنِ مشتری را می‌گیرد و تیکتِ کامل (با مشخصاتِ سفارش) می‌سازد."""
+    from tenant import get_bot_row
     from tenant.shared.support_ticket import _save_new_ticket
+    row = await get_bot_row(bot)
+    if not row:
+        await cb.answer()
+        return
     trk = cb.data.split(":", 2)[2]
     await cb.answer()
-    fake_msg = type("M", (), {
-        "from_user": cb.from_user,
-        "answer": cb.message.answer,
-    })()
-    await _save_new_ticket(
-        fake_msg, state, bot,
-        text=f"پیگیریِ سفارش — کدِ پیگیری: {trk}\n\n(لطفاً وضعیتِ این سفارش را بررسی کنید.)")
+    if (await _get_setting(row.id, "order_ticket_ask_text", "1")) != "0":
+        await state.set_state(OrderTicketFSM.text)
+        await state.update_data(ordtk_trk=trk)
+        await cb.message.answer(
+            f"📞 <b>پیگیریِ سفارش</b> <code>{trk}</code>\n\n"
+            "پیام یا سؤالت درباره‌یِ این سفارش را بنویس و بفرست تا همراهِ مشخصاتِ سفارش برایِ پشتیبانی برود:",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                text="❌ انصراف", callback_data="ordtk:cancel", style=ButtonStyle.DANGER)]]))
+        return
+    fake_msg = type("M", (), {"from_user": cb.from_user, "answer": cb.message.answer})()
+    await state.update_data(ticket_category="order", ticket_subject=f"پیگیریِ سفارش {trk}")
+    await _save_new_ticket(fake_msg, state, bot, text=await build_order_ticket_text(row.id, trk))
+
+
+@smm_router.callback_query(F.data == "ordtk:cancel")
+async def order_ticket_cancel(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await cb.answer("انصراف شد")
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        logger.debug("ordtk: پاک‌کردنِ دکمهٔ انصراف ممکن نشد (بی‌اهمیت)")
+
+
+@smm_router.message(OrderTicketFSM.text, F.text)
+async def order_ticket_text_in(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import get_bot_row
+    from tenant.shared.support_ticket import _save_new_ticket
+    row = await get_bot_row(bot)
+    data = await state.get_data()
+    trk = data.get("ordtk_trk") or ""
+    if not row or not trk:
+        await state.clear()
+        return
+    user_text = (msg.text or "").strip()
+    if len(user_text) > 1500:
+        await msg.answer("پیامت خیلی بلند است (حداکثر ۱۵۰۰ کاراکتر). کوتاه‌ترش کن:")
+        return
+    await state.update_data(ticket_category="order", ticket_subject=f"پیگیریِ سفارش {trk}")
+    await _save_new_ticket(msg, state, bot, text=await build_order_ticket_text(row.id, trk, user_text))
 
 
 @smm_router.callback_query(F.data.startswith("gift:pay:"))

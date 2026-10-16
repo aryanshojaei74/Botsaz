@@ -603,6 +603,17 @@ async def _can_close(cb: CallbackQuery, d) -> bool:
     row = await get_bot_row_by_id(d.bot_id)
     if not row:
         return False
+    # === PATCH_ESCROW_GROUP_ADMIN_CLOSE_V1 === (Fadayi: «مالکِ گروه هم می‌زند کار نمی‌کند»)
+    # گروهِ معامله را اکانتِ واسط می‌سازد و خودش مالکِ گروه است؛ ادمین‌هایِ گروه (واسط‌ها) هم همان‌جا ادمین شده‌اند.
+    # آیدیِ این اکانت/افراد لزوماً در فهرستِ «واسط‌ها» یا ادمین‌هایِ ربات نیست، پس قبلاً رد می‌شدند.
+    # ملاک: خودِ تلگرام می‌گوید این فرد در *همین گروهِ معامله* سازنده/ادمین است (خریدار/فروشنده بالاتر کنار گذاشته شده‌اند).
+    if getattr(d, "group_chat_id", None):
+        try:
+            m = await cb.bot.get_chat_member(int(d.group_chat_id), cb.from_user.id)
+            if getattr(m, "status", "") in ("creator", "administrator"):
+                return True
+        except Exception:
+            logger.info("escrow: بررسیِ ادمین‌بودن در گروهِ معامله ممکن نشد (بی‌اهمیت)")
     if cfg["mediators"]:
         return cb.from_user.id == row.owner_id
     return await is_owner_or_admin(d.bot_id, cb.from_user.id, row.owner_id)

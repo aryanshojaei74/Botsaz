@@ -2786,6 +2786,34 @@ def _nav_install(bot) -> None:
     async def _wrapped(bot_, method, timeout=None):
         name = type(method).__name__
         mk = getattr(method, "reply_markup", None)
+        # === PATCH_VS_CUSTOM_TEXTS_ALL_ORDERS_V1 === متنِ دلخواهِ ثبت/تکمیل/ردِ سفارش برایِ استارز/تون/گیفت/ری‌اکشن
+        if name == "SendMessage" and isinstance(getattr(method, "text", None), str) \
+                and isinstance(getattr(method, "chat_id", None), int) and method.chat_id > 0:
+            from tenant.shared.vs_msg_override import rule_key as _vs_rule_key
+            if _vs_rule_key(method.text):
+                try:
+                    _rowv = await get_bot_row(bot_)
+                    if _rowv:
+                        from tenant.shared.vs_msg_override import override_text as _vs_override
+                        _newt = await _vs_override(_rowv.id, method.chat_id, method.text)
+                        if _newt:
+                            method = method.model_copy(update={"text": _newt, "parse_mode": "HTML"})
+                except Exception:
+                    logger.exception("vs_msg_override hook failed")
+        # === PATCH_ORDER_SUPPORT_BTN_TOGGLE_V1 === (فدایی) خاموش‌کردنِ دکمهٔ «📞 پشتیبانی (پیگیریِ سفارش)» زیرِ پیام‌هایِ سفارش
+        if isinstance(mk, InlineKeyboardMarkup) and any(
+                str(getattr(b, "callback_data", "") or "").startswith("gift:support:")
+                for r in mk.inline_keyboard for b in r):
+            try:
+                _rows_sup = await get_bot_row(bot_)
+                if _rows_sup and await get_setting(_rows_sup.id, "order_support_btn", "1") == "0":
+                    _kept = [[b for b in r if not str(getattr(b, "callback_data", "") or "").startswith("gift:support:")]
+                             for r in mk.inline_keyboard]
+                    _kept = [r for r in _kept if r]
+                    mk = InlineKeyboardMarkup(inline_keyboard=_kept) if _kept else None
+                    method = method.model_copy(update={"reply_markup": mk})
+            except Exception:
+                logger.exception("order_support_btn hook failed")
         # === PATCH_HOME_KB_BUTTON_V1 === جایی که کد کیبوردِ پایین را «پاک» می‌کند، اگر دکمهٔ ثابتِ منو روشن است همان را بگذار
         if isinstance(mk, ReplyKeyboardRemove) and name.startswith("Send") and isinstance(
                 getattr(method, "chat_id", None), int) and method.chat_id > 0:
