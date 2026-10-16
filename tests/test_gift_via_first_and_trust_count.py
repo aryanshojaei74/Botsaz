@@ -50,9 +50,9 @@ async def test_dest_buttons_carry_via_and_support_text(db):
 
 
 @pytest.mark.asyncio
-async def test_dest_bot_mode_keeps_started_warning(db):
+async def test_dest_bot_mode_explains_unstarted_goes_manual(db):
     t = _Target()
     await smm._gift_ask_dest(t, 5, "g1", 1, via="b")
     text, kb = t.sent[0]
-    assert "حداقل یک‌بار" in text
+    assert "استارت نکرده" in text and "پشتیبانی" in text   # PATCH_GIFT_ANY_DEST_V1: دیگر ردّ نمی‌کند، دستی می‌شود
     assert any(c.endswith(":1:b") for c in _cbs(kb))

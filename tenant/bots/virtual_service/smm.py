@@ -12384,8 +12384,8 @@ async def _gift_ask_dest(target: Message, bot_id: int, gift_id: str, qty: int, v
     if via == "s":   # === PATCH_GIFT_VIA_FIRST_V1 === پشتیبانی دستی می‌فرستد؛ محدودیتِ استارت ندارد
         _warn = "ℹ️ ارسال با اکانتِ پشتیبانی است؛ برایِ «شخصِ دیگر» هر آیدیِ عددی یا یوزرنیمی که ربات را استارت کرده، قبول می‌شود."
     else:
-        _warn = ("⚠️ توجه: برایِ «کاربرِ دیگر»، آن شخص باید حداقل یک‌بار همین ربات "
-                 "را استارت کرده باشد (محدودیتِ خودِ تلگرام است، نه ربات).")
+        _warn = ("ℹ️ برایِ «کاربرِ دیگر» می‌توانی یوزرنیم/کانال هم بدهی؛ اگر آن شخص ربات را استارت نکرده باشد، "
+                 "گیفت با اکانتِ پشتیبانی (دستی) برایش فرستاده می‌شود.")
     await target.answer(
         intro + _warn,
         reply_markup=kb, parse_mode="HTML", link_preview_options=_LPO_ON)
@@ -12683,21 +12683,56 @@ async def gift_dest_username_in(msg: Message, bot: Bot, state: FSMContext):
             await _gift_show_invoice(msg, row.id, gift_id, _did,
                                      await _resolve_dest_label(row.id, _did), qty, via=via, state=state)
             return
+        # === PATCH_GIFT_ANY_DEST_V1 === (درخواستِ MoBiN) گیرنده لازم نیست عضوِ ربات باشد (کانال/سورپرایز):
+        # ربات‌ها نمی‌توانند به کسی که استارت نکرده گیفت بفرستند، پس چنین سفارشی خودکار به «اکانتِ پشتیبانی/دستی» می‌رود.
+        await msg.answer("ℹ️ این شخص ربات را استارت نکرده؛ گیفت با اکانتِ پشتیبانی (دستی) برایش فرستاده می‌شود.")
+        await _gift_show_invoice(msg, row.id, gift_id, _did,
+                                 await _resolve_dest_label(row.id, _did), qty, via="s", state=state)
+        return
     async with Session() as s:
         target_user = await s.scalar(select(BotUser).where(
             BotUser.bot_id == row.id, BotUser.username == uname))
     if not target_user:
-        if via == "s":
-            await msg.answer(
-                f"❌ یوزرنیمِ @{uname} در این ربات ثبت نشده؛ برایِ ارسال با پشتیبانی، "
-                "آیدیِ عددیِ تلگرامِ گیرنده را بفرست (یا از او بخواه یک‌بار ربات را استارت کند).")
+        # === PATCH_GIFT_ANY_DEST_V1 === یوزرنیمِ ناشناخته (کانال/کسی که استارت نکرده): سفارش با اکانتِ پشتیبانی/دستی
+        if not _valid_tg_username(uname):
+            await msg.answer("❌ یوزرنیم نامعتبر است (۵ تا ۳۲ حرفِ انگلیسی/عدد/زیرخط، بدونِ @). دوباره بفرست.")
             return
-        await msg.answer(
-            f"❌ کاربری با یوزرنیمِ @{uname} پیدا نشد.\n\n"
-            "این شخص باید حداقل یک‌بار همین ربات را استارت کرده باشد — "
-            "تلگرام اجازه نمی‌دهد ربات‌ها هر یوزرنیمی را بدونِ این پیدا کنند.")
+        dest_id = await _ensure_placeholder_dest(row.id, uname)
+        await msg.answer(f"ℹ️ @{uname} ربات را استارت نکرده؛ گیفت با اکانتِ پشتیبانی (دستی) برایش فرستاده می‌شود "
+                         "(کانال هم می‌شود).")
+        await _gift_show_invoice(msg, row.id, gift_id, dest_id, f"@{uname}", qty, via="s", state=state)
         return
     await _gift_show_invoice(msg, row.id, gift_id, target_user.telegram_id, f"@{uname}", qty, via=via, state=state)
+
+
+def _valid_tg_username(u: str) -> bool:
+    import re as _r
+    return bool(_r.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", u or ""))
+
+
+async def _ensure_placeholder_dest(bot_id: int, uname: str) -> int:
+    """=== PATCH_GIFT_ANY_DEST_V1 === برایِ گیرنده‌ایِ ناشناخته (کانال/نااستارت) یک ردیفِ «جانشین» با آیدیِ منفیِ ثابت می‌سازد تا
+    کلِ مسیرِ گیفت (callbackها که آیدیِ عددی می‌خواهند) بدونِ تغییر کار کند. مسدود علامت می‌خورد تا پیامِ همگانی/آمار را خراب نکند.
+    آیدیِ منفی فقط به مسیرِ دستی/پشتیبانی می‌رسد (via=s) و هرگز به bot.send_gift."""
+    import zlib as _z
+    tid = -((_z.crc32(f"ph:{bot_id}:{uname.lower()}".encode()) % 2_000_000_000) + 1)
+    from sqlalchemy.exc import IntegrityError
+    for _ in range(2):
+        async with Session() as s:
+            u = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == tid))
+            if u is not None:
+                if (u.username or "").lower() != uname.lower():
+                    u.username = uname
+                    await s.commit()
+                return tid
+            s.add(BotUser(bot_id=bot_id, telegram_id=tid, username=uname,
+                          full_name=f"@{uname} (گیرندهٔ بدونِ استارت)", is_blocked=True))
+            try:
+                await s.commit()
+                return tid
+            except IntegrityError:
+                await s.rollback()
+    return tid
 
 
 async def _bot_id(bot: Bot) -> int:
@@ -17382,6 +17417,8 @@ async def _resolve_dest_label(bot_id: int, dest_id: int) -> str:
     async with Session() as s:
         u = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == dest_id))
     # === PATCH_DEST_LABEL_USERNAME_LINE_V1 ===
+    if dest_id < 0:     # PATCH_GIFT_ANY_DEST_V1 — جانشینِ گیرندهٔ بدونِ استارت: آیدیِ ساختگی را نشان نده
+        return (f"@{u.username} (گیرندهٔ بدونِ استارت — با یوزرنیم بفرست)" if u and u.username else "گیرندهٔ ناشناخته")
     lines = [f"🆔 آیدی: {dest_id}"]
     if u and u.full_name:
         lines.insert(0, u.full_name)
@@ -18343,7 +18380,7 @@ async def acc_fulfil_gift(bot: Bot, row, order_id: int, *, by_admin: bool = Fals
         for i in range(done, qty):
             msg = _gift_comment_for(comment[:128], scope, i)
             try:
-                await _acc.send_gift(row.id, username=username, tg_id=dest_tg or None, gift_id=gift_id,
+                await _acc.send_gift(row.id, username=username, tg_id=(dest_tg if dest_tg > 0 else None), gift_id=gift_id,
                                      text=msg or None, hide_name=anon)
             except _acc.AccGiftError as e:
                 if not e.definite:
