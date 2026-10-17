@@ -5461,6 +5461,7 @@ async def choose_plan(cb: CallbackQuery, state: FSMContext):
         await cb.answer(PLAN_SALE_LOCK_MSG, show_alert=True)
         return
     price = 0
+    ptc_new_note = ""     # PATCH_PTC_EVERYWHERE_V1
     promo_id, promo_pct = None, 0     # PATCH_PLATFORM_PROMOTER_V1
     trial_req_id = None
     trial_expires = None
@@ -5500,8 +5501,17 @@ async def choose_plan(cb: CallbackQuery, state: FSMContext):
             _udp = await _ud_pct(cb.from_user.id, plan)
             if _udp > disc:
                 disc, promo_id, promo_pct = _udp, None, 0
+            # === PATCH_PTC_EVERYWHERE_V1 === تخفیفِ «نفراتِ برتر» در ساختِ رباتِ جدید هم اعمال شود (قبلاً فقط در تمدید/ارتقا بود)
+            ptc_mode, ptc_amt = await ptc_discount_for(cb.from_user.id)
+            if ptc_mode == "percent" and ptc_amt > disc:
+                disc, promo_id, promo_pct = ptc_amt, None, 0
+                ptc_new_note = f"🏆 تخفیفِ نفراتِ برتر ({ptc_amt}٪) روی قیمت‌ها اعمال شده است."
+            elif ptc_mode == "flat" and ptc_amt > 0:
+                ptc_new_note = f"🏆 تخفیفِ نفراتِ برتر ({rial(ptc_amt)} در هر ماه) روی قیمت‌ها اعمال شده است."
             base_after_plan_disc, _, _ = plan_price_final(plan)
             price = base_after_plan_disc * (100 - disc) // 100
+            if ptc_mode == "flat" and ptc_amt > 0:
+                price = max(0, price - ptc_amt)
             if bal < price:
                 await _record_failed_purchase(cb.from_user.id, plan, price)
                 await cb.answer(
@@ -5545,7 +5555,8 @@ async def choose_plan(cb: CallbackQuery, state: FSMContext):
         ])
         await cb.message.answer(
             "🗓 مدت پلن را انتخاب کن:"
-            + (f"\n\n🎁 تخفیفِ خریدِ اول ({promo_pct}٪) روی قیمت‌ها اعمال شده است." if promo_id else ""),
+            + (f"\n\n🎁 تخفیفِ خریدِ اول ({promo_pct}٪) روی قیمت‌ها اعمال شده است." if promo_id else "")
+            + (f"\n\n{ptc_new_note}" if ptc_new_note else ""),
             reply_markup=kb)
         await cb.answer()
         return
@@ -12055,6 +12066,30 @@ async def ptc_discount_for(uid: int) -> tuple[str, int]:
     return await ptc_settings()
 
 
+async def display_plan_discount(uid: int, plan: str) -> tuple[int, int, str]:
+    """=== PATCH_PTC_EVERYWHERE_V1 === (Whale Support) درصدِ تخفیفِ مؤثر، تخفیفِ ثابتِ ماهانه و یادداشتِ «نفرات برتر» برایِ
+    *نمایشِ* قیمت در منوهایِ مدت. همان منطقِ «بزرگ‌ترین تخفیف» که در خریدِ واقعی هست (بدونِ مصرفِ کدِ معرف)."""
+    async with Session() as s:
+        refs = await s.scalar(
+            select(func.count()).select_from(PlatformUser).where(PlatformUser.referrer_id == uid))
+    disc = referral_discount(refs or 0)
+    from platform_promoters import promo_for as _promo_for, pct_with_promo as _pwp
+    disc, _hit = _pwp(disc, await _promo_for(uid))
+    from platform_user_discounts import percent_for as _ud_pct
+    disc = max(disc, await _ud_pct(uid, plan))
+    mode, amt = await ptc_discount_for(uid)
+    flat, note = 0, ""
+    if mode == "percent" and amt > disc:
+        disc, note = amt, f"🏆 تخفیفِ نفراتِ برتر ({amt}٪) روی قیمت‌ها اعمال شده است."
+    elif mode == "flat" and amt > 0:
+        flat, note = amt, f"🏆 تخفیفِ نفراتِ برتر ({rial(amt)} در هر ماه) روی قیمت‌ها اعمال شده است."
+    return disc, flat, note
+
+
+def price_after(base: int, disc: int, flat: int) -> int:
+    return max(0, base * (100 - disc) // 100 - flat)
+
+
 async def _ptc_name(tg_id: int) -> str:
     async with Session() as s:
         u = await s.scalar(select(PlatformUser).where(PlatformUser.telegram_id == tg_id))
@@ -12287,6 +12322,9 @@ async def buyplan_confirm(cb: CallbackQuery):
             months = 1  # حالت تست/رایگان: مدت‌گزینی لازم نیست
         else:
             final1, _b, _d = plan_price_final(plan)
+            # === PATCH_PTC_EVERYWHERE_V1 === قیمتِ منوی مدت باید همان قیمتِ واقعیِ بعد از تخفیف‌هایِ این کاربر باشد
+            _dp, _df, _dnote = await display_plan_discount(cb.from_user.id, plan)
+            final1 = price_after(final1, _dp, _df)
             kb = InlineKeyboardMarkup(inline_keyboard=[
                 [hx_button(f"🗓 ۱ ماهه — {rial(final1)}",
                                       callback_data=f"upg:{plan}:{bot_id}:1",
@@ -12300,12 +12338,14 @@ async def buyplan_confirm(cb: CallbackQuery):
             try:
                 await cb.message.edit_text(
                     f"🗓 مدت تمدید/خرید پلن «{PLAN_INFO[Plan(plan)]['title']}» را انتخاب کن:"
-                    f"\n\n{PURCHASE_TERMS}",
+                    + (f"\n\n{_dnote}" if _dnote else "")
+                    + f"\n\n{PURCHASE_TERMS}",
                     reply_markup=kb, parse_mode="HTML")
             except Exception:
                 await cb.message.answer(
                     f"🗓 مدت تمدید/خرید پلن «{PLAN_INFO[Plan(plan)]['title']}» را انتخاب کن:"
-                    f"\n\n{PURCHASE_TERMS}",
+                    + (f"\n\n{_dnote}" if _dnote else "")
+                    + f"\n\n{PURCHASE_TERMS}",
                     reply_markup=kb, parse_mode="HTML")
             await cb.answer()
             return
