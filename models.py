@@ -1107,6 +1107,18 @@ class ReferralJoin(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class ReferralOrderReward(Base):
+    """=== PATCH_REF_VS_RECONCILE_V1 === سفارشِ خدماتِ مجازی که پاداشِ دعوتش بررسی شده (یکتا → بدونِ پاداشِ تکراری)."""
+    __tablename__ = "referral_order_rewards"
+    __table_args__ = (UniqueConstraint("bot_id", "kind", "order_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(10))
+    order_id: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class MeteredAccount(Base):
     """=== PATCH_METERED_PLAN_V1 === سرویسِ «بستهٔ اعتباری»: مصرف از کیف پول کم می‌شود.
 
@@ -2910,7 +2922,7 @@ class BalanceTransfer(Base):
 TENANT_OWNED_MODELS = [
     WalletTxn, Config, Order, ButtonSetting, Setting, DiscountCode,
     TenantTicket, Broadcast, ForceJoin, AdminSupport, MainButton, Product,
-    ProductOrder, Appointment, AppointmentSlot, Poll, ReferralLink, ReferralJoin,
+    ProductOrder, Appointment, AppointmentSlot, Poll, ReferralLink, ReferralJoin, ReferralOrderReward,
     BotReview, AutoMessage, BotMenuItem, VpnPanel, VpnPlan, PanelAccount,
     StockRequest, CryptoCharge, GatedClaim, ProductRating,  # PATCH_PRODUCT_RATING_V1
     TrialUsage, ButtonTrialClaim, DiscountUsage, SmmService,

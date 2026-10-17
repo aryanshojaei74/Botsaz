@@ -9,6 +9,7 @@
   • سیستم نظر و امتیازدهی (1-5 ستاره)
   • پیام خودکار خوش‌آمدگویی
 """
+import datetime as _dt
 import json
 import secrets
 import html as _html
@@ -746,6 +747,21 @@ async def handle_referral_join(bot_id: int, new_user: BotUser, ref_code: str, bo
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
 
 
+async def _last_purchase_amount(bot_id: int, buyer_telegram_id: int) -> float:
+    """آخرین کسرِ کیف‌پولِ خریدار (۱۰ دقیقهٔ اخیر) — برایِ فراخوان‌هایی که مبلغِ خرید را پاس نمی‌دهند."""
+    async with Session() as s:
+        u = await s.scalar(select(BotUser).where(
+            BotUser.bot_id == bot_id, BotUser.telegram_id == buyer_telegram_id))
+        if not u:
+            return 0.0
+        tx = await s.scalar(select(WalletTxn).where(
+            WalletTxn.bot_id == bot_id, WalletTxn.user_id == u.id, WalletTxn.amount < 0,
+            WalletTxn.kind.notin_(("admin", "referral", "transfer")),
+            WalletTxn.created_at >= _dt.datetime.utcnow() - _dt.timedelta(minutes=10),
+        ).order_by(WalletTxn.id.desc()).limit(1))
+    return abs(float(tx.amount)) if tx else 0.0
+
+
 async def handle_referral_purchase(bot_id: int, buyer_telegram_id: int, bot: Bot,
                                    amount: float | None = None):
     """بعد از اولین خرید موفق زیرمجموعه فراخوانی می‌شود و پاداش می‌دهد.
@@ -754,11 +770,17 @@ async def handle_referral_purchase(bot_id: int, buyer_telegram_id: int, bot: Bot
     پاداش به دعوت‌کننده پرداخت می‌شود.
     """
     mode = await _eget(bot_id, "referral_reward_mode", "join")
-    if mode != "purchase":
-        return  # در حالت «هنگام عضویت»، پاداش قبلاً در handle_referral_join پرداخت شده
     # === PATCH_REF_PERCENT_V1 ===
     # سه حالت: مبلغِ ثابت، درصدی از اولین خرید، درصدی از هر خرید.
     rtype = await _eget(bot_id, "referral_reward_type", "fixed")
+    # === PATCH_REF_PERCENT_FIX_V2 === (Fadayi) پاداشِ درصدی همیشه «هنگامِ خرید» است و به حالتِ «عضویت/خرید» ربطی ندارد؛
+    # قبلاً اگر مالک حالت را روی «عضویت» می‌گذاشت، درصدی هرگز پرداخت نمی‌شد. فقط «مبلغِ ثابت» تابعِ این حالت است.
+    if rtype not in ("percent_first", "percent_all") and mode != "purchase":
+        return  # در حالت «هنگام عضویت»، پاداش قبلاً در handle_referral_join پرداخت شده
+    if await _eget(bot_id, "referral_reward_enabled", "1") != "1":
+        return
+    if rtype in ("percent_first", "percent_all") and not amount:
+        amount = await _last_purchase_amount(bot_id, buyer_telegram_id)   # فراخوان‌هایی که مبلغ نمی‌دهند
     try:
         pct = float(await _eget(bot_id, "referral_reward_pct", "5") or 5)
     except Exception:
@@ -786,6 +808,14 @@ async def handle_referral_purchase(bot_id: int, buyer_telegram_id: int, bot: Bot
         rj = await s.scalar(_q.with_for_update())
         if not rj:
             return  # یا از لینک نیامده یا قبلاً پاداش داده شده
+        # === PATCH_REF_DURATION_V1 === «مدتِ پاداش»: فقط تا N روز بعد از عضویتِ دعوت‌شده (۰ = بدونِ محدودیت)
+        if rtype in ("percent_first", "percent_all"):
+            try:
+                _days = int(float(await _eget(bot_id, "referral_reward_days", "0") or 0))
+            except Exception:
+                _days = 0
+            if _days > 0 and rj.created_at and (_dt.datetime.utcnow() - rj.created_at) > _dt.timedelta(days=_days):
+                return
 
         inviter = await s.get(BotUser, rj.inviter_user_id, with_for_update=True)
         if not inviter:
@@ -1033,3 +1063,83 @@ async def _is_foreign(obj, bot) -> bool:
     from tenant import get_bot_row as _gbr
     _r = await _gbr(bot)
     return bool(_r) and obj.bot_id != _r.id
+
+
+# ═══════════════════════════════════════════
+#  === PATCH_REF_VS_RECONCILE_V1 === پاداشِ دعوت برایِ خریدهایِ «خدماتِ مجازی»
+# ═══════════════════════════════════════════
+# گزارشِ Fadayi: پاداشِ درصدیِ زیرمجموعه‌گیری اصلاً کار نمی‌کرد. در ربات‌هایِ خدماتِ مجازی (استارز/تون/گیفت/پریمیوم/
+# ری‌اکشن/SMM) هیچ‌جا handle_referral_purchase صدا زده نمی‌شد. به‌جایِ دست‌بردن در ده‌ها مسیرِ پرداخت (کیف‌پول/کارت/
+# درگاه/دستی)، این حلقه سفارش‌هایِ «تحویل‌شده» را می‌بیند و برایِ هر سفارش دقیقاً یک‌بار (ReferralOrderReward یکتا) پاداش می‌دهد.
+
+_VS_DONE = {"gift": ("sent", "completed"), "smm": ("completed", "partial")}
+
+
+async def referral_vs_reconcile_once() -> int:
+    from sqlalchemy.exc import IntegrityError
+    from models import (Bot as BotRow, GiftOrder, SmmOrder, ReferralJoin, ReferralOrderReward, Setting)
+    from aiogram.client.default import DefaultBotProperties
+    from aiogram.enums import ParseMode
+    paid = 0
+    async with Session() as s:
+        bots = (await s.scalars(select(BotRow).where(
+            BotRow.status == "active", BotRow.field == "virtual_service"))).all()
+    for brow in bots:
+        try:
+            if await _eget(brow.id, "referral_reward_enabled", "1") != "1":
+                continue
+            rtype = await _eget(brow.id, "referral_reward_type", "fixed")
+            mode = await _eget(brow.id, "referral_reward_mode", "join")
+            if rtype == "fixed" and mode != "purchase":
+                continue
+            # فقط سفارش‌هایِ ساخته‌شده بعد از فعال‌شدنِ این قابلیت (بدونِ پاداشِ عطفِ‌به‌ماسبق)
+            since_raw = await _eget(brow.id, "ref_vs_since", "")
+            if not since_raw:
+                await _eset(brow.id, "ref_vs_since", _dt.datetime.utcnow().isoformat())
+                continue
+            since = _dt.datetime.fromisoformat(since_raw)
+            async with Session() as s:
+                g_orders = (await s.execute(
+                    select(GiftOrder, BotUser.telegram_id).join(BotUser, BotUser.id == GiftOrder.buyer_user_id)
+                    .where(GiftOrder.bot_id == brow.id, GiftOrder.status.in_(_VS_DONE["gift"]),
+                           GiftOrder.created_at >= since)
+                    .order_by(GiftOrder.id.desc()).limit(200))).all()
+                s_orders = (await s.scalars(select(SmmOrder).where(
+                    SmmOrder.bot_id == brow.id, SmmOrder.status.in_(_VS_DONE["smm"]),
+                    SmmOrder.created_at >= since).order_by(SmmOrder.id.desc()).limit(200))).all()
+            items = [("gift", o.id, tg, float(o.price_toman or 0) * max(1, int(o.quantity or 1)))
+                     for o, tg in g_orders]
+            items += [("smm", o.id, int(o.user_telegram_id), float(o.price_toman or 0)) for o in s_orders]
+            if not items:
+                continue
+            tb = Bot(token=brow.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+            try:
+                for kind, oid, tg, amount in items:
+                    async with Session() as s:
+                        has_join = await s.scalar(select(ReferralJoin.id).where(
+                            ReferralJoin.bot_id == brow.id, ReferralJoin.referred_telegram_id == tg))
+                        if not has_join or amount <= 0:
+                            continue
+                        s.add(ReferralOrderReward(bot_id=brow.id, kind=kind, order_id=oid))
+                        try:
+                            await s.commit()
+                        except IntegrityError:
+                            await s.rollback()
+                            continue      # قبلاً پردازش شده
+                    await handle_referral_purchase(brow.id, tg, tb, amount=amount)
+                    paid += 1
+            finally:
+                await tb.session.close()
+        except Exception:
+            logger.exception("referral reconcile failed (bot=%s)", brow.id)
+    return paid
+
+
+async def referral_vs_reconcile_loop() -> None:
+    import asyncio
+    while True:
+        try:
+            await referral_vs_reconcile_once()
+        except Exception:
+            logger.exception("referral reconcile loop failed")
+        await asyncio.sleep(90)

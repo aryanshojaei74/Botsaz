@@ -31445,6 +31445,9 @@ def _ref_reward_kb(enabled: bool, mode: str = "join", plan: str = "") -> InlineK
         [InlineKeyboardButton(text="📈 تنظیمِ درصدِ پاداش",
                               callback_data="refrw:pct",
                               style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="⏳ مدتِ پاداشِ درصدی (روز)",
+                              callback_data="refrw:days",
+                              style=ButtonStyle.PRIMARY)],
         # === PATCH_REF_BANNER_V1 ===
         [InlineKeyboardButton(text="✏️ متنِ صفحهٔ زیرمجموعه‌گیری",
                               callback_data="refrw:pagetext", style=ButtonStyle.PRIMARY)],
@@ -31465,6 +31468,7 @@ _REF_TYPE_LABELS = {
 
 class _RefPctFSM(StatesGroup):
     pct = State()
+    days = State()   # PATCH_REF_DURATION_V1
 
 
 @tenant_router.callback_query(F.data == "refrw:type")
@@ -31495,6 +31499,42 @@ async def ref_reward_pct_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
         "فقط عدد بفرست (مثلاً <code>5</code>).",
         reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
     await cb.answer()
+
+
+@tenant_router.callback_query(F.data == "refrw:days")
+async def ref_reward_days_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """=== PATCH_REF_DURATION_V1 === (Fadayi) پاداشِ درصدی فقط تا N روز بعد از عضویتِ دعوت‌شده."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await state.set_state(_RefPctFSM.days)
+    cur = await get_setting(row.id, "referral_reward_days", "0")
+    await cb.message.answer(
+        "⏳ تا چند روز بعد از عضویتِ زیرمجموعه، از خریدهایش درصد بدهم؟\n"
+        f"مثلاً <code>7</code> = یک هفته، <code>30</code> = یک ماه. <code>0</code> = بدونِ محدودیت (مادام‌العمر).\n"
+        f"مقدارِ فعلی: <b>{cur}</b>",
+        reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
+    await cb.answer()
+
+
+@tenant_router.message(_RefPctFSM.days, F.text)
+async def ref_reward_days_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner_ok(msg, bot)
+    await state.clear()
+    if not row:
+        return
+    raw = (msg.text or "").strip()
+    v = 0 if raw in ("0", "۰") else fa_to_int(raw)
+    if v is None or v < 0 or v > 3650:
+        await msg.answer("عددِ نامعتبر (۰ تا ۳۶۵۰).")
+        return
+    await set_setting(row.id, "referral_reward_days", str(v))
+    await msg.answer("✅ مدتِ پاداش: " + ("<b>بدونِ محدودیت</b>" if v == 0 else f"<b>{v} روز</b> بعد از عضویت"),
+                     parse_mode="HTML")
+    _en = await get_setting(row.id, "referral_reward_enabled", "1") == "1"
+    _md = await get_setting(row.id, "referral_reward_mode", "join")
+    await msg.answer(await _ref_reward_text(row.id),
+                     reply_markup=_ref_reward_kb(_en, _md, row.plan))
 
 
 @tenant_router.message(_RefPctFSM.pct, F.text)
@@ -31529,8 +31569,10 @@ async def _ref_reward_text(bot_id: int) -> str:
     _rpct = await get_setting(bot_id, "referral_reward_pct", "5")
     _tlbl = _REF_TYPE_LABELS.get(_rtype, _rtype)
     if _rtype in ("percent_first", "percent_all"):
+        _rdays = await get_setting(bot_id, "referral_reward_days", "0")
         _reward_line = (f"نوعِ پاداش: <b>{_tlbl}</b>\n"
-                        f"درصدِ پاداش: <b>{_rpct}٪</b>\n")
+                        f"درصدِ پاداش: <b>{_rpct}٪</b>\n"
+                        f"مدتِ پاداش: <b>{'بدونِ محدودیت' if str(_rdays) in ('0', '') else _rdays + ' روز بعد از عضویت'}</b>\n")
     else:
         _reward_line = (f"نوعِ پاداش: <b>{_tlbl}</b>\n"
                         f"مبلغ پاداش: <b>{rial(amt)}</b>\n")

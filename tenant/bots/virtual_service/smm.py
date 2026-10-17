@@ -13023,6 +13023,37 @@ async def build_order_ticket_text(bot_id: int, trk: str, user_text: str = "") ->
     return "\n\n".join(parts)
 
 
+async def recent_orders_ticket_block(bot_id: int, telegram_id: int, limit: int = 3) -> str:
+    """=== PATCH_ORDER_TICKET_FLOW_V2 === (Fadayi، تیکتِ #2413) تیکتی که مشتری از منوی «تیکت ← پیگیریِ سفارش» می‌سازد
+    کدِ پیگیری ندارد؛ آخرین سفارش‌هایِ همان مشتری (با همان رندرِ جزئیاتِ ادمین) به تیکت اضافه می‌شود."""
+    import html as _h
+    try:
+        async with Session() as s:
+            uid = await s.scalar(select(BotUser.id).where(
+                BotUser.bot_id == bot_id, BotUser.telegram_id == telegram_id))
+            rows = []
+            if uid:
+                rows += (await s.execute(select(GiftOrder.tracking_code, GiftOrder.created_at).where(
+                    GiftOrder.bot_id == bot_id, GiftOrder.buyer_user_id == uid,
+                    GiftOrder.tracking_code.is_not(None)).order_by(GiftOrder.id.desc()).limit(limit))).all()
+            rows += (await s.execute(select(SmmOrder.tracking_code, SmmOrder.created_at).where(
+                SmmOrder.bot_id == bot_id, SmmOrder.user_telegram_id == telegram_id,
+                SmmOrder.tracking_code.is_not(None)).order_by(SmmOrder.id.desc()).limit(limit))).all()
+        rows.sort(key=lambda r: r[1] or 0, reverse=True)
+        parts = []
+        for trk, _ in rows[:limit]:
+            det = await _order_details_html(bot_id, trk)
+            if det:
+                parts.append(f"🔖 <code>{_h.escape(trk)}</code>\n{det}")
+        if not parts:
+            return "⚠️ این مشتری سفارشِ ثبت‌شده‌ای با کدِ پیگیری ندارد."
+        out = "📋 <b>آخرین سفارش‌هایِ این مشتری:</b>\n\n" + "\n\n— — —\n\n".join(parts)
+        return out[:2800]
+    except Exception:
+        logger.exception("آخرین سفارش‌هایِ مشتری برایِ تیکت خوانده نشد")
+        return ""
+
+
 @smm_router.callback_query(F.data.startswith("gift:support:"))
 async def gift_support_quick(cb: CallbackQuery, bot: Bot, state: FSMContext):
     """دکمهٔ «📞 پشتیبانی (پیگیریِ این سفارش)»: متنِ مشتری را می‌گیرد و تیکتِ کامل (با مشخصاتِ سفارش) می‌سازد."""

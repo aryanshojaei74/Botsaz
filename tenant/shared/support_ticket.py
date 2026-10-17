@@ -417,6 +417,15 @@ async def _save_new_ticket(msg: Message, state: FSMContext, bot: Bot, text: str,
     _data = await state.get_data()
     category = _data.get("ticket_category")
     subject = (_data.get("ticket_subject") or "").strip() or None
+    # === PATCH_ORDER_TICKET_FLOW_V2 === تیکتِ «پیگیریِ سفارش» از منویِ تیکت (بدونِ کدِ پیگیری): مشخصاتِ آخرین سفارش‌ها اضافه شود
+    if category == "order" and (row.field or "") == "virtual_service" and "مشخصاتِ سفارش" not in (text or ""):
+        try:
+            from tenant.bots.virtual_service.smm import recent_orders_ticket_block
+            _blk = await recent_orders_ticket_block(row.id, msg.from_user.id)
+            if _blk:
+                text = f"{text}\n\n{_blk}"
+        except Exception:
+            logger.exception("افزودنِ مشخصاتِ سفارش به تیکت ناموفق بود")
     async with Session() as s:
         u = await s.scalar(select(BotUser).where(
             BotUser.bot_id == row.id, BotUser.telegram_id == msg.from_user.id))
