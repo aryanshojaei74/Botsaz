@@ -403,8 +403,13 @@ async def full_backup_auto_once() -> int:
     from aiogram.enums import ParseMode
     from tenant.shared.extras import _eget, _eset
     sent = 0
+    from models import Setting
+    # فقط رباتی که خودش روشن کرده (یک کوئریِ سبک؛ نه خواندنِ همهٔ ربات‌ها و ۲ کوئری برایِ هر کدام)
     async with Session() as s:
-        bots = (await s.scalars(select(BotRow).where(BotRow.status == "active"))).all()
+        _on = (await s.scalars(select(Setting.bot_id).where(
+            Setting.key == "auto_full_backup_days", Setting.value.in_(("1", "7"))))).all()
+        bots = (await s.scalars(select(BotRow).where(
+            BotRow.status == "active", BotRow.id.in_(list(_on))))).all() if _on else []
     for b in bots:
         try:
             days = int(float(await _eget(b.id, "auto_full_backup_days", "0") or 0))

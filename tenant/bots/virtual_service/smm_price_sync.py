@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import time
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from config import Session
 from logging_setup import get_logger as _get_logger
@@ -92,52 +92,74 @@ async def sync_bot(bot_id: int, *, auto: bool = False, only_pk="all") -> list[di
             continue
         rep["ok"] = True
         by_id = {str(x.get("service")): x for x in services}
+        # === PATCH_PRICE_SYNC_LIGHT_V1 ===
+        # لاگِ سرور: وقتی رباتی هزاران سرویس دارد، `select(SmmService)` همه را به‌صورتِ شیِ ORM می‌ساخت و حلقهٔ worker را
+        # بارها بیش از ۱ثانیه می‌بست (stack: sqlalchemy loading.instances ← smm_price_sync.sync_bot). حالا فقط ستون‌هایِ لازم
+        # خوانده می‌شوند و فقط ردیف‌هایِ *تغییرکرده* شیِ ORM می‌گیرند؛ معنا/خروجی همان قبل است.
+        import asyncio as _aio
         async with Session() as s:
             pk_cond = SmmService.panel_pk.is_(None) if panel_pk is None else SmmService.panel_pk == panel_pk
-            rows = (await s.scalars(select(SmmService).where(
-                SmmService.bot_id == bot_id, pk_cond,
-                SmmService.is_manual == False))).all()  # noqa: E712
-            gone: list = []
-            for v in rows:
-                if (v.category or "") in _SKIP_CATEGORIES:
+            light = (await s.execute(select(
+                SmmService.id, SmmService.service_id, SmmService.panel_rate, SmmService.min_qty,
+                SmmService.max_qty, SmmService.category, SmmService.is_active, SmmService.name,
+            ).where(SmmService.bot_id == bot_id, pk_cond, SmmService.is_manual == False))).all()  # noqa: E712
+            gone: list = []          # (id, name)
+            rate_ids: list[int] = []
+            qty_updates: list[tuple[int, dict]] = []
+            active_n = 0
+            for i, r in enumerate(light):
+                if i and i % 400 == 0:
+                    await _aio.sleep(0)          # به لوپ نفس بده
+                if (r.category or "") in _SKIP_CATEGORIES:
                     continue
                 rep["checked"] += 1
-                it = by_id.get(str(v.service_id))
+                if r.is_active:
+                    active_n += 1
+                it = by_id.get(str(r.service_id))
                 if not it:
-                    if v.is_active:
-                        gone.append(v)
+                    if r.is_active:
+                        gone.append((r.id, r.name))
                     continue
-                new_rate, old_rate = _num(it.get("rate")), _num(v.panel_rate)
+                upd = {}
                 try:
-                    if it.get("min") is not None:
-                        v.min_qty = int(it["min"])
-                    if it.get("max") is not None:
-                        v.max_qty = int(it["max"])
+                    if it.get("min") is not None and int(it["min"]) != r.min_qty:
+                        upd["min_qty"] = int(it["min"])
+                    if it.get("max") is not None and int(it["max"]) != r.max_qty:
+                        upd["max_qty"] = int(it["max"])
                 except (TypeError, ValueError):
                     pass
-                if new_rate <= 0 or new_rate == old_rate:
-                    continue
-                try:
-                    old_sell = await SM.compute_sell_price(bot_id, v, 1000)
-                except Exception:
-                    old_sell = None
-                v.panel_rate = new_rate
-                try:
-                    new_sell = await SM.compute_sell_price(bot_id, v, 1000)
-                except Exception:
-                    new_sell = None
-                ch = {"name": v.name, "sid": v.service_id, "old": old_rate, "new": new_rate,
-                      "old_sell": old_sell, "new_sell": new_sell, "manual": float(v.sell_rate or 0) > 0}
-                (rep["up"] if new_rate > old_rate else rep["down"]).append(ch)
+                if upd:
+                    qty_updates.append((r.id, upd))
+                new_rate, old_rate = _num(it.get("rate")), _num(r.panel_rate)
+                if new_rate > 0 and new_rate != old_rate:
+                    rate_ids.append(r.id)
+            for sid_, upd in qty_updates:
+                await s.execute(update(SmmService).where(SmmService.id == sid_).values(**upd))
+            if rate_ids:
+                objs = (await s.scalars(select(SmmService).where(SmmService.id.in_(rate_ids)))).all()
+                for v in sorted(objs, key=lambda x: x.id):
+                    it = by_id.get(str(v.service_id))
+                    new_rate, old_rate = _num(it.get("rate")), _num(v.panel_rate)
+                    try:
+                        old_sell = await SM.compute_sell_price(bot_id, v, 1000)
+                    except Exception:
+                        old_sell = None
+                    v.panel_rate = new_rate
+                    try:
+                        new_sell = await SM.compute_sell_price(bot_id, v, 1000)
+                    except Exception:
+                        new_sell = None
+                    ch = {"name": v.name, "sid": v.service_id, "old": old_rate, "new": new_rate,
+                          "old_sell": old_sell, "new_sell": new_sell, "manual": float(v.sell_rate or 0) > 0}
+                    (rep["up"] if new_rate > old_rate else rep["down"]).append(ch)
             # سرویسی که از ارائه‌دهنده حذف شده به مشتری فروخته نشود: خودکار غیرفعال می‌شود و فقط یک بار
             # گزارش می‌رود. محافظ: اگر ناگهان تعدادِ زیادی غیب شدند (خطا/لیستِ ناقصِ پنل) دست نمی‌زنیم.
-            active_n = sum(1 for v in rows if v.is_active and (v.category or "") not in _SKIP_CATEGORIES)
             if len(gone) >= _MASS_GONE_MIN and len(gone) * 2 > active_n:
-                rep["held"] = [v.name for v in gone]
-            else:
-                for v in gone:
-                    v.is_active = False
-                    rep["missing"].append(v.name)
+                rep["held"] = [n for _i, n in gone]
+            elif gone:
+                await s.execute(update(SmmService).where(SmmService.id.in_([g[0] for g in gone]))
+                                .values(is_active=False))
+                rep["missing"] = [n for _i, n in gone]
             await s.commit()
         reports.append(rep)
     await _ss(bot_id, "smm_price_sync_last", str(int(time.time())))

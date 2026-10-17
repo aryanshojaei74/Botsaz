@@ -311,16 +311,16 @@ async def ticket_new_category_pick(cb: CallbackQuery, bot: Bot, state: FSMContex
         await cb.answer()
         return
     await state.update_data(ticket_category=key, ticket_order_code=None)
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     # === PATCH_ORDER_TICKET_FLOW_V3 === (Fadayi) «پیگیریِ سفارش»: اول کدِ پیگیری ← بعد متنِ پیام ← تیکت با مشخصاتِ سفارش
     if key == "order":
         from tenant import get_bot_row
         _r = await get_bot_row(bot)
         if _r and (_r.field or "") == "virtual_service":
             await state.set_state(TicketFSM.order_code)
-            try:
-                await cb.message.edit_reply_markup(reply_markup=None)
-            except Exception:
-                logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
             await cb.message.answer(
                 "🔖 <b>کدِ پیگیریِ سفارش</b> را بفرست.\n"
                 "کد در پیامِ ثبتِ سفارش یا در بخشِ «سفارش‌های من» هست.",
@@ -331,10 +331,6 @@ async def ticket_new_category_pick(cb: CallbackQuery, bot: Bot, state: FSMContex
             await cb.answer()
             return
     await state.set_state(TicketFSM.new_subject)
-    try:
-        await cb.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     await cb.message.answer(
         "✏️ موضوعِ تیکت را در یک جمله کوتاه بنویس (مثلاً «واریز انجام شد ولی سرویس فعال نشد»):",
         reply_markup=await smart_cancel_kb(bot))

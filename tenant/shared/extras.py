@@ -1081,9 +1081,20 @@ async def referral_vs_reconcile_once() -> int:
     from aiogram.client.default import DefaultBotProperties
     from aiogram.enums import ParseMode
     paid = 0
+    # کوئریِ سبک: فقط رباتی که پاداشِ «درصدی» یا «ثابتِ بعد از خرید» دارد و خاموش نیست (نه خواندنِ همهٔ ربات‌ها)
     async with Session() as s:
+        _rows = (await s.execute(select(Setting.bot_id, Setting.key, Setting.value).where(
+            Setting.key.in_(("referral_reward_type", "referral_reward_mode", "referral_reward_enabled"))))).all()
+        _cfg: dict[int, dict] = {}
+        for _b, _k, _v in _rows:
+            _cfg.setdefault(_b, {})[_k] = _v
+        _cand = [b for b, c in _cfg.items()
+                 if c.get("referral_reward_enabled", "1") == "1"
+                 and (c.get("referral_reward_type", "fixed") in ("percent_first", "percent_all")
+                      or c.get("referral_reward_mode", "join") == "purchase")]
         bots = (await s.scalars(select(BotRow).where(
-            BotRow.status == "active", BotRow.field == "virtual_service"))).all()
+            BotRow.status == "active", BotRow.field == "virtual_service",
+            BotRow.id.in_(_cand)))).all() if _cand else []
     for brow in bots:
         try:
             if await _eget(brow.id, "referral_reward_enabled", "1") != "1":
@@ -1142,4 +1153,4 @@ async def referral_vs_reconcile_loop() -> None:
             await referral_vs_reconcile_once()
         except Exception:
             logger.exception("referral reconcile loop failed")
-        await asyncio.sleep(90)
+        await asyncio.sleep(180)
