@@ -12468,6 +12468,27 @@ async def _gift_show_invoice(target: Message, bot_id: int, gift_id: str,
             reply_markup=ckb, parse_mode="HTML")
         return
     _sfx = f":{via}" if via else ""
+    # === PATCH_GIFT_WIZARD_V1 === (درخواستِ MoBiN) مراحلِ کامنت ← شناس/ناشناس ← پرداخت، همه در یک پیام (مثلِ ری‌اکشن)
+    _wz_manual = bool(g.is_manual or via == "s"
+                      or (await _get_setting(bot_id, "gift_manual_delivery", "0")) == "1")
+    _wz_done = False
+    if state is not None and (not g.is_manual or _wz_manual):
+        _need_cmt, _need_anon = (not g.is_manual), _wz_manual
+        _gc = dict((await state.get_data()).get("gift_comment") or {})
+        _key = f"{gift_id}:{dest_id}:{qty}"
+        if _gc.get("k") != _key:
+            _gc = {"k": _key, "t": "", "anon": False, "scope": 0}
+        _wz = _gc.get("wz") or ("c" if _need_cmt else "a")
+        if _wz == "c" and not _need_cmt:
+            _wz = "a"
+        if _wz == "a" and not _need_anon:
+            _wz = "d"
+        _gc["wz"] = _wz
+        await state.update_data(gift_comment=_gc)
+        if _wz in ("c", "a"):
+            await _gift_wizard_step(target, state, _wz, gift_id, dest_id, qty, via, _gc, dest_label)
+            return
+        _wz_done = True
     # === PATCH_GIFT_CARD_PAYMENT_V1 ===
     # قبلاً فقط یک دکمهٔ «پرداخت» بود (فقط کیف‌پول). حالا روشِ پرداخت هم
     # پرسیده می‌شود — کیف‌پول (فوری) یا کارت‌به‌کارت (نیازِ به تاییدِ ادمین).
@@ -12486,6 +12507,8 @@ async def _gift_show_invoice(target: Message, bot_id: int, gift_id: str,
     _anon_row = [[InlineKeyboardButton(
         text=("🕶 ارسال: ناشناس (برای تغییر بزن)" if anon else "👤 ارسال: با نامِ من (برای ناشناس‌شدن بزن)"),
         callback_data=f"gift:an:{gift_id}:{dest_id}:{qty}:{via or 'n'}", style=ButtonStyle.PRIMARY)]] if _manual_path else []
+    if _wz_done:   # PATCH_GIFT_WIZARD_V1 — کامنت/ناشناس در مراحلِ قبل گرفته شده؛ فاکتور فقط پرداخت است
+        _cmt_row, _anon_row = [], []
     if comment and qty > 1:
         _cmt_row.append([InlineKeyboardButton(
             text=("📝 کامنت برایِ: " + ("همهٔ گیفت‌ها" if not scope else f"گیفتِ شمارهٔ {scope}") + " (تغییر)"),
@@ -12518,6 +12541,81 @@ async def _gift_show_invoice(target: Message, bot_id: int, gift_id: str,
         reply_markup=kb, parse_mode="HTML")
 
 
+async def _gift_wizard_step(target, state, step: str, gift_id, dest_id, qty, via, gc: dict, dest_label: str) -> None:
+    """=== PATCH_GIFT_WIZARD_V1 === مرحلهٔ کامنت ('c') یا شناس/ناشناس ('a') — یک پیام که ویرایش می‌شود."""
+    sfx = f"{gift_id}:{dest_id}:{qty}:{via or 'n'}"
+    back = [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="gift:back_shop", style=ButtonStyle.DANGER)]
+    if step == "c":
+        await state.set_state(SmmFSM.gift_comment)
+        await state.update_data(gc_gift=gift_id, gc_dest=dest_id, gc_qty=qty, gc_via=via or "")
+        await target.answer(
+            "💬 <b>کامنتِ همراهِ گیفت</b> (اختیاری)\n\n"
+            f"مقصد: {dest_label}\n\n"
+            "اگر می‌خواهی همراهِ گیفت کامنت باشد، <b>متنت را همین‌جا بفرست</b> (حداکثر ۱۲۸ حرف).\n"
+            "اگر کامنت نمی‌خواهی، دکمهٔ «⏭ رد کردن» را بزن.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⏭ رد کردن", callback_data=f"gift:wz:skip:{sfx}", style=ButtonStyle.PRIMARY)],
+                back]),
+            parse_mode="HTML")
+        return
+    await state.set_state(None)
+    sel, anon = bool(gc.get("anon_set")), bool(gc.get("anon"))
+    cmt = gc.get("t") or ""
+    await target.answer(
+        "🕶 <b>فرستنده: شناس یا ناشناس؟</b>\n\n"
+        + (f"💬 کامنت: {_html_escape(cmt)}\n\n" if cmt else "")
+        + "👤 <b>شناس:</b> گیرنده می‌بیند گیفت از طرفِ تو بوده.\n"
+        "🕶 <b>ناشناس:</b> نامِ فرستنده مخفی می‌شود (گیفت توسطِ پشتیبانی دستی ارسال می‌شود).\n\n"
+        "یکی را انتخاب کن، بعد «ثبت کردن» را بزن.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=("✅ 👤 شناس" if sel and not anon else "👤 شناس"),
+                                  callback_data=f"gift:wz:an:0:{sfx}", style=ButtonStyle.PRIMARY),
+             InlineKeyboardButton(text=("✅ 🕶 ناشناس" if sel and anon else "🕶 ناشناس"),
+                                  callback_data=f"gift:wz:an:1:{sfx}", style=ButtonStyle.PRIMARY)],
+            [InlineKeyboardButton(text="✅ ثبت کردن", callback_data=f"gift:wz:ok:{sfx}", style=ButtonStyle.SUCCESS)],
+            back]),
+        parse_mode="HTML")
+
+
+async def _gift_wz_apply(cb: CallbackQuery, bot: Bot, state: FSMContext, parts: list, mutate) -> None:
+    gift_id, dest_id, qty, via = parts[0], int(parts[1]), int(parts[2]), parts[3]
+    gc = dict((await state.get_data()).get("gift_comment") or {})
+    if gc.get("k") != f"{gift_id}:{dest_id}:{qty}":
+        return await cb.answer("منقضی شد؛ دوباره از اول شروع کن.", show_alert=True)
+    mutate(gc)
+    await state.update_data(gift_comment=gc)
+    await cb.answer()
+    bot_id = await _bot_id(bot)
+    label = (_self_dest_label(cb.from_user) if dest_id == cb.from_user.id
+             else await _resolve_dest_label(bot_id, dest_id))
+    await _gift_show_invoice(_EditFirstV(cb.message), bot_id, gift_id, dest_id, label, qty,
+                             via="" if via == "n" else via, state=state)
+
+
+@smm_router.callback_query(F.data.startswith("gift:wz:skip:"))
+async def gift_wz_skip(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    def _m(gc):
+        gc["t"], gc["wz"] = "", "a"
+    await _gift_wz_apply(cb, bot, state, cb.data.split(":")[3:], _m)
+
+
+@smm_router.callback_query(F.data.startswith("gift:wz:an:"))
+async def gift_wz_anon(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    parts = cb.data.split(":")
+    val = parts[3] == "1"
+
+    def _m(gc):
+        gc["anon"], gc["anon_set"], gc["wz"] = val, True, "a"
+    await _gift_wz_apply(cb, bot, state, parts[4:], _m)
+
+
+@smm_router.callback_query(F.data.startswith("gift:wz:ok:"))
+async def gift_wz_ok(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    def _m(gc):
+        gc["wz"] = "d"
+    await _gift_wz_apply(cb, bot, state, cb.data.split(":")[3:], _m)
+
+
 @smm_router.callback_query(F.data.startswith("gift:cmt:"))
 async def gift_comment_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
     """=== PATCH_GIFT_COMMENT_V1 === کامنتِ اختیاریِ گیفت. (حالتِ «مخفی‌کردنِ نامِ فرستنده» در Bot APIِ تلگرام
@@ -12547,9 +12645,13 @@ async def gift_comment_save(msg: Message, bot: Bot, state: FSMContext):
     await state.set_state(None)
     _old = (data.get("gift_comment") or {})
     _same = _old.get("k") == key
+    _wz = (_old.get("wz") if _same else None)
+    if _wz == "c":   # PATCH_GIFT_WIZARD_V1 — کامنت ثبت شد، مرحلهٔ بعد
+        _wz = "a"
     await state.update_data(gift_comment={"k": key, "t": comment,
                                           "anon": bool(_old.get("anon")) if _same else False,
-                                          "scope": int(_old.get("scope") or 0) if _same else 0})
+                                          "scope": int(_old.get("scope") or 0) if _same else 0,
+                                          "wz": _wz, "anon_set": bool(_old.get("anon_set")) if _same else False})
     bot_id = await _bot_id(bot)
     label = (_self_dest_label(msg.from_user) if dest_id == msg.from_user.id
              else await _resolve_dest_label(bot_id, dest_id))
@@ -12659,6 +12761,7 @@ async def gift_dest_self(cb: CallbackQuery, bot: Bot, state: FSMContext):
     qty = int(parts[3]) if len(parts) > 3 else 1
     via = parts[4] if len(parts) > 4 and parts[4] in ("b", "s") else ""   # PATCH_GIFT_VIA_FIRST_V1
     await cb.answer()
+    await state.update_data(gift_comment=None)   # PATCH_GIFT_WIZARD_V1 — هر خریدِ تازه از مرحلهٔ کامنت شروع شود
     await _gift_show_invoice(_EditFirstV(cb.message), (await _bot_id(bot)), gift_id, cb.from_user.id, "خودم", qty,
                              via=via, state=state)
 
