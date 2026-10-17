@@ -3892,6 +3892,11 @@ async def vpn_plan_limit_ip(msg: Message, bot: Bot, state: FSMContext):
 async def _finalize_vpn_plan(bot: Bot, chat_id: int, state: FSMContext, row, category: str | None) -> None:
     data = await state.get_data()
     key = data.get("plan_panel_key", "sanai")
+    # === PATCH_PLAN_FINALIZE_DOUBLETAP_V1 === لاگِ سرور: KeyError 'title' — تپِ دوباره/هم‌زمانِ دکمهٔ دسته: اولی state را پاک
+    # کرده و دومی داده‌ای ندارد. پلنِ تکراری/ناقص ساخته نمی‌شود و خطا هم نمی‌افتد.
+    if not all(k in data for k in ("title", "gb", "days", "price")):
+        logger.info("vpn plan finalize: state خالی/تکراری (تپِ دوباره) — نادیده گرفته شد")
+        return
     await state.clear()
     async with Session() as s:
         s.add(VpnPlan(
