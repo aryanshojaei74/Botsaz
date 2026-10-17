@@ -46,3 +46,21 @@ async def test_skipped_for_inline_mode_and_bot_messages(monkeypatch):
     m2, sent2 = _msg(is_bot=True)
     await _run(monkeypatch, m2, "reply")
     assert sent2 == []
+
+
+@pytest.mark.asyncio
+async def test_with_home_row_adds_once_in_reply_mode_only(monkeypatch):
+    import tenant
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    from tenant.bots.vpn import vpn_user
+
+    async def gs(bid, key, default=""):
+        return mode["v"]
+    mode = {"v": "reply"}
+    monkeypatch.setattr(tenant, "get_setting", gs)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="x", callback_data="x")]])
+    out = await vpn_user._with_home_row(kb, 1)
+    assert out.inline_keyboard[-1][0].callback_data == "mbtn:home"
+    assert len((await vpn_user._with_home_row(out, 1)).inline_keyboard) == 2
+    mode["v"] = "inline"
+    assert await vpn_user._with_home_row(kb, 1) is kb

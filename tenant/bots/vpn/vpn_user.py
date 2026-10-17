@@ -141,6 +141,24 @@ async def _drop_reply_kb(msg, bot_id: int) -> None:
         logger.info("vpn: برداشتنِ کیبوردِ قبلی ممکن نشد (بی‌اهمیت)")
 
 
+async def _with_home_row(kb: InlineKeyboardMarkup, bot_id: int) -> InlineKeyboardMarkup:
+    """=== PATCH_FLOW_HOME_ROW_V1 === (ایلیا) در منویِ کیبوردی، کیبوردِ پایین هنگامِ خرید برداشته می‌شود؛ پس هر صفحهٔ خرید
+    باید «🏠 بازگشت به منو» داشته باشد تا کیبورد برگردد. اگر قبلاً چنین دکمه‌ای هست، تکرار نمی‌شود."""
+    try:
+        from tenant import get_setting
+        if await get_setting(bot_id, "menu_mode", "reply") == "inline":
+            return kb
+        rows = list(kb.inline_keyboard)
+        if any((b.callback_data or "") == "mbtn:home" for r in rows for b in r):
+            return kb
+        rows.append([InlineKeyboardButton(text="🏠 بازگشت به منو", callback_data="mbtn:home",
+                                          style=ButtonStyle.DANGER)])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
+    except Exception:
+        logger.exception("vpn: افزودنِ «بازگشت به منو» ممکن نشد")
+        return kb
+
+
 class _EditFirst:
     """رپرِ cb.message: اولین `.answer(text, ...)` به‌جایِ حذفِ پیام و ارسالِ پیامِ تازه،
     *همان پیام* را ویرایش می‌کند (سریع‌تر و بدونِ پرشِ چت)؛ بقیهٔ فراخوانی‌ها (پیامِ دوم به بعد)
@@ -2741,7 +2759,7 @@ async def _build_buy_summary(bot: Bot, bot_id: int, plan_id: int,
             text += _line
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده (نمایشِ امتیازِ دستهٔ پلن)")
-    return text, InlineKeyboardMarkup(inline_keyboard=kb_rows)
+    return text, await _with_home_row(InlineKeyboardMarkup(inline_keyboard=kb_rows), bot_id)
 
 
 async def _ask_custom_name(target, plan_id: int, kind: str = "plan",
@@ -4643,7 +4661,7 @@ async def _vc_render(bot: Bot, bot_id: int, telegram_id: int, gb: int, days: int
                 kb = InlineKeyboardMarkup(inline_keyboard=_rows)
         except Exception:
             logger.exception("vc: دکمهٔ بازگشت به منویِ قبل ساخته نشد")
-    return text, kb
+    return text, await _with_home_row(kb, bot_id)
 
 
 
@@ -5243,7 +5261,7 @@ async def _vc_preinvoice(bot: Bot, bot_id: int, telegram_id: int, gb: int, days:
         kb_rows.append(_pg)
     kb_rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="vc:back",
                     style=ButtonStyle.DANGER)])
-    return text, InlineKeyboardMarkup(inline_keyboard=kb_rows)
+    return text, await _with_home_row(InlineKeyboardMarkup(inline_keyboard=kb_rows), bot_id)
 
 
 @vpn_user_router.callback_query(F.data.startswith("vc:checkout:"))
