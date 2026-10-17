@@ -621,7 +621,23 @@ async def _get_toman_unit_rate(bot_id: int, panel_pk: int | None = None) -> floa
             live = 0.0
         if live and live > 0:
             return float(live)
-    return await _panel_toman_per_unit(bot_id, panel_pk)
+    manual = await _panel_toman_per_unit(bot_id, panel_pk)
+    if manual > 0:
+        return manual
+    # === PATCH_SMM_USD_RATE_FALLBACK_V1 ===
+    # تیکت #856: پنلِ دلاری با حالتِ «دستی» و نرخِ ثبت‌نشده (۰) باعث می‌شد
+    # فراخوان‌ها نرخ را ۱ بگیرند و ۸ دلار به‌صورتِ ۸ تومان فروخته/نشان داده شود.
+    # برایِ پنلِ ارزی، در نبودِ نرخِ دستی از نرخِ زندهٔ دلار استفاده می‌کنیم.
+    if rate_mode != "auto":
+        try:
+            from tenant.gateways.crypto_pay import get_usd_to_toman_rate
+            live = await get_usd_to_toman_rate()
+        except Exception:
+            logger.exception("خطا در دریافت نرخ زندهٔ دلار برای SMM (fallback)")
+            live = 0.0
+        if live and live > 0:
+            return float(live)
+    return manual
 
 
 async def _effective_margin_pct(bot_id: int, svc: SmmService) -> float:
@@ -5264,7 +5280,7 @@ async def _panel_settings_content(bot_id: int, panel_pk: int | None) -> tuple[st
     order_txt = "خودکار" if order_mode == "auto" else "تأیید ادمین"
     fail_txt = "بازگشتِ خودکارِ وجه" if fail_policy == "auto_refund" else "نگه‌داری برایِ بررسیِ دستی"
     round_txt = "بدونِ رند" if price_round <= 0 else f"رندِ {price_round:,} تومانی"
-    currency_txt = "تومان (پنل خودش تومان می‌ده)" if currency == "toman" else "دلار (پنل دلاری‌ست)"
+    currency_txt = "تومان (پنل خودش تومان می‌ده)" if currency == "toman" else "ارزی/دلار (با نرخِ تبدیل)"
 
     pid = "0" if panel_pk is None else str(panel_pk)
     lines = [
@@ -5272,6 +5288,11 @@ async def _panel_settings_content(bot_id: int, panel_pk: int | None) -> tuple[st
         f"واحدِ قیمتِ پنل: <b>{currency_txt}</b>",
         f"حالتِ قیمت‌گذاری: <b>{price_txt}</b>" + (f" ({margin:g}٪)" if price_mode == "margin" else ""),
         f"نرخِ تبدیل: <b>{rate_txt}</b>" + (f" ({toman_rate:g} تومان)" if toman_rate else ""),
+    ]
+    if currency == "usd" and rate_mode != "auto" and not toman_rate:
+        lines.append("⚠️ نرخِ دستی ثبت نشده؛ از نرخِ زندهٔ دلار استفاده می‌شود. برایِ ارزِ دیگر "
+                     "(یورو و …) «نرخِ دستی» را به تومان ثبت کن.")
+    lines += [
         f"حالتِ ثبتِ سفارش: <b>{order_txt}</b>",
         f"سیاستِ خطا: <b>{fail_txt}</b>",
         f"رندِ قیمت: <b>{round_txt}</b>",
