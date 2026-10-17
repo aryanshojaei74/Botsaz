@@ -51,6 +51,7 @@ class TicketFSM(StatesGroup):
     user_reply = State()    # کاربر در حالِ ارسالِ پیامِ جدید برایِ تیکتِ بازِ خودش
     # === PATCH_TICKET_CATEGORY_SUBJECT_V1 ===
     new_subject = State()   # منتظرِ موضوعِ کوتاهِ تیکت (بعدِ انتخابِ دسته، قبلِ متنِ اصلی)
+    order_code = State()    # PATCH_ORDER_TICKET_FLOW_V3 — منتظرِ کدِ پیگیریِ سفارش (دستهٔ «پیگیریِ سفارش»)
 
 
 # === PATCH_TICKET_CATEGORY_SUBJECT_V1 ===
@@ -309,7 +310,26 @@ async def ticket_new_category_pick(cb: CallbackQuery, bot: Bot, state: FSMContex
     if key not in TICKET_CATEGORY_LABEL:
         await cb.answer()
         return
-    await state.update_data(ticket_category=key)
+    await state.update_data(ticket_category=key, ticket_order_code=None)
+    # === PATCH_ORDER_TICKET_FLOW_V3 === (Fadayi) «پیگیریِ سفارش»: اول کدِ پیگیری ← بعد متنِ پیام ← تیکت با مشخصاتِ سفارش
+    if key == "order":
+        from tenant import get_bot_row
+        _r = await get_bot_row(bot)
+        if _r and (_r.field or "") == "virtual_service":
+            await state.set_state(TicketFSM.order_code)
+            try:
+                await cb.message.edit_reply_markup(reply_markup=None)
+            except Exception:
+                logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+            await cb.message.answer(
+                "🔖 <b>کدِ پیگیریِ سفارش</b> را بفرست.\n"
+                "کد در پیامِ ثبتِ سفارش یا در بخشِ «سفارش‌های من» هست.",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="⏭ کدِ پیگیری ندارم", callback_data="ticket:nocode")],
+                    [InlineKeyboardButton(text="❌ انصراف", callback_data="ticket:menu", style=ButtonStyle.DANGER)]]))
+            await cb.answer()
+            return
     await state.set_state(TicketFSM.new_subject)
     try:
         await cb.message.edit_reply_markup(reply_markup=None)
@@ -318,6 +338,52 @@ async def ticket_new_category_pick(cb: CallbackQuery, bot: Bot, state: FSMContex
     await cb.message.answer(
         "✏️ موضوعِ تیکت را در یک جمله کوتاه بنویس (مثلاً «واریز انجام شد ولی سرویس فعال نشد»):",
         reply_markup=await smart_cancel_kb(bot))
+    await cb.answer()
+
+
+def _norm_order_code(raw: str) -> str:
+    fa = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+    return (raw or "").translate(fa).strip().lstrip("#").replace(" ", "").upper()
+
+
+@ticket_router.message(TicketFSM.order_code, F.text)
+async def ticket_order_code_in(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import get_bot_row, main_kb_or_remove, smart_cancel_kb
+    row = await get_bot_row(bot)
+    raw = (msg.text or "").strip()
+    if raw in ("❌ لغو", "❌ لغو / بازگشت"):
+        await state.clear()
+        kb = await main_kb_or_remove(row.id, row.owner_id, msg.from_user.id) if row else None
+        await msg.answer("لغو شد.", reply_markup=kb or ReplyKeyboardRemove())
+        return
+    code = _norm_order_code(raw)
+    if not row or not code:
+        await msg.answer("کدِ پیگیری را بفرست (یا «⏭ کدِ پیگیری ندارم» را بزن).")
+        return
+    from tenant.bots.virtual_service.smm import _order_details_html
+    if not await _order_details_html(row.id, code):
+        await msg.answer(
+            "❌ سفارشی با این کدِ پیگیری پیدا نشد. کد را دوباره چک کن و بفرست، یا «⏭ کدِ پیگیری ندارم» را بزن.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⏭ کدِ پیگیری ندارم", callback_data="ticket:nocode")]]))
+        return
+    await state.update_data(ticket_order_code=code, ticket_subject=f"پیگیریِ سفارش {code}")
+    await state.set_state(TicketFSM.new_text)
+    await msg.answer(f"✅ سفارشِ <code>{code}</code> پیدا شد.\n\n✍️ حالا پیام یا سؤالت درباره‌یِ این سفارش را بنویس:",
+                     parse_mode="HTML", reply_markup=await smart_cancel_kb(bot))
+
+
+@ticket_router.callback_query(F.data == "ticket:nocode")
+async def ticket_order_nocode(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """کدِ پیگیری ندارد: مسیرِ قبلی (موضوع ← متن)؛ مشخصاتِ آخرین سفارش‌هایش خودکار اضافه می‌شود."""
+    from tenant import smart_cancel_kb
+    await state.update_data(ticket_order_code=None)
+    await state.set_state(TicketFSM.new_subject)
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+    await cb.message.answer("✏️ موضوعِ تیکت را در یک جمله کوتاه بنویس:", reply_markup=await smart_cancel_kb(bot))
     await cb.answer()
 
 
@@ -417,6 +483,14 @@ async def _save_new_ticket(msg: Message, state: FSMContext, bot: Bot, text: str,
     _data = await state.get_data()
     category = _data.get("ticket_category")
     subject = (_data.get("ticket_subject") or "").strip() or None
+    # === PATCH_ORDER_TICKET_FLOW_V3 === کدِ پیگیریِ گرفته‌شده → همان قالبِ تیکتِ دکمهٔ سفارش (مشخصاتِ کاملِ سفارش)
+    _code = _data.get("ticket_order_code")
+    if category == "order" and _code and (row.field or "") == "virtual_service":
+        try:
+            from tenant.bots.virtual_service.smm import build_order_ticket_text
+            text = await build_order_ticket_text(row.id, _code, text)
+        except Exception:
+            logger.exception("ساختِ متنِ تیکتِ پیگیریِ سفارش ناموفق بود")
     # === PATCH_ORDER_TICKET_FLOW_V2 === تیکتِ «پیگیریِ سفارش» از منویِ تیکت (بدونِ کدِ پیگیری): مشخصاتِ آخرین سفارش‌ها اضافه شود
     if category == "order" and (row.field or "") == "virtual_service" and "مشخصاتِ سفارش" not in (text or ""):
         try:
