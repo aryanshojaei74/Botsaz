@@ -3461,8 +3461,7 @@ async def _fetch_wg_files_from_sub(sub_link: str) -> list[tuple[str, bytes]]:
     return []
 
 
-async def _send_sub_wg_files(bot, chat_id: int, sub_link: str) -> int:
-    files = await _fetch_wg_files_from_sub(sub_link)
+async def _send_wg_file_list(bot, chat_id: int, files: list[tuple[str, bytes]]) -> int:
     sent = 0
     for i, (name, data) in enumerate(files, 1):
         try:
@@ -3475,6 +3474,35 @@ async def _send_sub_wg_files(bot, chat_id: int, sub_link: str) -> int:
         except Exception:
             logger.exception("ارسالِ فایلِ وایرگاردِ ساب ناموفق بود")
     return sent
+
+
+async def _send_sub_wg_files(bot, chat_id: int, sub_link: str, panel=None, email: str = "") -> int:
+    """=== PATCH_WG_SUB_MULTI_FIX_V1 === (تیکت #857) ساب‌لینکِ بعضی پنل‌ها فقط *یک* لوکیشنِ وایرگارد می‌دهد
+    در حالی که پنل چند لوکیشن دارد؛ قبلاً همین یک فایل مسیرِ بومیِ چندفایلی را می‌پرید و مشتری فقط یکی می‌گرفت.
+    حالا اگر ساب بیش از یک فایل داد همان؛ وگرنه اگر مسیرِ بومیِ پنل لوکیشن‌هایِ بیشتری دارد آن‌ها فرستاده می‌شود،
+    و فقط در نبودنِ لوکیشنِ بیشتر همان تک‌فایلِ ساب."""
+    files = await _fetch_wg_files_from_sub(sub_link)
+    if len(files) > 1:
+        return await _send_wg_file_list(bot, chat_id, files)
+    if panel is not None and email:
+        client = None
+        try:
+            client = _client_from_panel(panel)
+            if hasattr(client, "get_wireguard_endpoints"):
+                endpoints = await client.get_wireguard_endpoints(email)
+                if endpoints and len(endpoints) > max(1, len(files)):
+                    sent = await _send_native_wg_files(bot, chat_id, client, email)
+                    if sent:
+                        return sent
+        except Exception:
+            logger.exception("بررسیِ لوکیشن‌هایِ بومیِ وایرگارد برایِ تکمیلِ فایل‌هایِ ساب ناموفق بود")
+        finally:
+            if client is not None:
+                try:
+                    await client.close()
+                except Exception:
+                    logger.exception("بستنِ کلاینتِ پنل ناموفق بود")
+    return await _send_wg_file_list(bot, chat_id, files) if files else 0
 
 
 # === PATCH_WG_NATIVE_IN_SINGLE_V1 ===
@@ -3743,7 +3771,7 @@ async def _send_wg_files_for_account(bot: Bot, chat_id: int, aid: int) -> int:
             if not a or not panel:
                 return 0
             email, sub_link = a.email, a.sub_link or ""
-        direct = await _send_sub_wg_files(bot, chat_id, sub_link)      # PATCH_WG_SUB_DIRECT_V1
+        direct = await _send_sub_wg_files(bot, chat_id, sub_link, panel, email)      # PATCH_WG_SUB_DIRECT_V1
         if direct:
             return direct
         client = _client_from_panel(panel)
@@ -3779,7 +3807,7 @@ async def vpn_service_wg_single(cb: CallbackQuery, bot: Bot):
     if not panel:
         await cb.message.answer("⛔️ پنلی به این سرویس وصل نیست.")
         return
-    if await _send_sub_wg_files(bot, cb.from_user.id, _acc_sub_link):     # PATCH_WG_SUB_DIRECT_V1
+    if await _send_sub_wg_files(bot, cb.from_user.id, _acc_sub_link, panel, email):     # PATCH_WG_SUB_DIRECT_V1
         return
     try:
         client = _client_from_panel(panel)
