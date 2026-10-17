@@ -16426,10 +16426,13 @@ def _trial_summary_text(cfg: dict) -> str:
 @tenant_router.callback_query(F.data.startswith("thb:trialmode:"))
 async def thb_trial_top_menu(cb: CallbackQuery, bot: Bot):
     """مرحلهٔ اول: کانفیگ خودکار (ساخت زنده از پنل) یا کانفیگ آماده (انبار)."""
+    await _trial_top_render(cb, bot, int(cb.data.split(":")[2]))
+
+
+async def _trial_top_render(cb: CallbackQuery, bot: Bot, mb_id: int):
     row = await _owner_ok(cb, bot)
     if not row:
         return
-    mb_id = int(cb.data.split(":")[2])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
     if not mb or mb.bot_id != row.id or mb.action != "free_trial":
@@ -16451,6 +16454,14 @@ async def thb_trial_top_menu(cb: CallbackQuery, bot: Bot):
     _claim_lbl = "♾️ نامحدود" if _claim_limit == "0" else f"{_claim_limit} بار"
     rows.append([InlineKeyboardButton(text=f"🔢 دفعاتِ مجاز هر کاربر: {_claim_lbl}",
                                       callback_data=f"thb:trclaimask:{mb_id}", style=ButtonStyle.PRIMARY)])
+    # تیکت #849 (دورِ دوم): دکمهٔ «حجم/مدت از تنظیماتِ کلی» فقط تویِ صفحهٔ عمقِ دوم بود و مشتری آن را
+    # در همین صفحه پیدا نمی‌کرد؛ حالا همین‌جا هم هست (بدونِ دست‌زدن به پنل/نوعِ تحویل).
+    _filled = await _trial_fill_global(row.id, cfg)
+    if cfg.get("trial_mode") in ("auto", "manual", "unlimited") and \
+            not ({"gb", "duration"} <= set(_filled.get("_from_global") or [])):
+        rows.append([InlineKeyboardButton(
+            text="♻️ حجم و مدت از «تنظیماتِ تستِ رایگان» (پاک‌کردنِ مقدارِ اختصاصیِ دکمه)",
+            callback_data=f"thb:trglobal2:{mb_id}", style=ButtonStyle.SUCCESS)])
     rows.append([InlineKeyboardButton(text="♻️ ریست برای همه (دوباره‌قابل‌دریافت)",
                                       callback_data=f"thb:trreset:{mb_id}", style=ButtonStyle.SUCCESS)])
     if cfg.get("trial_mode"):
@@ -16928,6 +16939,18 @@ async def thb_trial_use_global(cb: CallbackQuery, bot: Bot):
     except Exception:
         logger.info("بازسازیِ صفحهٔ تست بعد از «تنظیماتِ کلی» ممکن نشد")
     await cb.answer("✅ حالا حجم و مدت از «تنظیماتِ تستِ رایگان» خوانده می‌شود", show_alert=True)
+
+
+@tenant_router.callback_query(F.data.startswith("thb:trglobal2:"))
+async def thb_trial_use_global_top(cb: CallbackQuery, bot: Bot):
+    """همان «حجم/مدت از تنظیماتِ کلی» ولی از صفحهٔ اصلیِ تنظیماتِ تستِ دکمه؛ بعدش همان صفحه تازه می‌شود."""
+    mb_id = int(cb.data.split(":")[2])
+    mb = await _trial_fix_mb(cb, bot, mb_id)
+    if not mb:
+        return
+    await _trial_cfg_update(mb_id, trial_gb=None, trial_days=None, trial_hours=None)
+    await cb.answer("✅ حجم و مدت حالا از «تنظیماتِ تستِ رایگان» خوانده می‌شود", show_alert=True)
+    await _trial_top_render(cb, bot, mb_id)
 
 
 @tenant_router.callback_query(F.data.startswith("thb:trfixok:"))
