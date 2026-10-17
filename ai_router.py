@@ -1,0 +1,250 @@
+"""
+ai_router.py — PATCH_AI_ROUTER_V1
+
+روترِ چندکلیدیِ چندارائه‌دهنده برایِ مدل‌هایِ «رایگان» (همه OpenAI-compatible).
+هر درخواست از یک مسیر (ارائه‌دهنده+کلید) شروع می‌شود؛ اگر جواب نداد (۴۲۹، ۵xx، تایم‌اوت، کلیدِ باطل، …)
+همان لحظه مسیرِ بعدی امتحان می‌شود و مسیرِ خراب مدتی «خنک» می‌شود تا درخواست‌هایِ بعدی وقتشان را هدر ندهد.
+مسیرها به‌صورتِ round-robin بینِ همهٔ مسیرهایِ سالم می‌چرخند تا سهمیهٔ رایگانِ هر کلید یکنواخت مصرف شود.
+
+پیکربندی (فایلِ .env سرور) — متغیرِ GROUP_GUARD_AI_ROUTES، جداشده با کاما:
+
+    GROUP_GUARD_AI_ROUTES=groq=gsk_aaa,groq=gsk_bbb,openrouter=sk-or-ccc,gemini=AIza...,cerebras=csk-...,mistral=xxxx
+
+هر مورد:  نامِ‌ارائه‌دهنده[:مدل]=کلید
+  • نام‌هایِ آماده: groq, cerebras, gemini, openrouter, mistral, sambanova, nvidia, github
+  • مدلِ دلخواه: groq:llama-3.1-8b-instant=gsk_...
+  • ارائه‌دهندهٔ دلخواه (هر APIِ OpenAI-compatible):  https://host/v1|نامِ-مدل=کلید
+یک ارائه‌دهنده می‌تواند چند کلید داشته باشد (چند خط/مورد با همان نام).
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import time
+from dataclasses import dataclass, field
+
+from logging_setup import get_logger as _get_logger
+logger = _get_logger(__name__)
+
+PRESETS: dict[str, tuple[str, str]] = {
+    "groq": ("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
+    "cerebras": ("https://api.cerebras.ai/v1", "llama-3.3-70b"),
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.0-flash"),
+    "openrouter": ("https://openrouter.ai/api/v1", "meta-llama/llama-3.3-70b-instruct:free"),
+    "mistral": ("https://api.mistral.ai/v1", "mistral-small-latest"),
+    "sambanova": ("https://api.sambanova.ai/v1", "Meta-Llama-3.3-70B-Instruct"),
+    "nvidia": ("https://integrate.api.nvidia.com/v1", "meta/llama-3.3-70b-instruct"),
+    "github": ("https://models.inference.ai.azure.com", "gpt-4o-mini"),
+    "xai": ("https://api.x.ai/v1", "grok-3-mini"),
+}
+# ارائه‌دهنده‌هایِ «پولی/اعتباری»: در ترتیبِ تلاش بعد از رایگان‌ها می‌آیند (فقط وقتی رایگان‌ها جواب ندادند خرج می‌شوند)
+PAID = {"xai", "custom"}
+# شناسایی از رویِ پیشوندِ کلید: اگر نامِ نوشته‌شده با کلید نمی‌خواند (مثلاً «groq=xai-…») ارائه‌دهندهٔ واقعی انتخاب می‌شود
+KEY_PREFIX = (("xai-", "xai"), ("gsk_", "groq"), ("sk-or-", "openrouter"), ("csk-", "cerebras"), ("aiza", "gemini"))
+
+
+def detect_provider(key: str) -> str | None:
+    k = (key or "").lower()
+    for pre, name in KEY_PREFIX:
+        if k.startswith(pre):
+            return name
+    return None
+
+COOL_429 = 60           # ثانیه (اگر Retry-After نبود)
+COOL_AUTH = 3600        # کلیدِ باطل/بدونِ دسترسی
+COOL_BAD = 600          # مدل/درخواستِ نامعتبر برایِ این مسیر
+COOL_5XX = 30
+ATTEMPT_TIMEOUT = 18.0
+
+
+# === انتخابِ خودکارِ مدل: اگر نامِ پیش‌فرضِ مدل دیگر وجود نداشت (۴۰۴)، فهرستِ مدل‌هایِ همان ارائه‌دهنده خوانده می‌شود ===
+_EXCLUDE = ("whisper", "tts", "guard", "embed", "moderation", "orpheus", "playai", "image", "audio",
+            "rerank", "vision-preview", "transcribe", "speech", "dall", "imagen", "veo", "learnlm", "aqa")
+_PREFER = ("llama-3.3-70b", "gpt-oss-120b", "llama-4", "qwen3-32b", "qwen-3-32b", "llama-3.1-70b",
+           "gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash", "mistral-small", "grok-3-mini",
+           "gpt-oss-20b", "llama-3.1-8b", "gemma", "mistral", "grok", "llama", "gpt")
+
+
+def pick_model(ids: list[str]) -> str | None:
+    ok = [i for i in ids if i and not any(x in i.lower() for x in _EXCLUDE)]
+    for pref in _PREFER:
+        for i in ok:
+            if pref in i.lower():
+                return i
+    return ok[0] if ok else None
+
+
+@dataclass
+class Route:
+    name: str
+    base_url: str
+    model: str
+    key: str
+    cool_until: float = 0.0
+    fails: int = 0
+    ok: int = 0
+    discovered: bool = False      # مدل یک‌بار خودکار انتخاب شده؟
+
+    @property
+    def label(self) -> str:
+        return f"{self.name}:{self.model}#{self.key[-4:]}"
+
+
+def parse_routes(raw: str) -> list[Route]:
+    out: list[Route] = []
+    for item in (raw or "").replace("\n", ",").replace(";", ",").split(","):
+        item = item.strip()
+        if not item or "=" not in item:
+            continue
+        spec, key = item.split("=", 1)
+        spec, key = spec.strip(), key.strip().strip("'\"").strip()
+        if not key:
+            continue
+        if "|" in spec:                                   # https://host/v1|model
+            base, model = spec.split("|", 1)
+            out.append(Route("custom", base.strip().rstrip("/"), model.strip(), key))
+            continue
+        name, _, model = spec.partition(":")
+        name = name.strip().lower()
+        _det = detect_provider(key)
+        if _det and _det != name and name in PRESETS:
+            logger.warning("ai_router: کلیدِ «%s…» به نظر می‌رسد مالِ %s است نه %s؛ %s استفاده شد", key[:4], _det, name, _det)
+            name, model = _det, ""          # مدلِ پیش‌فرضِ ارائه‌دهندهٔ واقعی
+        if name not in PRESETS:
+            logger.warning("ai_router: نامِ ارائه‌دهندهٔ ناشناس نادیده گرفته شد: %r", name)
+            continue
+        base, default_model = PRESETS[name]
+        out.append(Route(name, base, model.strip() or default_model, key))
+    return out
+
+
+@dataclass
+class Router:
+    routes: list[Route] = field(default_factory=list)
+    _rr: int = 0
+    transport: object | None = None          # برایِ تست (httpx.MockTransport)
+
+    def configured(self) -> bool:
+        return bool(self.routes)
+
+    def _order(self) -> list[Route]:
+        """مسیرهایِ سالم به‌ترتیبِ round-robin، بعدش مسیرهایِ خنک (آخرین شانس)."""
+        n = len(self.routes)
+        if not n:
+            return []
+        start = self._rr % n
+        self._rr += 1
+        rot = self.routes[start:] + self.routes[:start]
+        now = time.monotonic()
+        ready = [r for r in rot if r.cool_until <= now]
+        cooling = sorted((r for r in rot if r.cool_until > now), key=lambda r: r.cool_until)
+        # رایگان‌ها اول (round-robin)، بعد پولی‌ها، بعد مسیرهایِ خنک
+        return [r for r in ready if r.name not in PAID] + [r for r in ready if r.name in PAID] + cooling
+
+    async def chat(self, system: str, user: str, *, max_tokens: int = 600,
+                   temperature: float = 0.0) -> tuple[str, dict, str]:
+        """(متن، usage، برچسبِ مسیر). اگر همهٔ مسیرها شکست خوردند RuntimeError."""
+        import httpx
+        errors: list[str] = []
+        payload_base = {"temperature": temperature, "max_tokens": max_tokens,
+                        "messages": [{"role": "system", "content": system},
+                                     {"role": "user", "content": user}]}
+        kw = {"transport": self.transport} if self.transport is not None else {}
+        async with httpx.AsyncClient(timeout=httpx.Timeout(ATTEMPT_TIMEOUT, connect=5.0),
+                                     headers={"Accept-Encoding": "identity"}, **kw) as client:
+            for r in self._order():
+                resp = None
+                for _try in range(2):          # بارِ دوم فقط بعد از انتخابِ خودکارِ مدل
+                    try:
+                        resp = await client.post(
+                            r.base_url + "/chat/completions", json=self._payload(payload_base, r),
+                            headers={"Authorization": f"Bearer {r.key}", "Content-Type": "application/json"})
+                    except (httpx.TimeoutException, httpx.HTTPError) as e:
+                        r.fails += 1
+                        r.cool_until = time.monotonic() + COOL_5XX
+                        errors.append(f"{r.label}: {type(e).__name__}")
+                        resp = None
+                        break
+                    if resp.status_code in (400, 404, 422) and r.name in PRESETS and not r.discovered:
+                        r.discovered = True
+                        new_model = await self._discover_model(client, r)
+                        if new_model and new_model != r.model:
+                            logger.warning("ai_router: مدلِ %s برایِ %s پذیرفته نشد؛ %s انتخاب شد", r.model, r.name, new_model)
+                            r.model = new_model
+                            continue
+                    break
+                if resp is None:
+                    continue
+                st = resp.status_code
+                if st == 200:
+                    try:
+                        data = resp.json()
+                        text = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+                    except Exception:                       # noqa: BLE001
+                        data, text = {}, ""
+                    if text:
+                        r.ok += 1
+                        return text, (data.get("usage") or {}), r.label
+                    r.cool_until = time.monotonic() + COOL_5XX
+                    errors.append(f"{r.label}: پاسخِ خالی")
+                    continue
+                r.fails += 1
+                if st == 429:
+                    try:
+                        wait = min(600, max(5, int(float(resp.headers.get("retry-after", COOL_429)))))
+                    except (TypeError, ValueError):
+                        wait = COOL_429
+                    r.cool_until = time.monotonic() + wait
+                elif st in (401, 403):
+                    r.cool_until = time.monotonic() + COOL_AUTH
+                elif st in (400, 404, 413, 422):
+                    r.cool_until = time.monotonic() + COOL_BAD
+                else:
+                    r.cool_until = time.monotonic() + COOL_5XX
+                errors.append(f"{r.label}: HTTP {st}")
+        raise RuntimeError("همهٔ مسیرهایِ هوش مصنوعی جواب ندادند: " + " | ".join(errors[-6:]))
+
+    @staticmethod
+    def _payload(base: dict, r: Route) -> dict:
+        """مدل‌هایِ reasoning (gpt-oss) بدونِ این، توکنِ جواب را صرفِ فکرکردن می‌کنند و متنِ خالی برمی‌گردد."""
+        p = {**base, "model": r.model}
+        if "gpt-oss" in r.model.lower() and r.name in ("groq", "cerebras"):
+            p["reasoning_effort"] = "low"
+            p["max_tokens"] = max(int(p.get("max_tokens", 600)), 900)
+        return p
+
+    async def _discover_model(self, client, r: Route) -> str | None:
+        try:
+            resp = await client.get(r.base_url + "/models", headers={"Authorization": f"Bearer {r.key}"})
+            if resp.status_code != 200:
+                return None
+            ids = [str(m.get("id", "")).removeprefix("models/") for m in (resp.json().get("data") or [])]
+            return pick_model(ids)
+        except Exception:                                   # noqa: BLE001
+            logger.debug("ai_router: خواندنِ فهرستِ مدل‌ها ممکن نشد (%s)", r.name)
+            return None
+
+    def status(self) -> str:
+        now = time.monotonic()
+        return "\n".join(
+            f"{'🟢' if r.cool_until <= now else '🟠'} {r.label} — موفق {r.ok}، ناموفق {r.fails}"
+            + (f"، خنک {int(r.cool_until - now)}ثانیه" if r.cool_until > now else "")
+            for r in self.routes) or "هیچ مسیری تنظیم نشده."
+
+
+_ROUTER: Router | None = None
+
+
+def get_router() -> Router:
+    """روترِ سراسری (از GROUP_GUARD_AI_ROUTES در محیط/.env)."""
+    global _ROUTER
+    if _ROUTER is None:
+        raw = os.getenv("GROUP_GUARD_AI_ROUTES", "")
+        try:
+            from config import GROUP_GUARD_AI_ROUTES as _cfg
+            raw = _cfg or raw
+        except Exception:                                   # noqa: BLE001
+            logger.debug("ai_router: خواندنِ GROUP_GUARD_AI_ROUTES از config ممکن نشد؛ از محیط")
+        _ROUTER = Router(parse_routes(raw))
+        logger.info("ai_router: %d مسیر بارگذاری شد", len(_ROUTER.routes))
+    return _ROUTER

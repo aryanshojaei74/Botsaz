@@ -1,0 +1,252 @@
+"""
+gateway_layout.py — «🎛 نام و ترتیبِ دکمه‌هایِ پرداخت» (PATCH_GATEWAY_LAYOUT_V1).
+
+درخواستِ مالک‌ها: اسمِ دکمهٔ درگاه (مثلاً زرین‌پال) را عوض کنند و دکمه‌هایِ پرداخت را
+جابه‌جا کنند. مسیر: پنل مدیریت ← مالی و کیف پول ← 🎛 نام و ترتیبِ دکمه‌هایِ پرداخت.
+
+  • ترتیب در تنظیمِ gw_order (کلیدهایِ درگاه با کاما) ذخیره می‌شود؛ خالی = ترتیبِ پیش‌فرض.
+  • اسم در همان کلیدِ «<درگاه>_display_name» (GATEWAY_LABELS) که بقیهٔ کد از قبل می‌خواند.
+  • ترتیب هم در صفحهٔ «کیف پول» و هم در دکمه‌هایِ شارژِ داخلِ صفحهٔ خرید اعمال می‌شود؛
+    فقط جایِ دکمه‌هایِ درگاه با هم عوض می‌شود، بقیهٔ دکمه‌ها (تاریخچه، احراز و …) سرِ جایشان می‌مانند.
+"""
+from __future__ import annotations
+
+from aiogram import Bot, F, Router
+from aiogram.enums import ButtonStyle
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+
+from logging_setup import get_logger as _get_logger
+
+logger = _get_logger(__name__)
+gateway_layout_router = Router(name="gateway_layout")
+
+# (کلید، callback_data دکمهٔ کیف پول، عنوان، قابلِ تغییرِ نام؟)
+ITEMS: list[tuple[str, str, str, bool]] = [
+    ("card",        "w:charge",      "💳 کارت‌به‌کارت",   False),
+    ("zarinpal",    "w:zarinpal",    "🔐 زرین‌پال",       True),
+    ("zibal",       "w:zibal",       "🔐 زیبال",          False),
+    ("uniquepay",   "w:uniquepay",   "💳 یونیک‌پی",       True),
+    ("apay",        "w:apay",        "💳 آپی",            True),
+    ("abangateway", "w:abangateway", "💳 آبان گیت‌وی",    True),
+    ("tonpays",     "w:tonpays",     "💠 تون‌پیز",        True),
+    ("hesabpay",    "w:hesabpay",    "🇦🇫 حساب‌پی",       False),
+    ("swap",        "w:swap",        "🟦 سواپ‌ولت",       True),
+    ("crypto",      "w:crypto",      "🪙 ارز دیجیتال",    False),
+    ("stars",       "w:stars",       "⭐ استارز",         False),
+]
+_BY_KEY = {k: (cb, title, ren) for k, cb, title, ren in ITEMS}
+_KEY_BY_CB = {cb: k for k, cb, _t, _r in ITEMS}
+
+
+class GwLayoutFSM(StatesGroup):
+    name = State()
+
+
+async def _get(bot_id: int, key: str, default: str = "") -> str:
+    from tenant import get_setting
+    return await get_setting(bot_id, key, default)
+
+
+async def get_order(bot_id: int) -> list[str]:
+    """ترتیبِ فعلی: آنچه مالک ذخیره کرده + درگاه‌هایِ جدید/ذخیره‌نشده در انتها با ترتیبِ پیش‌فرض."""
+    raw = (await _get(bot_id, "gw_order", "") or "").strip()
+    saved = [k for k in raw.split(",") if k in _BY_KEY]
+    seen = set(saved)
+    return saved + [k for k, *_ in ITEMS if k not in seen]
+
+
+def _reorder(seq: list, cb_of, order: list[str]) -> list:
+    """فقط اعضایِ «درگاه» را طبقِ order مرتب می‌کند و در همان جایگاه‌هایِ قبلی می‌گذارد."""
+    idxs = [i for i, it in enumerate(seq) if _KEY_BY_CB.get(cb_of(it)) is not None]
+    if len(idxs) < 2:
+        return seq
+    rank = {k: n for n, k in enumerate(order)}
+    gw_items = sorted((seq[i] for i in idxs), key=lambda it: rank.get(_KEY_BY_CB[cb_of(it)], 999))
+    out = list(seq)
+    for i, it in zip(idxs, gw_items):
+        out[i] = it
+    return out
+
+
+async def apply_order_options(bot_id: int, options: list) -> list:
+    """options = [(label, callback_data, style), ...] (صفحهٔ کیف پول)."""
+    try:
+        if not (await _get(bot_id, "gw_order", "") or "").strip():
+            return options
+        return _reorder(options, lambda it: it[1], await get_order(bot_id))
+    except Exception:
+        logger.exception("gateway_layout: اعمالِ ترتیب روی کیف پول ناموفق بود")
+        return options
+
+
+async def apply_order_rows(bot_id: int, rows: list) -> list:
+    """rows = [[InlineKeyboardButton], ...] (دکمه‌هایِ شارژِ داخلِ صفحهٔ خرید)."""
+    try:
+        if not (await _get(bot_id, "gw_order", "") or "").strip():
+            return rows
+
+        def _cb(r):
+            try:
+                c = r[0].callback_data or ""
+            except Exception:
+                return ""
+            return c
+
+        return _reorder(rows, _cb, await get_order(bot_id))
+    except Exception:
+        logger.exception("gateway_layout: اعمالِ ترتیب روی دکمه‌هایِ شارژ ناموفق بود")
+        return rows
+
+
+async def gw_custom_label(bot_id: int, key: str, default_label: str) -> str:
+    """اگر مالک اسمِ دلخواه گذاشته همان را *عیناً* برمی‌گرداند، وگرنه برچسبِ پیش‌فرضِ خودِ صفحه.
+
+    عیناً، چون دیسپچرِ حالتِ کیبوردی (gw_label_set) همین شکل را می‌شناسد؛ اگر ایموجی یا
+    قالبِ دیگری اضافه شود، تپ‌کردنِ دکمه در حالتِ کیبوردی بی‌واکنش می‌ماند."""
+    from tenant import GATEWAY_LABELS
+    _d, setting_key = GATEWAY_LABELS.get(key, (key, f"{key}_display_name"))
+    custom = ((await _get(bot_id, setting_key, "")) or "").strip()[:40]
+    return custom or default_label
+
+
+# ═══════════════════ صفحهٔ مدیریت ═══════════════════
+
+async def _menu_content(bot_id: int):
+    from tenant import GATEWAY_LABELS
+    order = await get_order(bot_id)
+    lines = ["🎛 <b>نام و ترتیبِ دکمه‌هایِ پرداخت</b>\n",
+             "با ⬆️ و ⬇️ جایِ دکمه‌ها را عوض کن و با «🏷» اسمی که کاربر می‌بیند را تغییر بده "
+             "(فقط درگاه‌هایی که پشتیبانی می‌کنند). ترتیب در «کیف پول» و دکمه‌هایِ شارژِ "
+             "صفحهٔ خرید اعمال می‌شود؛ درگاهِ غیرفعال اصلاً به کاربر نشان داده نمی‌شود.\n"]
+    rows = []
+    for n, key in enumerate(order):
+        cb, title, renamable = _BY_KEY[key]
+        shown = title
+        if renamable:
+            _d, sk = GATEWAY_LABELS.get(key, (key, f"{key}_display_name"))
+            cur = ((await _get(bot_id, sk, "")) or "").strip()
+            if cur:
+                shown = f"{title} ← «{cur}»"
+        lines.append(f"{n + 1}. {shown}")
+        r = [InlineKeyboardButton(text=f"{n + 1}. {title}", callback_data="gwl:noop")]
+        if renamable:
+            r.append(InlineKeyboardButton(text="🏷", callback_data=f"gwl:name:{key}"))
+        r.append(InlineKeyboardButton(text="⬆️", callback_data=f"gwl:up:{key}"))
+        r.append(InlineKeyboardButton(text="⬇️", callback_data=f"gwl:dn:{key}"))
+        rows.append(r)
+    rows.append([InlineKeyboardButton(text="♻️ برگشت به ترتیب و نامِ پیش‌فرض", callback_data="gwl:reset",
+                                      style=ButtonStyle.SUCCESS)])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:finance",
+                                      style=ButtonStyle.DANGER)])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _show(cb: CallbackQuery, bot_id: int) -> None:
+    text, kb = await _menu_content(bot_id)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def gwl_menu(cb: CallbackQuery, bot: Bot, state: FSMContext | None = None):
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    if state is not None:
+        await state.clear()
+    await _show(cb, row.id)
+    await cb.answer()
+
+
+@gateway_layout_router.callback_query(F.data == "gwl:menu")
+async def gwl_menu_cb(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    await gwl_menu(cb, bot, state)
+
+
+@gateway_layout_router.callback_query(F.data == "gwl:noop")
+async def gwl_noop(cb: CallbackQuery):
+    await cb.answer()
+
+
+@gateway_layout_router.callback_query(F.data.regexp(r"^gwl:(up|dn):"))
+async def gwl_move(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok, set_setting
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    _, direction, key = cb.data.split(":", 2)
+    order = await get_order(row.id)
+    if key not in order:
+        await cb.answer()
+        return
+    i = order.index(key)
+    j = i - 1 if direction == "up" else i + 1
+    if 0 <= j < len(order):
+        order[i], order[j] = order[j], order[i]
+        await set_setting(row.id, "gw_order", ",".join(order))
+    await _show(cb, row.id)
+    await cb.answer()
+
+
+@gateway_layout_router.callback_query(F.data == "gwl:reset")
+async def gwl_reset(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok, set_setting, GATEWAY_LABELS
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await set_setting(row.id, "gw_order", "")
+    for key, _cb, _t, renamable in ITEMS:
+        if renamable:
+            _d, sk = GATEWAY_LABELS.get(key, (key, f"{key}_display_name"))
+            await set_setting(row.id, sk, "")
+    await _show(cb, row.id)
+    await cb.answer("به پیش‌فرض برگشت.")
+
+
+@gateway_layout_router.callback_query(F.data.startswith("gwl:name:"))
+async def gwl_name_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok, smart_cancel_kb
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    key = cb.data.split(":", 2)[2]
+    if key not in _BY_KEY or not _BY_KEY[key][2]:
+        await cb.answer()
+        return
+    await state.set_state(GwLayoutFSM.name)
+    await state.update_data(gwl_key=key)
+    await cb.message.answer(
+        f"🏷 اسمِ جدیدِ دکمهٔ <b>{_BY_KEY[key][1]}</b> را بفرست (حداکثر ۴۰ حرف؛ همان‌طور که "
+        "نوشتی نمایش داده می‌شود).\nبرایِ برگشت به اسمِ پیش‌فرض: <code>پیش‌فرض</code>",
+        reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
+    await cb.answer()
+
+
+@gateway_layout_router.message(GwLayoutFSM.name, F.text)
+async def gwl_name_save(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok_msg, set_setting, GATEWAY_LABELS
+    row = await _owner_ok_msg(msg, bot)
+    data = await state.get_data()
+    await state.clear()
+    if not row:
+        return
+    key = data.get("gwl_key")
+    if key not in _BY_KEY:
+        return
+    txt = (msg.text or "").strip()
+    _d, sk = GATEWAY_LABELS.get(key, (key, f"{key}_display_name"))
+    if txt in ("پیش‌فرض", "پیشفرض", "default", "-"):
+        await set_setting(row.id, sk, "")
+        await msg.answer("✅ به اسمِ پیش‌فرض برگشت.")
+    elif not txt:
+        await msg.answer("اسمِ نامعتبر.")
+        return
+    else:
+        await set_setting(row.id, sk, txt[:40])
+        await msg.answer(f"✅ اسمِ دکمه روی «{txt[:40]}» تنظیم شد.")
+    await msg.answer("برگشت به صفحهٔ نام و ترتیب:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎛 نام و ترتیبِ دکمه‌ها", callback_data="gwl:menu")]]))
