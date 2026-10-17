@@ -384,6 +384,18 @@ async def full_auto_toggle(cb: CallbackQuery, bot: Bot):
     await backup_menu(cb, bot)
 
 
+@backup_full_router.callback_query(F.data == "tadm:bkfull:auto7")
+async def full_auto_weekly(cb: CallbackQuery, bot: Bot):
+    """دکمهٔ پیامِ اعلانِ ادمین: بک‌آپِ خودکارِ هفتگی را (بدونِ چرخش) روشن می‌کند."""
+    from tenant import set_setting
+    row = await _owner_row(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    await set_setting(row.id, "auto_full_backup_days", "7")
+    await cb.answer("✅ بک‌آپِ خودکارِ هفتگی روشن شد؛ فایل در همین چت می‌آید.", show_alert=True)
+
+
 async def full_backup_auto_once() -> int:
     """برایِ رباتی که بک‌آپِ خودکار را روشن کرده، در فاصلهٔ تنظیم‌شده فایل را به پیوی مالک می‌فرستد."""
     from models import Bot as BotRow

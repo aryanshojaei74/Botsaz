@@ -140,6 +140,9 @@ router.include_router(fake_join_router)
 # === PATCH_SPLIT_BOTRESET_V1 ===
 from platform_botreset import botreset_router
 router.include_router(botreset_router)
+# === PATCH_PLATFORM_BACKUP_V1 ===
+from platform_backup import platform_backup_router
+router.include_router(platform_backup_router)
 # === PATCH_TONPAYS_PLATFORM_V1 ===
 from platform_tonpays import platform_tonpays_router
 router.include_router(platform_tonpays_router)
@@ -16220,6 +16223,10 @@ async def _render_adm_bots_page(cb: CallbackQuery, page: int, flt: str = "active
     kb_rows.append([hx_button("🗓 فیلتر بازه (۱/۲ ماهه)", callback_data="admbots:durf:1:0")])
     kb_rows.append([hx_button("♻️ بازگردانی گروهی ربات‌های قدیمی به ۱ ماهه",
                               callback_data="admbots:bulkrevert")])
+    # === PATCH_PLATFORM_BACKUP_V1 === بک‌آپِ کاملِ بات‌ساز + اعلانِ بک‌آپ به مالکانِ ربات‌ها (فقط ادمینِ اصلی)
+    from platform_backup import is_platform_admin as _is_pa, backup_buttons as _pb_btns
+    if _is_pa(cb.from_user.id):
+        kb_rows.append(_pb_btns())
 
     if not rows:
         kb_rows.append([hx_button("⬅️ بازگشت", callback_data="adm:back",
