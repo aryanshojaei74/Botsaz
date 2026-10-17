@@ -13010,12 +13010,34 @@ async def _order_details_html(bot_id: int, trk: str) -> str:
         return ""
 
 
+def compact_order_details(det: str) -> str:
+    """=== PATCH_ORDER_TICKET_FORMAT_V1 === (Fadayi) مشخصاتِ سفارش برایِ تیکت: فقط «مقدار»ِ هر خط قابلِ‌کپی (<code>)،
+    نه کلِ بلوک؛ و کلِ مشخصات در نقل‌قولِ جمع‌شونده (expandable) تا تیکت کوتاه بماند."""
+    import html as _h
+    import re as _re
+    if not det:
+        return ""
+
+    def _fix(m):
+        out = []
+        for line in m.group(1).strip("\n").split("\n"):
+            mm = _re.match(r"\s*≡\s*(.+?)\s*:\s*(.*)$", line)
+            if not mm:
+                out.append(line.strip())
+                continue
+            key, val = mm.group(1), _h.unescape(mm.group(2)).strip()
+            out.append(f"{key}: " + (f"<code>{_h.escape(val)}</code>" if val and val != "—" else "—"))
+        return "\n".join(out)
+    body = _re.sub(r"<code>(.*?)</code>", _fix, det, flags=_re.S)
+    return f"<blockquote expandable>{body.strip()}</blockquote>"
+
+
 async def build_order_ticket_text(bot_id: int, trk: str, user_text: str = "") -> str:
     import html as _h
-    parts = [f"📞 <b>پیگیریِ سفارش</b> — کدِ پیگیری: <code>{_h.escape(trk)}</code>"]
+    parts = [f"📞 <b>پیگیریِ سفارش</b>\nکدِ پیگیری: <code>{_h.escape(trk)}</code>"]
     if user_text.strip():
         parts.append("💬 <b>پیامِ مشتری:</b>\n" + _h.escape(user_text.strip()))
-    det = await _order_details_html(bot_id, trk)
+    det = compact_order_details(await _order_details_html(bot_id, trk))
     if det:
         parts.append("📋 <b>مشخصاتِ سفارش:</b>\n" + det)
     else:
@@ -13042,13 +13064,13 @@ async def recent_orders_ticket_block(bot_id: int, telegram_id: int, limit: int =
         rows.sort(key=lambda r: r[1] or 0, reverse=True)
         parts = []
         for trk, _ in rows[:limit]:
-            det = await _order_details_html(bot_id, trk)
+            det = compact_order_details(await _order_details_html(bot_id, trk))
             if det:
-                parts.append(f"🔖 <code>{_h.escape(trk)}</code>\n{det}")
+                parts.append(f"🔖 کدِ پیگیری: <code>{_h.escape(trk)}</code>\n{det}")
         if not parts:
             return "⚠️ این مشتری سفارشِ ثبت‌شده‌ای با کدِ پیگیری ندارد."
-        out = "📋 <b>آخرین سفارش‌هایِ این مشتری:</b>\n\n" + "\n\n— — —\n\n".join(parts)
-        return out[:2800]
+        out = "📋 <b>آخرین سفارش‌هایِ این مشتری:</b>\n\n" + "\n\n".join(parts)
+        return out if len(out) <= 3000 else "📋 <b>آخرین سفارش‌هایِ این مشتری:</b>\n\n" + "\n\n".join(parts[:2])
     except Exception:
         logger.exception("آخرین سفارش‌هایِ مشتری برایِ تیکت خوانده نشد")
         return ""

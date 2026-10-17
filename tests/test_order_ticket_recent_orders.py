@@ -42,3 +42,14 @@ async def test_block_lists_buyer_orders(env, monkeypatch):
 async def test_block_without_orders_says_so(env):
     out = await smm.recent_orders_ticket_block(3, 999)
     assert "سفارشِ ثبت‌شده" in out
+
+
+def test_compact_details_copies_values_only_in_expandable_quote():
+    det = ("🔴 <b>وضعیت سفارش:</b> تکمیل\n\n📋 <b>مشخصات سفارش:</b>\n<code>\n≡ شناسه سفارش : AB12\n"
+           "≡ لینک : https://t.me/x?a=1&b=2\n≡ باقیمانده : —\n</code>\n🗓 تاریخ ثبت: 1405")
+    out = smm.compact_order_details(det)
+    assert out.startswith("<blockquote expandable>") and out.endswith("</blockquote>")
+    assert "شناسه سفارش: <code>AB12</code>" in out
+    assert "لینک: <code>https://t.me/x?a=1&amp;b=2</code>" in out
+    assert "باقیمانده: —" in out and "≡" not in out
+    assert "<code>\n" not in out                      # بلوکِ کپیِ کامل برداشته شد
