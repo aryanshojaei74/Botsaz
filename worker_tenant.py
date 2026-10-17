@@ -66,6 +66,7 @@ from tenant.gateways.abangateway import abangateway_poll_loop as _abangateway_lo
 # === PATCH_GROUP_BETTING_EXPIRY_LOOP_V1 ===
 from tenant.shared.group_betting import betting_expiry_loop as _betting_expiry_loop
 from tenant.bots.vpn.vpn_metered import metered_loop as _metered_loop   # PATCH_METERED_PLAN_V1
+from tenant.shared.backup_full import full_backup_auto_loop as _full_backup_loop   # PATCH_BACKUP_FULL_V1
 from tenant.shared.extras import referral_vs_reconcile_loop as _referral_vs_loop   # PATCH_REF_VS_RECONCILE_V1
 from tenant.shared.support_ticket import ticket_autoclose_loop as _ticket_autoclose_loop   # PATCH_TICKET_ORDER_SETTINGS_V1
 from tenant.bots.virtual_service.ozvinoo_vnum import ozvinoo_poll_loop as _ozvinoo_poll_loop
@@ -109,6 +110,7 @@ async def _worker_startup():
         _metered_loop(),   # PATCH_METERED_PLAN_V1
         _ticket_autoclose_loop(),   # PATCH_TICKET_ORDER_SETTINGS_V1
         _referral_vs_loop(),   # PATCH_REF_VS_RECONCILE_V1
+        _full_backup_loop(),   # PATCH_BACKUP_FULL_V1
         _stock_alarm_loop(),
         _vnum_recover_loop(),
         # === PATCH_TRAFFIC_OUT_CLEANUP_V1 ===

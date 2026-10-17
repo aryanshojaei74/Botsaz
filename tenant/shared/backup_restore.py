@@ -340,16 +340,28 @@ async def _restore_backup(bot_id: int, data: dict) -> None:
 
 # ═══════════════════ صفحه‌ی اصلیِ بخش ═══════════════════
 
-async def _backup_menu_content() -> tuple[str, InlineKeyboardMarkup]:
+async def _backup_menu_content(bot_id: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
     text = (
         "💾 <b>بک‌آپِ کاملِ ربات</b>\n\n"
         "همه‌ی دکمه‌ها، پنل‌هایِ API، دسته‌بندی‌ها و سرویس‌هایِ رباتت رو تویِ یه فایلِ "
         "<code>.botsaz</code> ذخیره کن. اگه بعداً ربات رو عوض کردی (توکنِ جدید، ربات‌سازِ جدید)، "
         "همین فایل رو ایمپورت کن تا همه‌چی دقیقاً به همون حالتِ قبل برگرده.\n\n"
         "⚠️ فایلِ خروجی شاملِ کلیدهایِ API پنل‌هاته — نگهش دار ولی با کسی به اشتراک نذار.")
+    _auto_lbl = "⛔️ خاموش"
+    if bot_id:
+        from tenant import get_setting as _gs
+        _auto_lbl = {"7": "🗓 هفتگی", "1": "📆 روزانه"}.get(str(await _gs(bot_id, "auto_full_backup_days", "0")), "⛔️ خاموش")
+    text += ("\n\n🗄 <b>بک‌آپِ کامل</b> علاوه بر این‌ها، کاربران، موجودیِ کیف‌پول‌ها، تراکنش‌ها، سفارش‌ها و تیکت‌ها را هم "
+             "نگه می‌دارد؛ اگر سرور از بین رفت، فایل را به رباتِ جدید بده تا همه‌چیز برگردد.")
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📤 خروجی‌گرفتن (Export)", callback_data="tadm:backup:export", style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="📥 بازگردانی (Import)", callback_data="tadm:backup:import", style=ButtonStyle.DANGER)],
+        # === PATCH_BACKUP_FULL_V1 === بک‌آپِ کامل: کاربران/کیف‌پول/سفارش‌ها و ...
+        [InlineKeyboardButton(text="🗄 بک‌آپِ کامل (با کاربران و کیف‌پول)", callback_data="tadm:bkfull:export",
+                              style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="📥 بازگردانیِ کامل", callback_data="tadm:bkfull:import", style=ButtonStyle.DANGER)],
+        [InlineKeyboardButton(text=f"⏰ بک‌آپِ خودکار در پیوی تو: {_auto_lbl}", callback_data="tadm:bkfull:auto",
+                              style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:settings", style=ButtonStyle.DANGER)],
     ])
     return text, kb
@@ -362,7 +374,7 @@ async def backup_menu(cb: CallbackQuery, bot: Bot):
     if not row or cb.from_user.id != row.owner_id:  # فایل شاملِ رمز/کلیدِ پنل‌هاست — فقط مالک
         await cb.answer()
         return
-    text, kb = await _backup_menu_content()
+    text, kb = await _backup_menu_content(row.id)
     try:
         await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except Exception:

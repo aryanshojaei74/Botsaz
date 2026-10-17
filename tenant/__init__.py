@@ -95,6 +95,7 @@ from tenant.shared.group_wallet import group_wallet_router  # === PATCH_GROUP_WA
 from tenant.shared.group_betting import betting_router  # === PATCH_GROUP_BETTING_V1 ===
 from tenant.bots.virtual_service.smm_ai import smm_ai_router  # === PATCH_SMM_AI_ASSISTANT_V1 ===
 from tenant.shared.backup_restore import backup_router, backup_menu  # === PATCH_BOT_BACKUP_V1 ===
+from tenant.shared.backup_full import backup_full_router  # === PATCH_BACKUP_FULL_V1 ===
 from models import DiceGame  # === PATCH_PARTNER_HUB_GIFT_DICE_V1 ===
 from models import SmmOrder, GiftOrder  # === PATCH_ORDER_TRACKING_V1 ===
 from models import order_no  # شناسهٔ واحدِ سفارش
@@ -241,6 +242,7 @@ tenant_router.include_router(group_wallet_router)  # === PATCH_GROUP_WALLET_V1 =
 tenant_router.include_router(betting_router)  # === PATCH_GROUP_BETTING_V1 ===
 _include(smm_ai_router, "virtual_service")  # === PATCH_SMM_AI_ASSISTANT_V1 ===
 tenant_router.include_router(backup_router)  # === PATCH_BOT_BACKUP_V1 ===
+tenant_router.include_router(backup_full_router)  # === PATCH_BACKUP_FULL_V1 ===
 _include(community_router, "community_mgmt")  # === PATCH_COMMUNITY_MGMT_V1 ===
 _include(funstat_bot_router, "funstat")  # === PATCH_FUNSTAT_BOT_V1 ===
 tenant_router.include_router(slideshow_router)
