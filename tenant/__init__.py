@@ -97,6 +97,7 @@ from tenant.bots.virtual_service.smm_ai import smm_ai_router  # === PATCH_SMM_AI
 from tenant.shared.backup_restore import backup_router, backup_menu  # === PATCH_BOT_BACKUP_V1 ===
 from tenant.shared.backup_full import backup_full_router  # === PATCH_BACKUP_FULL_V1 ===
 from tenant.bots.vpn.svc_cleanup import svc_cleanup_router  # === PATCH_SVC_CLEANUP_V1 ===
+from tenant.shared.charge_bonus import charge_bonus_router  # === PATCH_CHARGE_BONUS_V1 === (هوکِ بونوس هم با import نصب می‌شود)
 from models import DiceGame  # === PATCH_PARTNER_HUB_GIFT_DICE_V1 ===
 from models import SmmOrder, GiftOrder  # === PATCH_ORDER_TRACKING_V1 ===
 from models import order_no  # شناسهٔ واحدِ سفارش
@@ -245,6 +246,7 @@ _include(smm_ai_router, "virtual_service")  # === PATCH_SMM_AI_ASSISTANT_V1 ===
 tenant_router.include_router(backup_router)  # === PATCH_BOT_BACKUP_V1 ===
 tenant_router.include_router(backup_full_router)  # === PATCH_BACKUP_FULL_V1 ===
 _include(svc_cleanup_router, "vpn")  # === PATCH_SVC_CLEANUP_V1 === فقط پروسه‌هایِ VPN
+_include(charge_bonus_router)  # === PATCH_CHARGE_BONUS_V1 ===
 _include(community_router, "community_mgmt")  # === PATCH_COMMUNITY_MGMT_V1 ===
 _include(funstat_bot_router, "funstat")  # === PATCH_FUNSTAT_BOT_V1 ===
 tenant_router.include_router(slideshow_router)
@@ -6499,6 +6501,7 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
                 "set:phonelog": ("tenant", "set_phonelog_start"),
                 # === PATCH_FINANCE_KEYBOARD_MODE_MISSING_ENTRIES_V1 ===
                 "tadm:welcomebonus": ("tenant", "tadm_welcomebonus"),
+                "tadm:chgbonus": ("tenant.shared.charge_bonus", "tadm_chgbonus"),   # PATCH_CHARGE_BONUS_V1
                 "tadm:firstbuy": ("tenant", "tadm_firstbuy"),
                 "set:trrep": ("tenant.shared.trial_report_admin", "trrep_menu"),   # PATCH_TRIAL_REPORT_KEYBOARD_MODE_V1
             }
@@ -7522,10 +7525,17 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
     elif ref_count > 0:
         ref_note = f"\n\n👥 دعوت‌شدگان: {ref_count} نفر"
 
+    try:
+        from tenant.shared.charge_bonus import wallet_hint as _cb_hint   # PATCH_CHARGE_BONUS_V1
+        _cb_note = await _cb_hint(bot_id)
+    except Exception:
+        logger.exception("charge bonus hint")
+        _cb_note = ""
     wallet_text = (
         f"{header}"
         f"💰 <b>کیف پول</b>\n\n"
         f"💵 موجودی: <b>{rial(u.balance)}</b>"
+        f"{_cb_note}"
         f"{ref_note}"
         f"\n\n⚠️ <i>مبلغ کیف پول قابل برداشت نمی‌باشد و فقط برای خرید سرویس استفاده می‌شود.</i>"
     )
@@ -11380,6 +11390,9 @@ async def _sec_finance_opts(bot_id: int, plan: str) -> list[tuple[str, str]]:
     opts.append(("🎁 هدیهٔ ورودِ کاربرانِ جدید: "
                  + (f"✅ {int(_wb_amt):,} ت" if _wb_on else "❌ خاموش"),
                  "tadm:welcomebonus"))
+    # === PATCH_CHARGE_BONUS_V1 === بونوسِ درصدیِ شارژِ کیف پول (پله‌ای)
+    _cb_on = await get_setting(bot_id, "chg_bonus_on", "") == "1"
+    opts.append(("🎁 بونوسِ شارژِ کیف پول: " + ("✅ روشن" if _cb_on else "❌ خاموش"), "tadm:chgbonus"))
     # === PATCH_SETTINGS_REGISTRY_V5_SECTIONS ===
     # گزینه‌هایِ مخصوصِ هر نوعِ ربات در این بخش از tenant/bots/<kind>/settings.py می‌آیند.
     try:
@@ -11454,6 +11467,7 @@ async def _sec_finance_kb(bot_id: int, plan: str) -> InlineKeyboardMarkup | Repl
         "tadm:payguide": ButtonStyle.PRIMARY,
         # === PATCH_WELCOME_BONUS_V1 ===
         "tadm:welcomebonus": ButtonStyle.SUCCESS,
+        "tadm:chgbonus": ButtonStyle.SUCCESS,   # PATCH_CHARGE_BONUS_V1
     }
     if await get_setting(bot_id, "menu_mode", "reply") != "inline":
         rows = []
