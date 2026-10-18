@@ -60,6 +60,20 @@ def _is_admin(uid: int) -> bool:
     return uid == PLATFORM_ADMIN_ID
 
 
+def _utc_str(dt: datetime | None = None) -> str:
+    return (dt or datetime.utcnow()).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _is_expired(v) -> bool:
+    """تاریخِ پایان گذشته؟ (NULL = نامحدود). «T» و فاصله هر دو پذیرفته می‌شود."""
+    if not v:
+        return False
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "")[:19].replace("T", " ")) <= datetime.utcnow()
+    except ValueError:
+        return False
+
+
 def _fdate(v) -> str:
     if not v:
         return "نامحدود"
@@ -125,11 +139,9 @@ async def sftp_stats(cb: CallbackQuery):
         blocked = (await q(
             "select count(*) c from sftp_subscriptions where is_blocked=1"
         ))[0]["c"]
-        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-        active = (await q(
-            "select count(*) c from sftp_subscriptions "
-            "where is_blocked=0 and (expires_at is null or expires_at > ?)",
-            (now,)))[0]["c"]
+        # مقایسهٔ رشته‌ایِ «T» با فاصله باعث می‌شد اشتراکِ همان روز تا نیمه‌شب «فعال» حساب شود
+        _subs = await q("select is_blocked, expires_at from sftp_subscriptions")
+        active = sum(1 for r in _subs if not r["is_blocked"] and not _is_expired(r["expires_at"]))
         recent = (await q(
             "select count(*) c from sftp_connections "
             "where last_used_at is not null and last_used_at > ?",
@@ -173,7 +185,7 @@ async def sftp_users(cb: CallbackQuery):
 
     lines = [f"👥 <b>کاربرانِ SFTP</b> — مجموع {total}\n"]
     for r in rows:
-        mark = "⛔️" if r["is_blocked"] else "✅"
+        mark = "⛔️" if r["is_blocked"] else ("⌛️" if _is_expired(r["expires_at"]) else "✅")
         note = f" — {r['note']}" if r["note"] else ""
         lines.append(
             f"{mark} <code>{r['telegram_id']}</code> · "
@@ -333,17 +345,26 @@ async def sftp_block_do(msg: Message, state: FSMContext):
     tid = int(t)
     rows = await q("select is_blocked from sftp_subscriptions "
                    "where telegram_id=?", (tid,))
+    warn = ""
     if not rows:
+        # باگِ خطرناک: expires_at=NULL یعنی «نامحدود»؛ مسدودکردنِ کسی که اشتراک نداشت و بعد رفعِ مسدودی،
+        # اشتراکِ نامحدودِ رایگان می‌داد. ردیفِ تازه با تاریخِ پایانِ «همین الان» ساخته می‌شود.
         await q("insert into sftp_subscriptions"
-                "(telegram_id, expires_at, is_blocked) values(?, NULL, 1)",
-                (tid,), write=True)
+                "(telegram_id, expires_at, is_blocked) values(?, ?, 1)",
+                (tid, _utc_str()), write=True)
         new = 1
     else:
         new = 0 if rows[0]["is_blocked"] else 1
         await q("update sftp_subscriptions set is_blocked=? "
                 "where telegram_id=?", (new, tid), write=True)
+        if not new:
+            cur = (await q("select expires_at from sftp_subscriptions where telegram_id=?", (tid,)))[0]["expires_at"]
+            if not cur:
+                warn = "\n⚠️ این اشتراک <b>نامحدود</b> است (بدونِ تاریخِ پایان). اگر درست نیست، با «تمدید/اعطا» تاریخ بده."
+            elif _is_expired(cur):
+                warn = "\nℹ️ اشتراکش منقضی است؛ تا تمدید نشود دسترسی ندارد."
     await state.clear()
     logger.info("[SFTP_ADMIN] block tid=%s -> %s", tid, new)
     await msg.answer(
-        f"{'⛔️ مسدود شد' if new else '✅ رفعِ مسدودی شد'}: <code>{tid}</code>",
+        f"{'⛔️ مسدود شد' if new else '✅ رفعِ مسدودی شد'}: <code>{tid}</code>{warn}",
         reply_markup=_back_kb())

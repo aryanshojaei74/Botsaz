@@ -500,37 +500,72 @@ async def _vps_start(cb: CallbackQuery, p: MarketProject,
         "<code>123456789:AAE...</code>")
 
 
+async def _claim_trial(user_id: int, pid: int) -> int | None:
+    """=== PATCH_MARKET_AUDIT_V1 === ردیفِ تستِ این کاربر/پروژه را «پیش از نصب» اتمیک می‌نویسد؛
+    دو درخواستِ هم‌زمان (یا دو بارِ زدنِ دکمه) هر دو تست نمی‌گیرند. None = قبلاً تست گرفته."""
+    async with Session() as s:
+        # قفلِ ردیفِ کاربر: بررسی + ثبتِ تست پشتِ‌سرِهم و بدونِ رقابت انجام شود
+        await s.scalar(select(PlatformUser.id).where(
+            PlatformUser.telegram_id == user_id).with_for_update())
+        if await s.scalar(select(MarketPurchase.id).where(
+                MarketPurchase.user_telegram_id == user_id,
+                MarketPurchase.project_id == pid,
+                MarketPurchase.kind == "trial").limit(1)):
+            return None
+        pu = MarketPurchase(project_id=pid, user_telegram_id=user_id, kind="trial",
+                            price_paid=0, hosted_app_id=_VPS_CLAIM_PENDING)
+        s.add(pu)
+        await s.commit()
+        return pu.id
+
+
+async def _release_trial_claim(purchase_id: int) -> None:
+    """نصبِ تست ناموفق بود ⇒ ردیفِ رزروشده پاک شود تا کاربر بتواند دوباره تلاش کند."""
+    async with Session() as s:
+        pu = await s.get(MarketPurchase, purchase_id, with_for_update=True)
+        if pu and pu.kind == "trial" and pu.hosted_app_id == _VPS_CLAIM_PENDING:
+            await s.delete(pu)
+            await s.commit()
+
+
+def _app_name(p: MarketProject, user_id: int, trial: bool, claim_id: int | None) -> str:
+    """نامِ یکتای اپ. قبلاً «نامِ پروژه + user_id % 100000» بود: دو کاربرِ مختلف (مثلاً ...76827)
+    یا تست + خریدِ همان کاربر نامِ یکسان می‌گرفتند و نصبِ کاربرِ پول‌داده با «نام تکراری» رد می‌شد."""
+    base = re.sub(r"[^a-z0-9]+", "", (p.title or "bot").lower())[:12] or "bot"
+    tail = f"t{claim_id}" if trial else f"p{claim_id}"
+    return f"{base}{user_id}{tail}"[:40]
+
+
 async def _provision(bot: Bot, user_id: int, p: MarketProject,
                      token: str, admin_id: int, trial: bool) -> None:
     """ساختِ اپ رویِ سرویسِ میزبانی و ثبتِ خرید."""
-
-    # نامِ یکتا برایِ اپ: نامِ پروژه + آیدیِ کاربر
-    base = re.sub(r"[^a-z0-9]+", "", (p.title or "bot").lower())[:12] or "bot"
-    name = f"{base}{user_id % 100000}"
-
-    if not p.zip_file_id:
+    if not p.zip_file_id and not (p.zip_path and os.path.exists(p.zip_path)):
         await bot.send_message(user_id,
             "⚠️ فایلِ این پروژه هنوز آپلود نشده. به پشتیبانی پیام بده.")
         return
 
     claim_id = None
+    trial_claim = None
     if trial:
-        async with Session() as s:
-            if await s.scalar(select(MarketPurchase.id).where(
-                    MarketPurchase.user_telegram_id == user_id,
-                    MarketPurchase.project_id == p.id,
-                    MarketPurchase.kind == "trial").limit(1)):
-                await bot.send_message(user_id, "قبلاً تستِ این پروژه را گرفته‌ای.")
-                return
+        trial_claim = await _claim_trial(user_id, p.id)
+        if not trial_claim:
+            await bot.send_message(user_id, "قبلاً تستِ این پروژه را گرفته‌ای.")
+            return
+        claim_id = trial_claim
     else:
         claim_id = await _claim_vps_credit(user_id, p.id)
         if not claim_id:
             await bot.send_message(user_id, _VPS_USED_MSG)
             return
+    name = _app_name(p, user_id, trial, claim_id)
+    ok = False
     try:
-        await _provision_body(bot, user_id, p, token, admin_id, trial, name, claim_id)
+        ok = await _provision_body(bot, user_id, p, token, admin_id, trial, name, claim_id)
     finally:
-        if claim_id:
+        if trial_claim:
+            if not ok:
+                await _release_trial_claim(trial_claim)
+        elif claim_id:
             # اگر نصب به هر دلیلی ثبت نشد، اعتبارِ خرید برمی‌گردد
             await _settle_vps_credit(claim_id, None)
 
@@ -541,19 +576,24 @@ _VPS_USED_MSG = ("⚠️ نصبِ رویِ VPS برایِ این خرید قبل
 
 async def _provision_body(bot: Bot, user_id: int, p: MarketProject, token: str,
                           admin_id: int, trial: bool, name: str,
-                          claim_id: int | None) -> None:
+                          claim_id: int | None) -> bool:
+    """True = اپ ساخته و به خرید/تست وصل شد."""
     from platform_bot import _vip_api
     await bot.send_message(user_id, "⏳ در حال نصبِ پروژه رویِ سرور… (تا یک دقیقه)")
 
-    # دانلودِ zip از تلگرام
+    # دانلودِ zip از تلگرام (یا از دیسک برایِ پروژه‌هایِ دارایِ zip_path)
     try:
-        f = await bot.get_file(p.zip_file_id)
-        buf = await bot.download_file(f.file_path)
-        data = buf.read()
+        if p.zip_file_id:
+            f = await bot.get_file(p.zip_file_id)
+            buf = await bot.download_file(f.file_path)
+            data = buf.read()
+        else:
+            with open(p.zip_path, "rb") as fh:
+                data = fh.read()
     except Exception:
         logger.exception("دانلودِ zipِ پروژه ناموفق بود")
         await bot.send_message(user_id, "⚠️ دریافتِ فایلِ پروژه ناموفق بود؛ تیکت بزن.")
-        return
+        return False
 
     import json as _json
     import aiohttp
@@ -600,18 +640,31 @@ async def _provision_body(bot: Bot, user_id: int, p: MarketProject, token: str,
                 f"⚠️ نصبِ خودکارِ پروژه ناموفق\n👤 <code>{user_id}</code>\n📦 {p.title}\n{res}")
         except Exception:
             logger.exception("اطلاع به مدیر ناموفق بود")
-        return
+        return False
 
     app_id = (res or {}).get("app_id")
-    if trial:
+    if not app_id:
+        # پاسخِ سرویس بدونِ app_id: از رویِ نام پیدایش می‌کنیم؛ بدونِ اتصالِ اپ، پایانِ خودکارِ تست
+        # (و گزارشِ خریدار) کار نمی‌کند و تست تا ابد می‌ماند.
+        from models import HostedApp as _HA
         async with Session() as s:
-            s.add(MarketPurchase(
-                project_id=p.id, user_telegram_id=user_id,
-                kind="trial", price_paid=0,
-                hosted_app_id=app_id,
-                trial_expires_at=datetime.datetime.now() + datetime.timedelta(
-                    minutes=p.trial_minutes or 20)))
-            await s.commit()
+            app_id = await s.scalar(select(_HA.id).where(_HA.name == name))
+    if trial:
+        if not app_id:
+            await bot.send_message(user_id, "⚠️ نصب انجام شد ولی اتصالِ اپ ثبت نشد؛ تیکت بزن.")
+            try:
+                await bot.send_message(PLATFORM_ADMIN_ID,
+                    f"⚠️ تستِ بدونِ app_id — خاموشیِ خودکار کار نمی‌کند!\n👤 <code>{user_id}</code>\n⚡️ {name}")
+            except Exception:
+                logger.exception("اطلاع به مدیر ناموفق بود")
+            return False
+        async with Session() as s:
+            pu = await s.get(MarketPurchase, claim_id, with_for_update=True)
+            if pu:
+                pu.hosted_app_id = int(app_id)
+                pu.trial_expires_at = datetime.datetime.now() + datetime.timedelta(
+                    minutes=p.trial_minutes or 20)
+                await s.commit()
     else:
         # همان ردیفِ خرید به اپ وصل می‌شود (قبلاً ردیفِ تازه با قیمتِ کامل ثبت
         # می‌شد و آمارِ فروش را دو برابر نشان می‌داد)
@@ -658,6 +711,7 @@ async def _provision_body(bot: Bot, user_id: int, p: MarketProject, token: str,
             + ("\n🧪 تست" if trial else ""))
     except Exception:
         logger.exception("اطلاع به مدیر ناموفق بود")
+    return True
 
 
 @market_router.message(ProvisionFSM.token, F.text)
@@ -1257,15 +1311,42 @@ async def mka_buyer(cb: CallbackQuery):
 # «suspended» می‌کنیم؛ ناظرِ سرویسِ میزبانی ظرفِ ~۲ دقیقه کانتینر را متوقف
 # می‌کند. پولی‌شدن (paid_until در آینده) یا بایگانی/خاموشیِ قبلی را نادیده می‌گیریم.
 
+async def _stop_app_now(app_id: int) -> None:
+    """=== PATCH_MARKET_AUDIT_V1 === علاوه بر «suspended» (که ناظرِ سرویسِ میزبانی ظرفِ ~۲ دقیقه اعمال
+    می‌کند)، کانتینر را همان لحظه هم از راهِ APIِ ادمین خاموش می‌کنیم. خطا ⇒ فقط لاگ؛ ناظر جبران می‌کند."""
+    try:
+        from platform_bot import _vip_api
+        ok, res = await _vip_api("POST", f"/api/hosting/admin/{app_id}/action", data={"action": "stop"})
+        if not ok:
+            logger.warning("market trial: توقفِ فوریِ اپ %s ممکن نشد: %s", app_id, res)
+    except Exception:
+        logger.exception("market trial: توقفِ فوریِ اپ %s خطا داد", app_id)
+
+
+async def _drop_stale_trial_claims() -> None:
+    """رزروِ تستی که نصبش وسطِ راه قطع شده (ری‌استارتِ ورکر و…) ۱۵ دقیقه بعد آزاد می‌شود."""
+    cutoff = datetime.datetime.now() - datetime.timedelta(minutes=15)
+    async with Session() as s:
+        rows = (await s.scalars(select(MarketPurchase).where(
+            MarketPurchase.kind == "trial",
+            MarketPurchase.hosted_app_id == _VPS_CLAIM_PENDING,
+            MarketPurchase.created_at < cutoff))).all()
+        for r in rows:
+            await s.delete(r)
+        if rows:
+            await s.commit()
+
+
 async def expire_market_trials_once(bot: Bot | None = None) -> int:
     now = datetime.datetime.now()
+    await _drop_stale_trial_claims()
     async with Session() as s:
         due = (await s.scalars(select(MarketPurchase).where(
             MarketPurchase.kind == "trial",
             MarketPurchase.trial_ended_at.is_(None),
             MarketPurchase.trial_expires_at.isnot(None),
             MarketPurchase.trial_expires_at <= now,
-            MarketPurchase.hosted_app_id.isnot(None)).limit(50))).all()
+            MarketPurchase.hosted_app_id > 0).limit(50))).all()
         todo = []
         for pu in due:
             pu.trial_ended_at = now
@@ -1274,14 +1355,19 @@ async def expire_market_trials_once(bot: Bot | None = None) -> int:
                 continue
             if app.paid_until and app.paid_until > now:
                 continue            # در این فاصله پولی شده/تمدید شده
-            if app.status in ("archived", "suspended"):
+            if app.status == "archived":
                 continue
+            was_suspended = app.status == "suspended"
             app.status = "suspended"
             proj = await s.get(MarketProject, pu.project_id)
             todo.append((pu.user_telegram_id, app.name,
-                         (proj.title if proj else "پروژه"), pu.project_id))
+                         (proj.title if proj else "پروژه"), pu.project_id,
+                         app.id, was_suspended))
         await s.commit()
-    for uid, name, title, pid in todo:
+    for uid, name, title, pid, app_id, was_suspended in todo:
+        await _stop_app_now(app_id)       # حتی اگر قبلاً suspended بود، کانتینر ممکن است هنوز بالا باشد
+        if was_suspended:
+            continue
         logger.info("market trial: اپِ %s (کاربر %s) خاموش شد", name, uid)
         if bot is None:
             continue
@@ -1295,7 +1381,30 @@ async def expire_market_trials_once(bot: Bot | None = None) -> int:
                     style=ButtonStyle.SUCCESS)]]))
         except Exception:
             logger.exception("اطلاعِ پایانِ تست به کاربر نرسید")
-    return len(todo)
+    todo_n = len(todo)
+
+    # === PATCH_MARKET_AUDIT_V1 === دورِ دوم: تستِ تمام‌شده‌ای که کسی دوباره روشنش کرده (از مینی‌اپِ
+    # میزبانی یا هر راهِ دیگر) و پولی نشده ⇒ دوباره خاموش. فقط ۳ روزِ اخیر تا کوئری سبک بماند.
+    since = now - datetime.timedelta(days=3)
+    async with Session() as s:
+        ended = (await s.scalars(select(MarketPurchase).where(
+            MarketPurchase.kind == "trial",
+            MarketPurchase.trial_ended_at.isnot(None),
+            MarketPurchase.trial_ended_at >= since,
+            MarketPurchase.hosted_app_id > 0).limit(100))).all()
+        relive = []
+        for pu in ended:
+            app = await s.get(HostedApp, pu.hosted_app_id)
+            if (app and app.status in ("running", "building")
+                    and not (app.paid_until and app.paid_until > now)):
+                app.status = "suspended"
+                relive.append(app.id)
+        if relive:
+            await s.commit()
+    for app_id in relive:
+        logger.warning("market trial: اپِ تستِ تمام‌شدهٔ %s دوباره روشن شده بود؛ خاموش شد", app_id)
+        await _stop_app_now(app_id)
+    return todo_n + len(relive)
 
 
 async def market_trial_expiry_loop(interval_sec: int = 60, platform_bot: Bot | None = None):
