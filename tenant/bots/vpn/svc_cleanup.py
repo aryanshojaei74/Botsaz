@@ -138,8 +138,13 @@ def entry_button() -> InlineKeyboardButton:
 # ───────────────────────── هندلرها ─────────────────────────
 
 async def _owner(cb: CallbackQuery, bot: Bot):
+    """مالک/ادمینِ یک رباتِ فروشِ VPN؛ رباتِ دیگر هرگز به این صفحه‌ها دسترسی ندارد."""
     from tenant.bots.vpn.vpn_admin import _owner as _o
-    return await _o(cb, bot)
+    row = await _o(cb, bot)
+    if row and row.field != "vpn_sales":
+        await cb.answer()
+        return None
+    return row
 
 
 async def _show(cb: CallbackQuery, text: str, kb: InlineKeyboardMarkup) -> None:

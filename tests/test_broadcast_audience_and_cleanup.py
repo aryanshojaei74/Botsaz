@@ -135,3 +135,54 @@ async def test_runner_sends_only_to_audience(db, monkeypatch):
 
 async def _noop():
     return None
+
+
+class _Msg:
+    def __init__(self):
+        self.out = []
+
+    async def answer(self, text, **k):
+        self.out.append((text, k.get("reply_markup")))
+
+
+@pytest.mark.asyncio
+async def test_non_vpn_bot_skips_audience_step(db, monkeypatch):
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.memory import MemoryStorage, StorageKey
+    state = FSMContext(MemoryStorage(), StorageKey(bot_id=1, chat_id=1, user_id=1))
+    confirmed = []
+
+    async def go(msg, st):
+        confirmed.append(1)
+    monkeypatch.setattr(tenant, "_bc_go_to_confirm", go)
+
+    async def gbr_other(bot):
+        return SimpleNamespace(id=4, field="virtual_service")      # ربات ۴ سرویس دارد ولی VPN نیست
+    monkeypatch.setattr(tenant, "get_bot_row", gbr_other)
+    await tenant._bc_ask_audience(_Msg(), state, object())
+    assert confirmed == [1] and (await state.get_data()).get("bc_audience") == ""
+    assert await state.get_state() is None                          # مرحلهٔ مخاطب نشان داده نشد
+
+    async def gbr_vpn(bot):
+        return SimpleNamespace(id=4, field="vpn_sales")
+    monkeypatch.setattr(tenant, "get_bot_row", gbr_vpn)
+    m = _Msg()
+    await tenant._bc_ask_audience(m, state, object())
+    assert await state.get_state() == tenant.AdminFSM.broadcast_audience.state
+    assert "برایِ چه کسانی" in m.out[0][0]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_handlers_reject_non_vpn_bot(db, monkeypatch):
+    import tenant.bots.vpn.vpn_admin as va
+
+    async def owner(cb, bot):
+        return SimpleNamespace(id=4, field="digital_shop")
+    monkeypatch.setattr(va, "_owner", owner)
+
+    class Cb:
+        answered = 0
+
+        async def answer(self, *a, **k):
+            Cb.answered += 1
+    assert await sc._owner(Cb(), object()) is None and Cb.answered == 1

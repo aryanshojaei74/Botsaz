@@ -244,7 +244,7 @@ tenant_router.include_router(betting_router)  # === PATCH_GROUP_BETTING_V1 ===
 _include(smm_ai_router, "virtual_service")  # === PATCH_SMM_AI_ASSISTANT_V1 ===
 tenant_router.include_router(backup_router)  # === PATCH_BOT_BACKUP_V1 ===
 tenant_router.include_router(backup_full_router)  # === PATCH_BACKUP_FULL_V1 ===
-tenant_router.include_router(svc_cleanup_router)  # === PATCH_SVC_CLEANUP_V1 ===
+_include(svc_cleanup_router, "vpn")  # === PATCH_SVC_CLEANUP_V1 === فقط پروسه‌هایِ VPN
 _include(community_router, "community_mgmt")  # === PATCH_COMMUNITY_MGMT_V1 ===
 _include(funstat_bot_router, "funstat")  # === PATCH_FUNSTAT_BOT_V1 ===
 tenant_router.include_router(slideshow_router)
@@ -6581,7 +6581,7 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
             await msg.answer(info, reply_markup=kb)
             return
         # === PATCH_SVC_CLEANUP_V1 ===
-        if msg.text == "🧹 سرویس‌های منقضی‌شده (حذف دستی)":
+        if msg.text == "🧹 سرویس‌های منقضی‌شده (حذف دستی)" and row.field == "vpn_sales":
             from tenant.bots.vpn.svc_cleanup import render_list as _exp_render
             _etext, _ekb = await _exp_render(row.id, 0)
             await msg.answer(_etext, reply_markup=_ekb)
@@ -27333,7 +27333,8 @@ async def _bc_ask_audience(msg: Message, state: FSMContext, bot: Bot):
     سرویسِ VPN ندارد، مرحله رد می‌شود و برایِ همه می‌رود."""
     from tenant.shared.broadcast_runner import audience_options
     row = await get_bot_row(bot)
-    opts = await audience_options(row.id) if row else []
+    # فقط رباتِ فروشِ VPN؛ رباتِ دیگر (خدماتِ مجازی، فروشگاه، رزرو، …) این مرحله را نمی‌بیند.
+    opts = await audience_options(row.id) if (row and row.field == "vpn_sales") else []
     if not opts:
         await state.update_data(bc_audience="")
         await _bc_go_to_confirm(msg, state)
