@@ -30,8 +30,9 @@ from models import PlatformTonPaysCharge, PlatformTxn, PlatformUser
 from tenant.gateways.tonpays import (
     CHANGE_CARD_COOLDOWN, build_invoice_view, change_card,
     DISCLAIMER, ERROR_FA, MIN_AMOUNT, NEED_ACTION_TEXT, RECEIPT_MAX_BYTES,
-    STATUS_FA as _STATUS_FA_SHARED, TonPaysError, check_invoice, create_invoice,
-    is_custom_order, pick_card, upload_receipt, validate_api_key,
+    STATUS_FA as _STATUS_FA_SHARED, TonPaysError, cancel_at_gateway, check_invoice, create_invoice,
+    is_custom_order, need_action_hint, pending_kb, pending_text, pick_card, upload_receipt,
+    validate_api_key,
 )
 
 logger = _get_logger(__name__)
@@ -128,6 +129,8 @@ async def settle_charge(order_id: str) -> tuple[bool, str, int]:
         _hint = ""
         if _custom and _st in ("pending", "need_action"):
             _hint = " اگر واریز کرده‌ای، «📎 ارسال فیش» را بزن و تصویرِ فیش را بفرست."
+        if _st == "need_action":   # PATCH_TONPAYS_PENDING_V1
+            _hint += need_action_hint(info)
         return False, f"هنوز پرداخت تایید نشده (وضعیت: {_STATUS_FA.get(_st, _st)}).{_hint}", 0
 
     reported = int(info.get("request_amount") or 0)
@@ -445,15 +448,25 @@ async def ptonp_amount(msg: Message, bot: Bot, state: FSMContext):
             "یک مبلغِ بیشتر بفرست:", parse_mode="HTML")
         return
     await state.clear()
+    await _create_invoice(bot, msg, msg.from_user.id, amount)
 
+
+async def _create_invoice(bot: Bot, msg: Message, user_id: int, amount: int, after_cancel: bool = False):
+    from platform_bot import get_pset, set_pset
     _custom = await is_custom_mode()   # PATCH_TONPAYS_CUSTOM_V1
     api_key = await _get_key(_custom)
     order_id = _new_order_id(_custom)
     await msg.answer("⏳ در حال ساختِ فاکتور…")
     try:
         inv = await create_invoice(api_key, amount, order_id, _callback_url(),
-                                   buyer_chat_id=msg.from_user.id,
+                                   buyer_chat_id=user_id,
                                    custom=_custom)  # PATCH_TONPAYS_DOCS_V2
+    except TonPaysError as e:
+        if e.code == "PENDING_INVOICE_EXISTS":   # PATCH_TONPAYS_PENDING_V1
+            await _offer_cancel_pending(msg, user_id, amount, _custom, after_cancel)
+            return
+        await msg.answer(f"❌ ساختِ فاکتور ناموفق بود.\n{e}")
+        return
     except Exception as e:
         await msg.answer(f"❌ ساختِ فاکتور ناموفق بود.\n{e}")
         return
@@ -465,7 +478,7 @@ async def ptonp_amount(msg: Message, bot: Bot, state: FSMContext):
 
     async with Session() as s:
         s.add(PlatformTonPaysCharge(
-            user_telegram_id=msg.from_user.id, order_id=order_id,
+            user_telegram_id=user_id, order_id=order_id,
             invoice_id=invoice_id, request_amount=amount,
             final_amount=final_amount, status="waiting"))
         await s.commit()
@@ -486,6 +499,64 @@ async def ptonp_amount(msg: Message, bot: Bot, state: FSMContext):
         invoice_url=invoice_url, web_invoice_url=web_invoice_url, rial_fn=_rial)
     await msg.answer(_text, parse_mode="HTML", reply_markup=_kb)
     asyncio.create_task(_auto_poll(bot, order_id, msg.chat.id))
+
+
+# === PATCH_TONPAYS_PENDING_V1 ===
+async def _offer_cancel_pending(msg: Message, user_id: int, amount: int, custom: bool,
+                                after_cancel: bool) -> None:
+    async with Session() as s:
+        ch = await s.scalar(select(PlatformTonPaysCharge).where(
+            PlatformTonPaysCharge.user_telegram_id == user_id,
+            PlatformTonPaysCharge.status == "waiting",
+            PlatformTonPaysCharge.order_id.like("pc%" if custom else "pt%"),
+        ).order_by(PlatformTonPaysCharge.id.desc()))
+    if after_cancel or not ch:
+        await msg.answer(
+            "⚠️ در درگاه هنوز یک فاکتورِ پرداخت‌نشده برایِ تو باز است و فعلاً فاکتورِ جدید ساخته نمی‌شود.\n"
+            "چند دقیقه بعد دوباره تلاش کن (فاکتور خودکار منقضی می‌شود) یا با پشتیبانی تماس بگیر.")
+        return
+    await msg.answer(pending_text(ch.request_amount), parse_mode="HTML",
+                     reply_markup=pending_kb("ptonp", ch.order_id, amount))
+
+
+@platform_tonpays_router.callback_query(F.data.startswith("ptonp:cnew:"))
+async def ptonp_cancel_and_new(cb: CallbackQuery, bot: Bot):
+    try:
+        _, _, order_id, amt = cb.data.split(":")
+        amount = int(amt)
+    except ValueError:
+        await cb.answer("درخواست نامعتبر است.", show_alert=True)
+        return
+    async with Session() as s:
+        ch = await s.scalar(select(PlatformTonPaysCharge).where(
+            PlatformTonPaysCharge.order_id == order_id))
+    if not ch or ch.user_telegram_id != cb.from_user.id:
+        await cb.answer("این فاکتور پیدا نشد.", show_alert=True)
+        return
+    if ch.status == "paid":
+        await cb.answer("این فاکتور قبلاً پرداخت شده است.", show_alert=True)
+        return
+    await cb.answer("⏳ در حال لغو…")
+    _custom = is_custom_order(order_id)
+    res, why = await cancel_at_gateway(await _get_key(_custom), ch.invoice_id, _custom)
+    if res == "paid":
+        ok, text, _a = await settle_charge(order_id)
+        await cb.message.answer("✅ " + text if ok else text)
+        return
+    async with Session() as s:
+        await s.execute(
+            sa_update(PlatformTonPaysCharge)
+            .where(PlatformTonPaysCharge.order_id == order_id,
+                   PlatformTonPaysCharge.status != "paid")
+            .values(status="cancelled"))
+        await s.commit()
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        logger.debug("ptonp: پاک‌کردنِ دکمه‌هایِ لغو ممکن نشد (بی‌اهمیت)")
+    if res == "error":
+        logger.warning("ptonpays cancel-and-new: gateway cancel failed for %s: %s", order_id, why)
+    await _create_invoice(bot, cb.message, cb.from_user.id, amount, after_cancel=True)
 
 
 @platform_tonpays_router.callback_query(F.data.startswith("ptonp:verify:"))
@@ -666,9 +737,18 @@ async def ptonp_cancel(cb: CallbackQuery):
     async with Session() as s:
         ch = await s.scalar(select(PlatformTonPaysCharge).where(
             PlatformTonPaysCharge.order_id == order_id))
-        if not ch or ch.user_telegram_id != cb.from_user.id:
-            await cb.answer("این فاکتور پیدا نشد.", show_alert=True)
-            return
+    if not ch or ch.user_telegram_id != cb.from_user.id:
+        await cb.answer("این فاکتور پیدا نشد.", show_alert=True)
+        return
+    # === PATCH_TONPAYS_PENDING_V1 === لغو در خودِ درگاه (اگر واریز شده بود، شارژ)
+    _custom = is_custom_order(order_id)
+    _res, _why = await cancel_at_gateway(await _get_key(_custom), ch.invoice_id, _custom)
+    if _res == "paid":
+        ok, text, _a = await settle_charge(order_id)
+        await cb.answer()
+        await cb.message.answer("✅ " + text if ok else text)
+        return
+    async with Session() as s:
         # لغوِ اتمی: نوشتنِ بی‌شرط می‌توانست وضعیتِ «paid» را که هم‌زمان ثبت
         # شده بود به «cancelled» برگرداند و فاکتور دوباره قابلِ تسویه می‌شد
         res = await s.execute(

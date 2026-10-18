@@ -193,10 +193,11 @@ class TonPaysError(RuntimeError):
     """خطایِ درگاه با کدِ ماشینی (مثلاً RATE_LIMIT_EXCEEDED). زیرکلاسِ
     RuntimeError است تا همهٔ except/RuntimeErrorهایِ قبلی بی‌تغییر کار کنند."""
 
-    def __init__(self, message: str, code: str = "", status: int = 0):
+    def __init__(self, message: str, code: str = "", status: int = 0, data: dict | None = None):
         super().__init__(message)
         self.code = code
         self.status = status
+        self.data = data or {}
 
 
 # پیامِ فارسیِ کدهایِ خطایِ مستندات (فقط برایِ نمایش به کاربر/مالک)
@@ -224,6 +225,9 @@ ERROR_FA = {
     "RATE_LIMIT_EXCEEDED": "تعدادِ درخواست‌ها به درگاه زیاد شد؛ چند لحظه بعد دوباره تلاش کن.",
     "INVOICE_NOT_FOUND": "فاکتور در درگاه پیدا نشد.",
     "ACCESS_DENIED": "دسترسی به این فاکتور ندارید.",
+    # === PATCH_TONPAYS_PENDING_V1 ===
+    "PENDING_INVOICE_EXISTS": "یک فاکتورِ پرداخت‌نشده در درگاه داری؛ باید اول لغوش کنی.",
+    "CANCEL_UNSUPPORTED": "لغوِ فاکتور در درگاه ممکن نشد.",
 }
 
 # وضعیت‌هایِ نهاییِ ناموفق طبقِ مستندات
@@ -299,6 +303,26 @@ def _err_text(data: dict, status: int, min_amount: int | None = None) -> str:
     return f"خطای HTTP {status}"
 
 
+# === PATCH_TONPAYS_PENDING_V1 === (آپدیتِ ۱۸ اکتبرِ TonPays)
+# از این پس خریدارِ دارایِ فاکتورِ «در انتظارِ پرداخت» نمی‌تواند فاکتورِ دیگری بسازد مگر
+# اول لغوش کند (یا منقضی شود). تا وقتی ربات‌ساز این را پیاده نکرده، خودِ درگاه فاکتورِ قبلی را
+# خودکار منقضی می‌کند؛ پس این مسیر فقط وقتی فعال می‌شود که درگاه صریحاً «فاکتورِ باز دارد» بگوید.
+PENDING_CODE_HINTS = ("PENDING", "OPEN_INVOICE", "ACTIVE_INVOICE", "UNPAID_INVOICE")
+
+
+def _is_pending_err(data: dict, status: int = 0) -> bool:
+    code = _err_code(data).upper()
+    if code and any(h in code for h in PENDING_CODE_HINTS):
+        return True
+    try:
+        import json as _j
+        txt = _j.dumps(data, ensure_ascii=False).lower()
+    except Exception:
+        return False
+    return ("pending" in txt and "invoice" in txt and status in (400, 403, 409, 422, 429)
+            and "rate" not in txt)
+
+
 async def health() -> bool:
     if aiohttp is None:
         return False
@@ -337,6 +361,8 @@ async def create_invoice(api_key: str, amount_toman: int, order_id: str,
         if _is_merchant_buyer_err(data):   # PATCH_TONPAYS_MERCHANT_BUYER_V1
             raise TonPaysError(ERROR_FA["BUYER_IS_MERCHANT"], "BUYER_IS_MERCHANT", status)
         code = _err_code(data)
+        if _is_pending_err(data, status):   # PATCH_TONPAYS_PENDING_V1
+            raise TonPaysError(ERROR_FA["PENDING_INVOICE_EXISTS"], "PENDING_INVOICE_EXISTS", status, data)
         if status in (401, 403) and not code:
             raise TonPaysError(ERROR_FA["INVALID_API_KEY"], "INVALID_API_KEY", status)
         raise TonPaysError(_err_text(data, status), code, status)
@@ -350,6 +376,8 @@ async def create_invoice(api_key: str, amount_toman: int, order_id: str,
         if status in (200, 201):
             return data
         code = _err_code(data)
+    if _is_pending_err(data, status):   # PATCH_TONPAYS_PENDING_V1
+        raise TonPaysError(ERROR_FA["PENDING_INVOICE_EXISTS"], "PENDING_INVOICE_EXISTS", status, data)
     if status in (401, 403) and not code:
         raise TonPaysError("کلید API معتبر نیست (INVALID_API_KEY). از منویِ رباتِ "
                            "TonPays یک کلیدِ تازه بگیر.", "INVALID_API_KEY", status)
@@ -368,6 +396,104 @@ async def check_invoice(api_key: str, invoice_id: str, custom: bool = False) -> 
 def is_paid(info: dict) -> bool:
     """پرداختِ تأییدشده طبقِ مستندات: paid=true یا status=completed."""
     return bool(info.get("paid")) or (info.get("status") == "completed")
+
+
+# === PATCH_TONPAYS_PENDING_V1 === لغوِ فاکتور در خودِ درگاه
+# مسیرِ دقیقِ API لغو در PDF مستندات نیامده؛ چند مسیرِ محتمل به‌ترتیب امتحان می‌شود و اولین
+# مسیری که پاسخ داد (نه ۴۰۴/۴۰۵ بدونِ کدِ خطا) ملاک است. وقتی مسیرِ قطعی معلوم شد، فقط همین دو
+# فهرست را عوض کن.
+CANCEL_PATHS = [
+    ("POST", "/api/v1/invoices/{id}/cancel", {}),
+    ("POST", "/api/v1/invoices/cancel", "invoice_id"),
+]
+CUSTOM_CANCEL_PATHS = [
+    ("POST", "/api/custom/v1/invoices/{id}/cancel", {}),
+    ("POST", "/api/custom/v1/invoices/cancel", "invoice_id"),
+]
+
+
+async def cancel_invoice(api_key: str, invoice_id: str, custom: bool = False) -> dict:
+    """لغوِ فاکتورِ در انتظارِ پرداخت در درگاه. اگر هیچ مسیری وجود نداشت CANCEL_UNSUPPORTED."""
+    for method, path, extra in (CUSTOM_CANCEL_PATHS if custom else CANCEL_PATHS):
+        body = {extra: invoice_id} if isinstance(extra, str) else dict(extra)
+        status, data = await _request(method, path.format(id=invoice_id), api_key, body)
+        if status in (200, 201):
+            return data
+        code = _err_code(data)
+        if status in (404, 405) and not code:
+            continue   # این مسیر در درگاه وجود ندارد
+        raise TonPaysError(ERROR_FA.get(code) or _err_text(data, status), code, status, data)
+    raise TonPaysError(ERROR_FA["CANCEL_UNSUPPORTED"], "CANCEL_UNSUPPORTED", 0)
+
+
+async def cancel_at_gateway(api_key: str, invoice_id: str, custom: bool = False) -> tuple[str, str]:
+    """لغوِ امنِ فاکتور: اول استعلام (اگر پرداخت شده، لغو نمی‌شود).
+    خروجی: ("paid"|"cancelled"|"unsupported"|"error", توضیح)."""
+    if not api_key or not invoice_id:
+        return "unsupported", ""
+    try:
+        info = await check_invoice(api_key, invoice_id, custom=custom)
+        if is_paid(info):
+            return "paid", ""
+        if info.get("status") in TERMINAL_FAIL_STATUSES:
+            return "cancelled", ""        # قبلاً بسته شده (لغو/منقضی/ردّ)
+    except TonPaysError as e:
+        logger.info("tonpays cancel: precheck failed %s: %s", invoice_id, e)
+    try:
+        await cancel_invoice(api_key, invoice_id, custom)
+        return "cancelled", ""
+    except TonPaysError as e:
+        if e.code == "CANCEL_UNSUPPORTED":
+            return "unsupported", str(e)
+        return "error", str(e)
+    except Exception as e:  # noqa: BLE001 — خطایِ شبکه
+        logger.warning("tonpays cancel failed %s: %s", invoice_id, e)
+        return "error", str(e)
+
+
+_REMAINING_KEYS = ("remaining_amount", "remaining", "remaining_toman", "shortfall", "missing_amount",
+                   "underpaid_amount")
+_EXCESS_KEYS = ("excess_amount", "overpaid_amount", "extra_amount", "surplus_amount")
+
+
+def _first_amount(info: dict, keys: tuple) -> int:
+    for k in keys:
+        try:
+            v = int(float(info.get(k) or 0))
+        except (TypeError, ValueError):
+            continue
+        if v > 0:
+            return v
+    return 0
+
+
+def need_action_hint(info: dict) -> str:
+    """توضیحِ وضعیتِ «نیاز به اقدام»: کمتر واریز شده (مبلغِ باقی‌مانده) یا بیشتر (عودت)."""
+    rem = _first_amount(info, _REMAINING_KEYS)
+    if rem:
+        return (f" مبلغِ واریزی کمتر از فاکتور بوده؛ باقی‌مانده: {rem:,} تومان. "
+                "به پشتیبانیِ درگاه پیام بده تا فاکتورِ مبلغِ باقی‌مانده را بدهند و آن را هم واریز کنی.")
+    exc = _first_amount(info, _EXCESS_KEYS)
+    if exc:
+        return (f" مبلغِ واریزی {exc:,} تومان بیشتر از فاکتور بوده؛ به پشتیبانیِ درگاه پیام بده و "
+                "شمارهٔ کارتی که با آن واریز کردی را بفرست تا مبلغِ اضافه عودت شود.")
+    return ""
+
+
+def pending_text(amount: int | None = None) -> str:
+    amt = f" به مبلغِ <b>{int(amount):,} تومان</b>" if amount else ""
+    return (f"⚠️ شما یک پرداختِ ریالیِ نیمه‌کاره{amt} در درگاه دارید که در ربات ثبت شده است. "
+            "تا آن باز است، پرداختِ جدید ساخته نمی‌شود.\n\n"
+            "اگر به آن واریز کرده‌اید، <b>لغو نکنید</b> و با پشتیبانی در تماس باشید؛ "
+            "در غیرِ این صورت «لغو و پرداختِ جدید» را بزنید.")
+
+
+def pending_kb(prefix: str, order_id: str, amount: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ واریز کرده‌ام، بررسی کن", callback_data=f"{prefix}:verify:{order_id}")],
+        [InlineKeyboardButton(text="❌ لغو و پرداخت جدید", callback_data=f"{prefix}:cnew:{order_id}:{int(amount)}",
+                              style=ButtonStyle.DANGER)],
+    ])
 
 
 # === PATCH_TONPAYS_CHANGE_CARD_V1 ===
@@ -556,6 +682,8 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
         _hint = ""
         if _custom and st in ("pending", "need_action"):
             _hint = " اگر واریز کرده‌ای، «📎 ارسال فیش» را بزن و تصویرِ فیش را بفرست."
+        if st == "need_action":   # PATCH_TONPAYS_PENDING_V1
+            _hint += need_action_hint(info)
         return False, f"هنوز پرداخت تایید نشده (وضعیت: {STATUS_FA.get(st, st)}).{_hint}", 0
 
     # مبلغ هم باید با چیزی که خودمان ثبت کرده‌ایم بخواند
@@ -1283,7 +1411,8 @@ async def tonp_make_cancel(cb: CallbackQuery, state: FSMContext):
         logger.debug("tonp: ویرایشِ پیامِ لغو ممکن نشد (بی‌اهمیت)")
 
 
-async def _create_invoice(bot: Bot, row, msg: Message, user_id: int, amount: int):
+async def _create_invoice(bot: Bot, row, msg: Message, user_id: int, amount: int,
+                          after_cancel: bool = False):
     """ساختِ فاکتور و ارسالِ آن. msg فقط برایِ پاسخ دادن (answer/chat)؛ شناسهٔ کاربر جدا می‌آید
     (در مسیرِ کلیک، msg پیامِ خودِ ربات است)."""
     from tenant import get_setting, rial
@@ -1295,6 +1424,12 @@ async def _create_invoice(bot: Bot, row, msg: Message, user_id: int, amount: int
         inv = await create_invoice(api_key, amount, order_id, callback_url(),
                                    buyer_chat_id=user_id,
                                    custom=_custom)  # PATCH_TONPAYS_DOCS_V2
+    except TonPaysError as e:
+        if e.code == "PENDING_INVOICE_EXISTS":   # PATCH_TONPAYS_PENDING_V1
+            await _offer_cancel_pending(msg, row.id, user_id, amount, _custom, after_cancel)
+            return
+        await msg.answer(f"❌ ساختِ فاکتور ناموفق بود.\n{e}")
+        return
     except Exception as e:
         await msg.answer(f"❌ ساختِ فاکتور ناموفق بود.\n{e}")
         return
@@ -1435,6 +1570,73 @@ async def _auto_poll(bot: Bot, bot_id: int, order_id: str, chat_id: int) -> None
         logger.exception("tonpays auto-poll final notice")
 
 
+# === PATCH_TONPAYS_PENDING_V1 ===
+async def _offer_cancel_pending(msg: Message, bot_id: int, user_id: int, amount: int,
+                                custom: bool, after_cancel: bool) -> None:
+    """درگاه گفته کاربر فاکتورِ بازِ پرداخت‌نشده دارد ⇒ پیام + دکمهٔ «لغو و پرداخت جدید»."""
+    async with Session() as s:
+        ch = await s.scalar(select(TonPaysCharge).where(
+            TonPaysCharge.bot_id == bot_id, TonPaysCharge.user_telegram_id == user_id,
+            TonPaysCharge.status == "waiting",
+            TonPaysCharge.order_id.like("tc%" if custom else "tp%"),
+        ).order_by(TonPaysCharge.id.desc()))
+    if after_cancel or not ch:
+        # لغو انجام شده/فاکتور را نمی‌شناسیم ⇒ فقط توضیح (حلقهٔ بی‌پایان نمی‌سازیم)
+        await msg.answer(
+            "⚠️ در درگاه هنوز یک فاکتورِ پرداخت‌نشده برایِ تو باز است و فعلاً فاکتورِ جدید ساخته نمی‌شود.\n"
+            "چند دقیقه بعد دوباره تلاش کن (فاکتور خودکار منقضی می‌شود) یا با پشتیبانی تماس بگیر.")
+        return
+    await msg.answer(pending_text(ch.request_amount), parse_mode="HTML",
+                     reply_markup=pending_kb("tonp", ch.order_id, amount))
+
+
+@tonpays_router.callback_query(F.data.startswith("tonp:cnew:"))
+async def tonp_cancel_and_new(cb: CallbackQuery, bot: Bot):
+    """لغوِ فاکتورِ قبلی (در درگاه + محلی) و ساختِ فاکتورِ جدید با همان مبلغ."""
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    try:
+        _, _, order_id, amt = cb.data.split(":")
+        amount = int(amt)
+    except ValueError:
+        await cb.answer("درخواست نامعتبر است.", show_alert=True)
+        return
+    if not row:
+        await cb.answer()
+        return
+    async with Session() as s:
+        ch = await s.scalar(select(TonPaysCharge).where(
+            TonPaysCharge.bot_id == row.id, TonPaysCharge.order_id == order_id))
+    if not ch or ch.user_telegram_id != cb.from_user.id:
+        await cb.answer("این فاکتور پیدا نشد.", show_alert=True)
+        return
+    if ch.status == "paid":
+        await cb.answer("این فاکتور قبلاً پرداخت شده است.", show_alert=True)
+        return
+    await cb.answer("⏳ در حال لغو…")
+    _custom = is_custom_order(order_id)
+    api_key = await get_key(row.id, _custom)
+    res, why = await cancel_at_gateway(api_key, ch.invoice_id, _custom)
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        logger.debug("tonp: پاک‌کردنِ دکمه‌هایِ لغو ممکن نشد (بی‌اهمیت)")
+    if res == "paid":    # واریز شده بود: لغو نمی‌کنیم، شارژ می‌کنیم
+        ok, text, _amt = await settle_charge(row.id, order_id)
+        await cb.message.answer("✅ " + text if ok else text)
+        return
+    async with Session() as s:
+        await s.execute(
+            sa_update(TonPaysCharge)
+            .where(TonPaysCharge.bot_id == row.id, TonPaysCharge.order_id == order_id,
+                   TonPaysCharge.status != "paid")
+            .values(status="cancelled"))
+        await s.commit()
+    if res == "error":
+        logger.warning("tonpays cancel-and-new: gateway cancel failed for %s: %s", order_id, why)
+    await _create_invoice(bot, row, cb.message, cb.from_user.id, amount, after_cancel=True)
+
+
 @tonpays_router.callback_query(F.data.startswith("tonp:cancel:"))
 async def tonp_cancel(cb: CallbackQuery, bot: Bot):
     """لغوِ یک فاکتورِ پرداخت‌نشده (فقط سمتِ ما — پیگیریِ خودکار هم متوقف می‌شود)."""
@@ -1454,15 +1656,29 @@ async def tonp_cancel(cb: CallbackQuery, bot: Bot):
             await cb.answer("این فاکتور قبلاً پرداخت شده و قابلِ لغو نیست.",
                             show_alert=True)
             return
-        ch.status = "cancelled"
-        await s.commit()
-    await cb.answer("فاکتور لغو شد.")
+        _inv_id = ch.invoice_id
+    # === PATCH_TONPAYS_PENDING_V1 === فاکتور در خودِ درگاه هم لغو شود (وگرنه فاکتورِ بعدی رد می‌شود)
+    _custom = is_custom_order(order_id)
+    res, _why = await cancel_at_gateway(await get_key(row.id, _custom), _inv_id, _custom)
+    _paid_text = ""
+    if res == "paid":
+        ok, text, _amt = await settle_charge(row.id, order_id)
+        _paid_text = ("✅ " + text) if ok else text
+    else:
+        async with Session() as s:
+            await s.execute(
+                sa_update(TonPaysCharge)
+                .where(TonPaysCharge.bot_id == row.id, TonPaysCharge.order_id == order_id,
+                       TonPaysCharge.status != "paid")
+                .values(status="cancelled"))
+            await s.commit()
+    await cb.answer("فاکتور لغو شد." if not _paid_text else "")
     try:
         await cb.message.edit_reply_markup(reply_markup=None)
     except Exception:
         logger.debug("تمیزکاریِ ظاهریِ پیام ناموفق بود (بی‌اهمیت)")
     await cb.message.answer(
-        "❌ فاکتور لغو شد. اگر بعداً خواستی، دوباره از کیف پول شارژ را شروع کن.\n\n"
+        _paid_text or "❌ فاکتور لغو شد. اگر بعداً خواستی، دوباره از کیف پول شارژ را شروع کن.\n\n"
         "⚠️ اگر قبلِ لغو واریز کرده بودی، با پشتیبانی تماس بگیر.")
 
 
