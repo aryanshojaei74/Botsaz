@@ -36,6 +36,75 @@ _RUNNING: set[int] = set()
 _TASKS: set = set()
 
 
+# === PATCH_BROADCAST_AUDIENCE_V1 === (تیکت #863) انتخابِ مخاطبِ پیامِ همگانی بر اساسِ سرویس‌هایِ VPN
+AUD_ALL = ""
+AUD_ANY = "svc_any"
+AUD_UNLIMITED = "svc_unlimited"
+AUD_NONE = "svc_none"
+AUD_PANEL = "panel:"
+
+
+def audience_clause(bot_id: int, audience: str | None):
+    """شرطِ SQLAlchemy روی BotUser برایِ مخاطب؛ None یعنی همهٔ کاربران."""
+    if not audience:
+        return None
+    from models import PanelAccount
+    q = select(PanelAccount.user_telegram_id).where(PanelAccount.bot_id == bot_id)
+    if audience == AUD_UNLIMITED:
+        q = q.where(PanelAccount.volume_gb == 0, PanelAccount.volume_mb.is_(None))
+    elif audience.startswith(AUD_PANEL):
+        q = q.where(PanelAccount.panel_key == audience[len(AUD_PANEL):])
+    elif audience not in (AUD_ANY, AUD_NONE):
+        return None
+    cond = BotUser.telegram_id.in_(q)
+    return ~cond if audience == AUD_NONE else cond
+
+
+async def audience_count(bot_id: int, audience: str | None) -> int:
+    from sqlalchemy import func
+    cond = audience_clause(bot_id, audience)
+    q = select(func.count(BotUser.id)).where(BotUser.bot_id == bot_id, BotUser.is_banned == False)   # noqa: E712
+    if cond is not None:
+        q = q.where(cond)
+    async with Session() as s:
+        return int(await s.scalar(q) or 0)
+
+
+async def audience_options(bot_id: int) -> list[tuple[str, str, int]]:
+    """[(کلید، برچسب، تعدادِ مخاطب)] — فقط اگر ربات اصلاً سرویسِ VPN دارد؛ وگرنه []."""
+    from models import PanelAccount
+    from sqlalchemy import func
+    async with Session() as s:
+        n_acc = int(await s.scalar(select(func.count(PanelAccount.id)).where(PanelAccount.bot_id == bot_id)) or 0)
+        panel_keys = [k for k in (await s.scalars(select(PanelAccount.panel_key).where(
+            PanelAccount.bot_id == bot_id).distinct())).all() if k]
+    if not n_acc:
+        return []
+    out = [(AUD_ALL, "👥 همهٔ کاربران", await audience_count(bot_id, AUD_ALL)),
+           (AUD_ANY, "📡 فقط دارندگانِ سرویس", await audience_count(bot_id, AUD_ANY)),
+           (AUD_UNLIMITED, "♾ فقط دارندگانِ سرویسِ نامحدود", await audience_count(bot_id, AUD_UNLIMITED))]
+    try:
+        from tenant.bots.vpn.vpn_admin import panel_label
+    except Exception:   # noqa: BLE001
+        panel_label = None
+    for k in sorted(panel_keys):
+        try:
+            lbl = await panel_label(bot_id, k) if panel_label else k
+        except Exception:   # noqa: BLE001
+            lbl = k
+        a = AUD_PANEL + k
+        out.append((a, f"🛰 فقط دارندگانِ سرویسِ «{lbl}»", await audience_count(bot_id, a)))
+    out.append((AUD_NONE, "🆕 بدونِ سرویس (هنوز نخریده‌اند)", await audience_count(bot_id, AUD_NONE)))
+    return out
+
+
+def audience_label(options: list[tuple[str, str, int]], audience: str | None) -> str:
+    for k, lbl, _n in options:
+        if k == (audience or ""):
+            return lbl
+    return "👥 همهٔ کاربران"
+
+
 def _now() -> _dt.datetime:
     return _dt.datetime.utcnow()
 
@@ -113,10 +182,14 @@ async def run_broadcast(bc_id: int) -> None:
             await _edit_progress(bot, bc, f"📢 ادامهٔ ارسالِ همگانی #{bc_id} پس از ری‌استارت… "
                                           f"({sent + failed:,} از {total:,})")
         while status == "sending":
+            _aud = audience_clause(bc.bot_id, bc.audience)    # PATCH_BROADCAST_AUDIENCE_V1
+            _q = select(BotUser.id, BotUser.telegram_id, BotUser.is_blocked).where(
+                BotUser.bot_id == bc.bot_id, BotUser.is_banned == False,   # noqa: E712
+                BotUser.id > cursor)
+            if _aud is not None:
+                _q = _q.where(_aud)
             async with Session() as s:
-                users = (await s.execute(select(BotUser.id, BotUser.telegram_id, BotUser.is_blocked).where(
-                    BotUser.bot_id == bc.bot_id, BotUser.is_banned == False,   # noqa: E712
-                    BotUser.id > cursor).order_by(BotUser.id).limit(_BATCH))).all()
+                users = (await s.execute(_q.order_by(BotUser.id).limit(_BATCH))).all()
             if not users:
                 break
             for uid, tg_id, was_blocked in users:

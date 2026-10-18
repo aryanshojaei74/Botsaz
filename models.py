@@ -566,6 +566,8 @@ class Broadcast(Base):
     cursor_uid: Mapped[int | None] = mapped_column(Integer)      # آخرین BotUser.id که پردازش شد
     total_count: Mapped[int | None] = mapped_column(Integer)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime)  # ضربانِ اجرا (برایِ تشخیصِ اجرایِ مرده)
+    # === PATCH_BROADCAST_AUDIENCE_V1 === (تیکت #863) مخاطب: خالی=همه | svc_any | svc_unlimited | svc_none | panel:<key>
+    audience: Mapped[str | None] = mapped_column(String(60), nullable=True)
 
 
 class ForceJoin(Base):

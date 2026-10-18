@@ -736,6 +736,7 @@ async def menu_kb(panels: list[VpnPanel], bot_id: int = 0) -> "InlineKeyboardMar
         # نداشتن (نه باگِ نمایشی، دکمه واقعاً وجود نداشت).
         rows.append([KeyboardButton(text="🔍 جستجوی کانفیگ با کد سرویس", style=ButtonStyle.PRIMARY)])  # === PATCH_VPN_PANEL_COLOR_V1 ===
         rows.append([KeyboardButton(text="🤝 حساب‌های همکار (تخفیف)", style=ButtonStyle.PRIMARY)])  # === PATCH_VPN_PANEL_COLOR_V1 ===
+        rows.append([KeyboardButton(text="🧹 سرویس‌های منقضی‌شده (حذف دستی)", style=ButtonStyle.PRIMARY)])  # PATCH_SVC_CLEANUP_V1
         rows.append([KeyboardButton(text="⬅️ بازگشت به سرویس‌ها و محصولات")])
         return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
@@ -788,6 +789,9 @@ async def menu_kb(panels: list[VpnPanel], bot_id: int = 0) -> "InlineKeyboardMar
         text="🤝 حساب‌های همکار (تخفیف)",
         callback_data="vprt:list:vpn",
         style=ButtonStyle.PRIMARY)])  # === PATCH_VPN_PANEL_COLOR_V1 ===
+    # === PATCH_SVC_CLEANUP_V1 === (تیکت #863) حذفِ دستیِ سرویس‌هایِ منقضی‌نشده‌حذف‌شده
+    from tenant.bots.vpn.svc_cleanup import entry_button as _svc_cleanup_btn
+    rows.append([_svc_cleanup_btn()])
 
     # === PATCH_QR_BACKGROUND_V1 ===
     # دکمه‌اش به «🎛 دکمه‌ها و تنظیمات» منتقل شد، چون فقط مالِ پنلِ خودکار

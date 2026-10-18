@@ -96,6 +96,7 @@ from tenant.shared.group_betting import betting_router  # === PATCH_GROUP_BETTIN
 from tenant.bots.virtual_service.smm_ai import smm_ai_router  # === PATCH_SMM_AI_ASSISTANT_V1 ===
 from tenant.shared.backup_restore import backup_router, backup_menu  # === PATCH_BOT_BACKUP_V1 ===
 from tenant.shared.backup_full import backup_full_router  # === PATCH_BACKUP_FULL_V1 ===
+from tenant.bots.vpn.svc_cleanup import svc_cleanup_router  # === PATCH_SVC_CLEANUP_V1 ===
 from models import DiceGame  # === PATCH_PARTNER_HUB_GIFT_DICE_V1 ===
 from models import SmmOrder, GiftOrder  # === PATCH_ORDER_TRACKING_V1 ===
 from models import order_no  # شناسهٔ واحدِ سفارش
@@ -243,6 +244,7 @@ tenant_router.include_router(betting_router)  # === PATCH_GROUP_BETTING_V1 ===
 _include(smm_ai_router, "virtual_service")  # === PATCH_SMM_AI_ASSISTANT_V1 ===
 tenant_router.include_router(backup_router)  # === PATCH_BOT_BACKUP_V1 ===
 tenant_router.include_router(backup_full_router)  # === PATCH_BACKUP_FULL_V1 ===
+tenant_router.include_router(svc_cleanup_router)  # === PATCH_SVC_CLEANUP_V1 ===
 _include(community_router, "community_mgmt")  # === PATCH_COMMUNITY_MGMT_V1 ===
 _include(funstat_bot_router, "funstat")  # === PATCH_FUNSTAT_BOT_V1 ===
 tenant_router.include_router(slideshow_router)
@@ -4312,6 +4314,7 @@ class AdminFSM(StatesGroup):
     broadcast_text = State()
     broadcast_pick_buttons = State()  # PATCH_BROADCAST_BUTTONS_V1 — انتخابِ دکمه‌های پیوستی
     broadcast_support_link = State()  # PATCH_BROADCAST_SUPPORT_BTN_V1 — دریافتِ لینکِ دکمهٔ پشتیبانی
+    broadcast_audience = State()   # PATCH_BROADCAST_AUDIENCE_V1 — انتخابِ مخاطب (همه/دارندگانِ سرویس/نامحدود/هر پنل)
     broadcast_confirm = State()
     discount_code_add = State()
     discount_pct = State()
@@ -6576,6 +6579,12 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         if _panel_key_hit:
             info, kb = await _vpn_panel_menu_content(row, _panel_key_hit)
             await msg.answer(info, reply_markup=kb)
+            return
+        # === PATCH_SVC_CLEANUP_V1 ===
+        if msg.text == "🧹 سرویس‌های منقضی‌شده (حذف دستی)":
+            from tenant.bots.vpn.svc_cleanup import render_list as _exp_render
+            _etext, _ekb = await _exp_render(row.id, 0)
+            await msg.answer(_etext, reply_markup=_ekb)
             return
         # === PATCH_VPN_PARTNER_REPLY_KB_V1 ===
         if msg.text == "🤝 حساب‌های همکار (تخفیف)":
@@ -27312,9 +27321,52 @@ async def _bc_ask_support_link(msg: Message, state: FSMContext):
 
 
 @tenant_router.callback_query(AdminFSM.broadcast_support_link, F.data == "bc:supportskip")
-async def bc_support_skip(cb: CallbackQuery, state: FSMContext):
+async def bc_support_skip(cb: CallbackQuery, state: FSMContext, bot: Bot):
     await state.update_data(bc_support_link=None)
+    await _bc_ask_audience(cb.message, state, bot)    # PATCH_BROADCAST_AUDIENCE_V1
+    await cb.answer()
+
+
+# === PATCH_BROADCAST_AUDIENCE_V1 === (تیکت #863)
+async def _bc_ask_audience(msg: Message, state: FSMContext, bot: Bot):
+    """قبل از تأیید: مخاطب را بپرس (همه / دارندگانِ سرویس / نامحدود / هر پنل / بدونِ سرویس). اگر ربات اصلاً
+    سرویسِ VPN ندارد، مرحله رد می‌شود و برایِ همه می‌رود."""
+    from tenant.shared.broadcast_runner import audience_options
+    row = await get_bot_row(bot)
+    opts = await audience_options(row.id) if row else []
+    if not opts:
+        await state.update_data(bc_audience="")
+        await _bc_go_to_confirm(msg, state)
+        return
+    await state.set_state(AdminFSM.broadcast_audience)
+    await state.update_data(bc_aud_keys=[k for k, _l, _n in opts])
+    rows = [[InlineKeyboardButton(text=f"{lbl} ({n:,})", callback_data=f"bc:aud:{i}")]
+            for i, (_k, lbl, n) in enumerate(opts)]
+    rows.append([InlineKeyboardButton(text="❌ لغو", callback_data="bc:cancel")])
+    await msg.answer(
+        "🎯 <b>پیام برایِ چه کسانی ارسال شود؟</b>\n\n"
+        "عددِ کنارِ هر گزینه تعدادِ مخاطبِ همان گروه است (بن‌شده‌ها همیشه کنار گذاشته می‌شوند).",
+        parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@tenant_router.callback_query(AdminFSM.broadcast_audience, F.data.startswith("bc:aud:"))
+async def bc_audience_pick(cb: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    keys = list(data.get("bc_aud_keys") or [])
+    try:
+        aud = keys[int(cb.data.split(":")[2])]
+    except (ValueError, IndexError):
+        await cb.answer("منقضی شد؛ دوباره شروع کن.", show_alert=True)
+        return
+    await state.update_data(bc_audience=aud)
+    await cb.answer()
     await _bc_go_to_confirm(cb.message, state)
+
+
+@tenant_router.callback_query(AdminFSM.broadcast_audience, F.data == "bc:cancel")
+async def bc_audience_cancel(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await _bc_safe_edit(cb.message, "❌ ارسال همگانی لغو شد.")
     await cb.answer()
 
 
@@ -27335,14 +27387,14 @@ def _normalize_support_link(raw: str) -> str | None:
 
 
 @tenant_router.message(AdminFSM.broadcast_support_link, F.text)
-async def bc_support_save(msg: Message, state: FSMContext):
+async def bc_support_save(msg: Message, state: FSMContext, bot: Bot):
     if (msg.text or "").strip() in ("❌ لغو", "❌ لغو / بازگشت"):
         await state.clear()
         await msg.answer("❌ ارسال همگانی لغو شد.", reply_markup=ReplyKeyboardRemove())
         return
     link = _normalize_support_link(msg.text)
     await state.update_data(bc_support_link=link)
-    await _bc_go_to_confirm(msg, state)
+    await _bc_ask_audience(msg, state, bot)    # PATCH_BROADCAST_AUDIENCE_V1
 
 
 async def _bc_go_to_confirm(msg: Message, state: FSMContext):
@@ -27381,8 +27433,19 @@ async def _bc_go_to_confirm(msg: Message, state: FSMContext):
         [InlineKeyboardButton(text="✅ ارسال", callback_data="bc:send")],
         [InlineKeyboardButton(text="❌ لغو", callback_data="bc:cancel")],
     ])
+    # === PATCH_BROADCAST_AUDIENCE_V1 === مخاطب و تعدادش در پیش‌نمایش
+    _aud_line = ""
+    _aud = data.get("bc_audience") or ""
+    if _aud:
+        from tenant.shared.broadcast_runner import audience_options, audience_label
+        _row_aud = await get_bot_row(msg.bot)
+        if _row_aud:
+            _opts = await audience_options(_row_aud.id)
+            _n = next((n for k, _l, n in _opts if k == _aud), 0)
+            _aud_line = f"🎯 مخاطب: {audience_label(_opts, _aud)} — {_n:,} نفر\n\n"
     caption_suffix = (
-        (f"({len(preview_kb_rows)} دکمه هم زیرش می‌ره)\n\n" if preview_kb_rows else "")
+        _aud_line
+        + (f"({len(preview_kb_rows)} دکمه هم زیرش می‌ره)\n\n" if preview_kb_rows else "")
         + "آیا ارسال شود؟"
     )
     bc_photo = data.get("bc_photo")  # === PATCH_BROADCAST_PHOTO_CAPTION_V1 ===
@@ -27440,6 +27503,7 @@ async def bc_send(cb: CallbackQuery, state: FSMContext, bot: Bot):
     button_ids = data.get("bc_button_ids") or []  # PATCH_BROADCAST_BUTTONS_V1
     guide_keys = list(data.get("bc_guide_keys") or [])  # PATCH_BROADCAST_PICK_GUIDE_V1
     support_link = data.get("bc_support_link")  # PATCH_BROADCAST_SUPPORT_BTN_V1
+    bc_audience = data.get("bc_audience") or None   # PATCH_BROADCAST_AUDIENCE_V1
     await state.clear()
     bc_kb = None
     kb_rows = []
@@ -27465,16 +27529,15 @@ async def bc_send(cb: CallbackQuery, state: FSMContext, bot: Bot):
     # === PATCH_BROADCAST_DURABLE_V1 ===
     # کار در دیتابیس ذخیره می‌شود و tenant/shared/broadcast_runner اجرایش می‌کند؛ اگر این پروسه ری‌استارت
     # شود، ورکر از همان نفری که مانده بود ادامه می‌دهد (قبلاً بی‌صدا قطع می‌شد و برایِ همیشه «sending» می‌ماند).
-    async with Session() as s:
-        n_users = int(await s.scalar(select(func.count(BotUser.id)).where(
-            BotUser.bot_id == row.id, BotUser.is_banned == False)) or 0)   # noqa: E712
+    from tenant.shared.broadcast_runner import audience_count as _aud_count
+    n_users = await _aud_count(row.id, bc_audience)    # PATCH_BROADCAST_AUDIENCE_V1
     await _bc_safe_edit(cb.message, f"📢 در حال ارسال به {n_users:,} نفر...")
     async with Session() as s:
         bc = Broadcast(bot_id=row.id, text=text, status="sending",
                        media_id=bc_photo or None, media_type=(bc_mtype if bc_photo else None),
                        kb_json=(bc_kb.model_dump_json(exclude_none=True) if bc_kb else None),
                        chat_id=cb.message.chat.id, msg_id=cb.message.message_id,
-                       cursor_uid=0, total_count=n_users)
+                       cursor_uid=0, total_count=n_users, audience=bc_audience)
         s.add(bc)
         await s.commit()
         bc_id = bc.id
