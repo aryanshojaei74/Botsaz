@@ -31,8 +31,8 @@ from tenant.gateways.tonpays import (
     CHANGE_CARD_COOLDOWN, build_invoice_view, change_card,
     DISCLAIMER, ERROR_FA, MIN_AMOUNT, NEED_ACTION_TEXT, RECEIPT_MAX_BYTES,
     STATUS_FA as _STATUS_FA_SHARED, TonPaysError, cancel_at_gateway, check_invoice, create_invoice,
-    is_custom_order, need_action_hint, pending_kb, pending_text, pick_card, upload_receipt,
-    validate_api_key,
+    BUYER_BLOCK_CODES, NEED_ACTION_STATUSES, action_notice, is_custom_order, need_action_hint,
+    norm_card, pending_kb, pending_text, pick_card, refund_card, upload_receipt, validate_api_key,
 )
 
 logger = _get_logger(__name__)
@@ -49,6 +49,8 @@ class PTonFSM(StatesGroup):
     card = State()
     holder = State()
     receipt = State()   # === PATCH_TONPAYS_CUSTOM_V1 ===
+    refund_card = State()     # === PATCH_TONPAYS_PENDING_V1 ===
+    refund_holder = State()
 
 
 def _rial(n) -> str:
@@ -71,6 +73,7 @@ async def _get_key(custom: bool) -> str:
 
 
 _LAST_STATUS: dict[str, str] = {}
+_LAST_INFO: dict[str, dict] = {}     # PATCH_TONPAYS_PENDING_V1
 _NEED_ACTION_NOTIFIED: set[str] = set()
 
 
@@ -126,10 +129,11 @@ async def settle_charge(order_id: str) -> tuple[bool, str, int]:
     if not _is_paid(info):
         _st = info.get('status') or 'نامشخص'
         _LAST_STATUS[order_id] = _st   # PATCH_TONPAYS_CUSTOM_V1
+        _LAST_INFO[order_id] = info
         _hint = ""
         if _custom and _st in ("pending", "need_action"):
             _hint = " اگر واریز کرده‌ای، «📎 ارسال فیش» را بزن و تصویرِ فیش را بفرست."
-        if _st == "need_action":   # PATCH_TONPAYS_PENDING_V1
+        if _st in NEED_ACTION_STATUSES or _st == "rejected":   # PATCH_TONPAYS_PENDING_V1
             _hint += need_action_hint(info)
         return False, f"هنوز پرداخت تایید نشده (وضعیت: {_STATUS_FA.get(_st, _st)}).{_hint}", 0
 
@@ -462,8 +466,8 @@ async def _create_invoice(bot: Bot, msg: Message, user_id: int, amount: int, aft
                                    buyer_chat_id=user_id,
                                    custom=_custom)  # PATCH_TONPAYS_DOCS_V2
     except TonPaysError as e:
-        if e.code == "PENDING_INVOICE_EXISTS":   # PATCH_TONPAYS_PENDING_V1
-            await _offer_cancel_pending(msg, user_id, amount, _custom, after_cancel)
+        if e.code in BUYER_BLOCK_CODES:   # PATCH_TONPAYS_PENDING_V1
+            await _offer_buyer_block(msg, user_id, amount, _custom, after_cancel, e.code)
             return
         await msg.answer(f"❌ ساختِ فاکتور ناموفق بود.\n{e}")
         return
@@ -502,21 +506,27 @@ async def _create_invoice(bot: Bot, msg: Message, user_id: int, amount: int, aft
 
 
 # === PATCH_TONPAYS_PENDING_V1 ===
-async def _offer_cancel_pending(msg: Message, user_id: int, amount: int, custom: bool,
-                                after_cancel: bool) -> None:
+async def _offer_buyer_block(msg: Message, user_id: int, amount: int, custom: bool,
+                             after_cancel: bool, code: str) -> None:
     async with Session() as s:
         ch = await s.scalar(select(PlatformTonPaysCharge).where(
             PlatformTonPaysCharge.user_telegram_id == user_id,
             PlatformTonPaysCharge.status == "waiting",
             PlatformTonPaysCharge.order_id.like("pc%" if custom else "pt%"),
         ).order_by(PlatformTonPaysCharge.id.desc()))
-    if after_cancel or not ch:
-        await msg.answer(
-            "⚠️ در درگاه هنوز یک فاکتورِ پرداخت‌نشده برایِ تو باز است و فعلاً فاکتورِ جدید ساخته نمی‌شود.\n"
-            "چند دقیقه بعد دوباره تلاش کن (فاکتور خودکار منقضی می‌شود) یا با پشتیبانی تماس بگیر.")
+    if code == "BUYER_HAS_PENDING_INVOICE" and ch and not after_cancel:
+        await msg.answer(pending_text(ch.request_amount), parse_mode="HTML",
+                         reply_markup=pending_kb("ptonp", ch.order_id, amount))
         return
-    await msg.answer(pending_text(ch.request_amount), parse_mode="HTML",
-                     reply_markup=pending_kb("ptonp", ch.order_id, amount))
+    kb = None
+    if ch and code in ("BUYER_HAS_NEED_ACTION_LESS", "BUYER_HAS_NEED_ACTION_MORE", "BUYER_HAS_PROCESSING_INVOICE"):
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="✅ بررسیِ وضعیتِ پرداختِ قبلی", callback_data=f"ptonp:verify:{ch.order_id}")]])
+    txt = ERROR_FA[code]
+    if code == "BUYER_HAS_PENDING_INVOICE":
+        txt = ("در درگاه هنوز یک فاکتورِ پرداخت‌نشده برایِ تو باز است و فعلاً فاکتورِ جدید ساخته نمی‌شود.\n"
+               "چند دقیقه بعد دوباره تلاش کن یا با پشتیبانی تماس بگیر.")
+    await msg.answer("⚠️ " + txt, reply_markup=kb)
 
 
 @platform_tonpays_router.callback_query(F.data.startswith("ptonp:cnew:"))
@@ -542,6 +552,9 @@ async def ptonp_cancel_and_new(cb: CallbackQuery, bot: Bot):
     if res == "paid":
         ok, text, _a = await settle_charge(order_id)
         await cb.message.answer("✅ " + text if ok else text)
+        return
+    if res == "blocked":
+        await cb.message.answer("⚠️ " + why + "\nبا «✅ پرداخت کردم» وضعیت را بررسی کن.")
         return
     async with Session() as s:
         await s.execute(
@@ -654,7 +667,8 @@ async def ptonp_receipt_start(cb: CallbackQuery, state: FSMContext):
     async with Session() as s:
         ch = await s.scalar(select(PlatformTonPaysCharge).where(
             PlatformTonPaysCharge.order_id == order_id))
-    if not ch or ch.user_telegram_id != cb.from_user.id or not is_custom_order(order_id):
+    if (not ch or ch.user_telegram_id != cb.from_user.id
+            or not (is_custom_order(order_id) or _LAST_STATUS.get(order_id) == "action_required_less")):
         await cb.answer("این فاکتور پیدا نشد.", show_alert=True)
         return
     if ch.status == "paid":
@@ -696,7 +710,7 @@ async def ptonp_receipt_file(msg: Message, bot: Bot, state: FSMContext):
         await state.clear()
         await msg.answer("این فاکتور پیدا نشد.")
         return
-    api_key = await _get_key(True)
+    api_key = await _get_key(is_custom_order(order_id))
     if not api_key or not ch.invoice_id:
         await state.clear()
         await msg.answer("درگاه تنظیم نشده است.")
@@ -707,7 +721,8 @@ async def ptonp_receipt_file(msg: Message, bot: Bot, state: FSMContext):
         raw = buf.read() if buf else b""
         if not raw:
             raise RuntimeError("دانلودِ فایل از تلگرام ناموفق بود.")
-        res = await upload_receipt(api_key, ch.invoice_id, raw, fname, ctype)
+        res = await upload_receipt(api_key, ch.invoice_id, raw, fname, ctype,
+                                   custom=is_custom_order(order_id))
     except TonPaysError as e:
         if e.code in ("INVALID_RECEIPT_TYPE", "RECEIPT_TOO_LARGE"):
             await msg.answer(f"❌ {e}\nدوباره بفرست:")
@@ -748,6 +763,9 @@ async def ptonp_cancel(cb: CallbackQuery):
         await cb.answer()
         await cb.message.answer("✅ " + text if ok else text)
         return
+    if _res == "blocked":
+        await cb.answer(_why, show_alert=True)
+        return
     async with Session() as s:
         # لغوِ اتمی: نوشتنِ بی‌شرط می‌توانست وضعیتِ «paid» را که هم‌زمان ثبت
         # شده بود به «cancelled» برگرداند و فاکتور دوباره قابلِ تسویه می‌شد
@@ -767,6 +785,77 @@ async def ptonp_cancel(cb: CallbackQuery):
         logger.debug("تمیزکاریِ ظاهریِ پیام ناموفق بود (بی‌اهمیت)")
     await cb.message.answer(
         "❌ فاکتور لغو شد.\n\n⚠️ اگر قبلِ لغو واریز کرده بودی، با پشتیبانی تماس بگیر.")
+
+
+# ═══════════ ثبتِ کارتِ عودتِ مبلغِ بیشتر ═══════════
+# === PATCH_TONPAYS_PENDING_V1 ===
+
+@platform_tonpays_router.callback_query(F.data.startswith("ptonp:rfnd:"))
+async def ptonp_refund_start(cb: CallbackQuery, state: FSMContext):
+    order_id = cb.data.split(":", 2)[2]
+    async with Session() as s:
+        ch = await s.scalar(select(PlatformTonPaysCharge).where(
+            PlatformTonPaysCharge.order_id == order_id))
+    if not ch or ch.user_telegram_id != cb.from_user.id:
+        await cb.answer("این فاکتور پیدا نشد.", show_alert=True)
+        return
+    if ch.status == "paid":
+        await cb.answer("این فاکتور قبلاً تأیید و شارژ شده است.", show_alert=True)
+        return
+    await state.set_state(PTonFSM.refund_card)
+    await state.update_data(ptonp_rfnd_order=order_id)
+    await cb.message.answer(
+        "💳 <b>ثبتِ کارتِ عودت</b>\n\nشمارهٔ <b>۱۶ رقمیِ کارتِ خودت</b> را بفرست "
+        "(کارتی که مازادِ واریز به آن برگردد):", parse_mode="HTML")
+    await cb.answer()
+
+
+@platform_tonpays_router.message(PTonFSM.refund_card, F.text)
+async def ptonp_refund_card(msg: Message, state: FSMContext):
+    card = norm_card(msg.text)
+    if not card:
+        await msg.answer("❌ شمارهٔ کارت باید ۱۶ رقم باشد. دوباره بفرست:")
+        return
+    await state.update_data(ptonp_rfnd_card=card)
+    await state.set_state(PTonFSM.refund_holder)
+    await msg.answer("🧑 حالا <b>نامِ صاحبِ کارت</b> را بفرست:", parse_mode="HTML")
+
+
+@platform_tonpays_router.message(PTonFSM.refund_holder, F.text)
+async def ptonp_refund_holder(msg: Message, state: FSMContext):
+    data = await state.get_data()
+    order_id, card = data.get("ptonp_rfnd_order") or "", data.get("ptonp_rfnd_card") or ""
+    holder = (msg.text or "").strip()[:60]
+    if not order_id or not card:
+        await state.clear()
+        return
+    if len(holder) < 3:
+        await msg.answer("❌ نامِ صاحبِ کارت را کامل بفرست:")
+        return
+    async with Session() as s:
+        ch = await s.scalar(select(PlatformTonPaysCharge).where(
+            PlatformTonPaysCharge.order_id == order_id))
+    if not ch or ch.user_telegram_id != msg.from_user.id:
+        await state.clear()
+        await msg.answer("این فاکتور پیدا نشد.")
+        return
+    _custom = is_custom_order(order_id)
+    try:
+        await refund_card(await _get_key(_custom), ch.invoice_id, card, holder, _custom)
+    except TonPaysError as e:
+        await state.clear()
+        await msg.answer(f"❌ ثبتِ کارتِ عودت ناموفق بود.\n{e}")
+        return
+    except Exception as e:
+        logger.exception("platform tonpays refund failed %s", order_id)
+        await state.clear()
+        await msg.answer(f"❌ ثبتِ کارتِ عودت ناموفق بود: {e}")
+        return
+    await state.clear()
+    _NEED_ACTION_NOTIFIED.discard(order_id)
+    ok, text, _a = await settle_charge(order_id)
+    await msg.answer(("✅ کارتِ عودت ثبت شد. " + text) if ok else
+                     "✅ کارتِ عودت ثبت شد؛ مازادِ واریز به کارتت برمی‌گردد. " + text)
 
 
 # ═══════════════ پیگیریِ خودکار ═══════════════
@@ -789,12 +878,13 @@ async def _auto_poll(bot: Bot, order_id: str, chat_id: int) -> None:
                     parse_mode="HTML")
                 return
             # === PATCH_TONPAYS_CUSTOM_V1 === تأییدِ خودکار نشد ⇒ از خریدار فیش بخواه
-            if (is_custom_order(order_id) and _LAST_STATUS.get(order_id) == "need_action"
+            if (_LAST_STATUS.get(order_id) in NEED_ACTION_STATUSES
+                    and (is_custom_order(order_id) or _LAST_STATUS[order_id] != "need_action")
                     and order_id not in _NEED_ACTION_NOTIFIED):
                 _NEED_ACTION_NOTIFIED.add(order_id)
-                await bot.send_message(
-                    chat_id, NEED_ACTION_TEXT.format(oid=order_id),
-                    parse_mode="HTML", reply_markup=_receipt_kb(order_id))
+                _t, _k = action_notice("ptonp", order_id, _LAST_INFO.get(order_id) or {},
+                                       is_custom_order(order_id))
+                await bot.send_message(chat_id, _t, parse_mode="HTML", reply_markup=_k)
         except Exception:
             logger.exception("platform tonpays auto-poll %s", order_id)
 
@@ -823,14 +913,16 @@ async def poll_pending_once() -> None:
             logger.exception("platform tonpays sweeper %s", order_id)
             continue
         # === PATCH_TONPAYS_CUSTOM_V1 === need_action ⇒ یک‌بار از خریدار فیش بخواه
-        if (not ok and is_custom_order(order_id) and _LAST_STATUS.get(order_id) == "need_action"
+        if (not ok and _LAST_STATUS.get(order_id) in NEED_ACTION_STATUSES
+                and (is_custom_order(order_id) or _LAST_STATUS[order_id] != "need_action")
                 and order_id not in _NEED_ACTION_NOTIFIED):
             _NEED_ACTION_NOTIFIED.add(order_id)
             _nb = _Bot(token=PLATFORM_BOT_TOKEN,
                        default=DefaultBotProperties(parse_mode=ParseMode.HTML))
             try:
-                await _nb.send_message(tg_id, NEED_ACTION_TEXT.format(oid=order_id),
-                                       reply_markup=_receipt_kb(order_id))
+                _t, _k = action_notice("ptonp", order_id, _LAST_INFO.get(order_id) or {},
+                                       is_custom_order(order_id))
+                await _nb.send_message(tg_id, _t, reply_markup=_k)
             except Exception:
                 logger.exception("platform tonpays sweeper need_action notify %s", order_id)
             finally:

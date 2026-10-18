@@ -1,4 +1,4 @@
-"""TonPays: فاکتورِ باز ⇒ «لغو و پرداخت جدید» (PATCH_TONPAYS_PENDING_V1)."""
+"""TonPays: فاکتورِ باز ⇒ «لغو و پرداخت جدید»، مبلغِ کمتر/بیشتر، عودت (PATCH_TONPAYS_PENDING_V1)."""
 from types import SimpleNamespace
 
 import pytest
@@ -64,7 +64,7 @@ async def db(monkeypatch):
     await engine.dispose()
 
 
-def _err(code="PENDING_INVOICE_EXISTS"):
+def _err(code="BUYER_HAS_PENDING_INVOICE"):
     return {"detail": {"code": code, "message": "buyer has a pending invoice"}}
 
 
@@ -74,7 +74,7 @@ async def test_pending_error_is_detected_and_other_errors_are_not(monkeypatch):
     monkeypatch.setattr(TP, "_request", req)
     with pytest.raises(TP.TonPaysError) as e:
         await TP.create_invoice("K", 50000, "o1", buyer_chat_id=USER)
-    assert e.value.code == "PENDING_INVOICE_EXISTS"
+    assert e.value.code == "BUYER_HAS_PENDING_INVOICE"
 
     async def req2(method, path, key, body=None):
         return 429, {"detail": {"code": "RATE_LIMIT_EXCEEDED", "message": "slow down"}}
@@ -84,25 +84,118 @@ async def test_pending_error_is_detected_and_other_errors_are_not(monkeypatch):
     assert e2.value.code == "RATE_LIMIT_EXCEEDED"
 
 
-async def test_cancel_invoice_tries_next_path_on_route_not_found(monkeypatch):
+async def test_cancel_uses_documented_paths(monkeypatch):
+    calls = []
+
+    async def req(method, path, key, body=None):
+        calls.append((method, path, body))
+        return 200, {"status": "canceled"}
+    monkeypatch.setattr(TP, "_request", req)
+    await TP.cancel_invoice("K", "TP-X")
+    await TP.cancel_invoice("K", "TP-C", custom=True)
+    assert calls == [("POST", "/api/v1/invoices/TP-X/cancel", None),
+                     ("POST", "/api/custom/v1/invoices/TP-C/cancel", None)]
+
+
+async def test_cancel_blocked_for_processing_and_action_required(monkeypatch):
+    async def chk(key, inv, custom=False):
+        return {"status": "action_required_less", "paid": False}
+
+    async def boom(*a, **k):
+        raise AssertionError("نباید لغو شود")
+    monkeypatch.setattr(TP, "check_invoice", chk)
+    monkeypatch.setattr(TP, "cancel_invoice", boom)
+    res, why = await TP.cancel_at_gateway("K", "TP-X")
+    assert res == "blocked" and "مبلغِ کمتر" in why
+
+
+async def test_cancel_already_canceled_counts_as_cancelled(monkeypatch):
+    async def chk(key, inv, custom=False):
+        raise TP.TonPaysError("x", "RATE_LIMIT_EXCEEDED", 429)
+
+    async def cancel(key, inv, custom=False):
+        raise TP.TonPaysError("x", "INVOICE_ALREADY_CANCELED", 409)
+    monkeypatch.setattr(TP, "check_invoice", chk)
+    monkeypatch.setattr(TP, "cancel_invoice", cancel)
+    assert (await TP.cancel_at_gateway("K", "TP-X"))[0] == "cancelled"
+
+
+async def test_other_buyer_block_codes_are_raised_with_their_code(monkeypatch):
+    for code in ("BUYER_HAS_PROCESSING_INVOICE", "BUYER_HAS_NEED_ACTION_LESS",
+                 "BUYER_HAS_NEED_ACTION_MORE", "BUYER_INVOICE_BUSY"):
+        async def req(method, path, key, body=None, _c=code):
+            return 409, _err(_c)
+        monkeypatch.setattr(TP, "_request", req)
+        with pytest.raises(TP.TonPaysError) as e:
+            await TP.create_invoice("K", 50000, "o1", buyer_chat_id=USER, custom=True)
+        assert e.value.code == code
+
+
+async def test_refund_posts_card_without_amount(monkeypatch):
     calls = []
 
     async def req(method, path, key, body=None):
         calls.append((path, body))
-        if path.endswith("/TP-X/cancel"):
-            return 404, {"detail": "Not Found"}
-        return 200, {"status": "canceled"}
+        return 200, {"status": "completed", "paid": True}
     monkeypatch.setattr(TP, "_request", req)
-    r = await TP.cancel_invoice("K", "TP-X")
-    assert r["status"] == "canceled"
-    assert calls[1] == ("/api/v1/invoices/cancel", {"invoice_id": "TP-X"})
+    await TP.refund_card("K", "TP-X", "6037991234567890", "Ali Rezaei")
+    assert calls == [("/api/v1/invoices/TP-X/refund",
+                      {"invoice_id": "TP-X", "card_number": "6037991234567890", "card_holder": "Ali Rezaei"})]
+    assert "amount" not in calls[0][1]
 
 
-async def test_cancel_unsupported_when_no_route_exists(monkeypatch):
-    async def req(method, path, key, body=None):
-        return 404, {"detail": "Not Found"}
-    monkeypatch.setattr(TP, "_request", req)
-    assert (await TP.cancel_at_gateway("K", "TP-X"))[0] == "unsupported"
+async def test_norm_card_accepts_persian_digits_and_rejects_short():
+    assert TP.norm_card("۶۰۳۷-۹۹۱۲ ۳۴۵۶ ۷۸۹۰") == "6037991234567890"
+    assert TP.norm_card("6037") == ""
+
+
+async def test_action_notice_less_shows_remainder_card_and_receipt_button():
+    info = {"status": "action_required_less", "remaining_amount": 12000,
+            "remaining_card_number": "6219861012345678", "remaining_card_holder": "Shop Card"}
+    text, kb = TP.action_notice("tonp", "tpOLD", info, False)
+    assert "120,000 ریال" in text and "6219861012345678" in text and "Shop Card" in text
+    data = [b.callback_data for r in kb.inline_keyboard for b in r if b.callback_data]
+    assert data == ["tonp:rcpt:tpOLD", "tonp:verify:tpOLD"]
+
+
+async def test_action_notice_more_offers_refund_card():
+    text, kb = TP.action_notice("tonp", "tpOLD", {"status": "action_required_more", "refund_amount": 15000}, False)
+    assert "15,000" in text
+    assert [b.callback_data for r in kb.inline_keyboard for b in r] == ["tonp:rfnd:tpOLD"]
+
+
+async def test_refund_flow_registers_card_then_settles(db, monkeypatch):
+    maker, bid = db
+    got = []
+
+    async def rc(key, inv, card, holder, custom=False):
+        got.append((inv, card, holder))
+
+    async def settle(b, o):
+        return True, "پرداخت تایید و کیف پول شارژ شد.", 50000
+    monkeypatch.setattr(TP, "refund_card", rc)
+    monkeypatch.setattr(TP, "settle_charge", settle)
+    msg = Msg()
+    msg.text = "Ali Rezaei"
+    msg.from_user = SimpleNamespace(id=USER)
+    st = SimpleNamespace(data={"tonp_rfnd_order": "tpOLD", "tonp_rfnd_card": "6037991234567890"})
+
+    async def get_data():
+        return dict(st.data)
+
+    async def clear():
+        st.data = {}
+    st.get_data, st.clear = get_data, clear
+    await TP.tonp_refund_holder(msg, object(), st)
+    assert got == [("TP-OLD", "6037991234567890", "Ali Rezaei")]
+    assert "کارتِ عودت ثبت شد" in msg.sent[-1][0] and "شارژ شد" in msg.sent[-1][0]
+
+
+async def test_need_action_hint_for_less_more_and_rejected():
+    assert "12,000" in TP.need_action_hint({"status": "action_required_less", "remaining_amount": 12000})
+    assert "15,000" in TP.need_action_hint({"status": "action_required_more", "refund_amount": 15000})
+    assert "دلیل" in TP.need_action_hint({"status": "rejected", "reject_reasons": ["x"]})
+    assert TP.need_action_hint({"status": "pending"}) == ""
 
 
 async def test_cancel_at_gateway_never_cancels_a_paid_invoice(monkeypatch):
@@ -120,7 +213,7 @@ async def test_create_with_pending_offers_cancel_button(db, monkeypatch):
     maker, bid = db
 
     async def create(*a, **k):
-        raise TP.TonPaysError("x", "PENDING_INVOICE_EXISTS", 409)
+        raise TP.TonPaysError("x", "BUYER_HAS_PENDING_INVOICE", 409)
     monkeypatch.setattr(TP, "create_invoice", create)
 
     async def cm(_bid):
@@ -178,7 +271,7 @@ async def test_pending_after_cancel_does_not_loop(db, monkeypatch):
     maker, bid = db
 
     async def create(*a, **k):
-        raise TP.TonPaysError("x", "PENDING_INVOICE_EXISTS", 409)
+        raise TP.TonPaysError("x", "BUYER_HAS_PENDING_INVOICE", 409)
     monkeypatch.setattr(TP, "create_invoice", create)
 
     async def cm(_bid):
@@ -186,10 +279,4 @@ async def test_pending_after_cancel_does_not_loop(db, monkeypatch):
     monkeypatch.setattr(TP, "is_custom_mode", cm)
     msg = Msg()
     await TP._create_invoice(object(), SimpleNamespace(id=bid), msg, USER, 70000, after_cancel=True)
-    assert "reply_markup" not in msg.sent[-1][1]
-
-
-async def test_need_action_hint_shows_remaining_and_excess():
-    assert "12,000" in TP.need_action_hint({"remaining_amount": 12000})
-    assert "عودت" in TP.need_action_hint({"excess_amount": 5000})
-    assert TP.need_action_hint({}) == ""
+    assert msg.sent[-1][1].get("reply_markup") is None
