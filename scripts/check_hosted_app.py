@@ -130,6 +130,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("app_id", nargs="?", type=int)
     ap.add_argument("--name")
+    ap.add_argument("--fix-token", action="store_true",
+                    help="اگر BOT_TOKENِ ثبت‌شده را تلگرام رد می‌کند و در فایل‌هایِ پروژه دقیقاً یک توکنِ دیگرِ "
+                         "معتبر هست، همان را در متغیرِ BOT_TOKENِ پنل می‌گذارد (تنها حالتی که چیزی را عوض می‌کند)")
     a = ap.parse_args()
 
     envf = _load_env_file(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
@@ -199,6 +202,7 @@ def main() -> int:
     files = (fl.get("files") if ok else None) or []
     scanned = 0
     texts: dict[str, str] = {}
+    alt_tokens: set[str] = set()
     reg_set = set(reg_tokens.values())
     for f in files:
         p = f.get("path", "")
@@ -220,6 +224,7 @@ def main() -> int:
                   + ("همان توکنِ ثبت‌شده" if same else f"❗ با توکنِ ثبت‌شده فرق دارد — {get_me(tok)}"))
             if not same:
                 problems += 1
+                alt_tokens.add(tok)
                 for ln in txt.splitlines():
                     if "token" in ln.lower() and len(ln) < 200:
                         print("      خط:", TOKEN_RE.sub(lambda m: mask(m.group(0)), ln.strip()))
@@ -271,6 +276,35 @@ def main() -> int:
             for ln in tg:
                 print("    ", ln[:120])
             print("  راهنما: «Updater/Dispatcher» ⇒ python-telegram-bot==13.15 | «Application/ApplicationBuilder» ⇒ python-telegram-bot>=20")
+
+    if a.fix_token:
+        print("\n۵) اصلاحِ توکنِ پنل (--fix-token)")
+        key = "BOT_TOKEN" if "BOT_TOKEN" in reg_tokens else (next(iter(reg_tokens), None))
+        cur = reg_tokens.get(key, "") if key else ""
+        if not key:
+            print("  ⛔️ متغیرِ توکن در پنل نیست؛ چیزی عوض نشد.")
+        elif get_me(cur).startswith("✅"):
+            print("  ✅ توکنِ ثبت‌شده معتبر است؛ نیازی به تغییر نیست.")
+        else:
+            good = [t for t in sorted(alt_tokens) if get_me(t).startswith("✅")]
+            if len(good) != 1:
+                print(f"  ⛔️ توکنِ جایگزینِ معتبرِ یکتا پیدا نشد ({len(good)} مورد)؛ دستی عوض کن.")
+            else:
+                new_env = {e["key"]: e["value"] for e in env.get("env") or []}
+                new_env[key] = good[0]
+                body = urllib.parse.urlencode({"payload": json.dumps(new_env)}).encode()
+                req = urllib.request.Request(f"{base}/api/hosting/admin/{app_id}/env", data=body, method="POST",
+                                             headers={"X-Admin-Secret": secret})
+                try:
+                    urllib.request.urlopen(req, timeout=30).read()
+                    ok4, chk = _api(base, secret, "GET", f"/api/hosting/admin/{app_id}/env")
+                    now_v = next((e["value"] for e in (chk.get("env") or []) if e["key"] == key), "") if ok4 else ""
+                    print(f"  ✅ {key}: {mask(cur)} ⟵ {mask(now_v)} "
+                          + ("(تأیید شد)" if now_v == good[0] else "⚠️ بعد از ذخیره تأیید نشد!"))
+                    print("  ♻️ حالا اپ را از پنل «روشن/راه‌اندازی دوباره» کن.")
+                except Exception as e:  # noqa: BLE001
+                    print(f"  ❌ ذخیره ناموفق: {type(e).__name__}: {e}")
+                    problems += 1
 
     print("\n══ جمع‌بندی ══")
     print("❌ مشکلِ احتمالی بالا پیدا شد." if problems else "✅ توکنِ ثبت‌شده معتبر و بدونِ مشکلِ ظاهری است؛ علتِ Unauthorized جایِ دیگری است (لاگ را ببین).")

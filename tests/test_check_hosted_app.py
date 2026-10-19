@@ -109,3 +109,69 @@ def test_missing_module_is_reported_with_requirements_verdict(monkeypatch, capsy
     assert rc == 1
     assert "python-telegram-bot» در requirements.txt نیست" in out
     assert "Application" in out and "متغیرِ با نامِ کوچک" in out
+
+
+def test_fix_token_replaces_rejected_registered_token_with_the_single_valid_file_token(monkeypatch, capsys):
+    saved = {}
+
+    class H3(_H):
+        def do_GET(self):
+            if self.path.endswith("/env"):
+                body = {"name": "x", "env": [{"key": "BOT_TOKEN", "value": saved.get("tok", OLD)},
+                                             {"key": "ADMIN_ID", "value": "7"}]}
+            elif "/files" in self.path:
+                body = {"files": [{"path": "main.py", "size": 10}]}
+            elif "/filetext" in self.path:
+                body = {"text": f'BOT_TOKEN = "{GOOD}"\n'}
+            else:
+                body = {"logs": ""}
+            raw = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0))
+            from urllib.parse import parse_qs
+            payload = json.loads(parse_qs(self.rfile.read(n).decode())["payload"][0])
+            saved["tok"] = payload["BOT_TOKEN"]
+            saved["other"] = payload["ADMIN_ID"]
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"{}")
+    srv = HTTPServer(("127.0.0.1", 0), H3)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("VIP_ADMIN_SECRET", "s")
+    monkeypatch.setenv("VIP_API_BASE", f"http://127.0.0.1:{srv.server_port}")
+    monkeypatch.setattr(CH, "get_me", lambda t: "✅ معتبر: @x" if t.strip("'\" ") == GOOD else "❌ تلگرام رد کرد (HTTP 401)")
+    monkeypatch.setattr(sys, "argv", ["check_hosted_app.py", "5", "--fix-token"])
+    try:
+        CH.main()
+    finally:
+        srv.shutdown()
+    out = capsys.readouterr().out
+    assert saved["tok"] == GOOD and saved["other"] == "7"       # فقط توکن عوض شد، بقیهٔ متغیرها دست‌نخورده
+    assert "تأیید شد" in out and GOOD not in out and OLD not in out
+
+
+def test_fix_token_does_nothing_when_registered_token_is_valid(monkeypatch, capsys):
+    posted = []
+
+    class H4(_H):
+        def do_POST(self):
+            posted.append(1)
+            self.send_response(200)
+            self.end_headers()
+    srv = HTTPServer(("127.0.0.1", 0), H4)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("VIP_ADMIN_SECRET", "s")
+    monkeypatch.setenv("VIP_API_BASE", f"http://127.0.0.1:{srv.server_port}")
+    monkeypatch.setattr(CH, "get_me", lambda t: "✅ معتبر: @x")
+    monkeypatch.setattr(sys, "argv", ["check_hosted_app.py", "5", "--fix-token"])
+    try:
+        CH.main()
+    finally:
+        srv.shutdown()
+    assert posted == [] and "نیازی به تغییر نیست" in capsys.readouterr().out
