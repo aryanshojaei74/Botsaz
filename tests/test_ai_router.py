@@ -99,7 +99,8 @@ async def test_group_guard_ask_ai_uses_router_when_configured(monkeypatch):
     async def pset(key, default=""):
         return default
     monkeypatch.setattr(GG, "get_pset", pset)
-    assert await GG._ask_ai("درگاه آپی چطور فعال میشه؟") == "جوابِ نهایی"
+    # PATCH_GROUP_AI_REVAMP_V1: خروجی تمیز می‌شود (بدون <think> و بدون اعراب/کسره اضافه)
+    assert await GG._ask_ai("درگاه آپی چطور فعال میشه؟") == "جواب نهایی"
 
 
 def test_key_prefix_autocorrects_wrong_provider_name():
