@@ -336,9 +336,23 @@ async def w_charge_amount(msg: Message, state: FSMContext, bot: Bot):
     await _wallet_charge_proceed(msg, state, bot, amount, msg.from_user.id)
 
 
+async def _receipt_state_alive(msg: Message, state: FSMContext) -> bool:
+    """=== PATCH_RECEIPT_STATE_ALIVE_V1 === بعد از قطعیِ سرویس، تلگرام آپدیت‌هایِ صف‌شده را یک‌جا دوباره می‌فرستد؛
+    اگر درخواستِ شارژ در این فاصله تمام/لغو شده باشد، stateِ receipt بدونِ «amount» می‌ماند و هندلر KeyError می‌داد.
+    در این حالت state پاک می‌شود و به کاربر گفته می‌شود از اول شروع کند."""
+    data = await state.get_data()
+    if data.get("amount"):
+        return True
+    await state.clear()
+    await msg.answer("⌛ این درخواستِ شارژ دیگر فعال نیست (قبلاً ثبت یا لغو شده). اگر لازم است، دوباره از «شارژ کیف پول» شروع کن.")
+    return False
+
+
 @card_wallet_router.message(CardWalletFSM.receipt, F.photo)
 async def w_charge_receipt(msg: Message, state: FSMContext):
     from tenant import rial
+    if not await _receipt_state_alive(msg, state):
+        return
     await state.update_data(file_id=msg.photo[-1].file_id,
                             file_unique_id=msg.photo[-1].file_unique_id, receipt_text=None)
     await state.set_state(CardWalletFSM.confirm)
@@ -365,6 +379,8 @@ async def w_charge_receipt_text(msg: Message, state: FSMContext):
         raise SkipHandler
     if not msg.text or not msg.text.strip() or not any(ch.isdigit() for ch in msg.text):
         await msg.answer("⚠️ متن رسید باید شامل عدد باشد (مثلاً مبلغ یا کد پیگیری). لطفاً رسید را دوباره ارسال کنید.")
+        return
+    if not await _receipt_state_alive(msg, state):
         return
     await state.update_data(file_id=None, file_unique_id=None, receipt_text=msg.text)
     await state.set_state(CardWalletFSM.confirm)
