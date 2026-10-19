@@ -149,7 +149,23 @@ async def _with_home_row(kb: InlineKeyboardMarkup, bot_id: int) -> InlineKeyboar
         if await get_setting(bot_id, "menu_mode", "reply") == "inline":
             return kb
         rows = list(kb.inline_keyboard)
-        if any((b.callback_data or "") == "mbtn:home" for r in rows for b in r):
+        # === PATCH_FLOW_BACK_TO_SUBMENU_V1 === (ایلیا) اگر کاربر از یک زیرمنو آمده، «بازگشت به منو» همان زیرمنو را
+        # (با کیبوردش) برمی‌گرداند و «🏠 منوی اصلی» جدا کنارش می‌آید؛ وگرنه مثلِ قبل فقط یک دکمهٔ خانه.
+        from tenant import _last_menu_for
+        pm = _last_menu_for(bot_id)
+        has_home = any((b.callback_data or "") == "mbtn:home" for r in rows for b in r)
+        has_sub = any((b.callback_data or "").startswith("rsub:") for r in rows for b in r)
+        if pm:
+            if has_sub:
+                return kb
+            rows = [[b for b in r if (b.callback_data or "") != "mbtn:home"] for r in rows]
+            rows = [r for r in rows if r]
+            rows.append([InlineKeyboardButton(text="⬅️ بازگشت به منو", callback_data=f"rsub:{pm}",
+                                              style=ButtonStyle.DANGER),
+                         InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="mbtn:home",
+                                              style=ButtonStyle.DANGER)])
+            return InlineKeyboardMarkup(inline_keyboard=rows)
+        if has_home:
             return kb
         rows.append([InlineKeyboardButton(text="🏠 بازگشت به منو", callback_data="mbtn:home",
                                           style=ButtonStyle.DANGER)])

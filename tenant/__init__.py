@@ -2955,7 +2955,10 @@ async def inline_back_row(bot_id: int) -> list[InlineKeyboardButton] | None:
     اگر صفحه از داخلِ یک زیرمنو باز شده باشد، دکمهٔ «بازگشت به منوی قبل» هم کنارش می‌آید."""
     pm = _last_menu_for(bot_id)
     if pm:
-        return [InlineKeyboardButton(text="⬅️ بازگشت به منوی قبل", callback_data=f"smopen:{pm}",
+        # === PATCH_FLOW_BACK_TO_SUBMENU_V1 === منویِ کیبوردی زیرمنو را با کیبوردش برمی‌گرداند (rsub)، شیشه‌ای اینلاین (smopen)
+        _reply_mode = await get_setting(bot_id, "menu_mode", "reply") != "inline"
+        return [InlineKeyboardButton(text="⬅️ بازگشت به منوی قبل",
+                                     callback_data=(f"rsub:{pm}" if _reply_mode else f"smopen:{pm}"),
                                      style=ButtonStyle.DANGER),
                 InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="mbtn:home",
                                      style=ButtonStyle.DANGER)]
@@ -3155,6 +3158,36 @@ async def submenu_inline_kb(bot_id: int, parent_id: int) -> InlineKeyboardMarkup
     else:
         kb_rows.append([_inline_back_btn()])
     return InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+
+@tenant_router.callback_query(F.data.startswith("rsub:"))
+async def rsub_open(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """=== PATCH_FLOW_BACK_TO_SUBMENU_V1 === (ایلیا) «⬅️ بازگشت به منو» در صفحه‌هایِ مرحله‌ایِ خریدِ منویِ کیبوردی:
+    صفحهٔ خرید جمع می‌شود و *همان زیرمنویی که کاربر از آن آمده* دوباره با کیبوردِ خودش نمایش داده می‌شود (نه صفحهٔ اصلی)."""
+    row = await get_bot_row(bot)
+    if not row:
+        await cb.answer()
+        return
+    try:
+        mb_id = int(cb.data.split(":")[1])
+    except (ValueError, IndexError):
+        await cb.answer()
+        return
+    async with Session() as s:
+        btn = await s.get(MainButton, mb_id)
+    if (not btn or btn.bot_id != row.id or btn.action != "submenu"
+            or btn.id in await _disabled_btn_ids(row.id)):
+        # زیرمنو دیگر نیست/غیرفعال شده ⇒ مثلِ قبل به صفحهٔ اصلی
+        await mbtn_tap(cb.model_copy(update={"data": "mbtn:home"}), bot, state)
+        return
+    await cb.answer()
+    try:
+        await cb.message.delete()
+    except Exception:
+        logger.debug("rsub: حذفِ صفحهٔ خرید ممکن نشد (بی‌اهمیت)")
+    await state.clear()
+    fake = cb.message.model_copy(update={"from_user": cb.from_user}).as_(bot)
+    await _render_reply_submenu(fake, row.id, btn, state)
 
 
 @tenant_router.callback_query(F.data.startswith("smopen:"))
@@ -5489,6 +5522,8 @@ async def _render_reply_submenu(msg: Message, bot_id: int, btn: "MainButton", st
         if support_enabled:
             await state.update_data(support_mb_id=btn.id)
         await state.update_data(cur_submenu_id=btn.id)
+        # === PATCH_FLOW_BACK_TO_SUBMENU_V1 === (ایلیا) صفحه‌هایِ خرید «بازگشت به منو» را به همین زیرمنو برمی‌گردانند، نه صفحهٔ اصلی
+        _set_last_menu(bot_id, msg.from_user.id, btn.id)
         await msg.answer(_sm_head, reply_markup=kb)
     elif not btn.message:
         await msg.answer("🗂 این زیرمنو هنوز دکمه‌ای ندارد.")
@@ -6344,6 +6379,7 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
                     cur_btn = cb2
         parent_id = cur_btn.parent_id if cur_btn else None
         if not parent_id:
+            _set_last_menu(bot_id, msg.from_user.id, None)   # PATCH_FLOW_BACK_TO_SUBMENU_V1
             kb = await main_kb_or_remove(bot_id, row.owner_id, msg.from_user.id)
             await send_home_menu(msg, bot_id, kb or ReplyKeyboardRemove())
             await state.update_data(cur_submenu_id=None)
@@ -6856,6 +6892,7 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
 
     # بازگشت از زیرمنو به منوی اصلی
     if msg.text == BTN_BACK_MENU:
+        _set_last_menu(bot_id, msg.from_user.id, None)   # PATCH_FLOW_BACK_TO_SUBMENU_V1
         await state.update_data(cur_submenu_id=None, support_mb_id=None)
         kb = await main_kb_or_remove(bot_id, row.owner_id, msg.from_user.id)
         await send_home_menu(msg, bot_id, kb or ReplyKeyboardRemove())
