@@ -1225,7 +1225,9 @@ async def _rs_trial_cfg(bot_id: int, panel_key: str = "") -> tuple[float, int, i
                     cfg = _json.loads(b.config) or {}
                 except Exception:
                     continue
-                if cfg.get("trial_panel_key") != panel_key:
+                # PATCH_TRIAL_STALE_PANEL_KEYS_V1 — انتخابِ چندپنلی (trial_panel_keys) هم شناخته شود
+                if cfg.get("trial_panel_key") != panel_key and \
+                        panel_key not in [k for k in (cfg.get("trial_panel_keys") or "").split(",") if k]:
                     continue
                 if not any(k in cfg for k in ("trial_gb", "trial_days", "trial_hours")):
                     continue

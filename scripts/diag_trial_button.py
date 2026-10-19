@@ -44,6 +44,11 @@ def conclusions(cfg: dict, global_gb: str, global_days: str, panels: list[str], 
                ([cfg["trial_panel_key"]] if cfg.get("trial_panel_key") else [])
         if not keys:
             out.append("⚠️ هیچ پنلی روی دکمه انتخاب نشده؛ تست از «اولین پنلِ فعال» ساخته می‌شود.")
+        elif any(k not in panels for k in keys):
+            stale = [k for k in keys if k not in panels]
+            out.append(f"❌ کلیدِ پنلِ حذف/غیرفعال‌شده روی دکمه مانده ({', '.join(stale)}) و در صفحهٔ انتخاب دیده نمی‌شود؛ "
+                       "نسخه‌هایِ قدیمی هر چند تست یک‌بار به «اولین پنلِ فعال» می‌افتادند (یعنی از پنلِ دیگر هم ساخته می‌شد). "
+                       "با نسخهٔ جدید خودکار پاک می‌شود.")
         elif len(keys) > 1:
             out.append(f"ℹ️ {len(keys)} پنل تیک خورده ({', '.join(keys)}) ⇒ هر تست رندوم از یکی از آن‌ها ساخته می‌شود. "
                        "برایِ فقط یک پنل: صفحهٔ انتخابِ پنل را باز کن و فقط همان یکی را ✅ بگذار، سپس «✅ تأیید و ذخیره».")

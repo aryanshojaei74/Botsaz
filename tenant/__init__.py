@@ -8321,13 +8321,7 @@ async def do_free_trial(msg, bot: "Bot", bot_id: int, u: BotUser,
         # === PATCH_TRIAL_MULTI_PANEL_RANDOM_V1 ===
         # درخواستِ ادمین: بشه چند پنل رو هم‌زمان تیک زد؛ هر بار که کسی
         # تست می‌گیره، یکی‌شون رندوم انتخاب بشه (به‌جایِ همیشه یه پنلِ ثابت).
-        _panel_keys_raw = (btn_cfg.get("trial_panel_keys") or "").strip()
-        if _panel_keys_raw:
-            import random as _random
-            _pk_list = [k for k in _panel_keys_raw.split(",") if k]
-            panel_key = _random.choice(_pk_list) if _pk_list else None
-        else:
-            panel_key = btn_cfg.get("trial_panel_key")
+        panel_key = await _trial_pick_panel_key(bot_id, btn_cfg)    # PATCH_TRIAL_STALE_PANEL_KEYS_V1
         try:
             t_users = int(btn_cfg.get("trial_users", 0) or 0)
         except (ValueError, TypeError):
@@ -8804,7 +8798,7 @@ async def _trial_deliver(bot: "Bot", bot_id: int, u: "BotUser", trial_mode: str,
                     logger.warning("تستِ رایگان: پنلِ انتخاب‌شدهٔ دکمه (%r) فعال/موجود نیست؛ از اولین پنلِ فعال استفاده شد "
                                    "(bot_id=%s)", panel_key, bot_id)
                 panel = await s.scalar(select(VpnPanel).where(
-                    VpnPanel.bot_id == bot_id, VpnPanel.enabled == True))
+                    VpnPanel.bot_id == bot_id, VpnPanel.enabled == True).order_by(VpnPanel.id))   # PATCH_TRIAL_STALE_PANEL_KEYS_V1
             bot_row = await s.scalar(select(BotRow).where(BotRow.id == bot_id))
     except Exception as e:
         print(f"[_trial_deliver][panel] DB error fetching panel: {e}")
@@ -16410,9 +16404,67 @@ def _trial_cfg_of(mb) -> dict:
 # ریشه: دکمهٔ «تست رایگان» تنظیمِ اختصاصیِ خودش را دارد و ویزاردِ دکمه با «✅ ثبت» مقدارهایِ پیش‌فرضِ ثابتِ ۲ گیگ/۳ روز را
 # در دکمه می‌نوشت؛ پس مقدارِ تنظیماتِ کلیِ ربات هیچ‌وقت خوانده نمی‌شد. حالا هر مقداری که روی دکمه صراحتاً ثبت نشده باشد
 # (حجم/مدت) از «تنظیماتِ تستِ رایگان» ربات می‌آید؛ مقدارِ صریحِ دکمه همچنان اولویت دارد.
+# === PATCH_TRIAL_STALE_PANEL_KEYS_V1 ===
+# تیکت #849 (دورِ سوم): دکمهٔ تست «upanel_mizban,pasargad» را نگه داشته بود در حالی که پنلِ یوپنل دیگر وجود نداشت (جایش مرزبان
+# وصل شده بود). صفحهٔ انتخابِ پنل فقط پنل‌هایِ فعالِ فعلی را نشان می‌دهد، پس کلیدِ مرده دیده نمی‌شد و با هر تیک هم ذخیره می‌ماند؛
+# نتیجه: نیمی از تست‌ها «کلیدِ مرده» را رندوم می‌کردند و به «اولین پنلِ فعال» می‌افتادند — یعنی از پنلِ دیگر هم ساخته می‌شد.
+async def _trial_enabled_panel_keys(bot_id: int) -> list[str]:
+    from models import VpnPanel
+    async with Session() as s:
+        return [k for k in (await s.scalars(select(VpnPanel.panel_key).where(
+            VpnPanel.bot_id == bot_id, VpnPanel.enabled == True).order_by(VpnPanel.id))).all() if k]  # noqa: E712
+
+
+async def _trial_pick_panel_key(bot_id: int, btn_cfg: dict) -> str | None:
+    """پنلِ این تست: اگر چند پنل تیک خورده، رندوم فقط بینِ پنل‌هایی که همین الان فعال‌اند؛ وگرنه کلیدِ تکی. None = اولین پنلِ فعال."""
+    raw = (btn_cfg.get("trial_panel_keys") or "").strip()
+    if not raw:
+        return btn_cfg.get("trial_panel_key")
+    import random as _random
+    keys = [k for k in raw.split(",") if k]
+    live = set(await _trial_enabled_panel_keys(bot_id))
+    ok = [k for k in keys if k in live]
+    if keys and not ok:
+        logger.warning("تستِ رایگان: هیچ‌کدام از پنل‌هایِ تیک‌خوردهٔ دکمه (%s) فعال نیست؛ اولین پنلِ فعال (bot_id=%s)", raw, bot_id)
+    return _random.choice(ok) if ok else None
+
+
+async def _trial_prune_panel_keys(mb_id: int, bot_id: int) -> bool:
+    """کلیدهایِ پنلِ حذف/غیرفعال‌شده را از تنظیماتِ دکمه پاک می‌کند. True اگر چیزی عوض شد."""
+    async with Session() as s:
+        mb = await s.get(MainButton, mb_id)
+    if not mb or mb.bot_id != bot_id:
+        return False
+    keys = [k for k in (_trial_cfg_of(mb).get("trial_panel_keys") or "").split(",") if k]
+    if not keys:
+        return False
+    live = set(await _trial_enabled_panel_keys(bot_id))
+    kept = [k for k in keys if k in live]
+    if len(kept) == len(keys):
+        return False
+    await _trial_cfg_update(mb_id, trial_panel_keys=(",".join(kept) if kept else None))
+    return True
+
+
 async def _trial_fill_global(bot_id: int, cfg: dict | None) -> dict:
     out = dict(cfg or {})
     filled = []
+    # === PATCH_TRIAL_GLOBAL_DIFF_V1 === مقدارِ اختصاصیِ دکمه که با «تنظیماتِ تستِ رایگان» فرق دارد (برایِ هشدار در صفحه)
+    diffs = []
+    try:
+        if "trial_gb" in out:
+            _g = float(await get_setting(bot_id, "trial_gb", "2"))
+            if abs(float(out["trial_gb"]) - _g) > 1e-9:
+                diffs.append(("gb", str(out["trial_gb"]), str(_g)))
+        if "trial_days" in out or "trial_hours" in out:
+            _gd = (int(float(await get_setting(bot_id, "trial_days", "3"))), int(float(await get_setting(bot_id, "trial_hours", "0") or 0)))
+            _bd = (int(float(out.get("trial_days", 0) or 0)), int(float(out.get("trial_hours", 0) or 0)))
+            if _bd != _gd:
+                diffs.append(("duration", f"{_bd[0]}d{_bd[1]}h", f"{_gd[0]}d{_gd[1]}h"))
+    except (TypeError, ValueError):
+        diffs = []
+    if diffs:
+        out["_global_diff"] = diffs
     if "trial_gb" not in out:
         out["trial_gb"] = str(await get_setting(bot_id, "trial_gb", "2"))
         filled.append("gb")
@@ -16493,6 +16545,10 @@ def _trial_summary_text(cfg: dict) -> str:
             lines.append(f"تعداد کاربر: <b>{'♾️ نامحدود' if _u == '0' else _u}</b>")
     _limit = str(cfg.get("trial_claim_limit", 1) or 0)
     lines.append(f"سقفِ دفعات هر کاربر: <b>{'♾️ نامحدود' if _limit == '0' else _limit + ' بار'}</b>")
+    if cfg.get("_global_diff"):
+        _what = "، ".join({"gb": "حجم", "duration": "مدت"}.get(k, k) for k, _a, _b in cfg["_global_diff"])
+        lines.append(f"\n⚠️ {_what} این دکمه با «🎁 تنظیمات تست رایگان VPN» فرق دارد و مقدارِ همین دکمه اولویت دارد. "
+                     "اگر می‌خواهی فقط از آن تنظیمات خوانده شود، «♻️ حجم و مدت از تنظیماتِ تستِ رایگان» را بزن.")
     if cfg.get("_from_global"):
         lines.append("\nℹ️ حجم/مدتی که برایِ این دکمه جدا ثبت نکرده‌ای، از «🎁 تنظیمات تست رایگان VPN» (پنل مدیریت ← تنظیمات) گرفته می‌شود.")
     return "\n".join(lines)
@@ -16508,6 +16564,7 @@ async def _trial_top_render(cb: CallbackQuery, bot: Bot, mb_id: int):
     row = await _owner_ok(cb, bot)
     if not row:
         return
+    await _trial_prune_panel_keys(mb_id, row.id)      # PATCH_TRIAL_STALE_PANEL_KEYS_V1
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
     if not mb or mb.bot_id != row.id or mb.action != "free_trial":
@@ -16755,6 +16812,7 @@ async def thb_trial_auto_panels(cb: CallbackQuery, bot: Bot, _override_mb_id: in
     selected = set(k for k in (cfg.get("trial_panel_keys") or "").split(",") if k)
     if not selected and cfg.get("trial_panel_key"):
         selected = {cfg["trial_panel_key"]}
+    selected &= {p.panel_key for p in panels}          # PATCH_TRIAL_STALE_PANEL_KEYS_V1 — کلیدِ پنلِ حذف‌شده دیده نمی‌شد ولی می‌ماند
     rows = []
     for p in panels:
         mark = "✅ " if p.panel_key in selected else "⬜️ "
@@ -16791,6 +16849,7 @@ async def thb_trial_panel_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if action == "done":
         # === PATCH_TRIAL_MULTI_PANEL_RANDOM_V1 ===
         await state.clear()
+        await _trial_prune_panel_keys(mb_id, row.id)      # PATCH_TRIAL_STALE_PANEL_KEYS_V1
         cfg = await _trial_cfg_update(mb_id, trial_mode="auto", trial_panel_key=None,
                                       trial_select=None) or {}
         text, kb = _trial_fix_view(cfg, mb_id)
@@ -16810,6 +16869,7 @@ async def thb_trial_panel_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
         selected = set(k for k in (cfg.get("trial_panel_keys") or "").split(",") if k)
         if not selected and cfg.get("trial_panel_key"):
             selected = {cfg["trial_panel_key"]}
+        selected &= set(all_keys)          # PATCH_TRIAL_STALE_PANEL_KEYS_V1
         if panel_key in selected:
             selected.discard(panel_key)
         else:
@@ -30030,7 +30090,11 @@ async def set_trial_menu(cb: CallbackQuery, bot: Bot):
     gb_label = _trial_gb_label(gb)
     duration_label = _trial_duration_label(days, hours)
     unused_label = _trial_unused_label(unused_h)
+    # === PATCH_TRIAL_GLOBAL_DIFF_V1 === دکمه‌هایِ تستی که مقدارِ اختصاصی دارند و این صفحه را نادیده می‌گیرند
+    _ovr = await _trial_overriding_buttons(row.id)
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        *([[InlineKeyboardButton(text="♻️ همهٔ دکمه‌هایِ تست از همین تنظیمات بخوانند",
+                                 callback_data="set:trial_sync_buttons", style=ButtonStyle.SUCCESS)]] if _ovr else []),
         [InlineKeyboardButton(
             text=f"وضعیت: {toggle}",
             callback_data="set:trial_toggle", style=ButtonStyle.PRIMARY)],
@@ -30063,7 +30127,10 @@ async def set_trial_menu(cb: CallbackQuery, bot: Bot):
         f"یادآوریِ عدمِ استفاده: <b>{unused_label}</b>\n"
         f"شروعِ زمانِ تست: <b>{onhold_lbl}</b>\n\n"
         "⚠️ هر کاربر فقط یک‌بار می‌تواند از تست رایگان استفاده کند.\n\n"
-        "ℹ️ اگر از «تنظیم و مدیریت دکمه‌ها» یک دکمه را روی «تست رایگان VPN» گذاشته‌ای، حجم و مدتِ آن دکمه از همین‌جا "
+        + ("⚠️ این دکمه‌ها مقدارِ اختصاصی دارند و حجم/مدتِ بالا را <b>نادیده می‌گیرند</b>:\n"
+           + "\n".join(f"• «{_n}» — {_d}" for _n, _d in _ovr)
+           + "\nبا دکمهٔ «♻️ همهٔ دکمه‌هایِ تست از همین تنظیمات بخوانند» همه را یک‌جا یکی کن.\n\n" if _ovr else "")
+        + "ℹ️ اگر از «تنظیم و مدیریت دکمه‌ها» یک دکمه را روی «تست رایگان VPN» گذاشته‌ای، حجم و مدتِ آن دکمه از همین‌جا "
         "خوانده می‌شود، مگر اینکه خودِ دکمه مقدارِ اختصاصی داشته باشد."
     )
     try:
@@ -30071,6 +30138,41 @@ async def set_trial_menu(cb: CallbackQuery, bot: Bot):
     except Exception:
         await cb.message.answer(text, reply_markup=kb)
     await cb.answer()
+
+
+# === PATCH_TRIAL_GLOBAL_DIFF_V1 ===
+async def _trial_overriding_buttons(bot_id: int) -> list[tuple[str, str]]:
+    """دکمه‌هایِ «تست رایگان» که حجم/مدتِ اختصاصیِ متفاوت از «تنظیماتِ تستِ رایگان» دارند: [(برچسب, توضیح)]."""
+    async with Session() as s:
+        btns = (await s.scalars(select(MainButton).where(
+            MainButton.bot_id == bot_id, MainButton.action == "free_trial").order_by(MainButton.id))).all()
+    out = []
+    for mb in btns:
+        cfg = await _trial_fill_global(bot_id, _trial_cfg_of(mb))
+        parts = []
+        for k, a, b in cfg.get("_global_diff") or []:
+            if k == "gb":
+                parts.append(f"حجم دکمه {_trial_gb_label(a)}")
+            else:
+                parts.append("مدتِ دکمه با تنظیماتِ کلی فرق دارد")
+        if parts:
+            out.append((mb.label, "، ".join(parts)))
+    return out
+
+
+@tenant_router.callback_query(F.data == "set:trial_sync_buttons")
+async def set_trial_sync_buttons(cb: CallbackQuery, bot: Bot):
+    """حجم/مدتِ اختصاصیِ همهٔ دکمه‌هایِ «تست رایگان» را پاک می‌کند تا از «تنظیماتِ تستِ رایگان» خوانده شود."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    async with Session() as s:
+        ids = (await s.scalars(select(MainButton.id).where(
+            MainButton.bot_id == row.id, MainButton.action == "free_trial"))).all()
+    for mid in ids:
+        await _trial_cfg_update(mid, trial_gb=None, trial_days=None, trial_hours=None)
+    await cb.answer(f"✅ {len(ids)} دکمهٔ تست حالا حجم و مدت را از همین صفحه می‌خوانند", show_alert=True)
+    await set_trial_menu(cb, bot)
 
 
 @tenant_router.callback_query(F.data == "set:trial_toggle")
