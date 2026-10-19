@@ -33,6 +33,32 @@ SCAN_EXT = (".py", ".env", ".json", ".txt", ".js", ".ts", ".yml", ".yaml", ".ini
 MAX_SCAN_FILES = 40
 
 
+# نامِ ماژولِ ایمپورت ⇒ نامِ بسته در pip (فقط مواردِ رایجی که فرق دارند)
+PIP_NAMES = {
+    "telegram": "python-telegram-bot", "yt_dlp": "yt-dlp", "youtube_dl": "youtube-dl", "cv2": "opencv-python",
+    "PIL": "Pillow", "bs4": "beautifulsoup4", "yaml": "PyYAML", "dotenv": "python-dotenv", "sklearn": "scikit-learn",
+    "telethon": "Telethon", "pyrogram": "Pyrogram", "aiogram": "aiogram", "Crypto": "pycryptodome",
+    "dateutil": "python-dateutil", "magic": "python-magic", "jwt": "PyJWT", "serial": "pyserial",
+}
+
+
+def _norm_pkg(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name.strip().lower())
+
+
+def req_has(requirements: str, pip_name: str) -> bool:
+    """بسته (با هر مقایسه‌گر/نسخه) در متنِ requirements.txt هست؟"""
+    want = _norm_pkg(pip_name)
+    for ln in (requirements or "").splitlines():
+        ln = ln.split("#", 1)[0].strip()
+        if not ln or ln.startswith("-"):
+            continue
+        m = re.match(r"([A-Za-z0-9_.\-]+)", ln)
+        if m and _norm_pkg(m.group(1)) == want:
+            return True
+    return False
+
+
 def mask(tok: str) -> str:
     t = (tok or "").strip()
     return t[:4] + "…" + t[-4:] if len(t) > 8 else "…"
@@ -137,6 +163,7 @@ def main() -> int:
         return 2
     print(f"══ اپ {env.get('name', app_id)} ══")
     reg_tokens: dict[str, str] = {}
+    others: list[str] = []
     print("\n۱) متغیرهایِ ثبت‌شده")
     for e in env.get("env") or []:
         k, v = e.get("key", ""), e.get("value", "")
@@ -148,7 +175,14 @@ def main() -> int:
             problems += len(issues)
             reg_tokens[k] = v.strip().strip("'\" ")
         else:
-            print(f"  • {k}: (مقدار نمایش داده نمی‌شود)")
+            others.append(k)
+    if others:
+        up = [k for k in others if k == k.upper()]
+        low = [k for k in others if k != k.upper()]
+        print(f"  • سایرِ متغیرها: {', '.join(up) or '—'}")
+        if low:
+            print(f"  ℹ️ {len(low)} متغیرِ با نامِ کوچک هم ثبت شده (مثلِ {', '.join(low[:4])}) که شبیهِ نامِ "
+                  "متغیرهایِ داخلِ کد است نه تنظیماتِ واقعی؛ معمولاً بی‌اثر است، ولی احتمالاً از اسکنِ خودکارِ کد آمده.")
     if env.get("needed"):
         miss = [k for k in env["needed"] if k not in {e.get('key') for e in env.get('env') or []}]
         if miss:
@@ -164,6 +198,7 @@ def main() -> int:
     ok, fl = _api(base, secret, "GET", f"/api/hosting/admin/{app_id}/files")
     files = (fl.get("files") if ok else None) or []
     scanned = 0
+    texts: dict[str, str] = {}
     reg_set = set(reg_tokens.values())
     for f in files:
         p = f.get("path", "")
@@ -177,12 +212,18 @@ def main() -> int:
         ok2, d = _api(base, secret, "GET", f"/api/hosting/admin/{app_id}/filetext", {"path": p})
         if not ok2:
             continue
-        for tok in set(TOKEN_RE.findall(d.get("text") or "")):
+        txt = d.get("text") or ""
+        texts[p] = txt
+        for tok in set(TOKEN_RE.findall(txt)):
             same = tok in reg_set
             print(f"  • {p}: توکن {mask(tok)} — "
                   + ("همان توکنِ ثبت‌شده" if same else f"❗ با توکنِ ثبت‌شده فرق دارد — {get_me(tok)}"))
             if not same:
                 problems += 1
+                for ln in txt.splitlines():
+                    if "token" in ln.lower() and len(ln) < 200:
+                        print("      خط:", TOKEN_RE.sub(lambda m: mask(m.group(0)), ln.strip()))
+                        break
     if not scanned:
         print("  (فایلِ متنیِ قابلِ اسکن پیدا نشد)")
 
@@ -200,6 +241,36 @@ def main() -> int:
     print("  آخرین خط‌ها:")
     for ln in lines[-8:]:
         print("   ", ln[:180])
+
+    miss_mods = []
+    for ln in lines:
+        m = re.search(r"No module named ['\"]([\w.]+)['\"]", ln)
+        if m and m.group(1).split(".")[0] not in miss_mods:
+            miss_mods.append(m.group(1).split(".")[0])
+    if miss_mods:
+        print("\n۴) ماژولِ گم‌شده (علتِ واقعیِ کرشِ فعلی)")
+        req_path = next((p for p in texts if os.path.basename(p).lower() == "requirements.txt"), None)
+        if req_path is None:
+            ok3, d3 = _api(base, secret, "GET", f"/api/hosting/admin/{app_id}/filetext", {"path": "requirements.txt"})
+            req_txt = (d3.get("text") or "") if ok3 else None
+        else:
+            req_txt = texts[req_path]
+        for mod in miss_mods:
+            pip = PIP_NAMES.get(mod, mod)
+            if req_txt is None:
+                print(f"  ❌ {mod}: فایلِ requirements.txt در پروژه نیست ⇒ هیچ بسته‌ای نصب نمی‌شود. بسته: {pip}")
+            elif not req_has(req_txt, pip):
+                print(f"  ❌ {mod}: «{pip}» در requirements.txt نیست ⇒ باید اضافه شود.")
+            else:
+                print(f"  ⚠️ {mod}: «{pip}» در requirements.txt هست ولی نصب نشده ⇒ ساختِ (build) دوباره را بزن / لاگِ بیلد را ببین.")
+            problems += 1
+        tg = [ln.strip() for t in texts.values() for ln in t.splitlines()
+              if re.match(r"\s*(from|import)\s+telegram", ln)][:6]
+        if tg and "telegram" in miss_mods:
+            print("  ایمپورت‌هایِ کد (برایِ تعیینِ نسخه):")
+            for ln in tg:
+                print("    ", ln[:120])
+            print("  راهنما: «Updater/Dispatcher» ⇒ python-telegram-bot==13.15 | «Application/ApplicationBuilder» ⇒ python-telegram-bot>=20")
 
     print("\n══ جمع‌بندی ══")
     print("❌ مشکلِ احتمالی بالا پیدا شد." if problems else "✅ توکنِ ثبت‌شده معتبر و بدونِ مشکلِ ظاهری است؛ علتِ Unauthorized جایِ دیگری است (لاگ را ببین).")

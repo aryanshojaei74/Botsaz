@@ -66,3 +66,46 @@ def test_end_to_end_finds_hardcoded_old_token(monkeypatch, capsys):
     assert "main.py" in out and "با توکنِ ثبت‌شده فرق دارد" in out      # توکنِ قدیمیِ سخت‌کدشده
     assert OLD not in out and GOOD not in out                             # توکنِ کامل چاپ نمی‌شود
     assert "Unauthorized" in out
+
+
+def test_req_has_handles_versions_comments_and_name_normalisation():
+    req = "# deps\npython_telegram_bot==20.7\nyt-dlp>=2024.1  # video\n-r other.txt\nrequests\n"
+    assert CH.req_has(req, "python-telegram-bot") and CH.req_has(req, "yt-dlp") and CH.req_has(req, "Requests")
+    assert not CH.req_has(req, "Pillow") and not CH.req_has("", "x")
+    assert CH.PIP_NAMES["telegram"] == "python-telegram-bot"
+
+
+def test_missing_module_is_reported_with_requirements_verdict(monkeypatch, capsys):
+    class H2(_H):
+        def do_GET(self):
+            if "/logs" in self.path:
+                body = {"logs": "ERROR - خطا: No module named 'telegram'\n"}
+            elif "/filetext" in self.path and "requirements.txt" in self.path:
+                body = {"text": "yt-dlp\n"}
+            elif "/filetext" in self.path:
+                body = {"text": "from telegram.ext import Application\n"}
+            elif "/files" in self.path:
+                body = {"files": [{"path": "main.py", "size": 10}, {"path": "requirements.txt", "size": 7}]}
+            elif self.path.endswith("/env"):
+                body = {"name": "x", "env": [{"key": "BOT_TOKEN", "value": GOOD}, {"key": "chat", "value": "1"}]}
+            else:
+                body = {}
+            raw = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(raw)
+    srv = HTTPServer(("127.0.0.1", 0), H2)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("VIP_ADMIN_SECRET", "s")
+    monkeypatch.setenv("VIP_API_BASE", f"http://127.0.0.1:{srv.server_port}")
+    monkeypatch.setattr(CH, "get_me", lambda t: "✅ معتبر: @x")
+    monkeypatch.setattr(sys, "argv", ["check_hosted_app.py", "5"])
+    try:
+        rc = CH.main()
+    finally:
+        srv.shutdown()
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "python-telegram-bot» در requirements.txt نیست" in out
+    assert "Application" in out and "متغیرِ با نامِ کوچک" in out
