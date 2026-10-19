@@ -431,3 +431,262 @@ async def test_tenant_apay_settings_and_guide_have_no_webhook_setup():
     src = inspect.getsource(AA._menu_content)
     assert "ap:setsecret" not in src and "آدرس وب‌هوک" not in src and "نیازی به ثبت وب‌هوک" in src
     assert AP2.webhook_url is not None                                                   # سازوکار فنی (callback) سرجایش است
+
+
+# ═══════════ PATCH_APAY_ONE_OPEN_INVOICE_V1 — ربات مشتری: یک فاکتور باز؛ پرسش «واریز شد؟»ی مالک بعد از لغو/انقضا پاک می‌شود ═══════════
+
+def _ns(**kw):
+    import types
+    return types.SimpleNamespace(**kw)
+
+
+def _fake_msg(sent):
+    async def answer(text, reply_markup=None, **kw):
+        sent.append((text, reply_markup))
+        return _ns(message_id=900 + len(sent), chat=_ns(id=777))
+    return _ns(answer=answer)
+
+
+async def _noop_answer(*a, **k):
+    return None
+
+
+async def _row(maker):
+    async with maker() as s:
+        return await s.get(models.Bot, 5)
+
+
+def _patch_admin(monkeypatch, maker):
+    """apay_admin جلسه را مستقیم از config می‌گیرد؛ در تست روی همان دیتابیس درون‌حافظه می‌نشانیم."""
+    from tenant.gateways import apay_admin as AA
+    import tenant.shared.kyc as kyc
+    monkeypatch.setattr(AA, "Session", maker)
+
+    async def ok_charge(*a, **k):
+        return True, ""
+
+    async def no_hook(*a, **k):
+        return ""
+    monkeypatch.setattr(kyc, "check_charge", ok_charge)
+    monkeypatch.setattr(AP, "webhook_url", no_hook)
+    return AA
+
+
+@pytest.mark.asyncio
+async def test_tenant_open_invoice_detection(db):
+    from datetime import datetime, timedelta
+    maker, _n = db
+    assert (await AP.open_invoice(5, 777)).order_id == "bsabc"                 # waiting و تازه
+    assert await AP.open_invoice(5, 778) is None                               # کاربر دیگر
+    assert await AP.open_invoice(6, 777) is None                               # ربات دیگر
+    async with maker() as s:
+        ch = await s.scalar(select(models.ApayCharge))
+        ch.created_at = datetime.utcnow() - timedelta(minutes=AP.OPEN_INVOICE_MIN + 1)
+        await s.commit()
+    assert await AP.open_invoice(5, 777) is None                               # از مهلت اعتبار گذشته
+    for status in ("paid", "cancelled", "expired"):
+        async with maker() as s:
+            ch = await s.scalar(select(models.ApayCharge))
+            ch.created_at, ch.status = datetime.utcnow(), status
+            await s.commit()
+        assert await AP.open_invoice(5, 777) is None, status
+
+
+@pytest.mark.asyncio
+async def test_tenant_second_invoice_is_blocked_with_pay_or_cancel_message(db, monkeypatch):
+    maker, _n = db
+    AA = _patch_admin(monkeypatch, maker)
+    calls = []
+
+    async def create(*a, **k):
+        calls.append(1)
+        return 201, {"id": "pay_n", "pay_url": "https://pay/x", "pay_amount": 1_000_000}
+    monkeypatch.setattr(AP, "create_payment", create)
+    sent = []
+    await AA._apu_create_charge(_fake_msg(sent), _ns(), await _row(maker), 50_000, 777)
+    assert calls == [] and len(sent) == 1                                      # فاکتور جدیدی ساخته نشد
+    text, kb = sent[0]
+    assert "فاکتور باز" in text and "50,000" in text and "پرداخت کن" in text and "لغوش کن" in text
+    datas = [b.callback_data for row in kb.inline_keyboard for b in row if b.callback_data]
+    assert datas == ["apu:check:bsabc", "apu:cancel:bsabc"]
+
+
+@pytest.mark.asyncio
+async def test_tenant_new_invoice_allowed_after_cancel_and_concurrent_taps_make_one(db, monkeypatch):
+    import asyncio
+    maker, _n = db
+    AA = _patch_admin(monkeypatch, maker)
+    calls = []
+
+    async def create(*a, **k):
+        calls.append(1)
+        await asyncio.sleep(0.05)
+        return 201, {"id": f"pay_{len(calls)}", "pay_url": "https://pay/x", "pay_amount": 1_000_000}
+
+    async def card_for(tok, res):
+        return "6037", "holder"
+    monkeypatch.setattr(AP, "create_payment", create)
+    monkeypatch.setattr(AP, "card_for", card_for)
+    monkeypatch.setattr(AP, "invoice_view", lambda **k: ("invoice", None))
+    monkeypatch.setattr(AP, "watch_tenant_charge", lambda *a, **k: None)
+    async with maker() as s:                                                   # فاکتور قبلی لغو شده
+        (await s.scalar(select(models.ApayCharge))).status = "cancelled"
+        await s.commit()
+    row = await _row(maker)
+    sent = []
+    await asyncio.gather(AA._apu_create_charge(_fake_msg(sent), _ns(), row, 50_000, 777),
+                         AA._apu_create_charge(_fake_msg(sent), _ns(), row, 50_000, 777))
+    assert len(calls) == 1                                                     # دو کلیک هم‌زمان = فقط یک فاکتور
+    texts = [t for t, _k in sent]
+    assert any("فاکتور باز" in t for t in texts) and any(t == "invoice" for t in texts)
+    async with maker() as s:
+        n = len((await s.scalars(select(models.ApayCharge).where(models.ApayCharge.status == "waiting"))).all())
+    assert n == 1
+    # کاربر دیگری در همین ربات آزاد است
+    sent2 = []
+    await AA._apu_create_charge(_fake_msg(sent2), _ns(), row, 50_000, 778)
+    assert len(calls) == 2 and not any("فاکتور باز" in t for t, _k in sent2)
+
+
+@pytest.mark.asyncio
+async def test_tenant_entry_points_block_before_asking_amount_or_building_direct_invoice(db, monkeypatch):
+    maker, _n = db
+    AA = _patch_admin(monkeypatch, maker)
+    row = await _row(maker)
+
+    async def gbr(bot):
+        return row
+    monkeypatch.setattr(tenant, "get_bot_row", gbr)
+    sent, answered = [], []
+
+    async def answer(*a, **k):
+        answered.append(a)
+
+    async def clear():
+        return None
+    state = _ns(clear=clear, set_state=_noop_answer, update_data=_noop_answer)
+    async with maker() as s:
+        s.add(models.VpnPlan(id=1, bot_id=5, title="p", volume_gb=10, days=30, price=100_000, active=True))
+        await s.commit()
+    for data, handler in (("apu:start", AA.apu_start), ("w:apay", AA.apu_start),
+                          ("w:apay:vpn:1:100000", AA.apu_start_for_vpn_plan),
+                          ("w:apay:vc:10:30:1:100000", AA.apu_start_for_vc)):
+        sent.clear()
+        cb = _ns(data=data, from_user=_ns(id=777), message=_fake_msg(sent), answer=answer)
+        await handler(cb, _ns(), state)
+        assert len(sent) == 1 and "فاکتور باز" in sent[0][0], data
+        assert "چه مبلغی" not in sent[0][0]
+    assert answered                                                            # callback همیشه پاسخ می‌گیرد
+
+
+@pytest.mark.asyncio
+async def test_tenant_cancel_removes_owner_ask_and_buttons_of_original_invoice(db, monkeypatch):
+    maker, _n = db
+    AA = _patch_admin(monkeypatch, maker)
+    row = await _row(maker)
+
+    async def gbr(bot):
+        return row
+    monkeypatch.setattr(tenant, "get_bot_row", gbr)
+
+    async def ibk(bot_id):
+        return None
+    monkeypatch.setattr(tenant, "inline_back_kb", ibk)
+    dropped, edited, said = [], [], []
+
+    async def drop(bot_id, chat, msg):
+        dropped.append((bot_id, chat, msg))
+    monkeypatch.setattr(AP, "_drop_admin_ask", drop)
+    async with maker() as s:
+        ch = await s.scalar(select(models.ApayCharge))
+        ch.admin_ask_chat, ch.admin_ask_msg, ch.chat_id, ch.msg_id = 1, 4321, 777, 500
+        await s.commit()
+
+    class B:
+        async def edit_message_reply_markup(self, **k):
+            edited.append(k)
+
+    async def mdl_answer(t, **k):
+        said.append(t)
+    cb = _ns(data="apu:cancel:bsabc", from_user=_ns(id=777), answer=_noop_answer,
+             message=_ns(message_id=999, answer=mdl_answer, edit_reply_markup=_noop_answer))   # لغو از پیام «فاکتور باز دارید»
+    await AA.apu_cancel(cb, B())
+    assert dropped == [(5, 1, 4321)]
+    assert edited and edited[0]["chat_id"] == 777 and edited[0]["message_id"] == 500
+    async with maker() as s:
+        assert (await s.scalar(select(models.ApayCharge))).status == "cancelled"
+    assert said and "لغو شد" in said[0]
+    # کاربر دیگر نمی‌تواند فاکتور را لغو کند
+    cb2 = _ns(data="apu:cancel:bsabc", from_user=_ns(id=999), answer=_noop_answer,
+              message=_ns(message_id=999, answer=mdl_answer, edit_reply_markup=_noop_answer))
+    dropped.clear()
+    await AA.apu_cancel(cb2, B())
+    assert dropped == []
+
+
+@pytest.mark.asyncio
+async def test_tenant_expiry_removes_unanswered_ask_but_answered_ask_is_kept(db, monkeypatch):
+    from datetime import datetime, timedelta
+    maker, _n = db
+    AA = _patch_admin(monkeypatch, maker)
+    dropped = []
+
+    async def drop(bot_id, chat, msg):
+        dropped.append((bot_id, chat, msg))
+    monkeypatch.setattr(AP, "_drop_admin_ask", drop)
+    async with maker() as s:
+        ch = await s.scalar(select(models.ApayCharge))
+        ch.created_at = datetime.utcnow() - timedelta(minutes=45)
+        ch.admin_ask_chat, ch.admin_ask_msg = 1, 111
+        await s.commit()
+
+    async def v(token, pid):
+        return 200, {"verified": False, "payment": {"status": "expired"}}
+    monkeypatch.setattr(AP, "verify_payment", v)
+    await AP.poll_pending()
+    assert dropped == [(5, 1, 111)]                                            # منقضی‌شده و پرداخت‌نشده ⇒ پرسش پاک شد
+    async with maker() as s:
+        assert (await s.scalar(select(models.ApayCharge))).status == "expired"
+
+    # مالک جواب بدهد ⇒ شناسه‌ها فراموش می‌شوند و پیام نتیجه هرگز پاک نمی‌شود
+    async with maker() as s:
+        s.add(models.ApayCharge(bot_id=5, user_telegram_id=777, order_id="bsans", payment_id="pay_a",
+                                amount_toman=1000, status="waiting", admin_ask_chat=1, admin_ask_msg=222))
+        await s.commit()
+        cid = (await s.scalar(select(models.ApayCharge).where(models.ApayCharge.order_id == "bsans"))).id
+    row = await _row(maker)
+
+    async def owner_ok(cb, bot):
+        return row
+    monkeypatch.setattr(tenant, "_owner_ok", owner_ok)
+    edits = []
+
+    async def edit_text(t, reply_markup=None):
+        edits.append(t)
+    cb = _ns(data=f"apadm:no:{cid}", from_user=_ns(id=1), answer=_noop_answer,
+             message=_ns(html_text="پرسش", edit_text=edit_text))
+    await AA.ap_admin_answer(cb, _ns())
+    async with maker() as s:
+        ch = await s.get(models.ApayCharge, cid)
+    assert ch.admin_ask_chat is None and ch.admin_ask_msg is None and "واریز نشده" in edits[0]
+    dropped.clear()
+    await AP.poll_pending()
+    assert dropped == []                                                       # پیام جواب‌داده‌شده دیگر هیچ‌وقت پاک نمی‌شود
+
+
+@pytest.mark.asyncio
+async def test_tenant_direct_order_entry_is_blocked_when_open_invoice_exists(db, monkeypatch):
+    maker, _n = db
+    AA = _patch_admin(monkeypatch, maker)
+    row = await _row(maker)
+
+    async def gbr(bot):
+        return row
+    monkeypatch.setattr(tenant, "get_bot_row", gbr)
+    async with maker() as s:
+        s.add(models.Order(id=11, bot_id=5, user_id=1, volume_gb=10, days=30, amount=80_000, pay_method="wallet", status="pending"))
+        await s.commit()
+    sent = []
+    cb = _ns(data="w:apay:11", from_user=_ns(id=777), message=_fake_msg(sent), answer=_noop_answer)
+    await AA.apu_start_for_order(cb, _ns(), _ns(clear=_noop_answer))
+    assert len(sent) == 1 and "فاکتور باز" in sent[0][0]

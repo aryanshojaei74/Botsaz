@@ -5,13 +5,16 @@ apay_admin.py — PATCH_APAY_GATEWAY_V1
 """
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime
+
 from aiogram import Bot, F, Router
 from aiogram.enums import ButtonStyle
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (CallbackQuery, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
-from sqlalchemy import select
+from sqlalchemy import select, update as sa_update
 
 from config import Session
 from models import ApayCharge, BotUser
@@ -21,6 +24,9 @@ from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
 
 apay_router = Router()
+
+# === PATCH_APAY_ONE_OPEN_INVOICE_V1 === هر کاربر در هر ربات هم‌زمان فقط یک فاکتور باز دارد
+_invoice_locks: dict[tuple[int, int], "asyncio.Lock"] = {}
 
 
 class ApFSM(StatesGroup):
@@ -501,6 +507,26 @@ async def ap_test(cb: CallbackQuery, bot: Bot):
 
 
 # ═════════════════ جریانِ کاربر ═════════════════
+async def _apu_block_if_open(target, row, tg_id: int) -> bool:
+    """اگر کاربر فاکتور بازی دارد، به‌جای ساختن فاکتور دوم «یا پرداخت کن یا لغو کن» را می‌دهد (True)."""
+    ch = await AP.open_invoice(row.id, tg_id)
+    if ch is None:
+        return False
+    age = max(0, int((datetime.utcnow() - (ch.created_at or datetime.utcnow())).total_seconds() // 60))
+    rows = []
+    if (ch.pay_url or "").startswith("http"):
+        rows.append([InlineKeyboardButton(text="💳 رفتن به صفحهٔ پرداخت", url=ch.pay_url)])
+    rows.append([InlineKeyboardButton(text="🔄 بررسی پرداخت", callback_data=f"apu:check:{ch.order_id}"),
+                 InlineKeyboardButton(text="❌ لغو این فاکتور", callback_data=f"apu:cancel:{ch.order_id}",
+                                      style=ButtonStyle.DANGER)])
+    await target.answer(
+        "⚠️ <b>شما یک فاکتور باز دارید</b>\n\n"
+        f"💰 مبلغ: <b>{int(ch.amount_toman or 0):,} تومان</b> — {age} دقیقه پیش ساخته شده.\n\n"
+        "برای ساختن فاکتور جدید، اول همین فاکتور را <b>پرداخت کن</b> یا <b>لغوش کن</b>.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    return True
+
+
 @apay_router.callback_query(F.data.in_({"apu:start", "w:apay"}))
 async def apu_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from tenant import get_bot_row, smart_cancel_kb
@@ -509,6 +535,9 @@ async def apu_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return await cb.answer()
     if not await AP.is_available(row.id):
         return await cb.answer("این درگاه فعال نیست.", show_alert=True)
+    await state.clear()
+    if await _apu_block_if_open(cb.message, row, cb.from_user.id):      # PATCH_APAY_ONE_OPEN_INVOICE_V1
+        return await cb.answer()
     min_amount = await AP.get_min_amount(row.id)
     max_amount = await AP.get_max_amount(row.id)
     rng = f"حداقل: <b>{min_amount:,}</b> تومان"
@@ -583,6 +612,8 @@ async def apu_start_for_vpn_plan(cb: CallbackQuery, bot: Bot, state: FSMContext)
         plan = await s.get(VpnPlan, plan_id)
     if not plan or plan.bot_id != row.id or not plan.active:
         return await cb.answer("این پلن دیگر در دسترس نیست.", show_alert=True)
+    if await _apu_block_if_open(cb.message, row, cb.from_user.id):      # PATCH_APAY_ONE_OPEN_INVOICE_V1
+        return await cb.answer()
     need = await _apu_direct_need(cb, row, total, await _apu_user_balance(row, cb.from_user.id))
     if need is None:
         return
@@ -607,6 +638,8 @@ async def apu_start_for_vc(cb: CallbackQuery, bot: Bot, state: FSMContext):
     except (ValueError, IndexError):
         return await cb.answer()
     if not (0 <= gb <= 4095 and 0 <= days <= 2047 and 1 <= count <= 31) or total <= 0:
+        return await cb.answer()
+    if await _apu_block_if_open(cb.message, row, cb.from_user.id):      # PATCH_APAY_ONE_OPEN_INVOICE_V1
         return await cb.answer()
     need = await _apu_direct_need(cb, row, total, await _apu_user_balance(row, cb.from_user.id))
     if need is None:
@@ -636,6 +669,8 @@ async def apu_start_for_order(cb: CallbackQuery, bot: Bot, state: FSMContext):
         if not u or o.user_id != u.id:
             return await cb.answer("این سفارش مالِ تو نیست.", show_alert=True)
         total, bal = int(float(o.amount)), int(float(u.balance or 0))
+    if await _apu_block_if_open(cb.message, row, cb.from_user.id):      # PATCH_APAY_ONE_OPEN_INVOICE_V1
+        return await cb.answer()
     need = await _apu_direct_need(cb, row, total, bal)
     if need is None:
         return
@@ -648,6 +683,16 @@ async def apu_start_for_order(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 async def _apu_create_charge(msg: Message, bot: Bot, row, amount: int, tg_id: int,
                              for_order: int | None = None) -> None:
+    # === PATCH_APAY_ONE_OPEN_INVOICE_V1 === بررسی «فاکتور باز» و ساخت فاکتور زیر یک قفل هر-کاربر،
+    # تا دو کلیک پشت‌سرهم دو فاکتور نسازد.
+    async with _invoice_locks.setdefault((int(row.id), int(tg_id)), asyncio.Lock()):
+        if await _apu_block_if_open(msg, row, tg_id):
+            return
+        await _apu_create_charge_locked(msg, bot, row, amount, tg_id, for_order)
+
+
+async def _apu_create_charge_locked(msg: Message, bot: Bot, row, amount: int, tg_id: int,
+                                    for_order: int | None = None) -> None:
     """فاکتورِ آپی می‌سازد و نشان می‌دهد. for_order: پرداختِ مستقیمِ یک سفارش/پلن/خریدِ دلخواه
     (=== PATCH_APAY_DIRECT_PURCHASE_V1 ===)؛ بعد از پرداخت دکمهٔ «تکمیلِ خرید» می‌آید."""
     try:
@@ -757,12 +802,20 @@ async def apu_cancel(cb: CallbackQuery, bot: Bot):
         if ch.status == "paid":
             return await cb.answer("این فاکتور قبلاً پرداخت شده و قابلِ لغو نیست.", show_alert=True)
         ch.status = "cancelled"
+        ask_chat, ask_msg, inv_chat, inv_msg = ch.admin_ask_chat, ch.admin_ask_msg, ch.chat_id, ch.msg_id
         await s.commit()
     await cb.answer("فاکتور لغو شد.")
     try:
         await cb.message.edit_reply_markup(reply_markup=None)
     except Exception:
         logger.debug("apay: تمیزکاریِ ظاهریِ پیام ناموفق بود")
+    # === PATCH_APAY_ASK_CLEANUP_V2 === لغو کاربر ⇒ پیام «واریز شد؟»ی مالک دیگر لازم نیست
+    await AP._drop_admin_ask(row.id, ask_chat, ask_msg)
+    if inv_chat and inv_msg and inv_msg != cb.message.message_id:       # لغو از پیام «فاکتور باز دارید» زده شده
+        try:
+            await bot.edit_message_reply_markup(chat_id=inv_chat, message_id=inv_msg, reply_markup=None)
+        except Exception:
+            logger.debug("apay: دکمه‌های پیام اصلی فاکتور برداشته نشد")
     from tenant import inline_back_kb
     await cb.message.answer(
         "❌ فاکتور لغو شد.\n\nاگر قبل از لغو واریز کرده بودی نگران نباش؛ "
@@ -792,4 +845,9 @@ async def ap_admin_answer(cb: CallbackQuery, bot: Bot):
         await cb.message.edit_text((cb.message.html_text or "") + tail, reply_markup=None)
     except Exception:
         logger.info("apay: ویرایشِ پیامِ پرسش ممکن نشد")
+    # === PATCH_APAY_ASK_CLEANUP_V2 === پرسش جواب داده شد؛ پیامش (با نتیجه) می‌ماند و دیگر پاک نمی‌شود
+    async with Session() as s:
+        await s.execute(sa_update(ApayCharge).where(ApayCharge.id == cid, ApayCharge.bot_id == row.id)
+                        .values(admin_ask_chat=None, admin_ask_msg=None))
+        await s.commit()
     await cb.answer(msg if not ok else ("شارژ شد ✅" if act == "ok" else "ثبت شد"), show_alert=not ok)

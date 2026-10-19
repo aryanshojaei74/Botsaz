@@ -44,6 +44,8 @@ API_MIN_TOMAN = 1_000          # ۱۰٬۰۰۰ ریال
 API_MAX_TOMAN = 100_000_000    # ۱٬۰۰۰٬۰۰۰٬۰۰۰ ریال
 FEE_TOMAN = 1_500              # کارمزدِ هر پرداختِ موفق (fee=15000 ریال در پاسخِ آپی)
 POLL_FOR_MINUTES = 30          # ۱۵ دقیقه اعتبار + ۱۰ دقیقه پیامکِ دیرهنگام + حاشیه
+# === PATCH_APAY_ONE_OPEN_INVOICE_V1 === فاکتور آپی ۱۵ دقیقه اعتبار دارد؛ تا آن موقع «باز» حساب می‌شود
+OPEN_INVOICE_MIN = 15
 
 
 async def _get(bot_id: int, key: str, default: str = "") -> str:
@@ -58,6 +60,16 @@ async def _set(bot_id: int, key: str, value: str) -> None:
 
 def new_order_id() -> str:
     return "bs" + secrets.token_hex(8)
+
+
+async def open_invoice(bot_id: int, tg_id: int):
+    """فاکتور باز این کاربر در این ربات (در انتظار، لغو‌نشده و هنوز در مهلت اعتبار)؛ وگرنه None."""
+    since = datetime.utcnow() - timedelta(minutes=OPEN_INVOICE_MIN)
+    async with Session() as s:
+        return await s.scalar(select(ApayCharge).where(
+            ApayCharge.bot_id == int(bot_id), ApayCharge.user_telegram_id == int(tg_id),
+            ApayCharge.status == "waiting", ApayCharge.created_at >= since
+        ).order_by(ApayCharge.id.desc()))
 
 
 async def get_min_amount(bot_id: int) -> int:
@@ -750,7 +762,12 @@ async def poll_pending() -> int:
                     ApayCharge.status == "waiting").with_for_update())
                 if ch:
                     ch.status = "expired"
+                    ask_chat, ask_msg = ch.admin_ask_chat, ch.admin_ask_msg
                     await s.commit()
+                else:
+                    ask_chat = ask_msg = None
+            # === PATCH_APAY_ASK_CLEANUP_V2 === منقضی و پرداخت‌نشده ⇒ پرسش بی‌پاسخ مالک پاک شود
+            await _drop_admin_ask(bid, ask_chat, ask_msg)
     return n
 
 

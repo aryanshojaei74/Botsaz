@@ -112,6 +112,12 @@ async def test_direct_plan_charges_only_the_shortfall_and_remembers_the_plan(env
 async def test_direct_vc_and_order(env):
     maker, _s = env
     await AA.apu_start_for_vc(Cb("w:apay:vc:10:30:1:50000"), BOT, St())
+    blocked = Cb("w:apay:8")                                        # فاکتور اول هنوز باز است ⇒ دومی ساخته نمی‌شود
+    await AA.apu_start_for_order(blocked, BOT, St())
+    assert len(await _charge(maker)) == 1 and any("فاکتور باز" in t for t in blocked.message.out)
+    async with maker() as s:                                        # کاربر فاکتور اول را لغو می‌کند ⇒ دومی آزاد است
+        (await s.scalar(select(models.ApayCharge))).status = "cancelled"
+        await s.commit()
     await AA.apu_start_for_order(Cb("w:apay:8"), BOT, St())
     ch = sorted(await _charge(maker), key=lambda c: c.id)
     assert ch[0].amount_toman == 20_000 and ch[0].for_order_id == vc_pack(10, 30, 1)
