@@ -244,6 +244,8 @@ from tenant_group_guard import tenant_group_guard_router  # === PATCH_TENANT_GRO
 tenant_router.include_router(tenant_group_guard_router)
 tenant_router.include_router(group_wallet_router)  # === PATCH_GROUP_WALLET_V1 ===
 tenant_router.include_router(betting_router)  # === PATCH_GROUP_BETTING_V1 ===
+from tenant.shared.wager_games import wager_games_router  # === PATCH_WAGER_TENANT_V1 ===
+tenant_router.include_router(wager_games_router)  # === PATCH_WAGER_TENANT_V1 ===
 _include(smm_ai_router, "virtual_service")  # === PATCH_SMM_AI_ASSISTANT_V1 ===
 tenant_router.include_router(backup_router)  # === PATCH_BOT_BACKUP_V1 ===
 tenant_router.include_router(backup_full_router)  # === PATCH_BACKUP_FULL_V1 ===

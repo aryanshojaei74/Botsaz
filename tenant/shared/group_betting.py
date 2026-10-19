@@ -482,8 +482,13 @@ async def _bet_settings_view(bot_id: int):
         f"حداکثر مبلغ: {_rial(maximum) if maximum else 'نامحدود'}\n"
         f"زمان انتظار: <b>{ttl}</b> ثانیه"
     )
+    # === PATCH_WAGER_TENANT_V1 === وضعیت فعال‌سازی بازی‌های ایکس‌او/سنگ‌کاغذ‌قیچی/تاس + روشن/خاموش هر بازی
+    from tenant.shared.wager_games import settings_extra
+    extra_text, extra_rows = await settings_extra(bot_id)
+    text += extra_text
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=("🔴 خاموش‌کردن بازی" if enabled else "🟢 روشن‌کردن بازی"), callback_data="gset:bet_toggle")],
+        *extra_rows,
         [InlineKeyboardButton(text=f"💸 درصد کارمزد ({fee}٪)", callback_data="gset:bet_fee")],
         [InlineKeyboardButton(text="🔢 حداقل مبلغ", callback_data="gset:bet_min"), InlineKeyboardButton(text="🔢 حداکثر مبلغ", callback_data="gset:bet_max")],
         [InlineKeyboardButton(text=f"⏱ زمان انتظار ({ttl} ثانیه)", callback_data="gset:bet_ttl")],

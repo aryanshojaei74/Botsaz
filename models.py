@@ -3246,6 +3246,8 @@ class PlatformWager(Base):
     """
     __tablename__ = "platform_wagers"
     id: Mapped[int] = mapped_column(primary_key=True)
+    # ۰ = ربات اصلی بات‌ساز (کیف‌پول PlatformUser)؛ غیر صفر = ربات مستأجر (کیف‌پول BotUser همان ربات)
+    bot_id: Mapped[int] = mapped_column(BigInteger, default=0, index=True)
     chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
     message_id: Mapped[int] = mapped_column(BigInteger, default=0)
     game: Mapped[str] = mapped_column(String(8))                    # xo | rps | dice
@@ -3270,6 +3272,21 @@ class PlatformWager(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)  # مهلت پیوستن یا مهلت حرکت بعدی
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     settled_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+# === PATCH_WAGER_ADDON_V1 ===
+class BotAddon(Base):
+    """افزونهٔ پولی فعال‌شده برای یک ربات مستأجر (مثلا بازی‌های شرط‌بندی). یک‌بار پرداخت، دائمی؛
+    جدول جدا تا «ریست ربات» یا تغییر تنظیمات آن را پاک نکند."""
+    __tablename__ = "bot_addons"
+    __table_args__ = (UniqueConstraint("bot_id", "addon", name="uq_bot_addon"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    addon: Mapped[str] = mapped_column(String(32))
+    amount: Mapped[float] = mapped_column(Numeric(14, 0), default=0)    # مبلغ پرداخت‌شده (تومان)
+    paid_by: Mapped[int] = mapped_column(BigInteger, default=0)         # تلگرام‌آیدی پرداخت‌کننده
+    source: Mapped[str] = mapped_column(String(16), default="wallet")   # wallet | free | admin
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 # === PATCH_TENANT_GROUP_GUARD_V1 ===

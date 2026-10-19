@@ -550,6 +550,13 @@ async def test_shirt_bandi_with_zwnj_reaches_coin_flip_regex():
 
 @pytest.mark.asyncio
 async def test_hub_shows_both_sections_and_is_admin_only(db, psets, monkeypatch):
+    import platform_bot
+    import platform_wager_sale
+
+    async def gp(key, default=""):
+        return psets.get(key, default)
+    monkeypatch.setattr(platform_bot, "get_pset", gp)          # بخش فروش به ربات‌ها از get_pset می‌خواند
+    monkeypatch.setattr(platform_wager_sale, "Session", db)
     monkeypatch.setattr(GM, "PLATFORM_ADMIN_ID", 1)
     async with db() as s:
         s.add(models.PlatformDiceGame(emoji="🎯", title="دارت", active=True))

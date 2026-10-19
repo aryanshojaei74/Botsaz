@@ -30,7 +30,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sqlalchemy import func, or_, select
 
 from config import PLATFORM_ADMIN_ID, Session
-from models import PlatformDiceGame, PlatformTxn, PlatformUser, PlatformWager
+from models import BotUser, PlatformDiceGame, PlatformTxn, PlatformUser, PlatformWager, WalletTxn
 from platform_group_money import (
     ANON_NOTICE, _bet_enabled, _digits, _edit_settings, _group_allowed, _int, _money, _name, _pset,
     _reply_target, _rial, _set, _user, _admin, admin_hint_blocked,
@@ -108,20 +108,43 @@ def rps_result(a: str, b: str) -> int:
 
 # ───────────────────────── تنظیمات ─────────────────────────
 
-async def load_cfg() -> dict:
-    fee_on = (await _pset("platform_group_betting_fee_enabled", "off")) == "on"
-    pct = Decimal(str(await _pset("platform_group_betting_fee_pct", "0") or 0)) if fee_on else Decimal("0")
+async def _cfg_get(bot_id: int, name: str, default: str) -> str:
+    """=== PATCH_WAGER_TENANT_V1 === bot_id=۰: تنظیمات ربات اصلی (pset)؛ وگرنه تنظیمات همان ربات مستأجر
+    (کلیدهای group_betting_* که صفحهٔ «تنظیمات بازی» مالک هم می‌نویسد)."""
+    if not bot_id:
+        return await _pset({"enabled": "platform_group_betting_enabled", "fee_on": "platform_group_betting_fee_enabled",
+                            "fee_pct": "platform_group_betting_fee_pct", "min": "platform_group_betting_min",
+                            "max": "platform_group_betting_max", "ttl": "platform_group_betting_ttl",
+                            "move": "platform_wager_move_secs"}.get(name) or f"platform_wager_{name}", default)
+    from tenant import get_setting
+    return await get_setting(bot_id, {"enabled": "group_betting_enabled", "fee_on": "group_betting_fee_enabled",
+                                      "fee_pct": "group_betting_fee_pct", "min": "group_betting_min",
+                                      "max": "group_betting_max", "ttl": "group_betting_ttl",
+                                      "move": "wager_move_secs"}.get(name) or f"wager_game_{name}", default)
+
+
+def _on(v) -> bool:
+    return str(v).strip().lower() in ("on", "1", "true")
+
+
+async def master_enabled(bot_id: int = 0) -> bool:
+    return _on(await _cfg_get(bot_id, "enabled", "off" if not bot_id else "0"))
+
+
+async def load_cfg(bot_id: int = 0) -> dict:
+    fee_on = _on(await _cfg_get(bot_id, "fee_on", "off"))
+    pct = Decimal(str(await _cfg_get(bot_id, "fee_pct", "0") or 0)) if fee_on else Decimal("0")
     return {
-        "min": max(1, _int(await _pset("platform_group_betting_min", "1000"), 1000)),
-        "max": _int(await _pset("platform_group_betting_max", "0")),
+        "min": max(1, _int(_digits(await _cfg_get(bot_id, "min", "1000")), 1000)),
+        "max": _int(_digits(await _cfg_get(bot_id, "max", "0"))),
         "fee_pct": pct,
-        "ttl": max(60, min(_int(await _pset("platform_group_betting_ttl", "300"), 300), 86400)),
-        "move": max(30, min(_int(await _pset("platform_wager_move_secs", "180"), 180), 3600)),
+        "ttl": max(60, min(_int(_digits(await _cfg_get(bot_id, "ttl", "300")), 300), 86400)),
+        "move": max(30, min(_int(_digits(await _cfg_get(bot_id, "move", "180")), 180), 3600)),
     }
 
 
-async def game_enabled(game: str) -> bool:
-    return (await _pset(f"platform_wager_{game}", "on")) == "on"
+async def game_enabled(game: str, bot_id: int = 0) -> bool:
+    return _on(await _cfg_get(bot_id, game, "on"))
 
 
 def _now() -> datetime:
@@ -149,18 +172,29 @@ def _res(w=None, err=None, note=None):
 
 # ───────────────────────── عملیات مالی ─────────────────────────
 
-async def _lock_user(s, uid: int):
+async def _lock_user(s, uid: int, bot_id: int = 0):
+    if bot_id:
+        return await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == uid).with_for_update())
     return await s.scalar(select(PlatformUser).where(PlatformUser.telegram_id == uid).with_for_update())
 
 
-async def _credit(s, uid: int, amount: int, kind: str, note: str) -> None:
-    u = await _lock_user(s, uid)
+def _add_txn(s, bot_id: int, u, amount: int, kind: str, note: str) -> None:
+    """ثبت در دفتر کیف‌پول درست: ربات اصلی ⇒ PlatformTxn، ربات مستأجر ⇒ WalletTxn."""
+    if bot_id:
+        s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=amount, kind=kind[:20], note=note[:200]))
+    else:
+        s.add(PlatformTxn(user_telegram_id=u.telegram_id, amount=amount, kind=kind[:20], note=note[:200]))
+
+
+async def _credit(s, uid: int, amount: int, kind: str, note: str, bot_id: int = 0) -> None:
+    u = await _lock_user(s, uid, bot_id)
     if u is None:                                     # نباید پیش بیاید؛ ولی پول گم نشود
-        u = PlatformUser(telegram_id=uid, full_name=str(uid), balance=0)
+        u = (BotUser(bot_id=bot_id, telegram_id=uid, full_name=str(uid), balance=0) if bot_id
+             else PlatformUser(telegram_id=uid, full_name=str(uid), balance=0))
         s.add(u)
         await s.flush()
     u.balance = Decimal(str(u.balance or 0)) + Decimal(amount)
-    s.add(PlatformTxn(user_telegram_id=uid, amount=amount, kind=kind, note=note[:200]))
+    _add_txn(s, bot_id, u, amount, kind, note)
 
 
 def _finish(w: PlatformWager, status: str, reason: str, winner: int | None = None) -> None:
@@ -169,21 +203,22 @@ def _finish(w: PlatformWager, status: str, reason: str, winner: int | None = Non
 
 
 async def _settle_win(s, w: PlatformWager, winner_id: int, reason: str = "win") -> None:
-    await _credit(s, winner_id, _money(w.payout_amount), "wager_prize", f"جایزهٔ شرط‌بندی #{w.id}")
+    await _credit(s, winner_id, _money(w.payout_amount), "wager_prize", f"جایزهٔ شرط‌بندی #{w.id}", w.bot_id or 0)
     if _money(w.fee_amount):
-        s.add(PlatformTxn(user_telegram_id=winner_id, amount=0, kind="wager_fee",
-                          note=f"کارمزد شرط‌بندی #{w.id}: {_money(w.fee_amount)}"))
+        u = await _lock_user(s, winner_id, w.bot_id or 0)
+        if u is not None:
+            _add_txn(s, w.bot_id or 0, u, 0, "wager_fee", f"کارمزد شرط‌بندی #{w.id}: {_money(w.fee_amount)}")
     _finish(w, "settled", reason, winner_id)
 
 
 async def _refund_both(s, w: PlatformWager, status: str, reason: str) -> None:
     for uid in sorted({w.creator_id, w.opponent_id or 0} - {0}):
-        await _credit(s, uid, _money(w.amount), "wager_refund", f"برگشت مبلغ شرط‌بندی #{w.id}")
+        await _credit(s, uid, _money(w.amount), "wager_refund", f"برگشت مبلغ شرط‌بندی #{w.id}", w.bot_id or 0)
     _finish(w, status, reason)
 
 
 async def _refund_creator(s, w: PlatformWager, status: str, reason: str) -> None:
-    await _credit(s, w.creator_id, _money(w.amount), "wager_refund", f"برگشت مبلغ شرط‌بندی #{w.id}")
+    await _credit(s, w.creator_id, _money(w.amount), "wager_refund", f"برگشت مبلغ شرط‌بندی #{w.id}", w.bot_id or 0)
     _finish(w, status, reason)
 
 
@@ -216,15 +251,16 @@ async def _timeout_locked(s, w: PlatformWager) -> None:
         await _forfeit_or_refund(s, w, st.get("rolls") or {})
 
 
-async def _active_count(s, uid: int) -> int:
+async def _active_count(s, uid: int, bot_id: int = 0) -> int:
     return int(await s.scalar(select(func.count(PlatformWager.id)).where(
-        PlatformWager.status.in_(ACTIVE),
+        PlatformWager.bot_id == bot_id, PlatformWager.status.in_(ACTIVE),
         or_(PlatformWager.creator_id == uid, PlatformWager.opponent_id == uid))) or 0)
 
 
 # ───────────────────────── ساخت / پیوستن / لغو ─────────────────────────
 
-async def create_wager(game: str, chat_id: int, creator: tuple, amount: int, target: tuple | None, cfg: dict):
+async def create_wager(game: str, chat_id: int, creator: tuple, amount: int, target: tuple | None, cfg: dict,
+                       bot_id: int = 0):
     """creator/target = (telegram_id, full_name, username). خروجی: (wager|None, پیام خطا|None)."""
     if amount < cfg["min"] or (cfg["max"] and amount > cfg["max"]):
         return None, f"❌ مبلغ باید بین {_rial(cfg['min'])} و {(_rial(cfg['max']) if cfg['max'] else 'بدون سقف')} باشد."
@@ -234,31 +270,31 @@ async def create_wager(game: str, chat_id: int, creator: tuple, amount: int, tar
         return None, "❌ کارمزد باید کمتر از مجموع مبلغ دو نفر باشد."
     cid, cname, cuser = creator
     async with Session() as s:
-        u = await _lock_user(s, cid)
+        u = await _lock_user(s, cid, bot_id)
         if not u or u.is_banned:
             return None, "❌ موجودی کافی نیست."
         if _money(u.balance) < amount:
             return None, f"❌ موجودی کافی نیست. نیاز: {_rial(amount)}"
-        if await _active_count(s, cid) >= MAX_ACTIVE:
+        if await _active_count(s, cid, bot_id) >= MAX_ACTIVE:
             return None, f"❌ هم‌زمان حداکثر {MAX_ACTIVE} شرط‌بندی باز می‌توانی داشته باشی."
         u.balance = Decimal(str(u.balance)) - Decimal(amount)
         w = PlatformWager(
-            chat_id=chat_id, game=game, creator_id=cid, creator_name=cname or "", creator_username=cuser or None,
+            bot_id=bot_id, chat_id=chat_id, game=game, creator_id=cid, creator_name=cname or "", creator_username=cuser or None,
             target_id=target[0] if target else 0, target_name=(target[1] if target else "") or "",
             target_username=(target[2] if target else None) or None, amount=amount, fee_pct=cfg["fee_pct"], fee_amount=fee,
             payout_amount=payout, status="pending", state="{}", expires_at=_now() + timedelta(seconds=cfg["ttl"]))
         s.add(w)
         await s.flush()
-        s.add(PlatformTxn(user_telegram_id=cid, amount=-amount, kind="wager_reserve", note=f"رزرو شرط‌بندی #{w.id}"))
+        _add_txn(s, bot_id, u, -amount, "wager_reserve", f"رزرو شرط‌بندی #{w.id}")
         await s.commit()
         return w, None
 
 
-async def join_wager(wid: int, user: tuple, move_secs: int):
+async def join_wager(wid: int, user: tuple, move_secs: int, bot_id: int = 0):
     uid, uname, uuser = user
     async with Session() as s:
         w = await s.get(PlatformWager, wid, with_for_update=True)
-        if not w or w.status != "pending":
+        if not w or (w.bot_id or 0) != bot_id or w.status != "pending":
             return _res(err="این شرط‌بندی دیگر در انتظار نیست.")
         if w.creator_id == uid:
             return _res(err="سازنده نمی‌تواند خودش به شرط‌بندی بپیوندد.")
@@ -268,14 +304,13 @@ async def join_wager(wid: int, user: tuple, move_secs: int):
             await _timeout_locked(s, w)
             await s.commit()
             return _res(w=w, err="مهلت این شرط‌بندی تمام شده؛ مبلغ به سازنده برگشت.")
-        opp = await _lock_user(s, uid)
+        opp = await _lock_user(s, uid, bot_id)
         if not opp or opp.is_banned or _money(opp.balance) < _money(w.amount):
             return _res(err=f"موجودی کافی نیست؛ نیاز به {_rial(w.amount)} داری.")
-        if await _active_count(s, uid) >= MAX_ACTIVE:
+        if await _active_count(s, uid, bot_id) >= MAX_ACTIVE:
             return _res(err=f"هم‌زمان حداکثر {MAX_ACTIVE} شرط‌بندی باز می‌توانی داشته باشی.")
         opp.balance = Decimal(str(opp.balance)) - Decimal(str(w.amount))
-        s.add(PlatformTxn(user_telegram_id=uid, amount=-_money(w.amount), kind="wager_stake",
-                          note=f"پیوستن به شرط‌بندی #{w.id}"))
+        _add_txn(s, bot_id, opp, -_money(w.amount), "wager_stake", f"پیوستن به شرط‌بندی #{w.id}")
         w.opponent_id, w.opponent_name, w.opponent_username = uid, uname or "", uuser or None
         w.status = "playing"
         w.expires_at = _now() + timedelta(seconds=move_secs)
@@ -290,10 +325,10 @@ async def join_wager(wid: int, user: tuple, move_secs: int):
         return _res(w=w)
 
 
-async def cancel_wager(wid: int, uid: int):
+async def cancel_wager(wid: int, uid: int, bot_id: int = 0):
     async with Session() as s:
         w = await s.get(PlatformWager, wid, with_for_update=True)
-        if not w or w.status != "pending":
+        if not w or (w.bot_id or 0) != bot_id or w.status != "pending":
             return _res(err="این شرط‌بندی قبلا تعیین‌تکلیف شده است.")
         if w.creator_id != uid:
             return _res(err="فقط سازنده می‌تواند لغو کند.")
@@ -315,18 +350,18 @@ async def expire_one(wid: int):
 
 # ───────────────────────── حرکت‌ها ─────────────────────────
 
-def _playing(w, uid: int, game: str):
-    if not w or w.status != "playing" or w.game != game:
+def _playing(w, uid: int, game: str, bot_id: int = 0):
+    if not w or (w.bot_id or 0) != bot_id or w.status != "playing" or w.game != game:
         return "این شرط‌بندی در حال بازی نیست."
     if uid not in (w.creator_id, w.opponent_id):
         return "تو بازیکن این شرط‌بندی نیستی."
     return None
 
 
-async def xo_move(wid: int, uid: int, cell: int, move_secs: int):
+async def xo_move(wid: int, uid: int, cell: int, move_secs: int, bot_id: int = 0):
     async with Session() as s:
         w = await s.get(PlatformWager, wid, with_for_update=True)
-        err = _playing(w, uid, "xo")
+        err = _playing(w, uid, "xo", bot_id)
         if err:
             return _res(err=err)
         if w.expires_at and w.expires_at <= _now():
@@ -354,12 +389,12 @@ async def xo_move(wid: int, uid: int, cell: int, move_secs: int):
         return _res(w=w)
 
 
-async def rps_pick(wid: int, uid: int, choice: str):
+async def rps_pick(wid: int, uid: int, choice: str, bot_id: int = 0):
     if choice not in _BEATS:
         return _res(err="انتخاب نامعتبر.")
     async with Session() as s:
         w = await s.get(PlatformWager, wid, with_for_update=True)
-        err = _playing(w, uid, "rps")
+        err = _playing(w, uid, "rps", bot_id)
         if err:
             return _res(err=err)
         if w.expires_at and w.expires_at <= _now():
@@ -383,11 +418,11 @@ async def rps_pick(wid: int, uid: int, choice: str):
         return _res(w=w, note=f"انتخابت ثبت شد: {RPS_FA[choice]}")
 
 
-async def dice_claim(wid: int, uid: int):
+async def dice_claim(wid: int, uid: int, bot_id: int = 0):
     """نوبت پرتاب uid را رزرو می‌کند (جلوی پرتاب دوباره). خطا ⇒ err."""
     async with Session() as s:
         w = await s.get(PlatformWager, wid, with_for_update=True)
-        err = _playing(w, uid, "dice")
+        err = _playing(w, uid, "dice", bot_id)
         if err:
             return _res(err=err)
         if w.expires_at and w.expires_at <= _now():
@@ -408,10 +443,10 @@ async def dice_claim(wid: int, uid: int):
         return _res(w=w)
 
 
-async def dice_release(wid: int, uid: int) -> None:
+async def dice_release(wid: int, uid: int, bot_id: int = 0) -> None:
     async with Session() as s:
         w = await s.get(PlatformWager, wid, with_for_update=True)
-        if not w or w.status != "playing":
+        if not w or (w.bot_id or 0) != bot_id or w.status != "playing":
             return
         st = _st(w)
         (st.get("rolling") or {}).pop(str(uid), None)
@@ -419,10 +454,10 @@ async def dice_release(wid: int, uid: int) -> None:
         await s.commit()
 
 
-async def dice_record(wid: int, uid: int, value: int):
+async def dice_record(wid: int, uid: int, value: int, bot_id: int = 0):
     async with Session() as s:
         w = await s.get(PlatformWager, wid, with_for_update=True)
-        if not w or w.status != "playing":
+        if not w or (w.bot_id or 0) != bot_id or w.status != "playing":
             return _res(err="این شرط‌بندی دیگر در حال بازی نیست.")
         st = _st(w)
         rolls, rolling = st.get("rolls") or {}, st.get("rolling") or {}
@@ -442,12 +477,17 @@ async def dice_record(wid: int, uid: int, value: int):
         return _res(w=w)
 
 
-async def sweep_expired(bot: Bot | None = None) -> int:
-    """شرط‌های باز که مهلتشان گذشته را تسویه/برگشت می‌دهد (حلقهٔ پس‌زمینه و قبل هر ساخت). تعداد را برمی‌گرداند."""
+async def sweep_expired(bot: Bot | None = None, bot_id: int | None = 0, overdue_secs: int = 0) -> int:
+    """شرط‌های باز که مهلتشان گذشته را تسویه/برگشت می‌دهد (حلقهٔ پس‌زمینه و قبل هر ساخت). تعداد را برمی‌گرداند.
+    bot_id: ۰ = ربات اصلی، عدد ربات = همان ربات مستأجر، None = همه‌چیز؛ overdue_secs: فقط آن‌هایی که این‌قدر دیرتر شده‌اند
+    (شبکهٔ اطمینان ربات اصلی برای تسویهٔ شرط‌های مستأجری که پروسهٔ خودش بالا نیست)."""
+    cutoff = _now() - timedelta(seconds=overdue_secs)
+    q = select(PlatformWager.id).where(
+        PlatformWager.status.in_(ACTIVE), PlatformWager.expires_at.is_not(None), PlatformWager.expires_at <= cutoff)
+    if bot_id is not None:
+        q = q.where(PlatformWager.bot_id == bot_id)
     async with Session() as s:
-        ids = (await s.scalars(select(PlatformWager.id).where(
-            PlatformWager.status.in_(ACTIVE), PlatformWager.expires_at.is_not(None),
-            PlatformWager.expires_at <= _now()))).all()
+        ids = (await s.scalars(q)).all()
     done = 0
     for wid in ids:
         try:
@@ -472,7 +512,9 @@ async def wager_sweep_loop(platform_bot=None, interval_sec: int = 20):
     await asyncio.sleep(20)
     while True:
         try:
-            await sweep_expired(platform_bot)
+            await sweep_expired(platform_bot, 0)
+            # شبکهٔ اطمینان: شرط ربات مستأجر که ۱۰ دقیقه از مهلتش گذشته (پروسهٔ آن ربات کار نمی‌کند) را بی‌ویرایش پیام برگردان
+            await sweep_expired(None, None, overdue_secs=600)
         except Exception:  # noqa: BLE001
             logger.exception("wager_sweep_loop error")
         await asyncio.sleep(interval_sec)
@@ -496,13 +538,23 @@ def _money_lines(w: PlatformWager) -> str:
             f"🏆 جایزهٔ برنده: <b>{_rial(w.payout_amount)}</b>")
 
 
+def _px(w: PlatformWager) -> str:
+    """پیشوند callback_data: pgw = ربات اصلی، twg = ربات مستأجر (هندلرهای جدا)."""
+    return "twg" if w.bot_id else "pgw"
+
+
+def _btn(w: PlatformWager, text: str, **kw):
+    """ربات اصلی: دکمهٔ شکلک‌دار (hx_button)؛ مستأجر: دکمهٔ ساده (آیدی ایموجی پرمیوم بات‌ساز برای ربات‌های مشتری معنا ندارد)."""
+    return InlineKeyboardButton(text=text, **kw) if w.bot_id else hx_button(text, **kw)
+
+
 def _board_kb(w: PlatformWager, live: bool) -> InlineKeyboardMarkup:
     board = _st(w).get("board") or [""] * 9
     sym = {"": "⬜", "X": "❌", "O": "⭕"}
     rows = []
     for r in range(3):
         rows.append([InlineKeyboardButton(text=sym[board[r * 3 + c]],
-                                          callback_data=(f"pgw:x:{w.id}:{r * 3 + c}" if live else "pgw:noop"))
+                                          callback_data=(f"{_px(w)}:x:{w.id}:{r * 3 + c}" if live else f"{_px(w)}:noop"))
                      for c in range(3)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -545,8 +597,8 @@ def render(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
         text = (f"{_head(w)}\n\n👤 سازنده: {_who(w, w.creator_id)}\n{target}{_money_lines(w)}\n\n"
                 f"⏳ منتظر حریف…\n\n{_NOTICE}")
         kb = InlineKeyboardMarkup(inline_keyboard=[[
-            hx_button("✅ قبول و پیوستن", callback_data=f"pgw:join:{w.id}", style=ButtonStyle.SUCCESS),
-            hx_button("❌ لغو", callback_data=f"pgw:cancel:{w.id}", style=ButtonStyle.DANGER)]])
+            _btn(w, "✅ قبول و پیوستن", callback_data=f"{_px(w)}:join:{w.id}", style=ButtonStyle.SUCCESS),
+            _btn(w, "❌ لغو", callback_data=f"{_px(w)}:cancel:{w.id}", style=ButtonStyle.DANGER)]])
         return text, kb
     if w.status != "playing":
         kb = _board_kb(w, False) if w.game == "xo" and w.opponent_id else InlineKeyboardMarkup(inline_keyboard=[])
@@ -562,7 +614,7 @@ def render(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
         text = (head + f"{_who(w, w.creator_id)}: {mark(w.creator_id)}\n{_who(w, w.opponent_id)}: {mark(w.opponent_id)}\n\n"
                 "هر دو نفر انتخاب کنید؛ انتخاب‌ها تا لحظهٔ آخر مخفی است.\n⏱ نکردن در مهلت = باخت.")
         kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=RPS_FA[k], callback_data=f"pgw:r:{w.id}:{k}") for k in ("r", "p", "s")]])
+            InlineKeyboardButton(text=RPS_FA[k], callback_data=f"{_px(w)}:r:{w.id}:{k}") for k in ("r", "p", "s")]])
         return text, kb
     rolls = st.get("rolls") or {}
     mark = lambda uid: f"🎲 {rolls[str(uid)]}" if str(uid) in rolls else "⏳ منتظر"  # noqa: E731
@@ -570,7 +622,7 @@ def render(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
             "هر نفر یک‌بار «پرتاب تاس» را بزند؛ تاس را خود تلگرام می‌اندازد. عدد بزرگ‌تر برنده است.\n"
             "⏱ نکردن در مهلت = باخت.")
     kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🎲 پرتاب تاس", callback_data=f"pgw:d:{w.id}")]])
+        InlineKeyboardButton(text="🎲 پرتاب تاس", callback_data=f"{_px(w)}:d:{w.id}")]])
     return text, kb
 
 
@@ -795,9 +847,14 @@ async def hub_screen() -> tuple[str, InlineKeyboardMarkup]:
         "🎲 <b>بازی کن پول بگیر</b> (بازی‌های خود تلگرام: 🎲 🎯 🏀 ⚽ 🎳 🎰؛ جایزه از طرف شما به بازیکن می‌رسد "
         "و نتیجه را سرور تلگرام تعیین می‌کند)\n"
         f"{len(active)} بازی فعال از {len(games)} بازی ثبت‌شده")
+    # === PATCH_WAGER_ADDON_V1 === فروش به ربات‌های مشتری (قیمت / روشن‌خاموش)
+    from platform_wager_sale import hub_sale_section
+    sale_text, sale_rows = await hub_sale_section()
+    text += sale_text
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [hx_button("🎰 تنظیمات شرط‌بندی گروه", callback_data="gg:bet_settings@hub", style=ButtonStyle.PRIMARY)],
         [hx_button("🎲 بازی کن پول بگیر (بازی‌های تلگرام)", callback_data="padg:menu@hub", style=ButtonStyle.PRIMARY)],
+        *sale_rows,
         [hx_button("⬅️ بازگشت به پنل", callback_data="adm:back", style=ButtonStyle.DANGER)],
     ])
     return text, kb

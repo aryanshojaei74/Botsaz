@@ -134,6 +134,9 @@ router.include_router(platform_group_money_router)
 # === PATCH_PLATFORM_WAGER_V1 === شرط‌بندی ایکس‌او / سنگ‌کاغذ‌قیچی / تاس (قبل از هندلر کلی متن بازی‌های تاس)
 from platform_wager import platform_wager_router
 router.include_router(platform_wager_router)
+# === PATCH_WAGER_ADDON_V1 === فروش «بازی‌های شرط‌بندی» به ربات‌های مشتری
+from platform_wager_sale import platform_wager_sale_router
+router.include_router(platform_wager_sale_router)
 # === PATCH_PLATFORM_GROUP_GUARD_V1 ===
 from platform_group_guard import group_guard_router
 router.include_router(group_guard_router)
@@ -6873,6 +6876,14 @@ async def my_bot_detail(cb: CallbackQuery, state: FSMContext):
             [hx_button("🎨 بازسازی چیدمان دکمه‌ها", callback_data=f"mbedit:{bot_id}")],
             [hx_button("⭐️ ارتقا پلن", callback_data=f"mbup:{bot_id}", style=ButtonStyle.SUCCESS)],
         ]
+        # === PATCH_WAGER_ADDON_V1 === افزونهٔ پولی «بازی‌های شرط‌بندی» (فقط برای ربات‌های واجد شرایط)
+        try:
+            from platform_wager_sale import mybot_button as _wager_btn
+            _wb = await _wager_btn(bot_id, field, plan)
+            if _wb is not None:
+                kb_rows.append([_wb])
+        except Exception:
+            logger.exception("دکمهٔ بازی‌های شرط‌بندی ساخته نشد (نادیده گرفته شد)")
         # === PATCH_SELF_SERVICE_TOKEN_OWNER_V1 ===
         # درخواستِ تعویضِ توکن/واگذاریِ مالکیت (خودسرویس، بدونِ نیاز به تاییدِ
         # دستیِ ادمین) فقط برایِ پلن‌هایِ رشد/حرفه‌ای در دسترسه.

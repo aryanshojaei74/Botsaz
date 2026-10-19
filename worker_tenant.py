@@ -65,6 +65,7 @@ from tenant.shared.panel_clients.panel_tools import repair_manual_accounts_once 
 from tenant.gateways.abangateway import abangateway_poll_loop as _abangateway_loop
 # === PATCH_GROUP_BETTING_EXPIRY_LOOP_V1 ===
 from tenant.shared.group_betting import betting_expiry_loop as _betting_expiry_loop
+from tenant.shared.wager_games import wager_expiry_loop as _wager_expiry_loop  # === PATCH_WAGER_TENANT_V1 ===
 from tenant.bots.vpn.vpn_metered import metered_loop as _metered_loop   # PATCH_METERED_PLAN_V1
 from tenant.shared.backup_full import full_backup_auto_loop as _full_backup_loop   # PATCH_BACKUP_FULL_V1
 from tenant.shared.extras import referral_vs_reconcile_loop as _referral_vs_loop   # PATCH_REF_VS_RECONCILE_V1
@@ -141,6 +142,7 @@ async def _worker_startup():
         _abangateway_loop(),
         # === PATCH_GROUP_BETTING_EXPIRY_LOOP_V1 ===
         _betting_expiry_loop(),
+        _wager_expiry_loop(),  # === PATCH_WAGER_TENANT_V1 ===
         # === PATCH_P2P_MARKET_V1 ===
         _p2p_loop(),
         _nft_sources_loop(),
