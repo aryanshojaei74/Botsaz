@@ -28,6 +28,25 @@ def _mask(conf: str) -> str:
     return "\n".join(out)
 
 
+async def _explain_login_failure(c, user: str, pw: str) -> None:
+    """پاسخِ خامِ پنل به ورود را (بدونِ رمز) نشان می‌دهد تا علت معلوم شود: رمز/یوزرنیم، 2FA، CSRF یا آدرس."""
+    import aiohttp
+    base = c.base_url
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15),
+                                         connector=aiohttp.TCPConnector(ssl=False)) as s:
+            async with s.get(base + "/") as r:
+                print(f"   GET / → HTTP {r.status} ({r.headers.get('Content-Type', '')[:30]})")
+            async with s.post(base + "/login", json={"username": user, "password": pw, "twoFactorCode": ""},
+                              headers={"X-Requested-With": "XMLHttpRequest", "Origin": base.split("/", 3)[0] + "//" + base.split("/")[2]}) as r:
+                txt = (await r.text())[:300].replace(pw, "***") if pw else (await r.text())[:300]
+                print(f"   POST /login → HTTP {r.status}: {txt}")
+    except Exception as e:  # noqa: BLE001
+        print(f"   (تشخیصِ بیشتر ممکن نشد: {type(e).__name__}: {e})")
+    print("   راهنما: «Wrong username or password» = یوزرنیم/رمز؛ «csrf» = توکن؛ «2fa/otp» = کدِ دومرحله‌ای روشن است؛ "
+          "HTTP 404 = مسیرِ مخفیِ آدرس اشتباه است.")
+
+
 async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", required=True, help="آدرسِ پنل با مسیرِ مخفی (بدونِ /panel/admins)")
@@ -39,7 +58,12 @@ async def main() -> int:
     from tenant.shared.panel_clients.vpn_panel import PanelError
     c = HeimdallPanelClient(a.url, a.user, pw)
     try:
-        await c.login()
+        try:
+            await c.login()
+        except PanelError as e:
+            print(f"❌ {e}")
+            await _explain_login_failure(c, a.user, pw)
+            return 1
         print(f"✅ ورود موفق | CSRF: {'دارد' if c._csrf else 'ندارد (فقط Bearer/GET کار می‌کند)'}")
         try:
             ibs = await c.list_inbounds()
