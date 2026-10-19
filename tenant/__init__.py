@@ -98,6 +98,7 @@ from tenant.shared.backup_restore import backup_router, backup_menu  # === PATCH
 from tenant.shared.backup_full import backup_full_router  # === PATCH_BACKUP_FULL_V1 ===
 from tenant.bots.vpn.svc_cleanup import svc_cleanup_router  # === PATCH_SVC_CLEANUP_V1 ===
 from tenant.shared.charge_bonus import charge_bonus_router  # === PATCH_CHARGE_BONUS_V1 === (هوکِ بونوس هم با import نصب می‌شود)
+from tenant.shared.wrong_delete_refund import wdr_router  # === PATCH_WRONG_DELETE_REFUND_V1 ===
 from models import DiceGame  # === PATCH_PARTNER_HUB_GIFT_DICE_V1 ===
 from models import SmmOrder, GiftOrder  # === PATCH_ORDER_TRACKING_V1 ===
 from models import order_no  # شناسهٔ واحدِ سفارش
@@ -247,6 +248,7 @@ tenant_router.include_router(backup_router)  # === PATCH_BOT_BACKUP_V1 ===
 tenant_router.include_router(backup_full_router)  # === PATCH_BACKUP_FULL_V1 ===
 _include(svc_cleanup_router, "vpn")  # === PATCH_SVC_CLEANUP_V1 === فقط پروسه‌هایِ VPN
 _include(charge_bonus_router)  # === PATCH_CHARGE_BONUS_V1 ===
+_include(wdr_router)  # === PATCH_WRONG_DELETE_REFUND_V1 === تأییدِ ادمین برایِ عودتِ حذفِ اشتباهِ سرویس
 _include(community_router, "community_mgmt")  # === PATCH_COMMUNITY_MGMT_V1 ===
 _include(funstat_bot_router, "funstat")  # === PATCH_FUNSTAT_BOT_V1 ===
 tenant_router.include_router(slideshow_router)

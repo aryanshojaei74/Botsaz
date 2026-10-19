@@ -11,14 +11,15 @@ scripts/find_wrongly_deleted.py — فهرستِ سرویس‌هایی که «ب
   ۳) در WalletTxn دنبالِ «تمدید» یا «افزایش حجم» می‌گردد که *بعد از مهر و قبل از حذف* ثبت شده باشد.
 
 هر موردِ پیداشده یعنی کاربر پول داده و سرویسش حذف شده؛ باید برایش سرویسِ جدید ساخت/جبران کرد.
-بدونِ فلگ فقط می‌خواند و چیزی را تغییر نمی‌دهد. با `--refund` مبلغِ پرداخت‌شده به کیف پولِ کاربر برمی‌گردد
-(اول فهرستِ دقیق + تأییدِ دستی؛ هر مورد فقط یک‌بار — اجرای دوباره دوباره‌کاری نمی‌کند). اجرا از /opt/botsaz:
+بدونِ فلگ فقط می‌خواند و چیزی را تغییر نمی‌دهد. با `--propose` برایِ مالکِ *همان ربات* (با خودِ رباتش) یک «پیشنهادِ عودت» با دکمهٔ
+✅ تأیید / ❌ رد می‌رود؛ فقط بعد از تأییدِ ادمینِ ربات، مبلغ به کیف پولِ کاربر برمی‌گردد. کسی که ادمین بعد از حذف دستی
+شارژش کرده (kind=admin) پیشنهاد نمی‌گیرد (یا فقط مابه‌التفاوت). هر مورد فقط یک‌بار پیشنهاد می‌شود. اجرا از /opt/botsaz:
 
     venv/bin/python scripts/find_wrongly_deleted.py --since "3 days ago"
     venv/bin/python scripts/find_wrongly_deleted.py --since "3 days ago" --bot 313
-    venv/bin/python scripts/find_wrongly_deleted.py --since "3 days ago" --refund                 # فهرست + تأیید
-    venv/bin/python scripts/find_wrongly_deleted.py --since "3 days ago" --refund --exclude-email mc1277427337qv
-    venv/bin/python scripts/find_wrongly_deleted.py --since "3 days ago" --refund --only-user 7375002338 --yes
+    venv/bin/python scripts/find_wrongly_deleted.py --since "3 days ago" --propose                # پیش‌نمایش + تأیید
+    venv/bin/python scripts/find_wrongly_deleted.py --since "3 days ago" --propose --exclude-email mc1277427337qv
+    venv/bin/python scripts/find_wrongly_deleted.py --since "3 days ago" --propose --only-user 7375002338 --yes
     journalctl -u botsaz-tenant-worker --since "7 days ago" --no-pager | venv/bin/python scripts/find_wrongly_deleted.py --stdin
 """
 from __future__ import annotations
@@ -86,79 +87,13 @@ async def analyze(events: list[dict], Session, margin_min: int = 20) -> list[dic
     return found
 
 
-REFUND_NOTE_PREFIX = "عودتِ حذفِ اشتباهِ سرویس "
-
-
-def refund_note(email: str) -> str:
-    return (REFUND_NOTE_PREFIX + email)[:200]
-
-
 def refund_amount(item: dict) -> int:
     """مجموعِ پرداخت‌هایِ داخلِ مهلت (مبلغ‌ها در دفتر منفی‌اند)."""
     return int(sum(-t[2] for t in item["txns"] if t[2] < 0))
 
 
-async def _send(token: str, chat_id: int, text: str) -> bool:
-    """پیامِ best-effort از طریقِ خودِ رباتِ مشتری؛ شکست مهم نیست."""
-    try:
-        from aiogram import Bot
-        from aiogram.client.default import DefaultBotProperties
-        from aiogram.enums import ParseMode
-        b = Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-        try:
-            await b.send_message(chat_id, text)
-            return True
-        finally:
-            await b.session.close()
-    except Exception:  # noqa: BLE001
-        return False
-
-
-async def apply_refunds(found: list[dict], Session, send=_send) -> list[dict]:
-    """مبلغِ پرداخت‌شده را به کیف پولِ هر کاربر برمی‌گرداند. هر (ربات، کاربر، سرویس) فقط یک‌بار
-    (یادداشتِ تراکنشِ عودت کلیدِ جلوگیری از تکرار است). نتیجه: لیستِ {…, status: refunded|skipped, amount}."""
-    from sqlalchemy import select
-    from models import Bot as BotRow, BotUser, WalletTxn
-    results = []
-    for it in found:
-        amount = refund_amount(it)
-        res = {**it, "amount": amount, "status": "skipped"}
-        if amount <= 0:
-            results.append(res)
-            continue
-        note = refund_note(it["email"])
-        async with Session() as s:
-            u = await s.scalar(select(BotUser).where(
-                BotUser.bot_id == it["bot_id"], BotUser.telegram_id == it["telegram_id"]).with_for_update())
-            if not u:
-                results.append(res)
-                continue
-            dup = await s.scalar(select(WalletTxn.id).where(
-                WalletTxn.bot_id == it["bot_id"], WalletTxn.user_id == u.id,
-                WalletTxn.kind == "refund", WalletTxn.note == note).limit(1))
-            if dup:
-                res["status"] = "already"
-                results.append(res)
-                continue
-            u.balance = float(u.balance or 0) + amount
-            s.add(WalletTxn(bot_id=it["bot_id"], user_id=u.id, amount=amount, kind="refund", note=note))
-            brow = await s.get(BotRow, it["bot_id"])
-            token, owner_id = (brow.token, brow.owner_id) if brow else (None, None)
-            new_balance = float(u.balance)
-            await s.commit()
-        res["status"] = "refunded"
-        results.append(res)
-        if token:
-            await send(token, it["telegram_id"],
-                       "🙏 <b>عذرخواهی بابت یک خطای فنی</b>\n\n"
-                       f"سرویسِ <code>{it['email']}</code> پس از تمدید/افزایشِ حجم به‌اشتباه حذف شد. "
-                       f"مبلغِ <b>{amount:,} تومان</b> به کیف پولت برگردانده شد (موجودی: {int(new_balance):,} تومان). "
-                       "می‌توانی دوباره سرویس تهیه کنی.")
-            if owner_id:
-                await send(token, owner_id,
-                           f"ℹ️ به‌خاطرِ باگِ حذفِ خودکار، {amount:,} تومان به کیف پولِ کاربر "
-                           f"<code>{it['telegram_id']}</code> (سرویسِ <code>{it['email']}</code>) برگردانده شد.")
-    return results
+SKIP_FA = {"exists": "قبلاً پیشنهاد داده شده", "manual_done": "ادمین قبلاً دستی جبران کرده",
+           "already_refunded": "قبلاً عودت شده", "no_user": "کاربر در ربات نیست"}
 
 
 async def main() -> int:
@@ -167,8 +102,9 @@ async def main() -> int:
     ap.add_argument("--unit", default="botsaz-tenant-worker")
     ap.add_argument("--bot", type=int, help="فقط همین bot_id")
     ap.add_argument("--stdin", action="store_true", help="لاگ را از stdin بخوان (به‌جای journalctl)")
-    ap.add_argument("--refund", action="store_true", help="مبلغِ پرداخت‌شده را به کیف پولِ کاربرانِ فهرست برگردان")
-    ap.add_argument("--yes", action="store_true", help="با --refund: بدونِ پرسشِ تأیید اجرا کن")
+    ap.add_argument("--propose", action="store_true",
+                    help="برایِ مالکِ هر ربات پیشنهادِ عودت (با دکمهٔ تأیید/رد) بفرست؛ مبلغ تا تأییدِ ادمین برنمی‌گردد")
+    ap.add_argument("--yes", action="store_true", help="با --propose: بدونِ پرسشِ تأیید اجرا کن")
     ap.add_argument("--only-user", type=int, action="append", default=[], help="فقط این تلگرام‌آیدی (تکرارپذیر)")
     ap.add_argument("--exclude-email", action="append", default=[],
                     help="این سرویس را کنار بگذار (مثلاً سرویسی که هنوز رویِ پنل زنده است)")
@@ -198,29 +134,44 @@ async def main() -> int:
             print(f"  • کاربر {f['telegram_id']} — سرویسِ {f['email']} ({f['panel']}) — حذف {f['deleted_at']:%m-%d %H:%M}")
             for t in f["txns"]:
                 print(f"      پرداخت: {t[0]:%m-%d %H:%M} {t[1]} {t[2]:,.0f} — {t[3]}")
-    if not a.refund:
-        print("\nبرایِ برگشتِ مبلغ به کیف پول: همین دستور را با --refund اجرا کن (اول فهرستِ تأیید نشان داده می‌شود).")
+    if not a.propose:
+        print("\nبرایِ ارسالِ پیشنهادِ عودت به مالکانِ رباتِ هر مورد: همین دستور را با --propose اجرا کن.")
         return 1
 
+    from tenant.shared.wrong_delete_refund import create_proposal, evaluate, send_proposal
     plan = [f for f in found
             if f["email"] not in a.exclude_email and (not a.only_user or f["telegram_id"] in a.only_user)]
     if not plan:
-        print("هیچ موردی برایِ عودت باقی نماند (فیلترها).")
+        print("هیچ موردی باقی نماند (فیلترها).")
         return 1
-    total = sum(refund_amount(f) for f in plan)
-    print(f"\n══ برنامهٔ عودت ({len(plan)} مورد، مجموع {total:,} تومان) ══")
+    print("\n══ پیش‌نمایشِ پیشنهادها ══")
+    todo = []
     for f in plan:
-        print(f"  ربات {f['bot_id']} · کاربر {f['telegram_id']} ← {refund_amount(f):,} تومان ({f['email']})")
-    print("⚠️ اگر سرویسی هنوز رویِ پنل زنده است (حذفش از پنل شکست خورده بود)، آن را با --exclude-email کنار بگذار؛ "
-          "وگرنه کاربر هم سرویس را دارد و هم پولش را.")
+        paid = refund_amount(f)
+        ev = await evaluate(f["bot_id"], f["telegram_id"], f["email"], paid, f["deleted_at"])
+        if ev["status"] == "new":
+            extra = f" (قبلاً {ev['credited']:,} دستی شارژ شده؛ مابه‌التفاوت)" if ev["credited"] else ""
+            print(f"  ✉️ ربات {f['bot_id']} · کاربر {f['telegram_id']} ← پیشنهاد {ev['amount']:,} تومان ({f['email']}){extra}")
+            todo.append((f, paid))
+        else:
+            print(f"  ⏭ ربات {f['bot_id']} · کاربر {f['telegram_id']} — {SKIP_FA.get(ev['status'], ev['status'])} ({f['email']})")
+    if not todo:
+        print("\nچیزی برایِ ارسال نیست.")
+        return 0
+    print(f"\nپیشنهاد برایِ مالکِ {len({f['bot_id'] for f, _ in todo})} ربات فرستاده می‌شود؛ تا تأییدِ ادمینِ ربات هیچ مبلغی برنمی‌گردد.")
+    print("⚠️ سرویسی که حذفش از پنل شکست خورده و هنوز زنده است را با --exclude-email کنار بگذار.")
     if not a.yes:
-        if input("\nادامه و واریز به کیف پول؟ (بنویس yes): ").strip().lower() != "yes":
-            print("لغو شد؛ چیزی تغییر نکرد.")
+        if input("\nارسالِ پیشنهادها؟ (بنویس yes): ").strip().lower() != "yes":
+            print("لغو شد؛ چیزی ارسال یا ثبت نشد.")
             return 1
-    res = await apply_refunds(plan, Session)
-    for r in res:
-        label = {"refunded": "✅ برگشت داده شد", "already": "↩️ قبلاً عودت شده بود", "skipped": "⏭ رد شد"}[r["status"]]
-        print(f"  {label}: کاربر {r['telegram_id']} — {r['amount']:,} تومان")
+    for f, paid in todo:
+        r = await create_proposal(f["bot_id"], f["telegram_id"], f["email"], paid, f["deleted_at"])
+        if r["status"] != "created":
+            print(f"  ⏭ {f['email']}: {SKIP_FA.get(r['status'], r['status'])}")
+            continue
+        sent = await send_proposal(f["bot_id"], r["pid"], r["data"])
+        print(f"  {'✅ ارسال شد' if sent else '⚠️ ثبت شد ولی به مالک نرسید (ربات را استارت نکرده؟)'}: "
+              f"ربات {f['bot_id']} ← {f['email']} ({r['amount']:,} تومان)")
     return 0
 
 

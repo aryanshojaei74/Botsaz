@@ -64,30 +64,3 @@ async def test_victim_found_only_when_payment_is_inside_the_grace_window(maker):
     found = await FWD.analyze(ev, maker)
     assert [f["telegram_id"] for f in found] == [7375002338]
     assert found[0]["txns"][0][1] == "renew"
-
-
-async def test_refund_credits_wallet_once_notifies_and_is_idempotent(maker):
-    from sqlalchemy import select
-    ev = FWD.parse_lines([LOG])
-    found = await FWD.analyze(ev, maker)
-    sent = []
-
-    async def fake_send(token, chat_id, text):
-        sent.append((chat_id, text))
-        return True
-    r1 = await FWD.apply_refunds(found, maker, send=fake_send)
-    assert r1[0]["status"] == "refunded" and r1[0]["amount"] == 100000
-    async with maker() as s:
-        u = await s.scalar(select(models.BotUser).where(models.BotUser.telegram_id == 7375002338))
-        assert float(u.balance) == 100000
-        refunds = (await s.scalars(select(models.WalletTxn).where(models.WalletTxn.kind == "refund"))).all()
-        assert len(refunds) == 1 and float(refunds[0].amount) == 100000
-    assert {c for c, _ in sent} == {7375002338, 1} and "100,000" in sent[0][1]     # کاربر + مالکِ ربات
-
-    r2 = await FWD.apply_refunds(found, maker, send=fake_send)                      # اجرای دوباره
-    assert r2[0]["status"] == "already"
-    async with maker() as s:
-        u = await s.scalar(select(models.BotUser).where(models.BotUser.telegram_id == 7375002338))
-        assert float(u.balance) == 100000
-        assert len((await s.scalars(select(models.WalletTxn).where(models.WalletTxn.kind == "refund"))).all()) == 1
-    assert len(sent) == 2                                                          # پیامِ تکراری نرفت
