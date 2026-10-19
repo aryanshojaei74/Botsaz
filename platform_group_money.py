@@ -78,6 +78,33 @@ async def _group_allowed(chat_id: int) -> bool:
     return bool(guard_chat and str(chat_id) == guard_chat and (await _pset("group_guard_enabled", "off")) == "on")
 
 
+def blocked_reasons(guard_chat: str, guard_on: bool, chat_id: int) -> list[str]:
+    """=== PATCH_WAGER_DIAG_V1 === چرا شرط‌بندی در این گروه کار نمی‌کند؟ (خالی = مشکلی نیست)"""
+    guard_chat = (guard_chat or "").strip()
+    out = []
+    if not guard_chat:
+        out.append("هیچ گروهی به محافظ گروه وصل نیست")
+    elif str(chat_id) != guard_chat:
+        out.append(f"این گروه ({chat_id}) همان گروه متصل به محافظ ({guard_chat}) نیست")
+    if not guard_on:
+        out.append("محافظ گروه خاموش است")
+    return out
+
+
+async def admin_hint_blocked(msg: Message) -> None:
+    """مدیر اصلی که دستور را در گروه نامناسب می‌نویسد دلیلش را می‌بیند؛ بقیه چیزی نمی‌بینند (پیام‌های عادی گروه‌ها شلوغ نشود)."""
+    if not msg.from_user or msg.from_user.id != PLATFORM_ADMIN_ID:
+        return
+    reasons = blocked_reasons(await _pset("group_guard_chat_id", ""),
+                              (await _pset("group_guard_enabled", "off")) == "on", msg.chat.id)
+    if reasons:
+        await msg.reply("ℹ️ شرط‌بندی در این گروه کار نمی‌کند چون:\n• " + "\n• ".join(reasons)
+                        + "\n\n(این پیام فقط برای مدیر اصلی نمایش داده می‌شود.)")
+
+
+ANON_NOTICE = "❌ با حالت «ادمین ناشناس» یا هویت کانال نمی‌شود شرط بست (معلوم نیست کیف پول چه کسی باید کم شود). حالت ناشناس را خاموش کن و دوباره بنویس."
+
+
 async def _user(tg_id: int, full_name: str = "", username: str = "") -> PlatformUser:
     async with Session() as s:
         user = await s.scalar(select(PlatformUser).where(PlatformUser.telegram_id == tg_id))
@@ -251,9 +278,13 @@ def _bet_result_kb(bet: PlatformBet, winner_balance: int, loser_balance: int) ->
     F.func(lambda m: bool(_BET_RE.match((m.text or "").strip()))),
 )
 async def platform_create_bet(msg: Message):
-    if not await _group_allowed(msg.chat.id) or not await _bet_enabled():
+    if not await _group_allowed(msg.chat.id):
+        await admin_hint_blocked(msg)
+        return
+    if not await _bet_enabled():
         return
     if msg.sender_chat:
+        await msg.reply(ANON_NOTICE)
         return
     target = _reply_target(msg)
     if target and (target.is_bot or target.id == msg.from_user.id):

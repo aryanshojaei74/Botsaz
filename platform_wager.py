@@ -23,16 +23,17 @@ from decimal import Decimal, ROUND_HALF_UP
 from types import SimpleNamespace
 
 from aiogram import Bot, F, Router
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.enums import ButtonStyle, ChatType
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import func, or_, select
 
-from config import Session
+from config import PLATFORM_ADMIN_ID, Session
 from models import PlatformDiceGame, PlatformTxn, PlatformUser, PlatformWager
 from platform_group_money import (
-    _bet_enabled, _digits, _edit_settings, _group_allowed, _int, _money, _name, _pset, _reply_target,
-    _rial, _set, _user, _admin,
+    ANON_NOTICE, _bet_enabled, _digits, _edit_settings, _group_allowed, _int, _money, _name, _pset,
+    _reply_target, _rial, _set, _user, _admin, admin_hint_blocked,
 )
 from premium_emoji import hx_button
 
@@ -599,9 +600,31 @@ def _parse_filter(m: Message) -> bool:
 
 @platform_wager_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_parse_filter))
 async def wager_create(msg: Message):
-    if not await _group_allowed(msg.chat.id) or msg.sender_chat or not msg.from_user:
+    # === PATCH_WAGER_DIAG_V1 === هیچ مسیری نباید بی‌صدا تمام شود: دلیل را به مدیر می‌گوییم و خطاها را لاگ می‌کنیم
+    if not msg.from_user:
+        raise SkipHandler
+    if not await _group_allowed(msg.chat.id):
+        logger.info("wager: chat %s is not the guarded group; ignoring %r", msg.chat.id, (msg.text or "")[:30])
+        await admin_hint_blocked(msg)
+        raise SkipHandler                 # گروه‌های دیگر: پیام را به بقیهٔ روترها بده
+    if msg.sender_chat:
+        await msg.reply(ANON_NOTICE)
         return
     game, amount = parse_command(msg.text)
+    try:
+        await _create_and_post(msg, game, amount)
+    except SkipHandler:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.exception("wager: create failed (chat=%s user=%s game=%s amount=%s)", msg.chat.id, msg.from_user.id, game, amount)
+        extra = f"\n({type(e).__name__}: {str(e)[:150]})" if msg.from_user.id == PLATFORM_ADMIN_ID else ""
+        try:
+            await msg.reply("❌ ساخت شرط‌بندی با خطا روبه‌رو شد؛ چند لحظه بعد دوباره امتحان کن." + extra)
+        except Exception:  # noqa: BLE001
+            logger.exception("wager: could not even report the failure")
+
+
+async def _create_and_post(msg: Message, game: str, amount: int) -> None:
     if not await _bet_enabled():
         await msg.reply("❌ شرط‌بندی در بات‌ساز اصلی فعال نیست.")
         return
@@ -628,7 +651,7 @@ async def wager_create(msg: Message):
         logger.exception("wager #%s: sending the message failed; refunding", w.id)
         async with _wlock(w.id):
             await cancel_wager(w.id, w.creator_id)
-        return
+        raise
     async with Session() as s:
         row = await s.get(PlatformWager, w.id)
         row.message_id = sent.message_id

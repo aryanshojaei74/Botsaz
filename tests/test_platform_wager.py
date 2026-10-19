@@ -673,3 +673,86 @@ async def test_back_survives_settings_refresh_and_is_per_admin(nav, psets, monke
     assert _back_of(e[-2]) == "pgw:hub"
     import platform_navback as NB
     assert NB.back(2, "bet", "gg:ai") == "gg:ai"                       # ادمین دیگر تحت‌تأثیر نیست
+
+
+# ───────── هیچ مسیری بی‌صدا نیست (PATCH_WAGER_DIAG_V1) ─────────
+
+def test_blocked_reasons():
+    assert GM.blocked_reasons("-1001", True, -1001) == []
+    assert "همان گروه" in GM.blocked_reasons("-1001", True, -1002)[0]
+    assert "هیچ گروهی" in GM.blocked_reasons("", True, -1001)[0]
+    r = GM.blocked_reasons("-1001", False, -1002)
+    assert len(r) == 2 and "خاموش" in r[1]
+
+
+@pytest.mark.asyncio
+async def test_wrong_group_admin_gets_reason_others_fall_through(db, psets, monkeypatch):
+    from aiogram.dispatcher.event.bases import SkipHandler
+
+    async def denied(chat_id):
+        return False
+    monkeypatch.setattr(PW, "_group_allowed", denied)
+    monkeypatch.setattr(GM, "PLATFORM_ADMIN_ID", 1)
+    psets["group_guard_chat_id"], psets["group_guard_enabled"] = "-555", "on"
+    m, replies = _msg("تاس 20,000", uid=1)                      # مدیر اصلی در گروه دیگر
+    with pytest.raises(SkipHandler):
+        await PW.wager_create(m)
+    assert replies and "-100" in replies[0] and "-555" in replies[0] and "فقط برای مدیر" in replies[0]
+    m, replies = _msg("تاس 20,000", uid=A)                      # کاربر عادی: بی‌سروصدا ولی پیام را مصرف نمی‌کند
+    with pytest.raises(SkipHandler):
+        await PW.wager_create(m)
+    assert replies == [] and await bal(db, A) == 100_000
+
+
+@pytest.mark.asyncio
+async def test_anonymous_admin_is_told_why(db, psets):
+    m, replies = _msg("xo 5000")
+    m.sender_chat = SimpleNamespace(id=-100)
+    await PW.wager_create(m)
+    assert replies and "ناشناس" in replies[0] and await bal(db, A) == 100_000
+
+
+@pytest.mark.asyncio
+async def test_internal_error_is_reported_and_logged_not_swallowed(db, psets, monkeypatch, caplog):
+    async def boom(*a, **k):
+        raise RuntimeError("db exploded")
+    monkeypatch.setattr(PW, "create_wager", boom)
+    monkeypatch.setattr(config, "PLATFORM_ADMIN_ID", 1)
+    monkeypatch.setattr(PW, "PLATFORM_ADMIN_ID", 1)
+    m, replies = _msg("تاس 20,000", uid=1)
+    await PW.wager_create(m)
+    assert replies and "خطا" in replies[0] and "RuntimeError" in replies[0]          # مدیر نوع خطا را هم می‌بیند
+    m, replies = _msg("تاس 20,000", uid=A)
+    await PW.wager_create(m)
+    assert replies and "خطا" in replies[0] and "RuntimeError" not in replies[0]      # کاربر عادی جزئیات نمی‌بیند
+    assert any("create failed" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_comma_amount_with_digits_in_group_creates_wager(db, psets):
+    m, replies = _msg("تاس 20,000")
+    await PW.wager_create(m)
+    assert replies and "شرط‌بندی تاس" in replies[0] and "20,000" in replies[0] and await bal(db, A) == 80_000
+
+
+@pytest.mark.asyncio
+async def test_coin_flip_hints_admin_in_wrong_group(db, psets, monkeypatch):
+    async def denied(chat_id):
+        return False
+    monkeypatch.setattr(GM, "_group_allowed", denied)
+    monkeypatch.setattr(GM, "PLATFORM_ADMIN_ID", 1)
+    m, replies = _msg("شرطبندی 5000", uid=1)
+    await GM.platform_create_bet(m)
+    assert replies and "کار نمی" in replies[0]
+    m, replies = _msg("شرطبندی 5000", uid=A)
+    await GM.platform_create_bet(m)
+    assert replies == []
+
+
+def test_diag_script_imports():
+    import importlib.util
+    import os
+    spec = importlib.util.spec_from_file_location("diag_wager", os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts", "diag_wager.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert callable(mod.main) and "platform_wager_dice" in dict(mod.KEYS)
