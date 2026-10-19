@@ -80,7 +80,7 @@ async def main() -> int:
                     r = await c._request("GET", f"/panel/api/inbounds/get/{ib.get('id')}")
                     det = r.get("obj") or ib
                 except PanelError as e:
-                    print(f"   ⚠️ get/{ib.get('id')}: {e}")
+                    print(f"   ℹ️ get/{ib.get('id')}: {str(e)[:90]} (برایِ ادمینِ بدونِ inbounds.view طبیعی است؛ از /options استفاده می‌شود)")
                 st = det.get("settings")
                 if isinstance(st, str):
                     import json as _j
@@ -89,7 +89,9 @@ async def main() -> int:
                     except ValueError:
                         st = {}
                 st = st if isinstance(st, dict) else {}
-                extra = (f" | WG: secretKey={'✓' if st.get('secretKey') else '✗'} pubKey={'✓' if st.get('pubKey') else '✗'} "
+                extra = (f" | WG: wgPublicKey={'✓' if ib.get('wgPublicKey') else '✗'} wgMtu={ib.get('wgMtu') or '—'} "
+                         f"wgDns={ib.get('wgDns') or '—'} (از /options) | settings: "
+                         f"secretKey={'✓' if st.get('secretKey') else '✗'} pubKey={'✓' if st.get('pubKey') else '✗'} "
                          f"mtu={st.get('mtu')} peers={len(st.get('peers') or [])} "
                          f"clients={len(st.get('clients') or [])} listen={det.get('listen') or '—'} "
                          f"shareAddr={det.get('shareAddr') or '—'} | کلیدهایِ settings: {sorted(st.keys())}")

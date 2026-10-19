@@ -86,7 +86,8 @@ def build_wg_conf(inbound: dict, client: dict, panel_url: str, dns: str = "") ->
                 psk = psk or str(p.get("preSharedKey") or "").strip()
                 keep = keep or int(p.get("keepAlive") or 0)
                 break
-    server_pub = str(st.get("pubKey") or st.get("publicKey") or "").strip() or \
+    # /inbounds/options (در دسترسِ ادمینِ بدونِ inbounds.view) کلیدِ عمومیِ سرور، MTU و DNS را به‌صورتِ wgPublicKey/wgMtu/wgDns می‌دهد
+    server_pub = str(st.get("pubKey") or st.get("publicKey") or inbound.get("wgPublicKey") or "").strip() or \
         (wg_public_key(str(st.get("secretKey") or "")) or "")
     port = inbound.get("port")
     if not (priv and addr and server_pub and port):
@@ -100,13 +101,14 @@ def build_wg_conf(inbound: dict, client: dict, panel_url: str, dns: str = "") ->
         return None
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
-    mtu = st.get("mtu")
+    mtu = st.get("mtu") or inbound.get("wgMtu")
+    dns = dns or st.get("dns") or inbound.get("wgDns") or ""
     lines = []
     name = str(inbound.get("remark") or "").strip()
     if name:
         lines.append(f"# Name = {name}")
     lines += ["[Interface]", f"PrivateKey = {priv}", f"Address = {addr}",
-              f"DNS = {dns or st.get('dns') or '1.1.1.1'}"]
+              f"DNS = {dns or '1.1.1.1'}"]
     if mtu:
         lines.append(f"MTU = {int(mtu)}")
     lines += ["", "[Peer]", f"PublicKey = {server_pub}"]
@@ -176,18 +178,38 @@ class HeimdallPanelClient(PanelClient):
             raise
 
     # ── وایرگارد: لینکِ URL ندارد؛ از رویِ کلیدها ساخته می‌شود ──
+    async def _inbound_full(self, iid: int) -> dict | None:
+        try:
+            res = await self._request("GET", f"/panel/api/inbounds/get/{iid}")
+        except PanelError:
+            return None
+        ib = res.get("obj") if res.get("success") else None
+        return ib if isinstance(ib, dict) else None
+
     async def _wg_confs(self, email: str) -> list[str]:
         try:
             cl = await self.get_client(email)
             if not cl:
                 return []
             out: list[str] = []
+            opts: dict[int, dict] = {}
+            try:        # در دسترسِ هر ادمین؛ شاملِ wgPublicKey/wgMtu/wgDns/shareAddr
+                r = await self._request("GET", "/panel/api/inbounds/options")
+                opts = {int(o["id"]): o for o in (r.get("obj") or []) if isinstance(o, dict) and "id" in o} \
+                    if r.get("success") else {}
+            except PanelError:
+                opts = {}
             for iid in [int(i) for i in (cl.get("inboundIds") or [])]:
-                res = await self._request("GET", f"/panel/api/inbounds/get/{iid}")
-                ib = res.get("obj") if res.get("success") else None
-                if not isinstance(ib, dict) or str(ib.get("protocol") or "").lower() != "wireguard":
+                ib = dict(opts.get(iid) or {})
+                if not ib:
+                    ib = await self._inbound_full(iid) or {}
+                if str(ib.get("protocol") or "").lower() != "wireguard":
                     continue
                 conf = build_wg_conf(ib, cl, self.base_url)
+                if not conf:                    # گزینه‌ها کافی نبود؛ جزئیاتِ کامل (نیازمندِ inbounds.view)
+                    full = await self._inbound_full(iid)
+                    if full:
+                        conf = build_wg_conf({**ib, **full}, cl, self.base_url)
                 if conf:
                     out.append(conf)
             return out

@@ -64,12 +64,15 @@ def _app(state):
 
     @need_session
     async def inb_options(request):
-        return web.json_response({"success": True, "obj": [{"id": i["id"], "remark": i["remark"],
-                                                           "protocol": i["protocol"], "port": i["port"]}
-                                                          for i in state["inbounds"]]})
+        return web.json_response({"success": True, "obj": [
+            {"id": i["id"], "remark": i["remark"], "protocol": i["protocol"], "port": i["port"],
+             "listen": i.get("listen", ""), "shareAddr": i.get("shareAddr", ""), **state.get("opts_extra", {}).get(i["id"], {})}
+            for i in state["inbounds"]]})
 
     @need_session
     async def inb_get(request):
+        if state.get("get_block"):
+            return web.json_response({"success": False, "msg": "inbounds.view permission required"}, status=403)
         iid = int(request.match_info["id"])
         ib = next(i for i in state["inbounds"] if i["id"] == iid)
         return web.json_response({"success": True, "obj": ib})
@@ -197,3 +200,21 @@ def test_factory_and_registrations():
     from tenant.bots.vpn import vpn_admin
     assert vpn_admin.PANEL_LABELS["heimdall"] and vpn_admin._PANEL_EXTRA_FEATURE_GATE["heimdall"] is Feature.HEIMDALL_PANEL
     assert "heimdall" in vpn_admin._IP_LIMIT_PANELS
+
+
+async def test_wireguard_conf_works_for_admin_without_inbounds_view(panel):
+    """ادمینِ واقعیِ مشتری: /inbounds/get و /list ۴۰۳ می‌دهند؛ فقط /options (با wgPublicKey/wgMtu/wgDns) در دسترس است."""
+    c, state = panel
+    state["get_block"] = True
+    state["rbac_block"] = True
+    wg = _wg_inbound(2)
+    wg["settings"] = {}
+    wg["shareAddr"] = ""
+    state["inbounds"] = [_vless_inbound(1), wg]
+    state["opts_extra"] = {2: {"wgPublicKey": SERVER_PUB, "wgMtu": 1280, "wgDns": "8.8.8.8"}}
+    state["server_fill"] = {"privateKey": CLIENT_PRIV, "allowedIPs": ["10.9.0.3/32"], "keepAlive": 0}
+    await c.create_account("dina", 5, 30, inbound_ids=[2])
+    (conf,) = await c.get_client_links("dina")
+    assert f"PublicKey = {SERVER_PUB}" in conf and "MTU = 1280" in conf and "DNS = 8.8.8.8" in conf
+    assert "Address = 10.9.0.3/32" in conf and "PersistentKeepalive" not in conf
+    assert "Endpoint = 127.0.0.1:51820" in conf               # بدونِ shareAddr: میزبانِ خودِ پنل
