@@ -6797,6 +6797,7 @@ async def _vpn_add_traffic_pay_impl(cb: CallbackQuery, bot: Bot):
             a2 = await s.get(PanelAccount, aid)
             if a2:
                 a2.volume_gb = (a2.volume_gb or 0) + gb
+                a2.traffic_out_at = None   # PATCH_TRAFFIC_RENEW_GUARD_V1 — حجم اضافه شد ⇒ چرخهٔ حذفِ «اتمامِ حجم» لغو
                 await s.commit()
         await _safe_edit(cb, f"✅ {gb} گیگ به سرویس شما اضافه شد!")
         # === PATCH_RENEW_PURCHASE_ALERT_V1 ===
@@ -7344,6 +7345,7 @@ async def vpn_renew_pay_days(cb: CallbackQuery, bot: Bot):
             a2.days = (a2.days or 0) + add_days
             if add_gb:
                 a2.volume_gb = (a2.volume_gb or 0) + add_gb
+                a2.traffic_out_at = None   # PATCH_TRAFFIC_RENEW_GUARD_V1
             await s.commit()
     try:
         await client.close()
@@ -7480,6 +7482,7 @@ async def _vpn_renew_pay_impl(cb: CallbackQuery, bot: Bot):
                 a2.days = (a2.days or 0) + add_days
             if add_gb:
                 a2.volume_gb = (a2.volume_gb or 0) + add_gb
+                a2.traffic_out_at = None   # PATCH_TRAFFIC_RENEW_GUARD_V1
             await s.commit()
     try:
         await client.close()

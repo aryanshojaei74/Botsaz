@@ -29,6 +29,14 @@ traffic_cleanup.py — پایانِ چرخهٔ سرویس‌هایی که حجم
 مهلت برایِ هر ربات جدا قابلِ تنظیم است، با کلیدِ Setting:
     traffic_delete_hours   (پیش‌فرض "5")
 
+=== PATCH_TRAFFIC_RENEW_GUARD_V1 === (تیکتِ تعزیان: «تمدید کردم چرا حذف شد»)
+باگ: پاک‌شدنِ مهرِ `traffic_out_at` بعد از تمدید/خریدِ ترافیک فقط در `vpn_expiry_loop` انجام می‌شد که هر ۱۲ ساعت
+اجرا می‌شود، ولی حذف را همین حلقه هر ۱۰ دقیقه و ۵ ساعت بعد از مهر انجام می‌دهد ⇒ کاربری که ظرفِ ۵ ساعت تمدید می‌کرد،
+قبل از اینکه مهر پاک شود، سرویسِ تمدیدشده‌اش حذف می‌شد. دو لایهٔ دفاعی:
+  ۱) هر مسیرِ تمدید/خریدِ ترافیک مهر را همان لحظه پاک می‌کند (clear_traffic_out).
+  ۲) این حلقه قبل از حذف، وضعیتِ *زندهٔ* حساب را از پنل می‌خواند؛ اگر حجمِ باقی‌مانده دارد (یا نامحدود شده)، مهر
+     پاک و حذف لغو می‌شود. اگر خواندنِ پنل ممکن نبود، حذف به دورِ بعد موکول می‌شود (هرگز کورکورانه حذف نمی‌کنیم).
+
 این ماژول Router ندارد؛ فقط یک حلقهٔ پس‌زمینه است.
 """
 from __future__ import annotations
@@ -129,6 +137,52 @@ async def _delete_from_panel(pf: tuple | None, email: str) -> None:
             logger.exception("بستنِ کلاینتِ پنل ناموفق بود")
 
 
+async def clear_traffic_out(account_id: int) -> None:
+    """مهرِ «حجم تمام شد» را برمی‌دارد (بعد از تمدید/خریدِ ترافیک). هرگز استثنا پرتاب نمی‌کند."""
+    try:
+        async with Session() as s:
+            a = await s.get(PanelAccount, account_id)
+            if a and a.traffic_out_at is not None:
+                a.traffic_out_at = None
+                await s.commit()
+    except Exception:
+        logger.exception("traffic_cleanup: پاک‌کردنِ مهرِ حساب %s ناموفق بود", account_id)
+
+
+async def _live_usage(pf: tuple | None) -> dict[str, tuple[int, int]] | None:
+    """{email: (cap_bytes, used_bytes)} از رویِ پنل؛ None = خواندن ممکن نشد (حذف نباید انجام شود)؛
+    {} = پنلی در دسترس نیست (حذف/غیرفعال) ⇒ حساب‌ها مثلِ قبل فقط از دیتابیس پاک می‌شوند.
+    همان قالبِ خواندنِ `vpn_expiry_loop` (کلیدهایِ totalGB/total و up/down) تا برایِ همهٔ انواعِ پنل یکسان باشد."""
+    if pf is None:
+        return {}                         # پنل حذف/غیرفعال شده ⇒ مثلِ قبل فقط ردیفِ دیتابیس حذف می‌شود
+    client = _make_client(pf)
+    try:
+        clients = await client.list_clients()
+    except Exception as e:
+        logger.warning("traffic_cleanup: خواندنِ وضعیتِ زندهٔ پنلِ %s ناموفق؛ حذف به دورِ بعد موکول شد: %s",
+                       pf[0], (str(e) or type(e).__name__)[:200])
+        return None
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            logger.exception("بستنِ کلاینتِ پنل ناموفق بود")
+    out: dict[str, tuple[int, int]] = {}
+    for c in clients or []:
+        email = c.get("email")
+        if not email:
+            continue
+        tr = c.get("traffic") if isinstance(c.get("traffic"), dict) else c
+        try:
+            up = int(tr.get("up", 0) or 0)
+            down = int(tr.get("down", 0) or 0)
+            cap = int((c.get("totalGB", tr.get("total", 0))) or 0)
+        except (TypeError, ValueError):
+            continue
+        out[email] = (cap, up + down)
+    return out
+
+
 async def _process_bot(bot_id: int) -> None:
     now = _dt.datetime.utcnow()
 
@@ -171,6 +225,31 @@ async def _process_bot(bot_id: int) -> None:
         return
 
     panels = await _panels_of(bot_id)
+
+    # === PATCH_TRAFFIC_RENEW_GUARD_V1 === اعتبارسنجیِ زنده: فقط حساب‌هایی حذف می‌شوند که روی پنل هم هنوز
+    # «حجمِ تمام‌شده» دارند. تمدید/افزایشِ حجم (از هر مسیری، حتی مستقیم روی پنل) حذف را لغو می‌کند.
+    live_by_panel: dict[str, dict[str, tuple[int, int]] | None] = {}
+    verified = []
+    for row_t in rows:
+        aid, email, tg_id, title, code, vol_gb, days, panel_key, hours = row_t
+        pk = panel_key or "sanai"
+        if pk not in live_by_panel:
+            live_by_panel[pk] = await _live_usage(panels.get(pk))
+        live = live_by_panel[pk]
+        if live is None:
+            continue                      # پنل خوانده نشد ⇒ امروز حذف نمی‌کنیم
+        cur = live.get(email)
+        if cur is not None:
+            cap, used = cur
+            if cap <= 0 or cap - used > 0:   # نامحدود شده یا حجمِ باقی‌مانده دارد ⇒ تمدید شده
+                await clear_traffic_out(aid)
+                logger.info("traffic_cleanup: حذفِ %r لغو شد؛ حجمِ زنده دارد (cap=%s used=%s)", email, cap, used)
+                continue
+        verified.append(row_t)
+    rows = verified
+    if not rows:
+        return
+
     tbot = Bot(token=token, default=DEFAULTS)
     try:
         for aid, email, tg_id, title, code, vol_gb, days, panel_key, hours in rows:

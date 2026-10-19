@@ -4142,6 +4142,7 @@ async def vpn_cf_addgb_do(msg: Message, bot: Bot, state: FSMContext):
         a2 = await s.get(_PA, aid)
         if a2:
             a2.volume_gb = int((a2.volume_gb or 0) + gb)
+            a2.traffic_out_at = None  # PATCH_TRAFFIC_RENEW_GUARD_V1 — حجم اضافه شد ⇒ چرخهٔ حذفِ «اتمامِ حجم» لغو
             a2.expiry_notice = None  # چرخهٔ هشدار از نو
             # === PATCH_EXPIRY_WARN_QUOTA_V1 === با تمدید، چرخهٔ اخطار از نو
             a2.expiry_warn_count = 0

@@ -1575,6 +1575,7 @@ async def rs_renew(request: Request, acc_id: int = Form(...), plan_id: int = For
                 a2.days = (a2.days or 0) + add_days
             if add_gb:
                 a2.volume_gb = (a2.volume_gb or 0) + add_gb
+                a2.traffic_out_at = None   # PATCH_TRAFFIC_RENEW_GUARD_V1
             await s3.commit()
     return back(msg=f"✅ سرویس تمدید شد ({ptitle}).")
 
