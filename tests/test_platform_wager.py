@@ -544,3 +544,53 @@ async def test_help_text_lists_only_enabled_games():
 async def test_shirt_bandi_with_zwnj_reaches_coin_flip_regex():
     assert GM._BET_RE.match("شرط‌بندی ۱۰۰۰") and GM._INCOMPLETE_BET_RE.match("شرط‌بندی")
     assert GM._BET_RE.match("بازی ۱۰۰۰") and not GM._BET_RE.match("شرط‌بندی xo ۱۰۰۰")
+
+
+# ───────── صفحهٔ مشترک «بازی‌ها و شرط‌بندی» (هیچ بازی‌ای حذف نشده؛ هر دو بخش کنار هم دیده می‌شوند) ─────────
+
+@pytest.mark.asyncio
+async def test_hub_shows_both_sections_and_is_admin_only(db, psets, monkeypatch):
+    monkeypatch.setattr(GM, "PLATFORM_ADMIN_ID", 1)
+    async with db() as s:
+        s.add(models.PlatformDiceGame(emoji="🎯", title="دارت", active=True))
+        s.add(models.PlatformDiceGame(emoji="🎲", title="تاس", active=False))
+        await s.commit()
+    text, kb = await PW.hub_screen()
+    assert "شرط‌بندی" in text and "بازی کن پول بگیر" in text and "1 بازی فعال از 2" in text
+    datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert {"gg:bet_settings", "padg:menu", "adm:back"} <= set(datas)
+    edits = []
+    await PW.wager_hub(_cb("pgw:hub", 999, edits))
+    assert edits[-1][0] == "ANSWER" and edits[-1][2] is True
+    edits.clear()
+    await PW.wager_hub(_cb("pgw:hub", 1, edits))
+    assert "بازی‌ها و شرط‌بندی" in edits[0][0]
+
+
+def test_admin_menu_has_hub_and_keeps_telegram_games():
+    import platform_admin_menu as AM
+    fun = next(sec for sec in AM.ADMIN_SECTIONS if sec["key"] == "fun")
+    cbs = [it[1] for it in fun["items"]]
+    assert "pgw:hub" in cbs and "padg:menu" in cbs                          # بازی‌های تلگرام سر جایشان هستند
+    assert "pgw:hub" in [it[1] for it in AM._section_items(fun, True)]
+    assert "pgw:hub" not in [it[1] for it in AM._section_items(fun, False)]  # فقط مدیر اصلی
+
+
+@pytest.mark.asyncio
+async def test_telegram_games_menu_untouched_and_links_to_betting(db, monkeypatch):
+    import platform_dice as PD
+    async with db() as s:
+        s.add(models.PlatformDiceGame(emoji="🏀", title="بسکتبال", active=True))
+        await s.commit()
+    monkeypatch.setattr(PD, "Session", db)
+    monkeypatch.setattr(config, "PLATFORM_ADMIN_ID", 1)
+    edits = []
+
+    class St:
+        async def clear(self):
+            return None
+    cb = _cb("padg:menu", 1, edits)
+    await PD.padg_menu(cb, St())
+    text, kb = edits[0]
+    datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+    assert any(d.startswith("padg:open:") for d in datas) and "padg:add" in datas and "gg:bet_settings" in datas

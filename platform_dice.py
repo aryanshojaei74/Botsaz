@@ -194,6 +194,8 @@ async def padg_menu(cb: CallbackQuery, state: FSMContext):
         text=("✅" if g.active else "⛔️") + f" {g.emoji} {g.title}",
         callback_data=f"padg:open:{g.id}")] for g in games]
     rows.append([InlineKeyboardButton(text="➕ افزودن بازی", callback_data="padg:add")])
+    # === PATCH_PLATFORM_WAGER_V1 === کنار هم: تنظیمات شرط‌بندی گروه
+    rows.append([InlineKeyboardButton(text="🎰 تنظیمات شرط‌بندی گروه", callback_data="gg:bet_settings")])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت به پنل", callback_data="adm:back")])
     txt = ("🎲 <b>بازی کن پول بگیر — بات‌ساز</b>\n\n"
            "بازی‌ها از بازی‌های داخلیِ خودِ تلگرام استفاده می‌کنند، پس نتیجه را "

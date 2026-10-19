@@ -92,6 +92,7 @@ ADMIN_SECTIONS: list[dict] = [
         "desc": "قرعه‌کشی، بازی و انجمن بات‌ساز",
         "items": [
             ("🎉 قرعه‌کشی کانال بات‌ساز", "raffle:menu",   ButtonStyle.PRIMARY, False),
+            ("🎮 بازی‌ها و شرط‌بندی",   "pgw:hub",       ButtonStyle.SUCCESS, True),   # PATCH_PLATFORM_WAGER_V1
             ("🎲 بازی کن پول بگیر",      "padg:menu",     ButtonStyle.PRIMARY, False),
             ("🏛 انجمن بات‌ساز",         "adm:community", ButtonStyle.PRIMARY, True),
             ("🔎 Fun Stat (تست)",       "fst:adm",       ButtonStyle.PRIMARY, True),  # PATCH_FUNSTAT_V1

@@ -29,7 +29,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sqlalchemy import func, or_, select
 
 from config import Session
-from models import PlatformTxn, PlatformUser, PlatformWager
+from models import PlatformDiceGame, PlatformTxn, PlatformUser, PlatformWager
 from platform_group_money import (
     _bet_enabled, _digits, _edit_settings, _group_allowed, _int, _money, _name, _pset, _reply_target,
     _rial, _set, _user, _admin,
@@ -460,7 +460,7 @@ async def sweep_expired(bot: Bot | None = None) -> int:
                 try:
                     await bot.edit_message_text(text, chat_id=w.chat_id, message_id=w.message_id,
                                                 reply_markup=kb, parse_mode="HTML")
-                except Exception as e:  # noqa: BLE001 — پیام پاک شده یا بدون تغییر؛ مبلغ‌ها قبلاً برگشته‌اند
+                except Exception as e:  # noqa: BLE001 — پیام پاک شده یا بدون تغییر؛ مبلغ‌ها قبلا برگشته‌اند
                     logger.info("wager #%s: final message edit skipped: %s", wid, e)
         except Exception:  # noqa: BLE001
             logger.exception("wager sweep #%s failed", wid)
@@ -752,3 +752,43 @@ async def wager_game_toggle(cb: CallbackQuery):
     key = f"platform_wager_{game}"
     await _set(key, "off" if (await _pset(key, "on")) == "on" else "on")
     await _edit_settings(cb, "bet")
+
+
+# ───────────────────────── صفحهٔ مشترک «بازی‌ها و شرط‌بندی» ─────────────────────────
+
+async def hub_screen() -> tuple[str, InlineKeyboardMarkup]:
+    """هر دو بخش کنار هم: شرط‌بندی بین بازیکن‌ها + بازی‌های خود تلگرام (بازی کن پول بگیر)."""
+    master = await _bet_enabled()
+    flags = {g: await game_enabled(g) for g in GAMES}
+    async with Session() as s:
+        games = (await s.scalars(select(PlatformDiceGame).order_by(PlatformDiceGame.id))).all()
+    active = [g for g in games if g.active]
+    bet_line = ("✅ روشن" if master else "❌ خاموش") + " | " + "، ".join(
+        f"{'✅' if flags[g] else '❌'} {GAME_FA[g]}" for g in GAMES) + " | شیر یا خط"
+    text = (
+        "🎮 <b>بازی‌ها و شرط‌بندی</b>\n\n"
+        "🎰 <b>شرط‌بندی</b> (بازیکن در برابر بازیکن، با کیف پول؛ در گروه محافظ‌شده)\n"
+        f"{bet_line}\n\n"
+        "🎲 <b>بازی کن پول بگیر</b> (بازی‌های خود تلگرام: 🎲 🎯 🏀 ⚽ 🎳 🎰؛ جایزه از طرف شما به بازیکن می‌رسد "
+        "و نتیجه را سرور تلگرام تعیین می‌کند)\n"
+        f"{len(active)} بازی فعال از {len(games)} بازی ثبت‌شده")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [hx_button("🎰 تنظیمات شرط‌بندی گروه", callback_data="gg:bet_settings", style=ButtonStyle.PRIMARY)],
+        [hx_button("🎲 بازی کن پول بگیر (بازی‌های تلگرام)", callback_data="padg:menu", style=ButtonStyle.PRIMARY)],
+        [hx_button("⬅️ بازگشت به پنل", callback_data="adm:back", style=ButtonStyle.DANGER)],
+    ])
+    return text, kb
+
+
+@platform_wager_router.callback_query(F.data == "pgw:hub")
+async def wager_hub(cb: CallbackQuery):
+    if not _admin(cb):
+        await cb.answer("فقط مدیر اصلی", show_alert=True)
+        return
+    text, kb = await hub_screen()
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except TelegramBadRequest as e:
+        if "not modified" not in str(e).lower():
+            logger.warning("wager hub edit failed: %s", e)
+    await cb.answer()

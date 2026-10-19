@@ -441,6 +441,8 @@ async def _settings_screen(kind: str):
             [hx_button("💸 کارمزد شرط‌بندی", callback_data="pgbset:fee")],
             [hx_button("🔢 حداقل شرط", callback_data="pgbset:min"), hx_button("🔢 حداکثر شرط", callback_data="pgbset:max")],
             [hx_button("⏱ زمان انتظار", callback_data="pgbset:ttl")],
+            [hx_button("🎲 بازی کن پول بگیر (بازی‌های تلگرام)", callback_data="padg:menu")],
+            [hx_button("🎮 بازی‌ها و شرط‌بندی", callback_data="pgw:hub")],
             [hx_button("⬅️ بازگشت به هوش مصنوعی", callback_data="gg:ai", style=ButtonStyle.DANGER)],
         ])
     return text, kb
