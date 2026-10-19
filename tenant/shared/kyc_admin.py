@@ -36,6 +36,7 @@ class KycFSM(StatesGroup):
     l2text = State()
     user_lookup = State()
     user_card = State()
+    reject_reason = State()   # PATCH_KYC_REJECT_REASON_V1
 
 
 async def _content(bot_id: int):
@@ -747,8 +748,38 @@ async def kyc_approve(cb: CallbackQuery, bot: Bot):
     await _show(cb, row.id)
 
 
+# === PATCH_KYC_REJECT_REASON_V1 ===
+# گزارشِ فدایی: «برای رد کردنِ احراز هویت دلیل بذار بتونیم براش دلیل بنویسیم.» قبلاً «❌ رد» یک‌کلیکی و بدونِ دلیل
+# بود. حالا اول دلیل پرسیده می‌شود (یا «بدونِ دلیل»)؛ دلیل در ستونِ admin_note ذخیره و برایِ کاربر فرستاده می‌شود
+# و در صفحهٔ احرازِ خودِ کاربر هم تا درخواستِ بعدی دیده می‌شود.
+_REASON_MAX = 200
+_CANCEL_WORDS = {"انصراف", "لغو", "/cancel", "❌ لغو", "❌ انصراف"}
+
+
+async def _do_reject(bot: Bot, row, rid: int, reason: str) -> str:
+    """درخواست را رد می‌کند و به کاربر خبر می‌دهد. نتیجه: ok | gone."""
+    import html as _html
+    async with _S() as s:
+        r = await s.get(_KR, rid)
+        if not r or r.bot_id != row.id or r.status != "pending":
+            return "gone"
+        u = await s.get(_BU, r.user_id)
+        r.status = "rejected"
+        r.admin_note = (reason or None)
+        tg_id = u.telegram_id if u else None
+        lvl = r.level
+        await s.commit()
+    if tg_id:
+        why = f"\n\n📝 <b>دلیل:</b> {_html.escape(reason)}" if reason else ""
+        await _tell_user(bot, tg_id, (
+            f"❌ درخواستِ احرازِ سطح {lvl} شما تأیید نشد.{why}\n\n"
+            "لطفاً مواردِ خواسته‌شده را با دقت رعایت کن و دوباره اقدام کن. "
+            "اگر سؤالی داری با پشتیبانی در تماس باش."))
+    return "ok"
+
+
 @kyc_admin_router.callback_query(F.data.startswith("kyc:no:"))
-async def kyc_reject(cb: CallbackQuery, bot: Bot):
+async def kyc_reject(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from tenant import _owner_ok
     row = await _owner_ok(cb, bot)
     if not row:
@@ -759,17 +790,62 @@ async def kyc_reject(cb: CallbackQuery, bot: Bot):
         if not r or r.bot_id != row.id or r.status != "pending":
             return await cb.answer("این درخواست دیگر در انتظار نیست.",
                                    show_alert=True)
-        u = await s.get(_BU, r.user_id)
-        r.status = "rejected"
-        tg_id = u.telegram_id if u else None
-        lvl = r.level
-        await s.commit()
+    await state.set_state(KycFSM.reject_reason)
+    await state.update_data(kyc_reject_rid=rid)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚫 رد بدونِ دلیل", callback_data=f"kyc:nr:{rid}",
+                              style=ButtonStyle.DANGER)],
+        [InlineKeyboardButton(text="↩️ انصراف", callback_data="kyc:nc", style=ButtonStyle.PRIMARY)],
+    ])
+    await cb.message.answer(
+        "✍️ <b>دلیلِ ردِ این درخواست را بنویس.</b>\n\n"
+        "همین متن برایِ کاربر فرستاده می‌شود (حداکثر ۲۰۰ حرف)؛ مثلاً: «عکسِ کارت ناخوانا بود» یا "
+        "«نامِ روی کارت با حسابِ شما نمی‌خواند».\n"
+        "اگر نمی‌خواهی دلیل بنویسی «رد بدونِ دلیل» را بزن.",
+        reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
 
-    if tg_id:
-        await _tell_user(bot, tg_id, (
-            f"❌ درخواستِ احرازِ سطح {lvl} شما تأیید نشد.\n\n"
-            "لطفاً مواردِ خواسته‌شده را با دقت رعایت کن و دوباره اقدام کن. "
-            "اگر سؤالی داری با پشتیبانی در تماس باش."))
 
-    await cb.answer("رد شد.", show_alert=True)
+@kyc_admin_router.callback_query(F.data.startswith("kyc:nr:"))
+async def kyc_reject_noreason(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    rid = int(cb.data.rsplit(":", 1)[1])
+    res = await _do_reject(bot, row, rid, "")
+    await cb.answer("رد شد." if res == "ok" else "این درخواست دیگر در انتظار نیست.", show_alert=True)
     await _show(cb, row.id)
+
+
+@kyc_admin_router.callback_query(F.data == "kyc:nc")
+async def kyc_reject_cancel(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    try:
+        await cb.message.delete()
+    except Exception:
+        logger.debug("kyc: بستنِ پیامِ دلیل ممکن نشد")
+    await cb.answer("منصرف شدی؛ درخواست هنوز در انتظار است.")
+
+
+@kyc_admin_router.message(KycFSM.reject_reason, F.text)
+async def kyc_reject_reason_in(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok
+    row = await _owner_ok(msg, bot)
+    data = await state.get_data()
+    await state.clear()
+    if not row:
+        return
+    reason = (msg.text or "").strip()
+    if reason in _CANCEL_WORDS:
+        return await msg.answer("منصرف شدی؛ درخواست هنوز در انتظار است.")
+    rid = int(data.get("kyc_reject_rid") or 0)
+    res = await _do_reject(bot, row, rid, reason[:_REASON_MAX])
+    await msg.answer("✅ رد شد و دلیل برایِ کاربر فرستاده شد." if res == "ok"
+                     else "این درخواست دیگر در انتظار نیست.")
+    await _show(msg, row.id)

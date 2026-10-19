@@ -8,6 +8,7 @@ kyc_user.py — PATCH_KYC_V1
 """
 from __future__ import annotations
 
+import html
 import re
 
 from aiogram import Bot, F, Router
@@ -101,6 +102,19 @@ async def user_content(bot_id: int, tg_id: int):
         if pend is None and not blocked:
             can_change, _why = await K.card_change_status(bot_id, u.id)
             txt.append(f"🔄 {_why}")
+
+    # === PATCH_KYC_REJECT_REASON_V1 === آخرین درخواست اگر رد شده، دلیلِ ادمین (اگر نوشته) نشان داده شود
+    last_rej = None
+    if pend is None:
+        async with Session() as s:
+            last = await s.scalar(select(KycRequest).where(
+                KycRequest.bot_id == bot_id, KycRequest.user_id == u.id).order_by(KycRequest.id.desc()))
+        if last is not None and last.status == "rejected":
+            last_rej = last
+    if last_rej is not None:
+        txt.append(f"\n❌ آخرین درخواستِ شما (سطح {last_rej.level}) تأیید نشد.")
+        if last_rej.admin_note:
+            txt.append(f"📝 دلیل: {html.escape(last_rej.admin_note)}")
 
     rows = []
     if pend is not None:

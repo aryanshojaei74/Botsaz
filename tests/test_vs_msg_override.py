@@ -15,6 +15,10 @@ def test_rules():
     assert VO.rule_key("✅ سفارش شما با موفقیت ثبت شد! 🎉\n\nxx") == "order_placed_manual"
     assert VO.rule_key("✅ سفارش شما با موفقیت تکمیل شد! 🎉\n\n⭐ ...") == "completed"
     assert VO.rule_key("❌ متاسفانه سفارشت رد شد.") == "rejected"
+    # گزارشِ فدایی: ثبتِ سفارشِ استارز/تون/ری‌اکشن با کیف‌پول و رسیدِ کارت‌به‌کارت
+    assert VO.rule_key("✅ پرداختت ثبت شد — سفارشت برایِ ادمین فرستاده شد.\n🔖 کد پیگیری: <code>8054</code>") == "order_placed_manual"
+    assert VO.rule_key("✅ پرداختت ثبت شد — سفارشت برایِ ثبتِ دستیِ ری‌اکشن فرستاده شد.") == "order_placed_manual"
+    assert VO.rule_key("✅ رسید دریافت شد و برایِ تاییدِ ادمین فرستاده شد.\n🔖 کد پیگیری: <code>1</code>") == "order_placed_manual"
     assert VO.rule_key("↩️ سفارشِ تونِ تو (#5) لغو شد") == "rejected"
     # شمارهٔ مجازی (حاوی خودِ شماره) و متن‌هایِ SMM دست نمی‌خورند
     assert VO.rule_key("✅ <b>سفارش شما با موفقیت تکمیل شد!</b> 🎉") is None
@@ -54,3 +58,10 @@ async def test_custom_text_replaces_default_with_variables(db):
 
 async def test_no_custom_text_means_no_change(db):
     assert await VO.override_text(3, 555, "❌ متاسفانه سفارشت رد شد.\n🔖 کد پیگیری: <code>TRK12345</code>") is None
+
+
+async def test_custom_placed_text_replaces_paid_message(db):
+    db["smm_txt_order_placed_manual"] = "سفارش {{tracking_code}} ({{product_name}}) ثبت شد 🙏"
+    out = await VO.override_text(
+        3, 555, "✅ پرداختت ثبت شد — سفارشت برایِ ادمین فرستاده شد.\n🔖 کد پیگیری: <code>TRK12345</code>")
+    assert out == "سفارش TRK12345 (⭐ 200 استارز) ثبت شد 🙏"

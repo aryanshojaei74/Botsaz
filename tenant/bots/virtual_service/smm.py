@@ -10319,11 +10319,14 @@ async def smmu_bulk_confirm(cb: CallbackQuery, bot: Bot, state: FSMContext):
         if not uu or float(uu.balance) < final_total:
             bal = float(uu.balance) if uu else 0
             await cb.answer()
+            from tenant.shared import vs_pay as _vp   # PATCH_VS_PAY_V1 — دکمهٔ «شارژ حساب»
+            _bk = await inline_back_kb(row.id)
             await cb.message.answer(
                 f"❌ موجودی کیف پولت کافی نیست.\n"
                 f"مبلغِ کل: {int(final_total):,} تومان\nموجودیِ تو: {int(bal):,} تومان\n\n"
                 f"ابتدا کیف پولت را شارژ کن.",
-                reply_markup=await inline_back_kb(row.id))
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    *await _vp.charge_row(row.id, cb.from_user.id, int(final_total)), *(_bk.inline_keyboard if _bk else [])]))
             return
         uu.balance = float(uu.balance) - final_total
         cost_unit = await compute_cost_price(row.id, v, qty)
@@ -10728,11 +10731,14 @@ async def smm_place_order(bot: Bot, row, msg, v, link: str, qty: int, price: int
                 final_price = float(_ad["final"])
         if not uu or float(uu.balance) < final_price:
             bal = float(uu.balance) if uu else 0
+            from tenant.shared import vs_pay as _vp   # PATCH_VS_PAY_V1 — دکمهٔ «شارژ حساب»
+            _bk = await inline_back_kb(row.id)
             await msg.answer(
                 f"❌ موجودی کیف پولت کافی نیست.\n"
                 f"مبلغ سفارش: {int(final_price):,} تومان\nموجودی تو: {int(bal):,} تومان\n\n"
                 f"ابتدا کیف پولت را شارژ کن.",
-                reply_markup=await inline_back_kb(row.id))
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    *await _vp.charge_row(row.id, msg.from_user.id, int(final_price)), *(_bk.inline_keyboard if _bk else [])]))
             return {"status": "insufficient", "need": int(final_price), "balance": int(bal)}
         uu.balance = float(uu.balance) - final_price
         # === PATCH_SMM_TRACKING_IS_ORDER_ID_V1 ===
@@ -12513,14 +12519,14 @@ async def _gift_show_invoice(target: Message, bot_id: int, gift_id: str,
         _cmt_row.append([InlineKeyboardButton(
             text=("📝 کامنت برایِ: " + ("همهٔ گیفت‌ها" if not scope else f"گیفتِ شمارهٔ {scope}") + " (تغییر)"),
             callback_data=f"gift:csc:{gift_id}:{dest_id}:{qty}:{via or 'n'}")])
+    from tenant.shared import vs_pay as _vp   # PATCH_VS_PAY_V1 — تیک‌هایِ مالک + شارژ حساب
+    _pay_rows = await _vp.pay_rows(bot_id, _vp.tg_of(target), int(total_price),
+                                   f"gift:pay:{gift_id}:{dest_id}:{qty}{_sfx}",
+                                   f"gift:cardpay:{gift_id}:{dest_id}:{qty}{_sfx}")
     kb = InlineKeyboardMarkup(inline_keyboard=[
         *_cmt_row,
         *_anon_row,
-        [InlineKeyboardButton(text="💰 از کیف‌پول", callback_data=f"gift:pay:{gift_id}:{dest_id}:{qty}{_sfx}",
-                              style=ButtonStyle.SUCCESS)],
-        [InlineKeyboardButton(text="💳 کارت‌به‌کارت",
-                              callback_data=f"gift:cardpay:{gift_id}:{dest_id}:{qty}{_sfx}",
-                              style=ButtonStyle.PRIMARY)],
+        *_pay_rows,
         *await _vsd_rows_lazy(bot_id, "gift", total_price),   # PATCH_VS_DISCOUNT_V1
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="gift:back_shop", style=ButtonStyle.DANGER)],
     ])
@@ -12537,7 +12543,7 @@ async def _gift_show_invoice(target: Message, bot_id: int, gift_id: str,
            + "\n" if comment else "")
         + ("🕶 فرستنده: ناشناس (گیفت توسطِ پشتیبانی و به‌صورتِ دستی ارسال می‌شود)\n" if anon else "")
         + f"{price_line}\n\n"
-        f"روشِ پرداخت را انتخاب کن:",
+        f"روشِ پرداخت را انتخاب کن:" + ("" if _pay_rows else _vp.NO_METHOD_NOTE),
         reply_markup=kb, parse_mode="HTML")
 
 
@@ -13134,9 +13140,13 @@ async def order_ticket_text_in(msg: Message, bot: Bot, state: FSMContext):
 async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from tenant import get_bot_row, get_or_create_user
     from tenant.bots.virtual_service.vs_discount import vsd_pick, vsd_charge, vsd_record, vsd_clear, VsdError   # PATCH_VS_DISCOUNT_V1
+    from tenant.shared import vs_pay as _vp   # PATCH_VS_PAY_V1
     row = await get_bot_row(bot)
     if not row:
         await cb.answer()
+        return
+    if not await _vp.wallet_pay_allowed(row.id):
+        await cb.answer("❌ پرداخت از کیف‌پول در این ربات غیرفعال است.", show_alert=True)
         return
     parts = cb.data.split(":")
     gift_id, dest_id_str = parts[2], parts[3]
@@ -13194,9 +13204,9 @@ async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
                 _note_extra = f" (تخفیف اولین خرید −{_fd.discount:,})"
                 price = _fd.final_price
         if float(b.balance) < price:
-            await cb.answer(
-                f"❌ موجودیِ کیف‌پول کافی نیست. کمبود: {price - int(b.balance):,} تومان",
-                show_alert=True)
+            await s.rollback()        # قفلِ ردیف آزاد شود، بعد پیام برود
+            await cb.answer("❌ موجودی کافی نیست.")
+            await _vp.insufficient_notice(cb.message, row.id, cb.from_user.id, int(price), cb.data)
             return
         b.balance = float(b.balance) - price
         s.add(WalletTxn(bot_id=row.id, user_id=b.id, amount=-price, kind="purchase",
@@ -13493,6 +13503,16 @@ async def gift_cardpay_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if not card_num:
         await cb.answer("❌ پرداختِ کارت‌به‌کارت هنوز تنظیم نشده — از کیف‌پول استفاده کن.", show_alert=True)
         return
+    # === PATCH_VS_PAY_V1 === تیکِ کارت‌به‌کارتِ خرید + سقفِ احرازِ هویت *قبل* از نمایشِ شماره‌کارت
+    from tenant.shared import vs_pay as _vp
+    if not await _vp.card_pay_allowed(row.id):
+        await cb.answer("❌ پرداختِ کارت‌به‌کارت در این ربات غیرفعال است.", show_alert=True)
+        return
+    _blk = await _vp.kyc_block(row.id, cb.from_user.id, int(total_price), "gift:back_shop")
+    if _blk:
+        await cb.answer()
+        await cb.message.answer(_blk[0], reply_markup=_blk[1])
+        return
 
     buyer, _ = await get_or_create_user(
         row.id, cb.from_user.id, cb.from_user.full_name, cb.from_user.username or "",
@@ -13587,6 +13607,7 @@ async def gift_receipt_photo_in(msg: Message, bot: Bot, state: FSMContext):
         unit_price = o.price_toman
         qty = o.quantity or 1
         total_price = unit_price * qty
+        _buyer_uid = o.buyer_user_id   # PATCH_VS_PAY_V1 — برایِ مسدودسازیِ خودکارِ سطح ۱ بعد از پرداختِ واقعی
         emoji = o.gift_emoji
         stars = o.star_count
         dest_label = o.dest_label
@@ -13615,6 +13636,8 @@ async def gift_receipt_photo_in(msg: Message, bot: Bot, state: FSMContext):
     if _manual_deliv:
         _rt, _rk = await _with_sfirst(row.id, _rt, _rk)
     await msg.answer(_rt, parse_mode="HTML", reply_markup=_rk)
+    from tenant.shared import kyc as _K   # PATCH_VS_PAY_V1
+    await _K.after_charge(row.id, _buyer_uid)
 
     admin_kb = await _gift_admin_kb(row.id, order_id, gift_id)   # PATCH_TGTOOLS_GIFT_V1
     qty_line = f"🔢 تعداد: {qty}\n" if qty > 1 else ""
@@ -15307,9 +15330,11 @@ async def _premium_show_invoice(target: Message, bot_id: int, months: int,
     stars = dict(_PREMIUM_TIERS)[months]
     rate, margin = await _premium_settings(bot_id)
     price, _is_custom = await _premium_effective_price(bot_id, months, stars, rate, margin)  # PATCH_PREMIUM_CUSTOM_PRICE_V1
+    from tenant.shared import vs_pay as _vp   # PATCH_VS_PAY_V1 — تیک‌هایِ مالک + شارژ حساب
+    _pay_rows = await _vp.pay_rows(bot_id, _vp.tg_of(target), int(price), f"prm:pay:{months}:{dest_id}",
+                                   wallet_label="💳 پرداخت")
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 پرداخت", callback_data=f"prm:pay:{months}:{dest_id}",
-                              style=ButtonStyle.SUCCESS)],
+        *_pay_rows,
         *await _vsd_rows_lazy(bot_id, "premium", price),   # PATCH_VS_DISCOUNT_V1
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="prm:back_shop", style=ButtonStyle.DANGER)],
     ])
@@ -15318,7 +15343,7 @@ async def _premium_show_invoice(target: Message, bot_id: int, months: int,
         f"کالا: پرمیومِ تلگرام {months} ماهه ({stars:,} استارز)\n"
         f"مقصد: {dest_label}\n"
         f"قیمت: {price:,} تومان\n\n"
-        f"مبلغِ قابل‌پرداخت: {price:,} تومان",
+        f"مبلغِ قابل‌پرداخت: {price:,} تومان" + ("" if _pay_rows else _vp.NO_METHOD_NOTE),
         reply_markup=kb, parse_mode="HTML")
 
 
@@ -15365,9 +15390,13 @@ async def prm_dest_username_in(msg: Message, bot: Bot, state: FSMContext):
 async def prm_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from tenant import get_bot_row, get_or_create_user, _gen_tracking
     from tenant.bots.virtual_service.vs_discount import vsd_pick, vsd_charge, vsd_record, vsd_clear, VsdError   # PATCH_VS_DISCOUNT_V1
+    from tenant.shared import vs_pay as _vp   # PATCH_VS_PAY_V1
     row = await get_bot_row(bot)
     if not row:
         await cb.answer()
+        return
+    if not await _vp.wallet_pay_allowed(row.id):
+        await cb.answer("❌ پرداخت از کیف‌پول در این ربات غیرفعال است.", show_alert=True)
         return
     _, _, months_s, dest_id_str = cb.data.split(":")
     months = int(months_s)
@@ -15406,9 +15435,9 @@ async def prm_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
                 _note_extra = f" (تخفیف اولین خرید −{_fd.discount:,})"
                 price = _fd.final_price
         if float(b.balance) < price:
-            await cb.answer(
-                f"❌ موجودیِ کیف‌پول کافی نیست. کمبود: {price - int(b.balance):,} تومان",
-                show_alert=True)
+            await s.rollback()        # قفلِ ردیف آزاد شود، بعد پیام برود
+            await cb.answer("❌ موجودی کافی نیست.")
+            await _vp.insufficient_notice(cb.message, row.id, cb.from_user.id, int(price), cb.data)
             return
         b.balance = float(b.balance) - price
         s.add(WalletTxn(bot_id=row.id, user_id=b.id, amount=-price, kind="purchase",
@@ -16543,9 +16572,12 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext):
                 price = _fd.final_price
         if float(b.balance) < price:
             await state.clear()
+            from tenant.shared import vs_pay as _vp   # PATCH_VS_PAY_V1 — دکمهٔ «شارژ حساب»
             await msg.answer(
                 f"❌ موجودیِ کیف‌پول کافی نیست. کمبود: {price - int(b.balance):,} تومان\n"
-                "اول کیف‌پولت را شارژ کن و دوباره اقدام کن.")
+                "اول کیف‌پولت را شارژ کن و دوباره اقدام کن.",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=await _vp.charge_row(row.id, msg.from_user.id, int(price))))
             return
         b.balance = float(b.balance) - price
         s.add(WalletTxn(bot_id=row.id, user_id=b.id, amount=-price, kind="purchase",
@@ -17483,11 +17515,11 @@ async def _stars_show_invoice(target: Message, bot: Bot, dest_id: int, dest_labe
     note = ("\n\n⚠️ این شخص ربات را استارت نکرده — سفارش ثبت می‌شود ولی "
             "ارسال کاملاً دستی خواهد بود." if dest_id == 0 else "")
     from tenant.bots.virtual_service.vs_discount import vsd_rows   # PATCH_VS_DISCOUNT_V1
+    from tenant.shared import vs_pay as _vp   # PATCH_VS_PAY_V1 — تیک‌هایِ مالک + شارژ حساب
+    _pay_rows = await _vp.pay_rows(row.id, _vp.tg_of(target), price, f"star:pay:{dest_id}:{qty}{uname_part}",
+                                   f"star:cardpay:{dest_id}:{qty}{uname_part}")
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💰 از کیف‌پول", callback_data=f"star:pay:{dest_id}:{qty}{uname_part}",
-                              style=ButtonStyle.SUCCESS)],
-        [InlineKeyboardButton(text="💳 کارت‌به‌کارت", callback_data=f"star:cardpay:{dest_id}:{qty}{uname_part}",
-                              style=ButtonStyle.PRIMARY)],
+        *_pay_rows,
         *await vsd_rows(row.id, "stars", price),
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="star:back_shop", style=ButtonStyle.DANGER)],
     ])
@@ -17496,7 +17528,7 @@ async def _stars_show_invoice(target: Message, bot: Bot, dest_id: int, dest_labe
         f"کالا: ⭐ {qty:,} استارز\n"
         f"مقصد: {dest_label}\n"
         f"قیمت: {price:,} تومان{note}\n\n"
-        f"روشِ پرداخت را انتخاب کن:",
+        f"روشِ پرداخت را انتخاب کن:" + ("" if _pay_rows else _vp.NO_METHOD_NOTE),
         reply_markup=kb, parse_mode="HTML")
 
 
@@ -17536,7 +17568,14 @@ async def _stars_admin_kb(order_id: int) -> InlineKeyboardMarkup:
 # می‌شود و آن یکی نه — و چون پایِ پولِ مشتری وسط است، آن باگ گران تمام
 # می‌شود. هندلرِ ربات هم از همین تابع استفاده می‌کند.
 class StarsOrderError(Exception):
-    """خطایی که پیامش مستقیم به کاربر نشان داده می‌شود."""
+    """خطایی که پیامش مستقیم به کاربر نشان داده می‌شود.
+
+    short/price (PATCH_VS_PAY_V1): فقط وقتی «موجودی کافی نیست» است پر می‌شود تا ربات دکمهٔ «شارژ حساب و ثبت سفارش» بدهد."""
+
+    def __init__(self, msg: str = "", short: int = 0, price: int = 0):
+        super().__init__(msg)
+        self.short = int(short or 0)
+        self.price = int(price or 0)
 
 
 async def place_stars_order(bot: Bot, row, *, buyer_tg_id: int, buyer_name: str,
@@ -17575,7 +17614,8 @@ async def place_stars_order(bot: Bot, row, *, buyer_tg_id: int, buyer_name: str,
             await vsd_record(s, bot_id=row.id, tg_id=buyer_tg_id, code_id=_dc_id, discount=_dc_amt)
         if float(b.balance) < price:
             raise StarsOrderError(
-                f"موجودیِ کیف‌پول کافی نیست. کمبود: {price - int(b.balance):,} تومان")
+                f"موجودیِ کیف‌پول کافی نیست. کمبود: {price - int(b.balance):,} تومان",
+                short=price - int(b.balance), price=price)
         b.balance = float(b.balance) - price
         s.add(WalletTxn(bot_id=row.id, user_id=b.id, amount=-price, kind="purchase",
                         note=f"خریدِ {qty:,} استارز" + (f" (کد تخفیف −{_dc_amt:,})" if _dc_amt else "")))
@@ -17633,6 +17673,10 @@ async def star_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
     parts = cb.data.split(":")
     dest_id, qty = int(parts[2]), int(parts[3])
     dest_username = parts[4] if len(parts) > 4 else ""  # PATCH_STARS_UNSTARTED_DEST_V1
+    from tenant.shared import vs_pay as _vp   # PATCH_VS_PAY_V1
+    if not await _vp.wallet_pay_allowed(row.id):
+        await cb.answer("❌ پرداخت از کیف‌پول در این ربات غیرفعال است.", show_alert=True)
+        return
     try:
         res = await place_stars_order(
             bot, row, buyer_tg_id=cb.from_user.id, buyer_name=cb.from_user.full_name,
@@ -17640,6 +17684,10 @@ async def star_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
             self_user=cb.from_user, dest_username=dest_username,
             disc_code=vsd_pick(await state.get_data(), cb.message.message_id, "stars"))   # PATCH_VS_DISCOUNT_V1
     except StarsOrderError as e:
+        if e.short:      # PATCH_VS_PAY_V1 — «شارژ حساب و ثبت سفارش»
+            await cb.answer("❌ موجودی کافی نیست.")
+            await _vp.insufficient_notice(cb.message, row.id, cb.from_user.id, e.price, cb.data)
+            return
         await cb.answer(f"❌ {e}", show_alert=True)
         return
     await vsd_clear(state)
@@ -17707,6 +17755,16 @@ async def star_cardpay_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     card_holder = await get_setting(row.id, "card_holder", "")
     if not card_num:
         await cb.answer("❌ پرداختِ کارت‌به‌کارت هنوز تنظیم نشده — از کیف‌پول استفاده کن.", show_alert=True)
+        return
+    # === PATCH_VS_PAY_V1 === تیکِ کارت‌به‌کارتِ خرید + سقفِ احرازِ هویت *قبل* از نمایشِ شماره‌کارت
+    from tenant.shared import vs_pay as _vp
+    if not await _vp.card_pay_allowed(row.id):
+        await cb.answer("❌ پرداختِ کارت‌به‌کارت در این ربات غیرفعال است.", show_alert=True)
+        return
+    _blk = await _vp.kyc_block(row.id, cb.from_user.id, price, "star:back_shop")
+    if _blk:
+        await cb.answer()
+        await cb.message.answer(_blk[0], reply_markup=_blk[1])
         return
 
     buyer, _ = await get_or_create_user(
@@ -17794,7 +17852,10 @@ async def star_receipt_photo_in(msg: Message, bot: Bot, state: FSMContext):
         price = o.price_toman
         qty = o.star_count
         dest_label = o.dest_label
+        _buyer_uid = o.buyer_user_id   # PATCH_VS_PAY_V1
         await s.commit()
+    from tenant.shared import kyc as _K   # PATCH_VS_PAY_V1 — مسدودسازیِ خودکارِ سطح ۱ بعد از پرداختِ واقعی
+    await _K.after_charge(row.id, _buyer_uid)
 
     _rt2, _rk2 = await _with_sfirst(   # PATCH_SUPPORT_FIRST_V1 — فروشِ استارز همیشه دستی است
         row.id,

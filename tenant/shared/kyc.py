@@ -87,8 +87,38 @@ async def window_start(bot_id: int) -> datetime:
     return datetime.utcnow() - timedelta(hours=24)
 
 
+# === PATCH_KYC_DIRECT_CARD_V1 ===
+# گزارشِ فدایی: «کارت‌به‌کارتِ مستقیم از صفحهٔ فاکتور سقف نداشت؛ هرچقدر می‌شد خرید.» پرداختِ مستقیمِ کارتی
+# (بدونِ شارژِ کیف پول) هیچ WalletTxn نمی‌سازد، پس هرگز در مصرفِ روزانه جمع نمی‌شد. حالا سفارش‌هایی که رسیدشان
+# رسیده/تأیید شده هم شمرده می‌شوند (سفارشِ رهاشده یا ردشده و بازگشت‌خورده نه).
+_GIFT_CARD_NOT_PAID = ("awaiting_receipt", "pending", "rejected", "refunded", "canceled", "cancelled",
+                       "expired", "returned", "fake_reverted")
+_ORDER_CARD_PAID = ("awaiting_admin", "paid", "completed", "delivered")
+
+
+async def direct_card_today(s, bot_id: int, user_id: int, since) -> int:
+    """مجموعِ خریدهایِ مستقیمِ کارت‌به‌کارتِ این کاربر در بازهٔ روزانه (خدماتِ مجازی + سفارشِ ربات‌هایِ VPN)."""
+    from models import GiftOrder, Order
+    total = 0
+    try:
+        g = await s.scalar(select(func.coalesce(func.sum(
+            GiftOrder.price_toman * func.coalesce(GiftOrder.quantity, 1)), 0)).where(
+            GiftOrder.bot_id == bot_id, GiftOrder.buyer_user_id == user_id,
+            GiftOrder.pay_method == "card", GiftOrder.status.notin_(_GIFT_CARD_NOT_PAID),
+            GiftOrder.created_at >= since))
+        total += int(float(g or 0))
+        o = await s.scalar(select(func.coalesce(func.sum(Order.amount), 0)).where(
+            Order.bot_id == bot_id, Order.user_id == user_id,
+            Order.pay_method.in_(("card", "vpn_card")), Order.status.in_(_ORDER_CARD_PAID),
+            Order.created_at >= since))
+        total += int(float(o or 0))
+    except Exception:
+        logger.exception("[KYC] شمارشِ خریدهایِ کارتیِ مستقیم ناموفق بود (bot=%s user=%s)", bot_id, user_id)
+    return total
+
+
 async def charged_today(bot_id: int, user_id: int) -> int:
-    """مجموعِ واریزهایِ واقعیِ بازهٔ روزانه (نک: window_start)."""
+    """مجموعِ واریزهایِ واقعیِ بازهٔ روزانه (نک: window_start) + خریدهایِ مستقیمِ کارت‌به‌کارت."""
     since = await window_start(bot_id)
     async with Session() as s:
         v = await s.scalar(
@@ -98,10 +128,11 @@ async def charged_today(bot_id: int, user_id: int) -> int:
                 WalletTxn.amount > 0,
                 WalletTxn.kind.notin_(_NOT_DEPOSIT_KINDS),
                 WalletTxn.created_at >= since))
+        direct = await direct_card_today(s, bot_id, user_id, since)
     try:
-        return int(float(v or 0))
+        return int(float(v or 0)) + direct
     except Exception:
-        return 0
+        return direct
 
 
 async def check_charge(bot_id: int, user, amount) -> tuple[bool, str]:
