@@ -181,12 +181,18 @@ async def _is_super(uid: int) -> bool:
 
 # ─────────────────────────── پنل مدیریت ───────────────────────────
 
-@platform_dice_router.callback_query(F.data == "padg:menu")
+@platform_dice_router.callback_query(F.data.startswith("padg:menu"))
 async def padg_menu(cb: CallbackQuery, state: FSMContext):
     if not await _is_super(cb.from_user.id):
         await cb.answer("فقط سوپرادمین.", show_alert=True)
         return
     await state.clear()
+    # === PATCH_PLATFORM_NAVBACK_V1 === «بازگشت» = یک صفحه عقب: از هرجا که آمده‌ای همان‌جا برمی‌گردی
+    # (padg:menu ورود از دستهٔ سرگرمی، @hub از صفحهٔ مشترک، @bet از تنظیمات شرط‌بندی، @keep برگشت از زیرصفحه)
+    from platform_navback import back as _nb_back, enter as _nb_enter, split as _nb_split
+    _nb_enter(cb.from_user.id, "games", _nb_split(cb.data)[1],
+              {"hub": "pgw:hub", "bet": "gg:bet_settings@keep"})
+    back_cb = _nb_back(cb.from_user.id, "games", "adm:back")
     async with Session() as s:
         games = (await s.scalars(select(PlatformDiceGame).order_by(
             PlatformDiceGame.id))).all()
@@ -194,9 +200,7 @@ async def padg_menu(cb: CallbackQuery, state: FSMContext):
         text=("✅" if g.active else "⛔️") + f" {g.emoji} {g.title}",
         callback_data=f"padg:open:{g.id}")] for g in games]
     rows.append([InlineKeyboardButton(text="➕ افزودن بازی", callback_data="padg:add")])
-    # === PATCH_PLATFORM_WAGER_V1 === کنار هم: تنظیمات شرط‌بندی گروه
-    rows.append([InlineKeyboardButton(text="🎰 تنظیمات شرط‌بندی گروه", callback_data="gg:bet_settings")])
-    rows.append([InlineKeyboardButton(text="⬅️ بازگشت به پنل", callback_data="adm:back")])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=back_cb)])
     txt = ("🎲 <b>بازی کن پول بگیر — بات‌ساز</b>\n\n"
            "بازی‌ها از بازی‌های داخلیِ خودِ تلگرام استفاده می‌کنند، پس نتیجه را "
            "سرورِ تلگرام تعیین می‌کند و قابلِ دستکاری نیست.\n\n"
@@ -227,7 +231,7 @@ async def padg_add(cb: CallbackQuery):
         note = f"{faces} حالت" if faces <= MAX_FACES_FOR_PRIZES else f"{faces} حالت — جایزهٔ یکسان"
         rows.append([InlineKeyboardButton(text=f"{emoji} {name} ({note})",
                                           callback_data=f"padg:new:{emoji}")])
-    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="padg:menu")])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="padg:menu@keep")])
     if len(rows) == 1:
         await cb.answer("همهٔ بازی‌های تلگرام اضافه شده‌اند.", show_alert=True)
         return
@@ -320,7 +324,7 @@ async def _open(cb: CallbackQuery, gid: int, state: FSMContext):
         callback_data=f"padg:toggle:{gid}")])
     rows.append([InlineKeyboardButton(text="🗑 حذف این بازی", callback_data=f"padg:del:{gid}",
                                       style=ButtonStyle.DANGER)])
-    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="padg:menu")])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="padg:menu@keep")])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
     try:
         await cb.message.edit_text(txt, reply_markup=kb, parse_mode="HTML")

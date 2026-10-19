@@ -773,8 +773,8 @@ async def hub_screen() -> tuple[str, InlineKeyboardMarkup]:
         "و نتیجه را سرور تلگرام تعیین می‌کند)\n"
         f"{len(active)} بازی فعال از {len(games)} بازی ثبت‌شده")
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [hx_button("🎰 تنظیمات شرط‌بندی گروه", callback_data="gg:bet_settings", style=ButtonStyle.PRIMARY)],
-        [hx_button("🎲 بازی کن پول بگیر (بازی‌های تلگرام)", callback_data="padg:menu", style=ButtonStyle.PRIMARY)],
+        [hx_button("🎰 تنظیمات شرط‌بندی گروه", callback_data="gg:bet_settings@hub", style=ButtonStyle.PRIMARY)],
+        [hx_button("🎲 بازی کن پول بگیر (بازی‌های تلگرام)", callback_data="padg:menu@hub", style=ButtonStyle.PRIMARY)],
         [hx_button("⬅️ بازگشت به پنل", callback_data="adm:back", style=ButtonStyle.DANGER)],
     ])
     return text, kb

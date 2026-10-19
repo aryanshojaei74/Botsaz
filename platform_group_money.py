@@ -408,7 +408,15 @@ def _admin(cb: CallbackQuery) -> bool:
     return cb.from_user.id == PLATFORM_ADMIN_ID
 
 
-async def _settings_screen(kind: str):
+def _bet_back_button(uid: int | None):
+    """=== PATCH_PLATFORM_NAVBACK_V1 === بازگشت تنظیمات شرط‌بندی: به صفحه‌ای که از آن آمده‌ای (هوش مصنوعی / صفحهٔ مشترک)."""
+    from platform_navback import back
+    target = back(uid, "bet", "gg:ai")
+    label = "⬅️ بازگشت به بازی‌ها و شرط‌بندی" if target == "pgw:hub" else "⬅️ بازگشت به هوش مصنوعی"
+    return label, {"callback_data": target, "style": ButtonStyle.DANGER}
+
+
+async def _settings_screen(kind: str, uid: int | None = None):
     if kind == "wallet":
         enabled = (await _pset("platform_group_wallet_enabled", "off")) == "on"
         fee_on = (await _pset("platform_group_transfer_fee_enabled", "off")) == "on"
@@ -435,21 +443,21 @@ async def _settings_screen(kind: str):
         flags = {g: await game_enabled(g) for g in GAMES}
         text += "\n\n🎮 بازی‌ها (در کنار شیر یا خط):\n" + "\n".join(
             f"{'✅' if flags[g] else '❌'} {GAME_FA[g]}" for g in GAMES)
+        back_label, back_kw = _bet_back_button(uid)
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [hx_button("🔴 خاموش‌کردن" if enabled else "🟢 روشن‌کردن", callback_data="pgbset:toggle", style=ButtonStyle.DANGER if enabled else ButtonStyle.SUCCESS)],
             [hx_button(f"{'🔴 خاموش' if flags[g] else '🟢 روشن'}: {GAME_FA[g]}", callback_data=f"pgwset:{g}") for g in GAMES],
             [hx_button("💸 کارمزد شرط‌بندی", callback_data="pgbset:fee")],
             [hx_button("🔢 حداقل شرط", callback_data="pgbset:min"), hx_button("🔢 حداکثر شرط", callback_data="pgbset:max")],
             [hx_button("⏱ زمان انتظار", callback_data="pgbset:ttl")],
-            [hx_button("🎲 بازی کن پول بگیر (بازی‌های تلگرام)", callback_data="padg:menu")],
-            [hx_button("🎮 بازی‌ها و شرط‌بندی", callback_data="pgw:hub")],
-            [hx_button("⬅️ بازگشت به هوش مصنوعی", callback_data="gg:ai", style=ButtonStyle.DANGER)],
+            [hx_button("🎲 بازی کن پول بگیر (بازی‌های تلگرام)", callback_data="padg:menu@bet")],
+            [hx_button(back_label, **back_kw)],
         ])
     return text, kb
 
 
 async def _edit_settings(cb: CallbackQuery, kind: str):
-    text, kb = await _settings_screen(kind)
+    text, kb = await _settings_screen(kind, cb.from_user.id)
     await cb.message.edit_text(text, reply_markup=kb)
     await cb.answer()
 
@@ -462,11 +470,14 @@ async def main_wallet_settings(cb: CallbackQuery):
     await _edit_settings(cb, "wallet")
 
 
-@platform_group_money_router.callback_query(F.data == "gg:bet_settings")
+@platform_group_money_router.callback_query(F.data.startswith("gg:bet_settings"))
 async def main_bet_settings(cb: CallbackQuery):
     if not _admin(cb):
         await cb.answer("فقط مدیر اصلی", show_alert=True)
         return
+    # === PATCH_PLATFORM_NAVBACK_V1 === gg:bet_settings = از هوش مصنوعی، @hub = از صفحهٔ مشترک، @keep = برگشت از «بازی کن پول بگیر»
+    from platform_navback import enter, split
+    enter(cb.from_user.id, "bet", split(cb.data)[1], {"hub": "pgw:hub"})
     await _edit_settings(cb, "bet")
 
 

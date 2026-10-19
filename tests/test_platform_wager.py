@@ -558,7 +558,7 @@ async def test_hub_shows_both_sections_and_is_admin_only(db, psets, monkeypatch)
     text, kb = await PW.hub_screen()
     assert "شرط‌بندی" in text and "بازی کن پول بگیر" in text and "1 بازی فعال از 2" in text
     datas = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert {"gg:bet_settings", "padg:menu", "adm:back"} <= set(datas)
+    assert {"gg:bet_settings@hub", "padg:menu@hub", "adm:back"} <= set(datas)
     edits = []
     await PW.wager_hub(_cb("pgw:hub", 999, edits))
     assert edits[-1][0] == "ANSWER" and edits[-1][2] is True
@@ -577,7 +577,7 @@ def test_admin_menu_has_hub_and_keeps_telegram_games():
 
 
 @pytest.mark.asyncio
-async def test_telegram_games_menu_untouched_and_links_to_betting(db, monkeypatch):
+async def test_telegram_games_menu_untouched_by_the_wager_feature(db, monkeypatch):
     import platform_dice as PD
     async with db() as s:
         s.add(models.PlatformDiceGame(emoji="🏀", title="بسکتبال", active=True))
@@ -593,4 +593,83 @@ async def test_telegram_games_menu_untouched_and_links_to_betting(db, monkeypatc
     await PD.padg_menu(cb, St())
     text, kb = edits[0]
     datas = [b.callback_data for row in kb.inline_keyboard for b in row]
-    assert any(d.startswith("padg:open:") for d in datas) and "padg:add" in datas and "gg:bet_settings" in datas
+    assert any(d.startswith("padg:open:") for d in datas) and "padg:add" in datas and datas[-1] == "adm:back"   # ورود از دستهٔ سرگرمی: بازگشت به پنل
+
+
+# ───────── دکمهٔ «بازگشت» = یک صفحه عقب (PATCH_PLATFORM_NAVBACK_V1) ─────────
+
+def _back_of(edit):
+    """callback_data دکمهٔ «بازگشت» (آخرین ردیف) در آخرین پیام ویرایش‌شده."""
+    kb = edit[1]
+    return [b for b in kb.inline_keyboard[-1]][0].callback_data
+
+
+@pytest_asyncio.fixture
+async def nav(db, monkeypatch):
+    import platform_dice as PD
+    import platform_navback as NB
+    NB._BACK.clear()
+    monkeypatch.setattr(PD, "Session", db)
+    monkeypatch.setattr(config, "PLATFORM_ADMIN_ID", 1)
+    monkeypatch.setattr(GM, "PLATFORM_ADMIN_ID", 1)
+    async with db() as s:
+        s.add(models.PlatformDiceGame(emoji="🏀", title="بسکتبال", active=True))
+        await s.commit()
+
+    class St:
+        async def clear(self):
+            return None
+    return SimpleNamespace(PD=PD, st=St(), edits=[])
+
+
+@pytest.mark.asyncio
+async def test_back_from_ai_bet_games_goes_one_page_each_time(nav, psets):
+    e = nav.edits
+    # هوش مصنوعی ← تنظیمات شرط‌بندی ← بازی کن پول بگیر
+    await GM.main_bet_settings(_cb("gg:bet_settings", 1, e))
+    assert _back_of(e[-2]) == "gg:ai"                                  # از تنظیمات شرط‌بندی: برمی‌گردد به هوش مصنوعی
+    await nav.PD.padg_menu(_cb("padg:menu@bet", 1, e), nav.st)
+    assert _back_of(e[-2]) == "gg:bet_settings@keep"                   # از بازی‌ها: یک صفحه عقب = تنظیمات شرط‌بندی (نه ریشهٔ پنل)
+    await GM.main_bet_settings(_cb("gg:bet_settings@keep", 1, e))
+    assert _back_of(e[-2]) == "gg:ai"                                  # و از آن‌جا باز هم یک صفحه عقب = هوش مصنوعی
+
+
+@pytest.mark.asyncio
+async def test_back_from_hub_keeps_hub_as_parent(nav, psets):
+    e = nav.edits
+    await GM.main_bet_settings(_cb("gg:bet_settings@hub", 1, e))
+    assert _back_of(e[-2]) == "pgw:hub" and "بازی‌ها و شرط‌بندی" in e[-2][1].inline_keyboard[-1][0].text
+    await nav.PD.padg_menu(_cb("padg:menu@bet", 1, e), nav.st)
+    await GM.main_bet_settings(_cb("gg:bet_settings@keep", 1, e))
+    assert _back_of(e[-2]) == "pgw:hub"                                # مبدأ از دست نرفته
+    await nav.PD.padg_menu(_cb("padg:menu@hub", 1, e), nav.st)
+    assert _back_of(e[-2]) == "pgw:hub"
+
+
+@pytest.mark.asyncio
+async def test_games_menu_origin_resets_and_subscreens_keep_it(nav, psets):
+    e = nav.edits
+    await nav.PD.padg_menu(_cb("padg:menu@hub", 1, e), nav.st)
+    gid = [b.callback_data for row in e[-2][1].inline_keyboard for b in row if b.callback_data.startswith("padg:open:")][0]
+    await nav.PD.padg_open(_cb(gid, 1, e), nav.st)
+    assert _back_of(e[-2]) == "padg:menu@keep"                         # زیرصفحه: برگشت به منوی بازی‌ها
+    await nav.PD.padg_menu(_cb("padg:menu@keep", 1, e), nav.st)
+    assert _back_of(e[-2]) == "pgw:hub"                                # هنوز مبدأ همان صفحهٔ مشترک است
+    await nav.PD.padg_menu(_cb("padg:menu", 1, e), nav.st)             # ورود از دستهٔ سرگرمی ⇒ ریست
+    assert _back_of(e[-2]) == "adm:back"
+
+
+@pytest.mark.asyncio
+async def test_back_survives_settings_refresh_and_is_per_admin(nav, psets, monkeypatch):
+    async def fake_set(key, value):
+        psets[key] = value
+    monkeypatch.setattr(PW, "_set", fake_set)
+    monkeypatch.setattr(GM, "_set", fake_set)
+    e = nav.edits
+    await GM.main_bet_settings(_cb("gg:bet_settings@hub", 1, e))
+    await PW.wager_game_toggle(_cb("pgwset:xo", 1, e))                # تازه‌سازی صفحه پس از تغییر تنظیم
+    assert _back_of(e[-2]) == "pgw:hub"
+    await GM.main_bet_toggle(_cb("pgbset:toggle", 1, e))
+    assert _back_of(e[-2]) == "pgw:hub"
+    import platform_navback as NB
+    assert NB.back(2, "bet", "gg:ai") == "gg:ai"                       # ادمین دیگر تحت‌تأثیر نیست
