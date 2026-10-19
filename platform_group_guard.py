@@ -2730,7 +2730,7 @@ async def gg_ai_menu(cb: CallbackQuery):
             [hx_button("⏱ محدودیتِ سوال", callback_data="gg:ai_ratelimit")],
             [hx_button("🧠 دانشِ سفارشی/آپدیت‌شده", callback_data="gg:ai_knowledge")],
             [hx_button("💰 تنظیمات کیف‌پول و انتقال گروه", callback_data="gg:wallet_settings")],
-            [hx_button("🎲 تنظیمات بازی گروه", callback_data="gg:bet_settings")],
+            [hx_button("🎲 تنظیمات شرط‌بندی گروه", callback_data="gg:bet_settings")],
             [hx_button("⬅️ بازگشت", callback_data="adm:group_guard", style=ButtonStyle.DANGER)],
         ])
     try:

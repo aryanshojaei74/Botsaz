@@ -28,8 +28,8 @@ platform_group_money_router = Router()
 
 _DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
 _TRANSFER_RE = re.compile(r"^انتقال\s+([۰-۹0-9,،]+)$")
-_BET_RE = re.compile(r"^(?:بازی|شرطبندی|شرط\s*بندی)\s+([۰-۹0-9,،]+)$", re.IGNORECASE)
-_INCOMPLETE_BET_RE = re.compile(r"^(?:بازی|شرطبندی|شرط\s*بندی)$", re.IGNORECASE)
+_BET_RE = re.compile(r"^(?:بازی|شرط[\s\u200c]*بندی)\s+([۰-۹0-9,،]+)$", re.IGNORECASE)
+_INCOMPLETE_BET_RE = re.compile(r"^(?:بازی|شرط[\s\u200c]*بندی)$", re.IGNORECASE)
 _locks: dict[tuple[int, int], asyncio.Lock] = {}
 
 
@@ -109,9 +109,10 @@ async def platform_incomplete_bet_command(msg: Message):
     if not await _group_allowed(msg.chat.id):
         return
     if not await _bet_enabled():
-        await msg.reply("❌ قابلیت بازی در بات‌ساز اصلی فعال نیست.")
+        await msg.reply("❌ شرط‌بندی در بات‌ساز اصلی فعال نیست.")
         return
-    await msg.reply("برای ساخت بازی عمومی، مبلغ را هم بنویس؛ مثلاً: «بازی ۱۰۰۰۰»\nبرای بازی روی یک نفر، همین دستور را روی پیام او ریپلای کن.")
+    from platform_wager import GAMES, game_enabled, help_text
+    await msg.reply(help_text({g: await game_enabled(g) for g in GAMES}), parse_mode="HTML")
 
 @platform_group_money_router.message(
     F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}),
@@ -216,7 +217,7 @@ def _bet_pending_text(bet: PlatformBet) -> str:
         "👥 حالت عمومی: اولین نفری که روی «✅ قبول و پیوستن» بزند، شرکت می‌کند.\n"
     )
     return (
-        "🎲 <b>بازی</b>\n\n"
+        "🎲 <b>شرط‌بندی شانسی (شیر یا خط)</b>\n\n"
         f"👤 سازنده: {_name(bet.creator_telegram_id, bet.creator_username, bet.creator_name)}\n"
         f"{participant_line}"
         f"💰 مبلغ بازی هر نفر: <b>{_rial(bet.amount)}</b>\n"
@@ -228,7 +229,7 @@ def _bet_pending_text(bet: PlatformBet) -> str:
 
 def _bet_result_text(bet: PlatformBet) -> str:
     return (
-        "🎲 <b>نتیجهٔ بازی مشخص شد</b> 🎉\n\n"
+        "🎲 <b>نتیجهٔ شرط‌بندی مشخص شد</b> 🎉\n\n"
         f"🏆 برنده: <b>{_name(bet.winner_telegram_id, bet.winner_username, bet.winner_name)}</b>\n"
         f"❌ بازنده: <b>{_name(bet.loser_telegram_id, bet.loser_username, bet.loser_name)}</b>\n"
         f"💰 مبلغ بازی: <b>{_rial(bet.amount)}</b> برای هر نفر\n"
@@ -428,11 +429,17 @@ async def _settings_screen(kind: str):
         mn = _int(await _pset("platform_group_betting_min", "1000"), 1000)
         mx = _int(await _pset("platform_group_betting_max", "0"))
         ttl = _int(await _pset("platform_group_betting_ttl", "300"), 300)
-        text = f"🎲 <b>تنظیمات بازی گروه</b>\n\nوضعیت: {'✅ فعال' if enabled else '❌ غیرفعال'}\nکارمزد: {'✅ ' + fee + '٪' if fee_on else '❌ غیرفعال'}\nحداقل: {_rial(mn)}\nحداکثر: {_rial(mx) if mx else 'نامحدود'}\nزمان انتظار: {ttl} ثانیه"
+        text = f"🎲 <b>تنظیمات شرط‌بندی گروه</b>\n\nوضعیت: {'✅ فعال' if enabled else '❌ غیرفعال'}\nکارمزد: {'✅ ' + fee + '٪' if fee_on else '❌ غیرفعال'}\nحداقل: {_rial(mn)}\nحداکثر: {_rial(mx) if mx else 'نامحدود'}\nزمان انتظار: {ttl} ثانیه"
+        # === PATCH_PLATFORM_WAGER_V1 === بازی‌های دونفره (ایکس‌او / سنگ‌کاغذ‌قیچی / تاس) روی همین کلید اصلی و همین کارمزد/حداقل/حداکثر
+        from platform_wager import GAMES, GAME_FA, game_enabled
+        flags = {g: await game_enabled(g) for g in GAMES}
+        text += "\n\n🎮 بازی‌ها (در کنار شیر یا خط):\n" + "\n".join(
+            f"{'✅' if flags[g] else '❌'} {GAME_FA[g]}" for g in GAMES)
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [hx_button("🔴 خاموش‌کردن" if enabled else "🟢 روشن‌کردن", callback_data="pgbset:toggle", style=ButtonStyle.DANGER if enabled else ButtonStyle.SUCCESS)],
-            [hx_button("💸 کارمزد بازی", callback_data="pgbset:fee")],
-            [hx_button("🔢 حداقل بازی", callback_data="pgbset:min"), hx_button("🔢 حداکثر بازی", callback_data="pgbset:max")],
+            [hx_button(f"{'🔴 خاموش' if flags[g] else '🟢 روشن'}: {GAME_FA[g]}", callback_data=f"pgwset:{g}") for g in GAMES],
+            [hx_button("💸 کارمزد شرط‌بندی", callback_data="pgbset:fee")],
+            [hx_button("🔢 حداقل شرط", callback_data="pgbset:min"), hx_button("🔢 حداکثر شرط", callback_data="pgbset:max")],
             [hx_button("⏱ زمان انتظار", callback_data="pgbset:ttl")],
             [hx_button("⬅️ بازگشت به هوش مصنوعی", callback_data="gg:ai", style=ButtonStyle.DANGER)],
         ])

@@ -58,6 +58,8 @@ from platform_bot import sms_expiry_notify_loop
 from main_platform import zarinpal_platform_reconcile_loop
 # === PATCH_MARKET_TRIAL_EXPIRY_V1 ===
 from platform_market import market_trial_expiry_loop
+# === PATCH_PLATFORM_WAGER_V1 ===
+from platform_wager import wager_sweep_loop
 
 
 async def _worker_startup():
@@ -89,6 +91,8 @@ async def _worker_startup():
         zarinpal_platform_reconcile_loop(),
         # === PATCH_MARKET_TRIAL_EXPIRY_V1 ===
         market_trial_expiry_loop(platform_bot=mp.platform_bot),
+        # === PATCH_PLATFORM_WAGER_V1 === برگشت/تسویهٔ شرط‌های باز که مهلتشان گذشته
+        wager_sweep_loop(platform_bot=mp.platform_bot),
     ):
         mp.spawn(_coro)
 

@@ -3236,6 +3236,42 @@ class PlatformBetLedger(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+# === PATCH_PLATFORM_WAGER_V1 ===
+class PlatformWager(Base):
+    """شرط‌بندی دونفرهٔ گروهی با کیف‌پول بات‌ساز (ایکس‌او / سنگ‌کاغذ‌قیچی / تاس).
+
+    مبلغ هر دو نفر هنگام ساخت/پیوستن از کیف‌پول رزرو می‌شود و فقط با تسویه
+    (برنده)، مساوی (برگشت هر دو) یا لغو/انقضا (برگشت سازنده) آزاد می‌شود.
+    state = JSON وضعیت بازی (صفحهٔ ایکس‌او، انتخاب‌های سنگ‌کاغذ‌قیچی، تاس‌ها).
+    """
+    __tablename__ = "platform_wagers"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    message_id: Mapped[int] = mapped_column(BigInteger, default=0)
+    game: Mapped[str] = mapped_column(String(8))                    # xo | rps | dice
+    creator_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    creator_name: Mapped[str] = mapped_column(String(120), default="")
+    creator_username: Mapped[str | None] = mapped_column(String(64))
+    target_id: Mapped[int] = mapped_column(BigInteger, default=0)   # ۰ = عمومی
+    target_name: Mapped[str] = mapped_column(String(120), default="")
+    target_username: Mapped[str | None] = mapped_column(String(64))
+    opponent_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    opponent_name: Mapped[str | None] = mapped_column(String(120))
+    opponent_username: Mapped[str | None] = mapped_column(String(64))
+    amount: Mapped[float] = mapped_column(Numeric(14, 0))
+    fee_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
+    fee_amount: Mapped[float] = mapped_column(Numeric(14, 0), default=0)
+    payout_amount: Mapped[float] = mapped_column(Numeric(14, 0), default=0)
+    status: Mapped[str] = mapped_column(String(12), default="pending", index=True)  # pending|playing|settled|draw|cancelled|expired
+    state: Mapped[str] = mapped_column(Text, default="{}")
+    turn_id: Mapped[int | None] = mapped_column(BigInteger)         # نوبت چه کسی (ایکس‌او)
+    winner_id: Mapped[int | None] = mapped_column(BigInteger)
+    end_reason: Mapped[str | None] = mapped_column(String(16))      # win | forfeit | draw | cancel | expire
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)  # مهلت پیوستن یا مهلت حرکت بعدی
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 # === PATCH_TENANT_GROUP_GUARD_V1 ===
 class TenantGroupBan(Base):
     __tablename__ = "tenant_group_guard_bans"

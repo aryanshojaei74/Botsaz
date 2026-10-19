@@ -131,6 +131,9 @@ router.include_router(ticket_router)
 # باید قبل از catch-all محافظ گروه ثبت شود تا پیام‌های مالی گروه مصرف نشوند.
 from platform_group_money import platform_group_money_router
 router.include_router(platform_group_money_router)
+# === PATCH_PLATFORM_WAGER_V1 === شرط‌بندی ایکس‌او / سنگ‌کاغذ‌قیچی / تاس (قبل از هندلر کلی متن بازی‌های تاس)
+from platform_wager import platform_wager_router
+router.include_router(platform_wager_router)
 # === PATCH_PLATFORM_GROUP_GUARD_V1 ===
 from platform_group_guard import group_guard_router
 router.include_router(group_guard_router)
