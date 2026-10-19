@@ -2316,6 +2316,9 @@ class SmmService(Base):
     # پیش‌فرض ۰ برایِ همه — یعنی تا وقتی ادمین با دکمه‌هایِ 🔼/🔽 جابه‌جا
     # نکرده، ترتیب اثری ندارد (هم‌ارز با id).
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # === PATCH_SMM_INPUT_KIND_V1 === آنچه مشتری هنگامِ سفارش می‌فرستد: ""/"link" = لینک (پیش‌فرض)،
+    # "number" = فقط عدد (آیدی/شماره، مثلاً «میو پوینت»)، "text" = متنِ آزاد
+    input_kind: Mapped[str | None] = mapped_column(String(10), default="", server_default="")
 
 
 class SmmOrder(Base):

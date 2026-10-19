@@ -163,6 +163,8 @@ async def ensure_smm_columns(force: bool = False):
             ("type_key", "VARCHAR(30)", "VARCHAR(30)"),
             # === PATCH_SMM_PROVIDER_DESC_V1 ===
             ("provider_desc", "TEXT", "TEXT"),
+            # === PATCH_SMM_INPUT_KIND_V1 ===
+            ("input_kind", "VARCHAR(10) DEFAULT ''", "VARCHAR(10) DEFAULT ''"),
         ],
         "smm_orders": [("panel_status", "VARCHAR(30)", "VARCHAR(30)")],
         # === PATCH_SMM_PROVIDER_DETAIL_V1 ===
@@ -8424,6 +8426,34 @@ async def smm_special_manual_category_set(cb: CallbackQuery, bot: Bot):
 
 # ═══════════════════════ سرویس‌های دستی ═══════════════════════
 
+# === PATCH_SMM_INPUT_KIND_V1 ===
+# درخواستِ فدایی/سهیل: «محصولِ دستی (میو پوینت) آدرسِ سفارش را به‌صورتِ عدد بگیرد، نه لینک.» هر سرویس یک «نوعِ ورودیِ سفارش» دارد:
+#   link (پیش‌فرض) · number (فقط عدد: آیدی/شماره) · text (متنِ آزاد)
+_INPUT_KINDS = ("link", "number", "text")
+_INPUT_KIND_FA = {"link": "🔗 لینک", "number": "🔢 عدد (آیدی)", "text": "✏️ متنِ آزاد"}
+_FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+
+
+def _input_kind(v) -> str:
+    k = (getattr(v, "input_kind", "") or "link").lower()
+    return k if k in _INPUT_KINDS else "link"
+
+
+def _norm_number_input(raw: str) -> str | None:
+    """«۱۲۳٬۴۵۶» / «123 456» ← «123456»؛ هر چیزِ غیرعددی ⇒ None."""
+    t = (raw or "").translate(_FA_DIGITS)
+    t = "".join(ch for ch in t if ch not in " ,،٬\u200c\u200f\u200e")
+    return t if t.isdigit() and 1 <= len(t) <= 40 else None
+
+
+def _input_prompt(kind: str, link_prompt: str) -> str:
+    if kind == "number":
+        return "آیدی/شماره‌ی موردنظرت را بفرست (فقط عدد):"
+    if kind == "text":
+        return "اطلاعاتِ موردنیاز را به‌صورتِ متن بفرست:"
+    return link_prompt
+
+
 async def manual_services_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     """متن و کیبوردِ «سرویس‌های دستی» — مشترک بین callback و action مستقل."""
     await ensure_smm_columns()
@@ -8487,12 +8517,16 @@ async def manual_services_content(bot_id: int) -> tuple[str, InlineKeyboardMarku
         pr = f"{int(v.sell_rate):,} ت/هزار" if v.sell_rate else "بدون قیمت"
         _cat_name = _manual_cat_names.get(getattr(v, "category_pk", None), "بدون دسته")
         lines.append(f"• [{smm_api.service_type_label(smm_api.detect_service_type(v.name, v.category or ''))}] "
-                     f"{v.name[:38]} — {pr}\n  📂 دسته‌بندی: {_cat_name}")
+                     f"{v.name[:38]} — {pr}\n  📂 دسته‌بندی: {_cat_name} · ورودیِ سفارش: {_INPUT_KIND_FA[_input_kind(v)]}")
         rows.append([
             InlineKeyboardButton(text=f"🗑 حذف: {v.name[:22]}", callback_data=f"smm:mandel:{v.id}"),
             # === PATCH_SMM_MANUAL_CATEGORY_FLOW_V2 ===
             InlineKeyboardButton(text="📂 دسته‌بندی", callback_data=f"smm:svc:cat:{v.id}:man"),
         ])
+        # === PATCH_SMM_INPUT_KIND_V1 ===
+        rows.append([InlineKeyboardButton(
+            text=f"✏️ ورودیِ سفارش: {_INPUT_KIND_FA[_input_kind(v)]} (بزن تا عوض شود)",
+            callback_data=f"smm:inpk:{v.id}")])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:products", style=ButtonStyle.DANGER)])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -8592,6 +8626,31 @@ async def smm_mandel(cb: CallbackQuery, bot: Bot):
             await s.commit()
     await cb.answer("حذف شد")
     await smm_manlist(cb, bot)
+
+
+@smm_router.callback_query(F.data.startswith("smm:inpk:"))
+async def smm_input_kind_cycle(cb: CallbackQuery, bot: Bot):
+    """=== PATCH_SMM_INPUT_KIND_V1 === چرخش: لینک ← عدد ← متنِ آزاد (فقط سرویس‌هایِ دستیِ همین ربات)."""
+    row = await _owner(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    await ensure_smm_columns()
+    vid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        v = await s.get(SmmService, vid)
+        if not v or v.bot_id != row.id or not v.is_manual:
+            await cb.answer("سرویس پیدا نشد.", show_alert=True)
+            return
+        nxt = _INPUT_KINDS[(_INPUT_KINDS.index(_input_kind(v)) + 1) % len(_INPUT_KINDS)]
+        v.input_kind = nxt
+        await s.commit()
+    await cb.answer(f"ورودیِ سفارش: {_INPUT_KIND_FA[nxt]}")
+    text, kb = await manual_services_content(row.id)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 @smm_router.callback_query(F.data == "smm:mannew")
@@ -8746,6 +8805,7 @@ async def smm_man_max_in(msg: Message, bot: Bot, state: FSMContext):
         f"در غیر این صورت بدون دسته باقی می‌ماند.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="📂 انتخاب دسته‌بندی", callback_data=f"smm:svc:cat:{new_id}:man")],
+            [InlineKeyboardButton(text="🔢 ورودیِ سفارش: لینک (برایِ عدد/آیدی بزن)", callback_data=f"smm:inpk:{new_id}")],
             [InlineKeyboardButton(text="✍️ سرویس‌های دستی", callback_data="smm:manlist")]]))
 
 
@@ -9865,9 +9925,10 @@ async def send_smm_product_page(msg_or_cb, bot: Bot, vid: int, state: FSMContext
     sample = await compute_sell_price(row.id, v, _sample_qty)
     await state.set_state(SmmFSM.user_link)
     await state.update_data(smmu_svc_id=vid)
+    _ik = _input_kind(v)       # PATCH_SMM_INPUT_KIND_V1 — سفارشِ انبوه فقط برایِ ورودیِ لینک
     cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📦 ثبتِ سفارشِ انبوه (چندلینکی)", callback_data=f"smmu:bulk:{vid}",
-                              style=ButtonStyle.PRIMARY)],
+        *([[InlineKeyboardButton(text="📦 ثبتِ سفارشِ انبوه (چندلینکی)", callback_data=f"smmu:bulk:{vid}",
+                                 style=ButtonStyle.PRIMARY)]] if _ik == "link" else []),
         [InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="mbtn:home", style=ButtonStyle.DANGER)]])
     _rate = ""
     try:
@@ -9925,10 +9986,10 @@ async def send_smm_product_page(msg_or_cb, bot: Bot, vid: int, state: FSMContext
         f"🔢 حداقل: {v.min_qty} | حداکثر: {v.max_qty}\n"
         # === PATCH_SMM_PRODUCT_SHORTCUT_ROUTING_V1 === دستورهایِ میانبر (تپ‌شدنی)
         f"⌨️ میانبر: /{v.id}\n"
-        f"📦 ثبت سفارش انبوه: /multi_{v.id}"
-        f"{_rate}"
+        + (f"📦 ثبت سفارش انبوه: /multi_{v.id}" if _ik == "link" else "")
+        + f"{_rate}"
         f"{desc_line}\n\n"
-        f"۱/۲ — {_link_prompt}"
+        f"۱/۲ — {_input_prompt(_ik, _link_prompt)}"
     )
     if is_cb:
         try:
@@ -9940,10 +10001,11 @@ async def send_smm_product_page(msg_or_cb, bot: Bot, vid: int, state: FSMContext
     return True
 
 
-def _smm_link_confirm_kb() -> InlineKeyboardMarkup:
+def _smm_link_confirm_kb(kind: str = "link") -> InlineKeyboardMarkup:
+    _w = "لینک" if kind == "link" else ("آیدی" if kind == "number" else "اطلاعات")   # PATCH_SMM_INPUT_KIND_V1
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ تأیید لینک", callback_data="smmu:link_confirm", style=ButtonStyle.SUCCESS),
-         InlineKeyboardButton(text="✏️ تغییر لینک", callback_data="smmu:link_change", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text=f"✅ تأیید {_w}", callback_data="smmu:link_confirm", style=ButtonStyle.SUCCESS),
+         InlineKeyboardButton(text=f"✏️ تغییر {_w}", callback_data="smmu:link_change", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="❌ لغو سفارش", callback_data="smmu:order_cancel", style=ButtonStyle.DANGER)],
     ])
 
@@ -10030,7 +10092,8 @@ async def _smm_qty_preview_text_kb(bot_id: int, v, link: str, qty: int, price: i
     text = (
         "🧾 <b>پیش‌نمایش سفارش</b>\n\n"
         f"🛍 سرویس: {_html_escape(v.name)}\n"
-        f"🔗 لینک: <code>{_html_escape(link)}</code>\n"
+        f"{'🔢 آیدی/شماره' if str(link).isdigit() and _input_kind(v) == 'number' else '🔗 لینک'}: "
+        f"<code>{_html_escape(link)}</code>\n"
         f"🔢 تعداد: <b>{qty:,}</b>\n"
         f"{_price_txt}\n\n"
         "اطلاعات سفارش درست است؟"
@@ -10109,6 +10172,9 @@ async def smmu_bulk_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 async def _bulk_start_prompt(target, state: FSMContext, v: "SmmService") -> None:
     """شروعِ سفارشِ انبوه برایِ سرویسِ v — هم از دکمه (smmu:bulk:) و هم از دستورِ /multi_<شماره>."""
+    if _input_kind(v) != "link":      # PATCH_SMM_INPUT_KIND_V1
+        await target.answer("برایِ این محصول سفارشِ انبوه وجود ندارد؛ همان صفحهٔ محصول را باز کن و آیدی/شماره را بفرست.")
+        return
     await state.set_state(SmmFSM.bulk_links)
     await state.update_data(smmu_svc_id=v.id)
     cancel_kb = InlineKeyboardMarkup(inline_keyboard=[[
@@ -10451,6 +10517,34 @@ async def smmu_bulkdisc_del(cb: CallbackQuery, bot: Bot, state: FSMContext):
 @smm_router.message(SmmFSM.user_link, F.text)
 async def smmu_link_in(msg: Message, bot: Bot, state: FSMContext):
     link = msg.text.strip()
+    # === PATCH_SMM_INPUT_KIND_V1 === محصولی که «عدد/متن» می‌خواهد: بدونِ چکِ لینک و بدونِ نوعِ لینکِ دسته
+    _d0 = await state.get_data()
+    _kind = "link"
+    if _d0.get("smmu_svc_id"):
+        async with Session() as s:
+            _v0 = await s.get(SmmService, int(_d0["smmu_svc_id"]))
+        if _v0 is not None and not await _is_foreign(_v0, bot):
+            _kind = _input_kind(_v0)
+    if _kind != "link":
+        if _kind == "number":
+            val = _norm_number_input(link)
+            if val is None:
+                await msg.answer("❌ فقط عدد بفرست (بدونِ حرف و فاصله)، مثلاً 123456:",
+                                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                                     text="🏠 منوی اصلی", callback_data="mbtn:home", style=ButtonStyle.DANGER)]]))
+                return
+        else:
+            val = link[:300]
+            if not val:
+                await msg.answer("❌ متنی فرستاده نشد. دوباره بفرست:")
+                return
+        await state.update_data(smmu_link=val)
+        await state.set_state(SmmFSM.user_link_confirm)
+        await msg.answer(
+            ("🔢 <b>آیدی/شماره دریافت شد</b>" if _kind == "number" else "✏️ <b>اطلاعات دریافت شد</b>")
+            + f"\n\n<code>{_html_escape(val)}</code>\n\nآیا درست است؟",
+            parse_mode="HTML", reply_markup=_smm_link_confirm_kb(_kind))
+        return
     if not (link.startswith("http://") or link.startswith("https://") or link.startswith("@")
 
             or "t.me/" in link):
@@ -10531,8 +10625,14 @@ async def smmu_link_confirm(cb: CallbackQuery, bot: Bot, state: FSMContext):
 @smm_router.callback_query(F.data == "smmu:link_change")
 async def smmu_link_change(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await state.set_state(SmmFSM.user_link)
+    _kind = "link"      # PATCH_SMM_INPUT_KIND_V1
+    _sid = (await state.get_data()).get("smmu_svc_id")
+    if _sid:
+        async with Session() as s:
+            _kind = _input_kind(await s.get(SmmService, int(_sid)))
     await _EditFirstV(cb.message).answer(   # PATCH_VS_EDIT_IN_PLACE_V1
-        "✏️ لینک جدید را بفرست:",
+        {"link": "✏️ لینک جدید را بفرست:", "number": "✏️ آیدی/شماره‌ی جدید را بفرست (فقط عدد):",
+         "text": "✏️ اطلاعاتِ جدید را بفرست:"}[_kind],
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="❌ لغو سفارش", callback_data="smmu:order_cancel", style=ButtonStyle.DANGER)
         ]]))
