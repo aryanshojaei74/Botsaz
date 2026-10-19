@@ -27,6 +27,7 @@ async def check_imports() -> tuple[bool, str]:
         import tenant.shared.panel_clients.nodex_panel  # noqa: F401
         import tenant.shared.panel_clients.degeris_panel  # noqa: F401
         import tenant.shared.panel_clients.eylan_panel  # noqa: F401
+        import tenant.shared.panel_clients.heimdall_panel  # noqa: F401
         import tenant.shared.panel_clients.marzban_panel  # noqa: F401
         import tenant.shared.panel_clients.marzneshin_panel  # noqa: F401
         import models  # noqa: F401

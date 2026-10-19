@@ -162,6 +162,7 @@ _BY_FIELD: dict[str, list[tuple[str, str]]] = {
         ("buy_vpn_nodex",         "🔷 خرید از پنل نودکس"),
         ("buy_vpn_degeris",       "🟣 خرید از پنل DEGERIS"),
         ("buy_vpn_eylan",         "🟠 خرید از پنل ایلان"),
+        ("buy_vpn_heimdall",      "🛡 خرید از پنل HEIMDALL"),
         # نیازمندِ PATCH_SHAHAN_BUY_BUTTON_V1 در tenant/__init__.py
         ("buy_vpn_shahan",        "🟤 خرید از پنل شاهان"),
         ("my_services",           "📡 سرویس‌های من"),

@@ -88,6 +88,8 @@ PANEL_LABELS = _PanelLabels({
     "degeris":        "🟣 پنل DEGERIS (ثنایی جدید)",
     # === PATCH_EYLAN_PANEL_V1 === فقط پلنِ حرفه‌ای
     "eylan":          "🟠 پنل ایلان (EylanPanel)",
+    # === PATCH_HEIMDALL_PANEL_V1 === فقط پلنِ حرفه‌ای
+    "heimdall":       "🛡 پنل HEIMDALL",
 })
 PANEL_KEYS = list(PANEL_LABELS.keys())
 
@@ -97,7 +99,7 @@ PANEL_KEYS = list(PANEL_LABELS.keys())
 # (پلنِ حرفه‌ای). برایِ پنلِ بعدی که بخواهد فقط حرفه‌ای باشد، همین‌جا
 # یک ردیفِ دیگر اضافه کن.
 _PANEL_EXTRA_FEATURE_GATE = {"nodex": Feature.NODEX_PANEL, "degeris": Feature.DEGERIS_PANEL,
-                             "eylan": Feature.EYLAN_PANEL}
+                             "eylan": Feature.EYLAN_PANEL, "heimdall": Feature.HEIMDALL_PANEL}
 
 
 def _panel_labels_for_plan(plan) -> dict:
@@ -2374,7 +2376,7 @@ async def vpn_custom_count_save(msg: Message, bot: Bot, state: FSMContext):
 # محدودیتِ تعدادِ کاربرِ هم‌زمان (IP) رویِ خودِ پنل. تا امروز فقط «پلن»
 # می‌توانست محدودیت داشته باشد، پس خریدِ «حجم/روزِ دلخواه» — که پلنی ندارد —
 # همیشه بدونِ محدودیت ساخته می‌شد.
-_IP_LIMIT_PANELS = {"pasargad", "pasarguard", "rebecca", "shahan", "sanai", "alireza", "degeris", "eylan"}
+_IP_LIMIT_PANELS = {"pasargad", "pasarguard", "rebecca", "shahan", "sanai", "alireza", "degeris", "eylan", "heimdall"}
 
 
 @vpn_admin_router.callback_query(F.data.startswith("tvpn:panel_iplimit:"))
