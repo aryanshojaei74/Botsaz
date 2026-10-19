@@ -6520,6 +6520,7 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
                 # === PATCH_FINANCE_TOGGLE_CLARITY_V1 ===
                 "set:wallet_charge_toggle": ("tenant", "set_wallet_charge_toggle"),
                 "set:wallet_pay_toggle": ("tenant", "set_wallet_pay_toggle"),  # PATCH_WALLET_PAY_TOGGLE_V1
+                "set:card_purchase_toggle": ("tenant", "set_card_purchase_toggle"),  # PATCH_CARD_PURCHASE_TOGGLE_V1
                 "set:discount_purchase_toggle": ("tenant", "set_discount_purchase_toggle"),
                 "set:toggle_payphone": ("tenant", "tn_payphone_toggle"),
                 "tadm:payguide": ("tenant", "tadm_payguide"),
@@ -11320,6 +11321,10 @@ async def _sec_finance_opts(bot_id: int, plan: str) -> list[tuple[str, str]]:
     wallet_charge_v = await get_setting(bot_id, "wallet_charge_in_purchase_enabled", "0")
     opts.append((f"🔋 شارژ کیف پول در صفحه خرید: " + ("✅ فعال" if wallet_charge_v == "1" else "❌ غیرفعال"),
                  "set:wallet_charge_toggle"))
+    # === PATCH_CARD_PURCHASE_TOGGLE_V1 === (فدایی) خاموش‌کردنِ کارت‌به‌کارت در فاکتورِ خرید، کنارِ دو تیکِ دیگر
+    _cpay_v = await get_setting(bot_id, "card_purchase_enabled", "1")
+    opts.append(("💳 پرداخت کارت‌به‌کارت در فاکتور خرید: " + ("✅ فعال" if _cpay_v != "0" else "❌ غیرفعال"),
+                 "set:card_purchase_toggle"))
     # === PATCH_PAYGUIDE_MOVE_FINANCE_PRO_V1 ===
     # از «دکمه‌ها و تنظیمات» به اینجا منتقل شد؛ فقط پلنِ حرفه‌ای می‌بیند.
     if ok(Feature.PAYMENT_GUIDE):
@@ -11461,6 +11466,7 @@ async def _sec_finance_kb(bot_id: int, plan: str) -> InlineKeyboardMarkup | Repl
     # فعال/غیرفعالِ همیشه‌هم‌رنگ) — پس دیگه نیازی به گروه‌بندیِ ویژهٔ
     # toggle_pair_specs ندارن؛ همون مکانیزمِ سادهٔ auto_approve_toggle کافیه.
     single_toggle_cbs = ("set:auto_approve_toggle", "set:wallet_pay_toggle", "set:wallet_charge_toggle",
+                         "set:card_purchase_toggle",   # PATCH_CARD_PURCHASE_TOGGLE_V1
                          "set:discount_purchase_toggle", "set:toggle_payphone")
 
     groups: list[list[tuple[str, str]]] = []
@@ -11502,6 +11508,7 @@ async def _sec_finance_kb(bot_id: int, plan: str) -> InlineKeyboardMarkup | Repl
         # === PATCH_FINANCE_TOGGLE_CLARITY_V1 ===
         "set:wallet_charge_toggle": ButtonStyle.SUCCESS,
         "set:wallet_pay_toggle": ButtonStyle.SUCCESS,   # PATCH_WALLET_PAY_TOGGLE_V1
+        "set:card_purchase_toggle": ButtonStyle.SUCCESS,   # PATCH_CARD_PURCHASE_TOGGLE_V1
         "set:discount_purchase_toggle": ButtonStyle.SUCCESS,
         "set:toggle_payphone": ButtonStyle.SUCCESS,
         # === PATCH_PAYGUIDE_MOVE_FINANCE_PRO_V1 ===
@@ -29547,6 +29554,21 @@ async def set_wallet_pay_toggle(cb: CallbackQuery, bot: Bot):
     new = ("1" if action == "on" else "0") if action in ("on", "off") else ("0" if cur != "0" else "1")
     await set_setting(row.id, "wallet_pay_purchase_enabled", new)
     await cb.answer("👛 پرداخت از کیف پول در خرید " + ("فعال شد ✅" if new == "1" else "غیرفعال شد ❌"), show_alert=True)
+    await _refresh_finance_toggle_view(cb, row)
+
+
+@tenant_router.callback_query(F.data.startswith("set:card_purchase_toggle"))
+async def set_card_purchase_toggle(cb: CallbackQuery, bot: Bot):
+    """=== PATCH_CARD_PURCHASE_TOGGLE_V1 === روشن/خاموش‌کردنِ «کارت‌به‌کارت» فقط در فاکتورِ خرید (VPN، فروشگاه، خدماتِ مجازی).
+    شارژِ کیف پول با کارت‌به‌کارت از همین تیک اثر نمی‌گیرد. همان تنظیمِ صفحهٔ «شماره کارت» (card_purchase_enabled) است."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cur = await get_setting(row.id, "card_purchase_enabled", "1")
+    action = cb.data.rsplit(":", 1)[-1]
+    new = ("1" if action == "on" else "0") if action in ("on", "off") else ("0" if cur != "0" else "1")
+    await set_setting(row.id, "card_purchase_enabled", new)
+    await cb.answer("💳 کارت‌به‌کارت در فاکتور خرید " + ("فعال شد ✅" if new == "1" else "غیرفعال شد ❌"), show_alert=True)
     await _refresh_finance_toggle_view(cb, row)
 
 
