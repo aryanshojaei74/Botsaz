@@ -3289,6 +3289,33 @@ class BotAddon(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+# === PATCH_GROUP_REPORT_V1 ===
+class GroupReport(Base):
+    """گزارش یک عضو توسط عضو دیگر در گروه محافظ‌شدهٔ ربات اصلی (ریپلای + «گزارش»)؛ به مدیر اصلی می‌رسد."""
+    __tablename__ = "group_reports"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    reporter_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    reporter_name: Mapped[str] = mapped_column(String(120), default="")
+    reporter_username: Mapped[str | None] = mapped_column(String(64))
+    target_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    target_name: Mapped[str] = mapped_column(String(120), default="")
+    target_username: Mapped[str | None] = mapped_column(String(64))
+    target_message_id: Mapped[int] = mapped_column(BigInteger, default=0)    # پیام گزارش‌شده
+    message_text: Mapped[str] = mapped_column(Text, default="")              # خلاصهٔ متن پیام گزارش‌شده
+    command_message_id: Mapped[int] = mapped_column(BigInteger, default=0)   # پیام «گزارش» خود گزارش‌دهنده
+    ack_message_id: Mapped[int] = mapped_column(BigInteger, default=0)       # پیام تأیید ربات در گروه
+    prompt_message_id: Mapped[int] = mapped_column(BigInteger, default=0, index=True)  # «دلیل را بنویس»
+    admin_message_id: Mapped[int] = mapped_column(BigInteger, default=0)     # پیام گزارش در پیوی مدیر
+    reason: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(10), default="draft", index=True)  # draft|sent|closed|cancelled|failed
+    actions: Mapped[str] = mapped_column(String(60), default="")             # warn,mute,del,ban,ok
+    handled_by: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 # === PATCH_TENANT_GROUP_GUARD_V1 ===
 class TenantGroupBan(Base):
     __tablename__ = "tenant_group_guard_bans"

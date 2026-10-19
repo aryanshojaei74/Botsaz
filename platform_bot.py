@@ -137,6 +137,9 @@ router.include_router(platform_wager_router)
 # === PATCH_WAGER_ADDON_V1 === فروش «بازی‌های شرط‌بندی» به ربات‌های مشتری
 from platform_wager_sale import platform_wager_sale_router
 router.include_router(platform_wager_sale_router)
+# === PATCH_GROUP_REPORT_V1 === «گزارش» اعضا؛ باید قبل از catch-all محافظ گروه ثبت شود
+from platform_group_report import platform_group_report_router
+router.include_router(platform_group_report_router)
 # === PATCH_PLATFORM_GROUP_GUARD_V1 ===
 from platform_group_guard import group_guard_router
 router.include_router(group_guard_router)

@@ -1416,6 +1416,8 @@ async def _gg_main_text_kb() -> tuple[str, InlineKeyboardMarkup]:
     captcha_timeout = int(await get_pset("group_guard_captcha_timeout_sec", "300") or "300")
     # === PATCH_GROUP_GUARD_ANTIPROMO_V1 ===
     antipromo_on = (await get_pset("group_guard_antipromo_enabled", "off")) == "on"
+    # === PATCH_GROUP_REPORT_V1 ===
+    report_on = (await get_pset("platform_group_report_enabled", "on")) == "on"
     # === PATCH_GROUP_GUARD_LOG_V1 ===
     log_chat_title = await get_pset("group_guard_log_chat_title", "")
     log_chat_id = await get_pset("group_guard_log_chat_id", "")
@@ -1455,6 +1457,9 @@ async def _gg_main_text_kb() -> tuple[str, InlineKeyboardMarkup]:
         # === PATCH_GROUP_GUARD_ANTIPROMO_V1 ===
         [hx_button(f"📢 آنتی‌فلودِ لینکِ تبلیغاتی: {'🟢 روشن' if antipromo_on else '🔴 خاموش'}",
                               callback_data="gg:antipromo_toggle")],
+        # === PATCH_GROUP_REPORT_V1 ===
+        [hx_button(f"📣 گزارش اعضا (ریپلای + «گزارش»): {'🟢 روشن' if report_on else '🔴 خاموش'}",
+                              callback_data="gg:report_toggle")],
         # === PATCH_GROUP_GUARD_LOG_V1 ===
         [hx_button(f"📝 لاگِ کامل: {('✅ ' + log_chat_title) if log_chat_id else '🔴 وصل نیست'}",
                               callback_data="gg:log_setup")],
@@ -3368,6 +3373,17 @@ async def gg_antipromo_toggle(cb: CallbackQuery):
         return
     cur = await get_pset("group_guard_antipromo_enabled", "off")
     await set_pset("group_guard_antipromo_enabled", "off" if cur == "on" else "on")
+    await gg_menu(cb)
+
+
+# === PATCH_GROUP_REPORT_V1 ===
+@group_guard_router.callback_query(F.data == "gg:report_toggle")
+async def gg_report_toggle(cb: CallbackQuery):
+    if not _require_admin(cb):
+        await cb.answer("فقط مدیر اصلی", show_alert=True)
+        return
+    cur = await get_pset("platform_group_report_enabled", "on")
+    await set_pset("platform_group_report_enabled", "off" if cur == "on" else "on")
     await gg_menu(cb)
 
 
