@@ -31,7 +31,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import select  # noqa: E402
 
-from config import Session  # noqa: E402
+from config import PLATFORM_ADMIN_ID, Session  # noqa: E402
 from models import HostedApp, MarketPurchase, Setting  # noqa: E402
 
 SFTP_DB = os.getenv("SFTPVIP_DB", "/opt/sftpvip/sftpvip.db")
@@ -128,7 +128,8 @@ def audit_sftp() -> int:
         for r in con.execute("select sql from sqlite_master where type='table'"):
             print("   ", (r[0] or "")[:200])
         return 0
-    unlimited = [r for r in subs if not r["is_blocked"] and not r["expires_at"]]
+    unlimited = [r for r in subs if not r["is_blocked"] and not r["expires_at"]
+                 and r["telegram_id"] != PLATFORM_ADMIN_ID]
     if unlimited:
         print(f"  ⚠️ اشتراکِ نامحدود (expires_at خالی) — {len(unlimited)} مورد؛ فقط اگر دستی اعطا کرده‌اید درست است:")
         for r in unlimited[:30]:
@@ -153,7 +154,9 @@ def audit_sftp() -> int:
         for tid, e, u in late[:30]:
             print(f"     {tid}: انقضا {_fmt(e)} ⟵ آخرین استفاده {_fmt(u)}")
         bad += len(late)
-    nobill = [c for c in conns if c["telegram_id"] not in exp_map]
+    # ادمینِ اصلی معاف است (اتصالِ خودِ مدیر به سرور)؛ بقیه بدونِ اشتراک نباید اتصال داشته باشند
+    nobill = [c for c in conns if c["telegram_id"] not in exp_map
+              and c["telegram_id"] != PLATFORM_ADMIN_ID]
     if nobill:
         print(f"  ❌ اتصالِ بدونِ هیچ اشتراک — {len(nobill)} مورد: "
               + ", ".join(str(c["telegram_id"]) for c in nobill[:15]))
