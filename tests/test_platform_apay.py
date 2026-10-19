@@ -348,3 +348,184 @@ async def test_no_admin_ask_when_user_cancelled(db, monkeypatch):
         ch.status = "cancelled"
         await s.commit()
     assert await PA.ask_admin_pending() == 0 and not sent
+
+
+# ═══════════ PATCH_APAY_ONE_OPEN_INVOICE_V1 — یک فاکتور باز؛ پیام «واریز شد؟»ی مدیر بعد از لغو/انقضا پاک می‌شود ═══════════
+
+def _fake_msg(sent):
+    async def answer(text, reply_markup=None, **kw):
+        sent.append((text, reply_markup))
+        return types_ns(message_id=900 + len(sent), chat=types_ns(id=42))
+    return types_ns(answer=answer)
+
+
+def types_ns(**kw):
+    import types
+    return types.SimpleNamespace(**kw)
+
+
+@pytest.mark.asyncio
+async def test_open_invoice_detection(db):
+    maker, _st, _p = db
+    assert (await PA.open_invoice(42)).order_id == "pbx1"                      # waiting و تازه
+    assert await PA.open_invoice(43) is None                                   # کاربر دیگر
+    async with maker() as s:
+        ch = await s.scalar(select(models.PlatformApayCharge))
+        ch.created_at = datetime.utcnow() - timedelta(minutes=PA.OPEN_INVOICE_MIN + 1)
+        await s.commit()
+    assert await PA.open_invoice(42) is None                                   # از مهلت اعتبار گذشته
+    for status in ("paid", "cancelled", "expired"):
+        async with maker() as s:
+            ch = await s.scalar(select(models.PlatformApayCharge))
+            ch.created_at, ch.status = datetime.utcnow(), status
+            await s.commit()
+        assert await PA.open_invoice(42) is None, status
+    async with maker() as s:                                                   # خرید عمدهٔ همکار (ربات دیگر) مانع نیست
+        ch = await s.scalar(select(models.PlatformApayCharge))
+        ch.status, ch.purpose = "waiting", "partner_order"
+        await s.commit()
+    assert await PA.open_invoice(42) is None
+
+
+@pytest.mark.asyncio
+async def test_second_invoice_is_blocked_with_pay_or_cancel_message(db, monkeypatch):
+    maker, _st, _p = db
+    calls = []
+
+    async def create(*a, **k):
+        calls.append(1)
+        return 201, {"id": "pay_n", "pay_url": "https://pay/x", "pay_amount": 1_000_000}
+    monkeypatch.setattr(AP, "create_payment", create)
+    sent = []
+    await PA._make_invoice(_fake_msg(sent), 42, 50_000)
+    assert calls == [] and len(sent) == 1                                      # فاکتور جدیدی ساخته نشد
+    text, kb = sent[0]
+    assert "فاکتور باز" in text and "100,000" in text and "پرداخت کن" in text and "لغوش کن" in text
+    datas = [b.callback_data for row in kb.inline_keyboard for b in row if b.callback_data]
+    assert datas == ["papay:check:pbx1", "papay:cancel:pbx1"]
+
+
+@pytest.mark.asyncio
+async def test_new_invoice_allowed_after_cancel_or_pay_and_concurrent_taps_make_one(db, monkeypatch):
+    import asyncio
+    maker, _st, _p = db
+    calls = []
+
+    async def create(*a, **k):
+        calls.append(1)
+        await asyncio.sleep(0.05)
+        return 201, {"id": f"pay_{len(calls)}", "pay_url": "https://pay/x", "pay_amount": 1_000_000}
+
+    async def card_for(tok, res):
+        return "6037", "holder"
+    monkeypatch.setattr(AP, "create_payment", create)
+    monkeypatch.setattr(AP, "card_for", card_for)
+    monkeypatch.setattr(AP, "invoice_view", lambda **k: ("invoice", None))
+    monkeypatch.setattr(AP, "spawn_watch", lambda *a, **k: None)
+    async with maker() as s:                                                   # فاکتور قبلی لغو شده
+        (await s.scalar(select(models.PlatformApayCharge))).status = "cancelled"
+        await s.commit()
+    sent = []
+    await asyncio.gather(PA._make_invoice(_fake_msg(sent), 42, 50_000), PA._make_invoice(_fake_msg(sent), 42, 50_000))
+    assert len(calls) == 1                                                     # دو کلیک هم‌زمان = فقط یک فاکتور
+    texts = [t for t, _k in sent]
+    assert any("فاکتور باز" in t for t in texts) and any(t == "invoice" for t in texts)
+    async with maker() as s:
+        n = len((await s.scalars(select(models.PlatformApayCharge).where(
+            models.PlatformApayCharge.status == "waiting"))).all())
+    assert n == 1
+
+
+@pytest.mark.asyncio
+async def test_charge_entry_point_blocks_before_asking_amount(db, monkeypatch):
+    sent = []
+    cb = types_ns(data="charge_papay", from_user=types_ns(id=42), message=_fake_msg(sent), answer=_noop_answer)
+    state = types_ns(clear=_noop_answer)
+    await PA.charge_papay(cb, state)
+    assert len(sent) == 1 and "فاکتور باز" in sent[0][0] and "مبلغ شارژ را انتخاب کن" not in sent[0][0]
+
+
+async def _noop_answer(*a, **k):
+    return None
+
+
+@pytest.mark.asyncio
+async def test_cancel_removes_admins_pending_ask_and_buttons_of_original_invoice(db, monkeypatch):
+    maker, _st, _p = db
+    dropped, edited = [], []
+
+    async def drop(chat, msg):
+        dropped.append((chat, msg))
+    monkeypatch.setattr(PA, "_drop_admin_ask", drop)
+    async with maker() as s:
+        ch = await s.scalar(select(models.PlatformApayCharge))
+        ch.admin_ask_chat, ch.admin_ask_msg, ch.chat_id, ch.msg_id = 777, 4321, 42, 500
+        await s.commit()
+
+    class B:
+        async def edit_message_reply_markup(self, **k):
+            edited.append(k)
+    answers = []
+
+    async def answer(t="", **k):
+        answers.append(t)
+
+    async def mdl_answer(t, **k):
+        answers.append(t)
+
+    async def edit_rm(reply_markup=None):
+        answers.append("edit_rm")
+    cb = types_ns(data="papay:cancel:pbx1", from_user=types_ns(id=42), answer=answer, bot=B(),
+                  message=types_ns(message_id=999, answer=mdl_answer, edit_reply_markup=edit_rm))   # لغو از پیام «فاکتور باز دارید»
+    await PA.papay_cancel(cb)
+    assert dropped == [(777, 4321)]
+    assert edited and edited[0]["chat_id"] == 42 and edited[0]["message_id"] == 500
+    async with maker() as s:
+        assert (await s.scalar(select(models.PlatformApayCharge))).status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_expiry_removes_unanswered_ask_but_answered_ask_is_kept(db, monkeypatch):
+    maker, _st, _p = db
+    dropped = []
+
+    async def drop(chat, msg):
+        dropped.append((chat, msg))
+    monkeypatch.setattr(PA, "_drop_admin_ask", drop)
+    async with maker() as s:
+        s.add(models.PlatformApayCharge(user_telegram_id=42, order_id="pbold", payment_id="pay_o", amount_toman=50_000,
+                                        status="waiting", created_at=datetime.utcnow() - timedelta(minutes=45),
+                                        admin_ask_chat=777, admin_ask_msg=111))
+        ch = await s.scalar(select(models.PlatformApayCharge).where(models.PlatformApayCharge.order_id == "pbx1"))
+        ch.status = "cancelled"
+        await s.commit()
+
+    async def v(tok, pid):
+        return 200, {"verified": False, "payment": {"status": "expired"}}
+    monkeypatch.setattr(AP, "verify_payment", v)
+    await PA.poll_pending_once()
+    assert dropped == [(777, 111)]                                             # منقضی‌شده و پرداخت‌نشده ⇒ پرسش پاک شد
+
+    # مدیر جواب بدهد ⇒ شناسه‌ها فراموش می‌شوند و پیام نتیجه هرگز پاک نمی‌شود
+    async with maker() as s:
+        s.add(models.PlatformApayCharge(user_telegram_id=42, order_id="pbans", payment_id="pay_a", amount_toman=1000,
+                                        status="waiting", admin_ask_chat=777, admin_ask_msg=222))
+        await s.commit()
+        cid = (await s.scalar(select(models.PlatformApayCharge).where(models.PlatformApayCharge.order_id == "pbans"))).id
+
+    async def has_perm(*a, **k):
+        return True
+    monkeypatch.setattr(PB, "has_perm", has_perm)
+    edits = []
+
+    async def edit_text(t, reply_markup=None):
+        edits.append(t)
+
+    async def answer(*a, **k):
+        return None
+    cb = types_ns(data=f"papadm:no:{cid}", from_user=types_ns(id=777), answer=answer,
+                  message=types_ns(html_text="پرسش", edit_text=edit_text))
+    await PA.papay_admin_answer(cb)
+    async with maker() as s:
+        ch = await s.get(models.PlatformApayCharge, cid)
+    assert ch.admin_ask_chat is None and ch.admin_ask_msg is None and "واریز نشده" in edits[0]

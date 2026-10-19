@@ -11,6 +11,7 @@ platform_apay.py — درگاهِ «آپی» (کارت‌به‌کارتِ آن�
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 
 from aiogram import F, Router
@@ -33,6 +34,9 @@ DEFAULT_LABEL = "💳 کارت‌به‌کارتِ آنی"
 DEFAULT_MIN = 10_000
 POLL_FOR_MINUTES = 30
 PRESETS = [50_000, 100_000, 200_000, 400_000]
+# === PATCH_APAY_ONE_OPEN_INVOICE_V1 === فاکتور آپی ۱۵ دقیقه اعتبار دارد؛ تا آن موقع «باز» حساب می‌شود
+OPEN_INVOICE_MIN = 15
+_invoice_locks: dict[int, "asyncio.Lock"] = {}
 
 
 class PApayFSM(StatesGroup):
@@ -113,6 +117,36 @@ async def is_available(where: str = "") -> bool:
         return (await _g("papay_show_wallet", "1")) == "1"
     if where == "purchase":
         return (await _g("papay_show_purchase", "1")) == "1"
+    return True
+
+
+async def open_invoice(tg_id: int):
+    """فاکتور باز (پرداخت‌نشده، لغو‌نشده و هنوز در مهلت اعتبار) از نوع شارژ کیف پول این کاربر؛ وگرنه None."""
+    since = datetime.utcnow() - timedelta(minutes=OPEN_INVOICE_MIN)
+    async with Session() as s:
+        return await s.scalar(select(PlatformApayCharge).where(
+            PlatformApayCharge.user_telegram_id == int(tg_id), PlatformApayCharge.status == "waiting",
+            PlatformApayCharge.purpose == "wallet", PlatformApayCharge.created_at >= since
+        ).order_by(PlatformApayCharge.id.desc()))
+
+
+async def _block_if_open(target, tg_id: int) -> bool:
+    """اگر فاکتور بازی دارد، به‌جای ساختن فاکتور دوم پیام «یا پرداخت کن یا لغو کن» را می‌دهد (True)."""
+    ch = await open_invoice(tg_id)
+    if ch is None:
+        return False
+    age = max(0, int((datetime.utcnow() - (ch.created_at or datetime.utcnow())).total_seconds() // 60))
+    rows = []
+    if (ch.pay_url or "").startswith("http"):
+        rows.append([InlineKeyboardButton(text="💳 رفتن به صفحهٔ پرداخت", url=ch.pay_url)])
+    rows.append([InlineKeyboardButton(text="🔄 بررسی پرداخت", callback_data=f"papay:check:{ch.order_id}"),
+                 InlineKeyboardButton(text="❌ لغو این فاکتور", callback_data=f"papay:cancel:{ch.order_id}",
+                                      style=ButtonStyle.DANGER)])
+    await target.answer(
+        "⚠️ <b>شما یک فاکتور باز دارید</b>\n\n"
+        f"💰 مبلغ: <b>{int(ch.amount_toman or 0):,} تومان</b> — {age} دقیقه پیش ساخته شده.\n\n"
+        "برای ساختن فاکتور جدید، اول همین فاکتور را <b>پرداخت کن</b> یا <b>لغوش کن</b>.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
     return True
 
 
@@ -387,6 +421,8 @@ async def poll_pending_once() -> int:
                 await s.commit()
                 if ex.rowcount:     # PATCH_PARTNER_APAY_V1 — سفارشِ خریدِ عمدهٔ پرداخت‌نشده رد می‌شود
                     ch = await s.scalar(select(PlatformApayCharge).where(PlatformApayCharge.order_id == oid))
+                    if ch is not None:       # PATCH_APAY_ASK_CLEANUP_V2 — منقضی و پرداخت‌نشده ⇒ پرسش بی‌پاسخ مدیر پاک شود
+                        await _drop_admin_ask(ch.admin_ask_chat, ch.admin_ask_msg)
                     if ch and ch.purpose == "partner_order" and ch.ref_id:
                         from models import PartnerStockOrder
                         await s.execute(sa_update(PartnerStockOrder).where(
@@ -666,6 +702,8 @@ async def charge_papay(cb: CallbackQuery, state: FSMContext):
         return await cb.answer("این روش پرداخت در دسترس نیست.", show_alert=True)
     await state.clear()
     await cb.answer()
+    if await _block_if_open(cb.message, cb.from_user.id):      # PATCH_APAY_ONE_OPEN_INVOICE_V1
+        return
     await cb.message.answer(
         f"{await display_name()}\n\nمبلغِ شارژ را انتخاب کن یا «✏️ مبلغِ دلخواه» را بزن "
         f"(حداقل <b>{await min_amount():,}</b> تومان):",
@@ -702,6 +740,15 @@ async def papay_amount(msg: Message, state: FSMContext):
 
 
 async def _make_invoice(msg: Message, tg_id: int, amount: int) -> None:
+    # === PATCH_APAY_ONE_OPEN_INVOICE_V1 === بررسی «فاکتور باز» و ساخت فاکتور زیر یک قفل هر-کاربر،
+    # تا دو کلیک پشت‌سرهم دو فاکتور نسازد.
+    async with _invoice_locks.setdefault(int(tg_id), asyncio.Lock()):
+        if await _block_if_open(msg, tg_id):
+            return
+        await _make_invoice_locked(msg, tg_id, amount)
+
+
+async def _make_invoice_locked(msg: Message, tg_id: int, amount: int) -> None:
     mn, mx = await min_amount(), await max_amount()
     if amount < mn or amount > mx:
         await msg.answer(f"❌ مبلغ باید بینِ {mn:,} و {mx:,} تومان باشد.")
@@ -784,12 +831,20 @@ async def papay_cancel(cb: CallbackQuery):
         if ch.status == "paid":
             return await cb.answer("این فاکتور قبلاً پرداخت شده است.", show_alert=True)
         ch.status = "cancelled"
+        ask_chat, ask_msg, inv_chat, inv_msg = ch.admin_ask_chat, ch.admin_ask_msg, ch.chat_id, ch.msg_id
         await s.commit()
     await cb.answer("فاکتور لغو شد.")
     try:
         await cb.message.edit_reply_markup(reply_markup=None)
     except Exception:
         logger.debug("platform apay: تمیزکاریِ پیام ناموفق بود")
+    # === PATCH_APAY_ASK_CLEANUP_V2 === لغو کاربر ⇒ پیام «واریز شد؟»ی مدیر دیگر لازم نیست
+    await _drop_admin_ask(ask_chat, ask_msg)
+    if inv_chat and inv_msg and inv_msg != cb.message.message_id:       # لغو از پیام «فاکتور باز دارید» زده شده
+        try:
+            await cb.bot.edit_message_reply_markup(chat_id=inv_chat, message_id=inv_msg, reply_markup=None)
+        except Exception:
+            logger.debug("platform apay: دکمه‌های پیام اصلی فاکتور برداشته نشد")
     await cb.message.answer("❌ فاکتور لغو شد.\n\nاگر قبل از لغو واریز کرده بودی نگران نباش؛ "
                             "به‌محضِ تأییدِ بانک کیف پولت خودکار شارژ می‌شود.")
 
@@ -913,4 +968,9 @@ async def papay_admin_answer(cb: CallbackQuery):
         await cb.message.edit_text((cb.message.html_text or "") + tail, reply_markup=None)
     except Exception:
         logger.info("platform apay: ویرایشِ پیامِ پرسش ممکن نشد")
+    # === PATCH_APAY_ASK_CLEANUP_V2 === پرسش جواب داده شد؛ پیامش (با نتیجه) می‌ماند و دیگر پاک نمی‌شود
+    async with Session() as s:
+        await s.execute(sa_update(PlatformApayCharge).where(PlatformApayCharge.id == cid)
+                        .values(admin_ask_chat=None, admin_ask_msg=None))
+        await s.commit()
     await cb.answer(msg if not ok else ("شارژ شد ✅" if act == "ok" else "ثبت شد"), show_alert=not ok)

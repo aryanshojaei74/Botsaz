@@ -62,7 +62,6 @@ async def _menu_content(bot_id: int):
     show_purchase = await AP._get(bot_id, "apay_show_purchase", "1") == "1"
     min_amount = await AP.get_min_amount(bot_id)
     max_amount = await AP.get_max_amount(bot_id)
-    hook = await AP.webhook_url(bot_id)
     disp = await get_display_name(bot_id)
     fee_payer, fee_amt = await AP.get_fee_cfg(bot_id)   # PATCH_APAY_FEE_PAYER_V1
 
@@ -74,13 +73,12 @@ async def _menu_content(bot_id: int):
            f"🔑 توکنِ API: <code>{_mask(tok)}</code>\n"
            f"🏷 اسمِ نمایشی برایِ کاربر: <b>{disp}</b>\n"
            f"💸 کارمزدِ هر پرداخت: <b>{fee_amt:,}</b> تومان — پرداخت توسطِ <b>{AP.FEE_PAYERS[fee_payer]}</b>\n"
-           f"🔐 کلیدِ وب‌هوک: {'✅ ثبت شده' if sec else '— (اختیاری؛ بدونِ آن هم با استعلام کار می‌کند)'}\n"
            f"🔽 حداقلِ مبلغ: <b>{min_amount:,}</b> تومان\n"
            f"🔼 حداکثرِ مبلغ: <b>{(f'{max_amount:,}' if max_amount else 'بدونِ سقف')}</b>\n"
            f"👛 نمایش در کیف پول: {'✅' if show_wallet else '❌'}\n"
            f"🛒 نمایش موقعِ پرداختِ محصول: {'✅' if show_purchase else '❌'}\n\n"
            "📖 برایِ راه‌اندازیِ قدم‌به‌قدم و اتصالِ گوشیِ اندروید/آیفون، «📖 راهنما» را بزن.\n\n"
-           + (f"🔗 آدرسِ وب‌هوک:\n<code>{hook}</code>\n\n" if hook else "")
+           "ℹ️ <b>نیازی به ثبت وب‌هوک در آپی نیست.</b> ربات خودش پرداخت‌ها را استعلام می‌کند و کیف پول مشتری را شارژ می‌کند.\n\n"
            + f"💡 کارمزدِ آپی برایِ هر پرداختِ موفق {AP.FEE_TOMAN:,} تومان است و از کیف پولِ حسابِ "
            "آپیِ تو کم می‌شود (نه از مشتری)؛ آن کیف پول را شارژ نگه دار.\n"
            "💡 مشتری باید <b>دقیقاً</b> مبلغِ نمایش‌داده‌شده در صفحهٔ پرداخت را واریز کند "
@@ -92,9 +90,7 @@ async def _menu_content(bot_id: int):
             callback_data="ap:toggle",
             style=(ButtonStyle.DANGER if on else ButtonStyle.SUCCESS))],
         [InlineKeyboardButton(text="🔑 ثبت / تغییرِ توکن",
-                              callback_data="ap:setkey", style=ButtonStyle.PRIMARY),
-         InlineKeyboardButton(text="🔐 کلیدِ وب‌هوک",
-                              callback_data="ap:setsecret", style=ButtonStyle.PRIMARY)],
+                              callback_data="ap:setkey", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text=f"🏷 اسمِ نمایشی: {disp}",
                               callback_data="ap:setname", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text=("💸 کارمزد با: " + ("👤 خریدار" if fee_payer == "buyer" else "🏪 فروشنده")),
@@ -195,10 +191,14 @@ async def guide_content(page: str, hook: str, cb_prefix: str):
                "۴. از «🔑 توکن API» توکن (<code>apay_…</code>) بگیر و در همین ربات «🔑 ثبت / تغییرِ توکن» را بزن.\n"
                f"۵. «💰 شارژ کیف پول» در رباتِ آپی را برایِ کارمزد (هر پرداخت {AP.FEE_TOMAN:,} تومان) شارژ کن.\n"
                "۶. «✅ فعال‌کردن» را بزن و با «🧪 تستِ اتصال و موجودی» چک کن.\n\n"
-               "⚡️ <b>اختیاری (شارژِ فوری):</b> در رباتِ آپی از «👤 پروفایل» webhook secret را بردار و "
-               "اینجا «🔐 کلیدِ وب‌هوک» را بزن"
-               + (f"؛ آدرسِ وب‌هوک:\n<code>{hook}</code>" if hook else ".")
-               + "\nبدونِ این مرحله هم ربات هر دقیقه خودش پرداخت‌ها را استعلام می‌کند.")
+               + ("⚡️ <b>اختیاری (شارژ فوری):</b> در ربات آپی از «👤 پروفایل» webhook secret را بردار و "
+                  "اینجا «🔐 کلید وب‌هوک» را بزن"
+                  + (f"؛ آدرس وب‌هوک:\n<code>{hook}</code>" if hook else ".")
+                  + "\nبدون این مرحله هم ربات هر دقیقه خودش پرداخت‌ها را استعلام می‌کند."
+                  if cb_prefix == "papay" else
+                  # === PATCH_APAY_NO_WEBHOOK_UI_V1 === مشتریان مستأجر نیازی به وب‌هوک ندارند و گیج می‌شدند
+                  "ℹ️ <b>نیازی به ثبت وب‌هوک در آپی نیست.</b> ربات خودش پرداخت‌ها را استعلام می‌کند و بعد از "
+                  "رسیدن پیامک بانک، کیف پول مشتری را خودکار شارژ می‌کند."))
         rows = [
             [InlineKeyboardButton(text="🤖 اتصالِ اندروید", callback_data=f"{cb_prefix}:guide:android",
                                   style=ButtonStyle.SUCCESS),

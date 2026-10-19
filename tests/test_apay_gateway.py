@@ -416,3 +416,18 @@ async def test_tenant_auto_settle_deletes_owner_ask_message(db, monkeypatch):
     monkeypatch.setattr(AP, "verify_payment", _v)
     assert (await AP.settle_charge(5, "bsabc"))[0]
     assert dropped == [(5, 1, 555)]
+
+
+# === PATCH_APAY_NO_WEBHOOK_UI_V1 — مشتری مستأجر دیگر «وب‌هوک» نمی‌بیند ===
+@pytest.mark.asyncio
+async def test_tenant_apay_settings_and_guide_have_no_webhook_setup():
+    from tenant.gateways import apay_admin as AA
+    import tenant.gateways.apay as AP2
+    guide_t, _ = await AA.guide_content("", "https://x/apay/webhook/5", "ap")
+    guide_p, _ = await AA.guide_content("", "https://x/apay/platform/webhook", "papay")
+    assert "نیازی به ثبت وب‌هوک" in guide_t and "کلید وب‌هوک" not in guide_t and "https://x/apay/webhook/5" not in guide_t
+    assert "کلید وب‌هوک" in guide_p and "https://x/apay/platform/webhook" in guide_p      # صفحهٔ خود مدیر بدون تغییر
+    import inspect
+    src = inspect.getsource(AA._menu_content)
+    assert "ap:setsecret" not in src and "آدرس وب‌هوک" not in src and "نیازی به ثبت وب‌هوک" in src
+    assert AP2.webhook_url is not None                                                   # سازوکار فنی (callback) سرجایش است
