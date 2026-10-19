@@ -72,11 +72,27 @@ async def main() -> int:
             return 1
         print(f"📥 inboundها: {len(ibs)}")
         for ib in ibs:
-            st = ib.get("settings") if isinstance(ib.get("settings"), dict) else {}
             extra = ""
             if str(ib.get("protocol")).lower() == "wireguard":
+                # /inbounds/list معمولاً settings را null می‌دهد؛ جزئیات فقط از /inbounds/get/{id}
+                det = ib
+                try:
+                    r = await c._request("GET", f"/panel/api/inbounds/get/{ib.get('id')}")
+                    det = r.get("obj") or ib
+                except PanelError as e:
+                    print(f"   ⚠️ get/{ib.get('id')}: {e}")
+                st = det.get("settings")
+                if isinstance(st, str):
+                    import json as _j
+                    try:
+                        st = _j.loads(st)
+                    except ValueError:
+                        st = {}
+                st = st if isinstance(st, dict) else {}
                 extra = (f" | WG: secretKey={'✓' if st.get('secretKey') else '✗'} pubKey={'✓' if st.get('pubKey') else '✗'} "
-                         f"mtu={st.get('mtu')} shareAddr={ib.get('shareAddr') or '—'}")
+                         f"mtu={st.get('mtu')} peers={len(st.get('peers') or [])} "
+                         f"clients={len(st.get('clients') or [])} listen={det.get('listen') or '—'} "
+                         f"shareAddr={det.get('shareAddr') or '—'} | کلیدهایِ settings: {sorted(st.keys())}")
             print(f"  #{ib.get('id')} {ib.get('protocol')}:{ib.get('port')} «{ib.get('remark')}» "
                   f"{'روشن' if ib.get('enable', True) else 'خاموش'} کلاینت={len(ib.get('clientStats') or [])}{extra}")
         await c.ensure_sub_base()
