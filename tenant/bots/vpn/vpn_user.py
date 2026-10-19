@@ -685,7 +685,14 @@ def _parse_wireguard_uri(uri: str) -> str | None:
         private_key = unquote(u.username or "")
         host = u.hostname or ""
         port = u.port
-        qs = parse_qs(u.query)
+        # === PATCH_HEIMDALL_PANEL_V1 === کلیدهایِ query بدونِ توجه به حروفِ بزرگ/کوچک (HEIMDALL از publicKey/allowedIPs
+        # استفاده می‌کند؛ مرزبان از publickey/allowedips) و نام‌هایِ هم‌معنی
+        _alias = {"public_key": "publickey", "pbk": "publickey", "preshared_key": "presharedkey", "psk": "presharedkey",
+                  "allowed_ips": "allowedips", "persistentkeepalive": "keepalive", "persistent_keepalive": "keepalive"}
+        qs: dict = {}
+        for _k, _v in parse_qs(u.query).items():
+            _kl = _k.lower()
+            qs.setdefault(_alias.get(_kl, _kl), _v)
         def _q(key, default=""):
             v = qs.get(key)
             return unquote(v[0]) if v else default

@@ -28,6 +28,20 @@ def _mask(conf: str) -> str:
     return "\n".join(out)
 
 
+def _mask_uri(uri: str) -> str:
+    """لینکِ کلاینت را بدونِ رازها چاپ می‌کند: بخشِ کاربر (uuid/کلیدِ خصوصی) و مقدارِ کلیدهایِ حساس ماسک می‌شود."""
+    from urllib.parse import parse_qsl, urlsplit
+    try:
+        u = urlsplit(uri)
+        host = u.hostname or ""
+        port = f":{u.port}" if u.port else ""
+        secret_keys = {"privatekey", "presharedkey", "psk", "password", "pbk", "sid", "secret"}
+        q = [f"{k}={'***' if k.lower() in secret_keys else v[:40]}" for k, v in parse_qsl(u.query, keep_blank_values=True)]
+        return f"{u.scheme}://***@{host}{port}?{'&'.join(q)}#{u.fragment[:30]}"
+    except Exception:  # noqa: BLE001
+        return uri.split("@")[-1][:80]
+
+
 async def _explain_login_failure(c, user: str, pw: str) -> None:
     """پاسخِ خامِ پنل به ورود را (بدونِ رمز) نشان می‌دهد تا علت معلوم شود: رمز/یوزرنیم، 2FA، CSRF یا آدرس."""
     import aiohttp
@@ -107,8 +121,8 @@ async def main() -> int:
             print(f"👤 {a.email}: inboundها={cl.get('inboundIds')} subId={cl.get('subId')}")
             links = await c.get_client_links(a.email)
             print(f"🔌 لینک/کانفیگ: {len(links)}")
-            for ln in links[:3]:
-                print("  ", _mask(ln) if "[Interface]" in ln else ln[:80] + "…")
+            for ln in links[:6]:
+                print("  ", _mask(ln) if "[Interface]" in ln else _mask_uri(ln))
     except PanelError as e:
         print(f"❌ {e}")
         return 1

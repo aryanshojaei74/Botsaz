@@ -218,3 +218,26 @@ async def test_wireguard_conf_works_for_admin_without_inbounds_view(panel):
     assert f"PublicKey = {SERVER_PUB}" in conf and "MTU = 1280" in conf and "DNS = 8.8.8.8" in conf
     assert "Address = 10.9.0.3/32" in conf and "PersistentKeepalive" not in conf
     assert "Endpoint = 127.0.0.1:51820" in conf               # بدونِ shareAddr: میزبانِ خودِ پنل
+
+
+def test_wireguard_uri_with_camelcase_query_keys_is_parsed():
+    from tenant.bots.vpn.vpn_user import _parse_wireguard_uri
+    uri = ("wireguard://PRIVKEY%2Babc%3D@cim.example.net:35576?publicKey=SERVERPUB%3D&address=10.7.0.2%2F32"
+           "&allowedIPs=0.0.0.0%2F0%2C%3A%3A%2F0&mtu=1420&dns=9.9.9.9&presharedKey=PSK%3D&keepAlive=25#AE_WG")
+    conf = _parse_wireguard_uri(uri)
+    assert conf and "PrivateKey = PRIVKEY+abc=" in conf and "PublicKey = SERVERPUB=" in conf
+    assert "Address = 10.7.0.2/32" in conf and "Endpoint = cim.example.net:35576" in conf
+    assert "PresharedKey = PSK=" in conf and "PersistentKeepalive = 25" in conf and "DNS = 9.9.9.9" in conf
+    assert "# Name = AE_WG" in conf
+
+
+def test_check_script_masks_link_secrets():
+    import importlib.util
+    import os
+    spec = importlib.util.spec_from_file_location(
+        "chk", os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts", "check_heimdall.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    out = m._mask_uri("wireguard://SECRETKEY%3D@h.example:1?publicKey=PUB&presharedKey=PSK#x")
+    assert "SECRETKEY" not in out and "PSK" not in out and "publicKey=PUB" in out and "h.example:1" in out
+    assert "UUID-1234" not in m._mask_uri("vless://UUID-1234@h.example:443?security=reality&pbk=PUBKEY&sid=ab#n")
