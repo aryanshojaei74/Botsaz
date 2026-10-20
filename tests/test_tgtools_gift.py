@@ -120,7 +120,7 @@ async def order(env):
         return await s.scalar(select(models.GiftOrder))
 
 
-async def wait_status(env, *statuses, tries=60):
+async def wait_status(env, *statuses, tries=400):   # تا ۸ ثانیه؛ با رسیدن وضعیت زودتر برمی‌گردد (اولین تست هر اجرا زیر بار CPU گاهی کندتر بود)
     for _ in range(tries):
         await asyncio.sleep(0.02)
         o = await order(env)
