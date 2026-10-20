@@ -30,6 +30,7 @@ from sqlalchemy import select
 from config import Session
 from models import PanelAccount, VpnPanel
 from tenant.bots.vpn.vpn_admin import PANEL_LABELS, _bk, _owner, get_panel, is_panel_key
+from tenant.shared.panel_clients import panel_inbounds as PI  # === PATCH_PANEL_INBOUND_PICKER_V1 ===
 from tenant.shared.panel_clients.vpn_panel_factory import make_panel_client
 
 from logging_setup import get_logger as _get_logger
@@ -86,8 +87,8 @@ async def autosync_toggle(cb: CallbackQuery, bot: Bot):
         await s.commit()
     label = PANEL_LABELS.get(_bk(key), key)
     await cb.answer(
-        (f"✅ از این به بعد اینباندها و ساب‌لینکِ کاربرانِ {label} هر "
-         f"{AUTOSYNC_EVERY_HOURS} ساعت خودکار بروز می‌شود.")
+        (f"✅ از این به بعد ساب‌لینک کاربران {label} هر {AUTOSYNC_EVERY_HOURS} ساعت خودکار بروز می‌شود. "
+         "لیست اینباندها فقط در حالت «همه» با پنل هماهنگ می‌شود؛ انتخاب دستی تو ثابت می‌ماند.")
         if now_on else f"⛔️ بروزرسانیِ خودکارِ {label} خاموش شد.",
         show_alert=True)
     # منوی همان پنل دوباره رندر شود تا لیبلِ دکمه عوض شود.
@@ -117,30 +118,32 @@ async def sync_panel_once(panel_id: int) -> tuple[int, int]:
         await client.login()
 
         # ── ۱) اینباندها/گروه‌های فعالِ پنل ──
+        # === PATCH_PANEL_INBOUND_PICKER_V1 === (تیکت MidnightSoul)
+        # قبلا این بخش همیشه inbound_ids را با «همهٔ اینباندهای فعال» بازنویسی می‌کرد و
+        # انتخاب دستی مالک (مثلا فقط ترکیه) هر ۲ ساعت از بین می‌رفت. حالا فقط وقتی
+        # لیست را بروز می‌کند که مالک «همه» را خواسته باشد؛ انتخاب دستی ثابت می‌ماند.
         try:
             # === PATCH_AUTOSYNC_EYLAN_V1 === در ایلان «اینباند» = پروتکل (openvpn، wireguard، …) و
             # انتخابِ پروتکل‌ها با خودِ ادمین است؛ همگام‌سازیِ خودکار نباید آن را با «همهٔ پروتکل‌ها»
             # بازنویسی کند (قبلاً int('openvpn') خطا می‌داد و هر ساعت لاگ می‌شد).
             inbounds = [] if _bk(key) == "eylan" else (await client.list_inbounds() or [])
-            active = [ib for ib in inbounds if ib.get("enable", True)]
-            if _bk(key) in _MARZBAN_FAMILY:
-                active_ids = [str(ib["id"]) for ib in active if ib.get("id")]
-            else:
-                def _iid(v):
-                    try:
-                        return str(int(v))
-                    except (TypeError, ValueError):
-                        return str(v)
-                active_ids = [_iid(ib["id"]) for ib in active if ib.get("id") is not None]
+            active_ids = PI.active_ids(_bk(key), inbounds)
             if active_ids:
-                new_str = ",".join(active_ids)
                 async with Session() as s:
                     p2 = await s.get(VpnPanel, panel_id)
-                    if p2 and p2.inbound_ids != new_str:
-                        p2.inbound_ids = new_str
-                        await s.commit()
-                        logger.info("panel_autosync: اینباندهای پنل %s (bot %s) بروز شد: %s",
-                                    key, bot_id, new_str)
+                    if p2:
+                        plan = PI.plan_inbound_sync(p2.inbound_mode, p2.inbound_ids, active_ids)
+                        if plan.changed:
+                            old_ids = p2.inbound_ids
+                            p2.inbound_ids = plan.ids
+                            p2.inbound_mode = plan.mode
+                            await s.commit()
+                            if old_ids != plan.ids:
+                                logger.info("panel_autosync: اینباندهای پنل %s (bot %s) بروز شد: %s",
+                                            key, bot_id, plan.ids)
+                        if plan.missing:
+                            logger.warning("panel_autosync: پنل %s (bot %s) — این انتخاب‌ها دیگر در پنل نیستند/غیرفعال‌اند: %s",
+                                           key, bot_id, ",".join(plan.missing))
         except Exception:
             logger.exception("panel_autosync: خواندنِ اینباندهای پنل %s (bot %s) ناموفق", key, bot_id)
 

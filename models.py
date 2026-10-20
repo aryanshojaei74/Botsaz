@@ -1231,6 +1231,11 @@ class VpnPanel(Base):
     api_key: Mapped[str | None] = mapped_column(String(300))
     sub_base: Mapped[str | None] = mapped_column(String(300))
     inbound_ids: Mapped[str | None] = mapped_column(Text)  # "1,2,3" یا خالی=همه فعال‌ها
+    # === PATCH_PANEL_INBOUND_PICKER_V1 ===
+    # "all"    = همهٔ اینباندهای فعال؛ با پنل هماهنگ می‌ماند (بروزرسانی خودکار/دستی لیست را بروز می‌کند)
+    # "custom" = انتخاب دستی مالک؛ هیچ بروزرسانی‌ای آن را عوض نمی‌کند
+    # NULL     = ردیف قدیمی (از روی محتوا حدس زده می‌شود؛ tenant/shared/panel_clients/panel_inbounds.py)
+    inbound_mode: Mapped[str | None] = mapped_column(String(10))
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # === PATCH_PANEL_AUTOSYNC_V1 ===
     # همگام‌سازیِ خودکارِ اینباندها و ساب‌لینکِ کاربران هر ۲ ساعت. مالکِ ربات

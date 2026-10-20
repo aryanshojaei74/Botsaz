@@ -52,7 +52,7 @@ _SMM_SERVICE_FIELDS = ["service_id", "name", "category", "panel_rate", "sell_rat
                        "min_qty", "max_qty", "is_active", "is_manual", "description"]
 # === PATCH_BACKUP_VPN_V1 === پنل‌ها و پلن‌هایِ VPN هم در بک‌آپ (برایِ انتقال به رباتِ جدید)
 _VPN_PANEL_FIELDS = ["panel_key", "base_url", "username", "password", "api_key", "sub_base",
-                     "inbound_ids", "enabled", "auto_sync", "default_limit_ip"]
+                     "inbound_ids", "inbound_mode", "enabled", "auto_sync", "default_limit_ip"]
 _VPN_PLAN_FIELDS = ["panel_key", "audience", "title", "volume_gb", "days", "price",
                     "limit_ip", "active", "color", "category"]
 

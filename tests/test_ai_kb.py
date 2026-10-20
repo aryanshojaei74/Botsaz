@@ -88,6 +88,7 @@ def test_small_talk_selects_nothing_and_generic_words_do_not_match():
 
 def test_old_knowledge_is_still_retrievable():
     for q, needle in [("زرین پال مرچنت ایدی کجا بزنم", "درگاه زرین‌پال"),
+                      ("چطور فقط یه اینباند ترکیه رو انتخاب کنم که بروزرسانی خودکار همه رو برنگردونه", "انتخاب اینباندهای پنل"),
                       ("پنل هایمدال وایرگارد وصل کنم", "HEIMDALL"),
                       ("نرخ خودکار پرمیوم چطور کار میکنه", "نرخ خودکار پرمیوم")]:
         assert needle in _clean(_sel(q)), q

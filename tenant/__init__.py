@@ -33553,6 +33553,8 @@ _ADDONLY_SETUP_HANDLERS = frozenset({
     "vpn_setup", "vpn_setup_base", "vpn_setup_user", "vpn_setup_pass",
     "vpn_setup_authmode_pick", "vpn_setup_apikey", "vpn_setup_sub",
     "vpn_setup_inbounds", "vpn_test",
+    # === PATCH_PANEL_INBOUND_PICKER_V1 === صفحهٔ تیک‌دار اینباندها (فقط داخل جریان ثبت پنل جدید؛ _addonly_route)
+    "vpn_ib_toggle", "vpn_ib_all_none", "vpn_ib_page", "vpn_ib_confirm", "vpn_ib_manual",
 })
 _ADDONLY_KEYS_SETTING = "addonly_keys:%s"
 
@@ -33680,6 +33682,20 @@ async def _addonly_route(event, row, uid: int, state) -> tuple[str, str | None]:
             sd = await state.get_data()
             if sd.get("pa_addonly_key") and sd.get("pa_addonly_key") == sd.get("panel_key"):
                 return "allow", sd.get("panel_key")
+        # === PATCH_PANEL_INBOUND_PICKER_V1 ===
+        # صفحهٔ تیک‌دار اینباندها: فقط مرحلهٔ آخر همین ثبت پنل جدید (نه ویرایش پنل‌های موجود)
+        if (d.startswith("tvpn:ib") and not d.startswith("tvpn:ibpick:") and d != "tvpn:ibcancel"
+                and state is not None):
+            sd = await state.get_data()
+            ibp = sd.get("ibp") or {}
+            key = sd.get("pa_addonly_key")
+            if ibp.get("mode") == "setup" and key and key == sd.get("panel_key") == ibp.get("key"):
+                if await get_panel(row.id, key):
+                    await state.clear()
+                    await event.answer("⚠️ این پنل در همین فاصله ثبت شده؛ دوباره از «🛠 پنل مدیریت» شروع کن.",
+                                       show_alert=True)
+                    return "handled", None
+                return "allow", key
         return "user", None
     # پیام
     text = (event.text or "").strip()
@@ -33733,8 +33749,8 @@ async def _addonly_mw(handler, event, data):
         return await handler(event, data)
     finally:
         _ADDONLY_ALLOW.reset(token)
-        if key and not isinstance(event, CallbackQuery):
-            # بعد از مرحلهٔ آخر، پنلِ ساخته‌شده به فهرستِ «پنل‌هایِ خودش» اضافه
+        if key and (not isinstance(event, CallbackQuery) or (event.data or "") == "tvpn:ibok"):
+            # بعد از مرحلهٔ آخر (پیام تایپی، یا دکمهٔ «تأیید» در صفحهٔ تیک‌دار اینباندها)، پنل ساخته‌شده به فهرست «پنل‌های خودش» اضافه
             # می‌شود تا فقط «تست اتصال» همان پنل برایش باز باشد
             try:
                 from tenant.bots.vpn.vpn_admin import get_panel

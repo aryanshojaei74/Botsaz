@@ -47,6 +47,7 @@ from config import Session
 from models import Bot as BotRow, VpnPanel, VpnPlan, Setting
 from tenant.shared.panel_clients.vpn_panel import PanelError
 from tenant.shared.panel_clients.vpn_panel_factory import make_panel_client
+from tenant.shared.panel_clients import panel_inbounds as PI  # === PATCH_PANEL_INBOUND_PICKER_V1 ===
 from plans import has_feature, Feature, upgrade_hint
 
 from logging_setup import get_logger as _get_logger, PrintLogger as _PrintLogger
@@ -690,7 +691,7 @@ async def _panels_info_text(panels: list[VpnPanel]) -> str:
             f"  وضعیت: {status}\n"
             f"  آدرس: <code>{p.base_url}</code>\n"
             f"  ساب: <code>{p.sub_base or '—'}</code>\n"
-            f"  inboundها: {p.inbound_ids or 'همهٔ فعال‌ها'}"
+            f"  inboundها: {PI.describe(p.inbound_mode, p.inbound_ids)}"
         )
     lines.append("┈┅━━⊷⊰✨⊱⊶━━┅┈")
     return "\n".join(lines)
@@ -900,6 +901,11 @@ async def panel_manage_kb(panel: VpnPanel | None, key: str, bot_id: int = 0,
             text="📦 ثبت یادداشت در توضیحات تحویل کانفیگ",
             callback_data=f"tvpn:notedel:{key}",
             style=await _ibs(bot_id, "ibtn:vpn_custom"))])
+        if _bk(key) in PI.PICKABLE:    # === PATCH_PANEL_INBOUND_PICKER_V1 ===
+            rows.append([InlineKeyboardButton(
+                text=f"🧩 انتخاب {_ib_word(key)}",
+                callback_data=f"tvpn:ibpick:{key}",
+                style=await _ibs(bot_id, "ibtn:vpn_setup"))])
         rows.append([InlineKeyboardButton(
             text="🔄 بروزرسانی اینباندها و ساب‌لینک کاربران",
             callback_data=f"tvpn:refresh_subs:{key}",
@@ -989,7 +995,7 @@ async def _vpn_panel_menu_content(row, key: str) -> tuple[str, InlineKeyboardMar
             f"وضعیت فروش: {status}\n"
             f"آدرس پنل: <code>{panel.base_url}</code>\n"
             f"آدرس ساب: <code>{panel.sub_base or '—'}</code>\n"
-            f"inboundها: {panel.inbound_ids or 'همهٔ فعال‌ها'}\n\n"
+            f"inboundها: {PI.describe(panel.inbound_mode, panel.inbound_ids)}\n\n"
             "از دکمه‌ها مدیریت کن:"
         )
     else:
@@ -1223,7 +1229,7 @@ async def vpn_setup(cb: CallbackQuery, bot: Bot, state: FSMContext):
         await cb.answer("پنل نامعتبر", show_alert=True)
         return
     label = PANEL_LABELS.get(key, key)
-    await state.update_data(panel_key=key)
+    await state.update_data(panel_key=key, ibp=None)   # PATCH_PANEL_INBOUND_PICKER_V1: صفحهٔ تیک‌دار نیمه‌کاره را رها کن
     await state.set_state(VpnPanelFSM.base_url)
 
     if _bk(key) in ("pasargad", "pasarguard"):
@@ -1425,15 +1431,19 @@ async def _vpn_setup_step4_text(key: str) -> str:
 
 
 # === PATCH_SKIP_SUB_BASE_STEP_V1 ===
-async def _goto_inbound_step(msg: Message, state: FSMContext, key: str) -> None:
-    """مرحلهٔ ۵/۵ (اینباند/گروه) را نشان می‌دهد — بدونِ تکرارِ کد."""
+async def _goto_inbound_step(msg: Message, state: FSMContext, key: str, bot_id: int = 0) -> None:
+    """مرحلهٔ ۵/۵ (اینباند/گروه): اول لیست را از پنل می‌گیرد و صفحهٔ تیک‌دار را نشان می‌دهد
+    (PATCH_PANEL_INBOUND_PICKER_V1)؛ اگر نشد یا پنل لیست ندارد، همان مرحلهٔ تایپی قبلی."""
     await state.set_state(VpnPanelFSM.inbound_ids)
+    if _bk(key) in PI.PICKABLE and await _show_setup_picker(msg, state, key, bot_id):
+        return
     await _vpn_setup_step5_prompt(msg, key)
 
 
 @vpn_admin_router.message(VpnPanelFSM.password, F.text)
 async def vpn_setup_pass(msg: Message, bot: Bot, state: FSMContext):
-    if not await _owner_msg(msg, bot):
+    row = await _owner_msg(msg, bot)
+    if not row:
         return
     await state.update_data(password=msg.text.strip())
     data = await state.get_data()
@@ -1444,7 +1454,7 @@ async def vpn_setup_pass(msg: Message, bot: Bot, state: FSMContext):
     # می‌افتاد، منتها حالا امکانِ واردکردنِ مقدارِ اشتباه وجود ندارد.
     if _skips_sub_base(key):
         await state.update_data(sub_base="")
-        await _goto_inbound_step(msg, state, key)
+        await _goto_inbound_step(msg, state, key, row.id)
         return
     await state.set_state(VpnPanelFSM.sub_base)
     await msg.answer(await _vpn_setup_step4_text(key), reply_markup=cancel_kb())
@@ -1550,7 +1560,8 @@ async def _vpn_setup_step5_prompt(msg: Message, key: str) -> None:
 
 @vpn_admin_router.message(VpnPanelFSM.sub_base, F.text)
 async def vpn_setup_sub(msg: Message, bot: Bot, state: FSMContext):
-    if not await _owner_msg(msg, bot):
+    row = await _owner_msg(msg, bot)
+    if not row:
         return
     sub = msg.text.strip()
     sub = "" if sub in ("-", "—", "خالی", "ندارم", "نمیدونم", "نمی‌دانم") else sub.rstrip("/")
@@ -1572,8 +1583,7 @@ async def vpn_setup_sub(msg: Message, bot: Bot, state: FSMContext):
                 reply_markup=cancel_kb(), parse_mode="HTML")
             return
     await state.update_data(sub_base=sub)
-    await state.set_state(VpnPanelFSM.inbound_ids)
-    await _vpn_setup_step5_prompt(msg, key)
+    await _goto_inbound_step(msg, state, key, row.id)
 
 
 @vpn_admin_router.message(VpnPanelFSM.inbound_ids, F.text)
@@ -1586,6 +1596,7 @@ async def vpn_setup_inbounds(msg: Message, bot: Bot, state: FSMContext):
     key = data.get("panel_key", "sanai")
     fetch_all = raw in ("همه", "all", "*")
     inbound = ""
+    mode = None            # === PATCH_PANEL_INBOUND_PICKER_V1 === all | custom | None
 
     # === PATCH_PANEL_SETUP_STATE_GUARD_V1 ===
     # اگه استیتِ مراحلِ قبلی (آدرس/یوزرنیم/رمز) به هر دلیلی خالی/ناقص شده
@@ -1614,12 +1625,14 @@ async def vpn_setup_inbounds(msg: Message, bot: Bot, state: FSMContext):
                     "حداقل یک نام inbound بفرست (یا «همه»):", reply_markup=cancel_kb())
                 return
             inbound = ",".join(tags)
+            mode = PI.MODE_CUSTOM
         else:
             nums = [p.strip() for p in raw.replace("،", ",").split(",") if p.strip()]
             if any(fa_to_int(n) is None for n in nums):
                 await msg.answer("فقط عدد و کاما مجاز است. دوباره بفرست (یا «همه»):", reply_markup=cancel_kb())
                 return
             inbound = ",".join(str(fa_to_int(n)) for n in nums)
+            mode = PI.MODE_CUSTOM
 
     if fetch_all:
         print(f"[vpn_setup_inbounds] START key={key} bot_id={getattr(row,'id','?')} url={data.get('base_url')}", flush=True)
@@ -1711,6 +1724,7 @@ async def vpn_setup_inbounds(msg: Message, bot: Bot, state: FSMContext):
                     reply_markup=cancel_kb())
                 return
             inbound = ",".join(all_ids)
+            mode = PI.MODE_ALL
         except PanelError as e:
             print(f"[vpn_setup_inbounds] PanelError for key={key} bot={row.id}: {e}")
             # متنِ خطا ممکن است حاویِ بدنهٔ خامِ پاسخِ پنل باشد (حتی HTML)؛
@@ -1756,35 +1770,382 @@ async def vpn_setup_inbounds(msg: Message, bot: Bot, state: FSMContext):
             "لطفاً از «➕ ثبت تنظیمات» دوباره از مرحلهٔ اول شروع کن.")
         return
 
+    await _save_panel_setup(row, key, data, inbound, mode)
+    text, kb = _setup_saved_reply(key, inbound, mode)
+    await msg.answer(text, reply_markup=kb)
+
+
+# ─────────────── انتخاب تیک‌دار اینباندها ───────────────
+# === PATCH_PANEL_INBOUND_PICKER_V1 ===
+# تیکت MidnightSoul: «موقع اتصال اولیه پنل چرا لیست اینباندها را نمی‌آورد که هرکدام را
+# خواستیم تیک بزنیم؟». بعد از گرفتن آدرس/یوزر/رمز، لیست را از خود پنل می‌گیریم و با
+# دکمه‌های تیک‌دار نشان می‌دهیم؛ همین صفحه از منوی پنل هم باز می‌شود (ویرایش بعدی).
+# حالت انتخاب (ستون VpnPanel.inbound_mode) باعث می‌شود بروزرسانی خودکار انتخاب مالک را عوض نکند.
+_IB_PAGE = 20
+_IB_WORDS = {"pasargad": "گروه‌ها", "pasarguard": "گروه‌ها", "marzneshin": "سرویس‌ها", "nodex": "سرویس‌ها"}
+
+
+_NO_GROUP_HINT = {k: ("\n\nدر پاسارگاد کاربر به «گروه» وصل می‌شود نه مستقیم به inbound: در پنل Groups ← Create Group را بزن، "
+                      "inboundهای موردنظر را داخلش انتخاب کن و ذخیره کن؛ بعد دوباره «ثبت تنظیمات» را بزن.")
+                  for k in ("pasargad", "pasarguard")}
+_IB_WORDS_1 = {"pasargad": "گروه", "pasarguard": "گروه", "marzneshin": "سرویس", "nodex": "سرویس"}
+
+
+def _ib_word(key: str) -> str:
+    return _IB_WORDS.get(_bk(key), "اینباندها")
+
+
+def _ib_word1(key: str) -> str:
+    """مفرد: «هیچ اینباند فعالی…»."""
+    return _IB_WORDS_1.get(_bk(key), "اینباند")
+
+
+def _ib_btn(text: str, data: str, style=None) -> InlineKeyboardButton:
+    kw = {"style": style} if style else {}
+    return InlineKeyboardButton(text=text, callback_data=data, **kw)
+
+
+def _ib_render(ibp: dict, label: str) -> tuple[str, InlineKeyboardMarkup]:
+    items, sel = ibp["items"], set(ibp["sel"])
+    word = _ib_word(ibp["key"])
+    pages = max(1, -(-len(items) // _IB_PAGE))
+    page = min(max(int(ibp.get("page", 0)), 0), pages - 1)
+    setup = ibp.get("mode") == "setup"
+    lines = [
+        f"🧩 <b>انتخاب {word} — {_html_escape_mod.escape(label)}</b>",
+        "",
+        "لیست زیر از خود پنل گرفته شد. هرکدام را که می‌خواهی کانفیگ‌ها روی آن ساخته شود تیک بزن، "
+        "بعد «💾 تأیید» را بزن.",
+        "",
+        f"✅ انتخاب‌شده: <b>{len(sel)}</b> از {len(items)}"
+        + (f"  ·  صفحه {page + 1} از {pages}" if pages > 1 else ""),
+    ]
+    if ibp.get("hidden"):
+        lines.append(f"({ibp['hidden']} مورد غیرفعال در پنل نشان داده نشد.)")
+    lines += ["",
+              "💡 اگر همه را تیک بزنی، هر مورد تازه‌ای که بعدا به پنل اضافه کنی هم با «بروزرسانی خودکار» "
+              "اضافه می‌شود. اگر فقط چندتا را تیک بزنی، انتخاب تو ثابت می‌ماند و هیچ بروزرسانی‌ای آن را عوض نمی‌کند."]
+    if setup:
+        lines.append("اگر ترجیح می‌دهی خودت تایپ کنی، «⌨️ ورود دستی» را بزن.")
+    rows = []
+    for i in range(page * _IB_PAGE, min(len(items), (page + 1) * _IB_PAGE)):
+        on = i in sel
+        rows.append([_ib_btn(f"{'✅' if on else '⬜️'} {items[i]['label'][:48]}", f"tvpn:ibt:{i}",
+                             ButtonStyle.SUCCESS if on else None)])
+    if pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(_ib_btn("⬅️ قبلی", f"tvpn:ibpg:{page - 1}"))
+        if page < pages - 1:
+            nav.append(_ib_btn("بعدی ➡️", f"tvpn:ibpg:{page + 1}"))
+        rows.append(nav)
+    rows.append([_ib_btn("✅ انتخاب همه", "tvpn:iball"), _ib_btn("⬜️ برداشتن همه", "tvpn:ibnone")])
+    rows.append([_ib_btn(f"💾 تأیید ({len(sel)})", "tvpn:ibok", ButtonStyle.PRIMARY)])
+    if setup:
+        rows.append([_ib_btn("⌨️ ورود دستی", "tvpn:ibman"), _ib_btn("✖️ لغو", "tvpn:cancel", ButtonStyle.DANGER)])
+    else:
+        rows.append([_ib_btn("✖️ لغو", "tvpn:ibcancel", ButtonStyle.DANGER)])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _tcp_precheck(base_url: str, timeout: float = 8) -> str | None:
+    """متن خطا اگر سرور ربات اصلا به آدرس/پورت پنل نرسد؛ وگرنه None."""
+    from urllib.parse import urlparse as _urlparse
+    try:
+        u = _urlparse(base_url)
+        port = u.port or (443 if u.scheme == "https" else 80)
+        if u.hostname:
+            _r, w = await asyncio.wait_for(asyncio.open_connection(u.hostname, port), timeout=timeout)
+            w.close()
+    except Exception as e:
+        print(f"[inbound_picker] TCP pre-check failed url={base_url}: {e!r}", flush=True)
+        return ("سرور ربات اصلا نمی‌تواند به آدرس/پورت این پنل وصل شود "
+                "(فایروال پنل فقط آی‌پی خاصی را اجازه می‌دهد، پورت اشتباه است یا پنل خاموش است).")
+    return None
+
+
+async def _list_inbounds_safe(client, timeout: int = 25):
+    """(لیست|None, خطا|None): login + list_inbounds با سقف زمان؛ کلاینت را همیشه می‌بندد."""
+    try:
+        client.timeout = timeout
+    except Exception:
+        logger.debug("تنظیم timeout روی کلاینت پنل ممکن نشد", exc_info=True)
+
+    async def _go():
+        await client.login()
+        return await client.list_inbounds()
+    try:
+        return await asyncio.wait_for(_go(), timeout=timeout + 5), None
+    except PanelError as e:
+        return None, f"اتصال به پنل ناموفق بود:\n{_html_escape_mod.escape(str(e))[:400]}"
+    except (asyncio.TimeoutError, TimeoutError):
+        return None, "پنل بیش از حد طول کشید و جواب نداد (آدرس/پورت/فایروال را چک کن)."
+    except Exception as e:
+        return None, f"خطای غیرمنتظره:\n{_html_escape_mod.escape(repr(e))[:300]}"
+    finally:
+        try:
+            await client.close()
+        except Exception:
+            logger.exception("بستن کلاینت پنل بعد از گرفتن لیست ناموفق بود")
+
+
+def _make_probe(key: str, data: dict):
+    from tenant.shared.panel_clients.vpn_panel_factory import make_panel_client_from_fields
+    return make_panel_client_from_fields(
+        key, data["base_url"], data.get("username") or "", data.get("password") or "",
+        sub_base=data.get("sub_base", ""), inbound_ids_str=None, api_key=data.get("api_key"))
+
+
+async def _ib_put(first: Message | None, fallback, text: str, kb) -> None:
+    """پیام را ویرایش می‌کند؛ نشد، پیام تازه می‌فرستد."""
+    try:
+        if first is None:
+            raise RuntimeError("no message to edit")
+        await first.edit_text(text, reply_markup=kb)
+    except Exception:
+        await fallback.answer(text, reply_markup=kb)
+
+
+async def _show_setup_picker(msg: Message, state: FSMContext, key: str, bot_id: int) -> bool:
+    """مرحلهٔ ۵/۵: لیست را از پنل می‌گیرد و صفحهٔ تیک‌دار را نشان می‌دهد.
+    False یعنی لیست گرفته نشد (پیام خطا فرستاده شده) و باید مرحلهٔ دستی نشان داده شود."""
+    data = await state.get_data()
+    if not data.get("base_url") or data.get("username") is None or data.get("password") is None:
+        return False
+    word = _ib_word(key)
+    status = await msg.answer(f"⏳ در حال گرفتن لیست {word} از پنل… (ممکن است تا ۳۰ ثانیه طول بکشد)")
+    err = await _tcp_precheck(data["base_url"])
+    inbounds = None
+    if not err:
+        inbounds, err = await _list_inbounds_safe(_make_probe(key, data))
+    items = sel = hidden = None
+    if not err:
+        existing = await get_panel(bot_id, key) if bot_id else None
+        items, sel, hidden = PI.picker_state(
+            _bk(key), inbounds, getattr(existing, "inbound_mode", None),
+            getattr(existing, "inbound_ids", None), existing=bool(existing))
+        if not items:
+            err = f"هیچ {_ib_word1(key)} فعالی روی پنل پیدا نشد." + _NO_GROUP_HINT.get(_bk(key), "")
+    if err:
+        await _ib_put(status, msg, f"⚠️ لیست {word} را نتوانستم خودکار بگیرم:\n{err}\n\nمی‌توانی دستی ادامه بدهی:", None)
+        return False
+    ibp = {"key": key, "mode": "setup", "items": items, "sel": sel, "hidden": hidden, "page": 0}
+    await state.update_data(ibp=ibp)
+    text, kb = _ib_render(ibp, PANEL_LABELS.get(key, key))
+    await _ib_put(status, msg, text, kb)
+    return True
+
+
+async def _ibp_get(cb: CallbackQuery, state: FSMContext) -> dict | None:
+    ibp = (await state.get_data()).get("ibp")
+    if not ibp or not ibp.get("items"):
+        await cb.answer("این صفحه منقضی شده؛ دوباره باز کن.", show_alert=True)
+        return None
+    return ibp
+
+
+async def _ib_redraw(cb: CallbackQuery, state: FSMContext, ibp: dict, row) -> None:
+    await state.update_data(ibp=ibp)
+    text, kb = _ib_render(ibp, await panel_label(row.id, ibp["key"]))
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        logger.debug("ویرایش صفحهٔ انتخاب اینباند ممکن نشد (احتمالا بدون تغییر)", exc_info=True)
+    await cb.answer()
+
+
+@vpn_admin_router.callback_query(F.data.regexp(r"^tvpn:ibt:\d+$"))
+async def vpn_ib_toggle(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    ibp = await _ibp_get(cb, state)
+    if not ibp:
+        return
+    i = int(cb.data.rsplit(":", 1)[1])
+    if not 0 <= i < len(ibp["items"]):
+        await cb.answer()
+        return
+    sel = set(ibp["sel"])
+    sel.symmetric_difference_update({i})
+    ibp["sel"] = sorted(sel)
+    await _ib_redraw(cb, state, ibp, row)
+
+
+@vpn_admin_router.callback_query(F.data.in_({"tvpn:iball", "tvpn:ibnone"}))
+async def vpn_ib_all_none(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    ibp = await _ibp_get(cb, state)
+    if not ibp:
+        return
+    ibp["sel"] = ([i for i, it in enumerate(ibp["items"]) if it["enabled"]]
+                  if cb.data == "tvpn:iball" else [])
+    await _ib_redraw(cb, state, ibp, row)
+
+
+@vpn_admin_router.callback_query(F.data.regexp(r"^tvpn:ibpg:\d+$"))
+async def vpn_ib_page(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    ibp = await _ibp_get(cb, state)
+    if not ibp:
+        return
+    ibp["page"] = int(cb.data.rsplit(":", 1)[1])
+    await _ib_redraw(cb, state, ibp, row)
+
+
+@vpn_admin_router.callback_query(F.data == "tvpn:ibman")
+async def vpn_ib_manual(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """از صفحهٔ تیک‌دار به ورود دستی شناسه‌ها (فقط هنگام ثبت پنل)."""
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    ibp = await _ibp_get(cb, state)
+    if not ibp:
+        return
+    key = ibp["key"]
+    await state.update_data(ibp=None)
+    await state.set_state(VpnPanelFSM.inbound_ids)
+    await _vpn_setup_step5_prompt(cb.message, key)
+    await cb.answer()
+
+
+@vpn_admin_router.callback_query(F.data == "tvpn:ibok")
+async def vpn_ib_confirm(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    data = await state.get_data()
+    ibp = data.get("ibp")
+    if not ibp or not ibp.get("items"):
+        await cb.answer("این صفحه منقضی شده؛ دوباره باز کن.", show_alert=True)
+        return
+    items = ibp["items"]
+    sel = {i for i in ibp["sel"] if 0 <= i < len(items)}
+    if not sel:
+        await cb.answer("حداقل یکی را تیک بزن.", show_alert=True)
+        return
+    chosen = [it["id"] for i, it in enumerate(items) if i in sel]
+    mode = PI.mode_for_choice(chosen, [it["id"] for it in items if it["enabled"]])
+    inbound = PI.join_ids(chosen)
+    key = ibp["key"]
+
+    if ibp.get("mode") == "setup":
+        # === PATCH_PANEL_SETUP_STATE_GUARD_V1 === همان محافظ مرحلهٔ تایپی
+        if (data.get("panel_key") != key or not data.get("base_url")
+                or data.get("username") is None or data.get("password") is None):
+            await state.clear()
+            await cb.message.answer(
+                "❌ اطلاعات این مرحله ناقص/منقضی شده (شاید ربات ری‌استارت شده یا خیلی طول کشیده).\n"
+                "لطفا از «➕ ثبت تنظیمات» دوباره از مرحلهٔ اول شروع کن.")
+            await cb.answer()
+            return
+        await state.clear()
+        await _save_panel_setup(row, key, data, inbound, mode)
+        text, kb = _setup_saved_reply(key, inbound, mode)
+        await _ib_put(cb.message, cb.message, text, kb)
+        await cb.answer("✅ ذخیره شد")
+        return
+
+    async with Session() as s:
+        p = await s.scalar(select(VpnPanel).where(VpnPanel.bot_id == row.id, VpnPanel.panel_key == key))
+        if not p:
+            await cb.answer("پنل پیدا نشد.", show_alert=True)
+            return
+        p.inbound_ids = inbound
+        p.inbound_mode = mode
+        await s.commit()
+    await state.update_data(ibp=None)
+    info, kb = await _vpn_panel_menu_content(row, key)
+    await _ib_put(cb.message, cb.message, f"✅ {_ib_word(key)} ذخیره شد: {_html_escape_mod.escape(PI.describe(mode, inbound))}\n\n{info}", kb)
+    await cb.answer("✅ ذخیره شد")
+
+
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:ibpick:"))
+async def vpn_ib_open(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """باز کردن صفحهٔ انتخاب برای پنل ثبت‌شده (دکمهٔ «🧩 انتخاب اینباندها» در منوی پنل)."""
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    key = cb.data.split(":", 2)[2]
+    if not is_panel_key(key) or _bk(key) not in PI.PICKABLE:
+        await cb.answer("این پنل لیست اینباند ندارد.", show_alert=True)
+        return
+    panel = await get_panel(row.id, key)
+    if not panel:
+        await cb.answer("اول تنظیمات پنل را ثبت کن.", show_alert=True)
+        return
+    await cb.answer("⏳ در حال گرفتن لیست از پنل…")
+    word = _ib_word(key)
+    inbounds, err = await _list_inbounds_safe(make_panel_client(panel))
+    items = sel = hidden = None
+    if not err:
+        items, sel, hidden = PI.picker_state(_bk(key), inbounds, panel.inbound_mode, panel.inbound_ids, existing=True)
+        if not items:
+            err = f"هیچ {_ib_word1(key)} فعالی روی پنل پیدا نشد."
+    if err:
+        await cb.message.answer(
+            f"⚠️ لیست {word} را نتوانستم بگیرم:\n{err}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"tvpn:panel:{key}", style=ButtonStyle.DANGER)]]))
+        return
+    ibp = {"key": key, "mode": "edit", "items": items, "sel": sel, "hidden": hidden, "page": 0}
+    await state.update_data(ibp=ibp)
+    text, kb = _ib_render(ibp, await panel_label(row.id, key))
+    await _ib_put(cb.message, cb.message, text, kb)
+
+
+@vpn_admin_router.callback_query(F.data == "tvpn:ibcancel")
+async def vpn_ib_cancel(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    key = ((await state.get_data()).get("ibp") or {}).get("key")
+    await state.update_data(ibp=None)
+    if not key:
+        await vpn_menu(cb, bot)
+        return
+    info, kb = await _vpn_panel_menu_content(row, key)
+    await _ib_put(cb.message, cb.message, info, kb)
+    await cb.answer()
+
+
+async def _save_panel_setup(row, key: str, data: dict, inbound: str, mode: str | None) -> None:
+    """ذخیرهٔ نهایی ثبت پنل (هم مسیر تایپی هم صفحهٔ تیک‌دار)."""
     async with Session() as s:
         panel = await s.scalar(
             select(VpnPanel).where(VpnPanel.bot_id == row.id, VpnPanel.panel_key == key))
         if panel:
-            panel.base_url = base_url
-            panel.username = username
-            panel.password = password
+            panel.base_url = data["base_url"]
+            panel.username = data["username"]
+            panel.password = data["password"]
             panel.api_key = data.get("api_key")  # === PATCH_PANEL_API_KEY_AUTH_V1 ===
             panel.sub_base = data.get("sub_base", "")
             panel.inbound_ids = inbound
+            panel.inbound_mode = mode
         else:
             panel = VpnPanel(
-                bot_id=row.id, panel_key=key, base_url=base_url,
-                username=username, password=password,
+                bot_id=row.id, panel_key=key, base_url=data["base_url"],
+                username=data["username"], password=data["password"],
                 api_key=data.get("api_key"),  # === PATCH_PANEL_API_KEY_AUTH_V1 ===
                 sub_base=data.get("sub_base", ""),
-                inbound_ids=inbound, enabled=False)
+                inbound_ids=inbound, inbound_mode=mode, enabled=False)
             s.add(panel)
         await s.commit()
 
+
+def _setup_saved_reply(key: str, inbound: str, mode: str | None) -> tuple[str, InlineKeyboardMarkup]:
     label = PANEL_LABELS.get(key, key)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔌 تست اتصال", callback_data=f"tvpn:test:{key}", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"tvpn:panel:{key}", style=ButtonStyle.DANGER)],
     ])
-    await msg.answer(
-        f"✅ تنظیمات <b>{label}</b> ذخیره شد.\n"
-        "حالا «🔌 تست اتصال» را بزن و اگر موفق بود، فروش خودکار را فعال کن.",
-        reply_markup=kb)
+    sel_line = f"\n🧩 {_ib_word(key)}: {_html_escape_mod.escape(PI.describe(mode, inbound))}" if inbound else ""
+    return (f"✅ تنظیمات <b>{label}</b> ذخیره شد.{sel_line}\n"
+            "حالا «🔌 تست اتصال» را بزن و اگر موفق بود، فروش خودکار را فعال کن."), kb
 
 
 # ─────────────── تست اتصال ───────────────
@@ -1985,40 +2346,49 @@ async def vpn_refresh_subs(cb: CallbackQuery, bot: Bot):
         # ─── ۱) گرفتن لیست اینباندهای فعال از پنل ───
         await client.login()
         inbounds = await client.list_inbounds()
-        active_inbounds = [ib for ib in inbounds if ib.get("enable", True)]
-        if _bk(key) in ("marzban", "rebecca", "upanel_mizban", "pasarguard", "pasargad"):
-            # در این پنل‌ها شناسهٔ اینباند رشتهٔ «tag» است، نه عدد
-            active_ids = [str(ib["id"]) for ib in active_inbounds if ib.get("id")]
-            active_names = ", ".join(str(ib.get("tag") or ib.get("id")) for ib in active_inbounds)
-        else:
-            active_ids = [int(ib["id"]) for ib in active_inbounds]
-            active_names = ", ".join(
-                f"#{ib['id']} {ib.get('remark', ib.get('tag', ''))}" for ib in active_inbounds
-            )
+        base = _bk(key)
+        # === PATCH_PANEL_INBOUND_PICKER_V1 === قاعدهٔ واحد با بروزرسانی خودکار (panel_autosync)
+        active_items = [it for it in PI.inbound_items(base, inbounds) if it["enabled"]]
+        active_ids = [it["id"] for it in active_items]
+        active_names = ", ".join(it["label"] for it in active_items)
 
-        # ─── ۲) بروزرسانی inbound_ids در دیتابیس ───
+        # ─── ۲) بروزرسانی inbound_ids در دیتابیس (فقط در حالت «همه»؛ انتخاب دستی مالک ثابت می‌ماند) ───
         old_inbound_str = panel.inbound_ids or "همه"
-        if active_ids:
-            new_inbound_str = ",".join(str(i) for i in active_ids)
-            if panel.inbound_ids != new_inbound_str:
+        if base == "eylan":
+            inbound_msg = "ℹ️ در ایلان انتخاب پروتکل‌ها با خود توست و بروزرسانی آن را عوض نمی‌کند."
+        elif not active_ids:
+            inbound_msg = "⚠️ هیچ اینباند فعالی در پنل پیدا نشد. inbound_ids تغییر نکرد."
+        else:
+            plan = PI.plan_inbound_sync(panel.inbound_mode, panel.inbound_ids, active_ids)
+            if plan.changed:
                 async with Session() as s:
                     p2 = await s.get(VpnPanel, panel.id)
                     if p2:
-                        p2.inbound_ids = new_inbound_str
+                        p2.inbound_ids = plan.ids
+                        p2.inbound_mode = plan.mode
                         await s.commit()
+            if plan.mode == PI.MODE_CUSTOM:
+                inbound_msg = ("📌 انتخاب دستی تو ثابت ماند (بروزرسانی آن را عوض نمی‌کند):\n"
+                               f"   <code>{_esc_html(plan.ids)}</code>")
+                if plan.missing:
+                    inbound_msg += ("\n⚠️ این موارد دیگر در پنل نیستند یا غیرفعال‌اند: "
+                                    f"<code>{_esc_html(PI.join_ids(plan.missing))}</code>")
+                if plan.fresh:
+                    inbound_msg += ("\nℹ️ این موارد در پنل هست ولی انتخابشان نکرده‌ای: "
+                                    f"<code>{_esc_html(PI.join_ids(plan.fresh))}</code>\n"
+                                    "   برای اضافه‌کردن، دکمهٔ «🧩 انتخاب اینباندها» را بزن.")
+            elif plan.ids != (panel.inbound_ids or ""):
                 inbound_msg = (f"✅ اینباندها بروز شدند:\n"
-                               f"   قبل: <code>{old_inbound_str}</code>\n"
-                               f"   بعد: <code>{new_inbound_str}</code>")
+                               f"   قبل: <code>{_esc_html(old_inbound_str)}</code>\n"
+                               f"   بعد: <code>{_esc_html(plan.ids)}</code>")
             else:
-                inbound_msg = f"ℹ️ اینباندها تغییری نداشتند: <code>{old_inbound_str}</code>"
-        else:
-            inbound_msg = "⚠️ هیچ اینباند فعالی در پنل پیدا نشد. inbound_ids تغییر نکرد."
+                inbound_msg = f"ℹ️ اینباندها تغییری نداشتند: <code>{_esc_html(old_inbound_str)}</code>"
 
         await cb.message.answer(
             f"🔌 <b>وضعیت اینباندهای {label}:</b>\n"
             f"{inbound_msg}\n\n"
-            f"تعداد اینباند فعال: <b>{len(active_inbounds)}</b>\n"
-            f"اینباندهای فعال پنل: {active_names or '—'}"
+            f"تعداد اینباند فعال: <b>{len(active_items)}</b>\n"
+            f"اینباندهای فعال پنل: {_html_escape_mod.escape(active_names) or '—'}"
         )
 
         # ─── ۳) بروزرسانی ساب‌لینک همهٔ کاربران این پنل ───
