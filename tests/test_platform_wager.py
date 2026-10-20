@@ -993,6 +993,7 @@ async def test_xo_wrong_turn_returns_fresh_state_for_redraw(db):
 
 @pytest.mark.asyncio
 async def test_handler_rapid_taps_edit_in_order_and_stale_tap_redraws(db, psets):
+    PW._wlocks.clear()          # قفل‌های تست‌های قبلی به event loop دیگری وصل‌اند
     m, _ = _msg("اکس او ۱۰۰۰")
     await PW.wager_create(m)
     async with db() as s:
