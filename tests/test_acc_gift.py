@@ -58,7 +58,12 @@ async def test_definite_failure_goes_manual_and_keeps_partial(env):
     o = await order(env)
     assert o.status == "awaiting_admin" and o.sent_qty == 1
     assert len(env["acc"]["sent"]) == 2                     # بدونِ retry
-    txt = " ".join(env["cap"].texts(OWNER))
+    # پیام مالک بعد از ثبت وضعیت سفارش ارسال می‌شود؛ چک فوری زیر بار CPU گاهی زودتر از رسیدن پیام بود
+    for _ in range(100):
+        txt = " ".join(env["cap"].texts(OWNER))
+        if "1 از 2" in txt and "کافی نیست" in txt:
+            break
+        await asyncio.sleep(0.02)
     assert "1 از 2" in txt and "کافی نیست" in txt
 
 
