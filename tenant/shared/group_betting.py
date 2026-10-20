@@ -239,7 +239,13 @@ async def incomplete_bet_command(msg: Message, bot: Bot):
     if (await _get_setting(row.id, "group_betting_enabled", "0")) != "1":
         await msg.reply("❌ قابلیت بازی در این ربات فعال نیست.")
         return
-    await msg.reply("برای ساخت بازی عمومی، مبلغ را هم بنویس؛ مثلاً: «بازی ۱۰۰۰۰»\nبرای بازی روی یک نفر، همین دستور را روی پیام او ریپلای کن.")
+    # === PATCH_WAGER_HELP_V1 === راهنمای کامل (شیر یا خط + ایکس‌او/سنگ‌کاغذ‌قیچی/تاس اگر برای این ربات فعال است)
+    import platform_wager as core
+    from bot_addons import WAGER_ADDON, addon_active, wager_eligible
+    games_on = (wager_eligible(row.field, row.plan) and await addon_active(row.id, WAGER_ADDON)
+                and await core.master_enabled(row.id))
+    enabled = {g: (games_on and await core.game_enabled(g, row.id)) for g in core.GAMES}
+    await msg.reply(core.help_text(enabled, bot_id=row.id, cfg=await core.load_cfg(row.id)), parse_mode="HTML")
 
 @betting_router.message(
     F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}),

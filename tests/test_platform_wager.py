@@ -607,6 +607,39 @@ async def test_help_text_lists_only_enabled_games():
     assert "ایکس‌او" in text and "تاس" in text and "سنگ‌کاغذ‌قیچی" not in text and "شرطبندی" in text
 
 
+def test_help_text_explains_how_to_play_step_by_step_with_rules_and_limits():
+    """PATCH_WAGER_HELP_V1 — وقتی کسی فقط «بازی» می‌نویسد باید همه‌چیز را واضح یاد بگیرد."""
+    cfg = {"min": 1000, "max": 500_000, "fee_pct": Decimal("5"), "ttl": 300, "move": 180, "move_sim": 300}
+    on = {"xo": True, "rps": True, "dice": True}
+    main = PW.help_text(on, cfg=cfg)
+    for must in ("مراحل کار", "قبول و پیوستن", "ریپلای", "لغو", "نماد خودش", "3 راند", "بزرگ‌تر برنده است یا عدد کوچک‌تر",
+                 "پرتاب تاس", "شیر یا خط", "ایکس‌او: هر حرکت 3 دقیقه", "هر مرحله 5 دقیقه", "از 1,000 تومان تا 500,000 تومان",
+                 "کارمزد: 5٪", "حداکثر 3 بازی باز", "ادمین ناشناس", "شرط‌بندی ریسک مالی"):
+        assert must in main, must
+    assert "🎰 <b>شرط‌بندی با کیف‌پول</b>" in main
+    game = PW.help_text(on, bot_id=5, cfg=cfg)                                   # ربات مشتری: نام «بازی» و همان هشدار
+    assert "🎮 <b>بازی با کیف‌پول</b>" in game and "شرط‌بندی" not in game
+    assert "⚠️ بازی ریسک مالی دارد؛ فقط با پولی بازی کن که از دست‌دادنش برایت مشکلی نیست." in game
+    free = PW.help_text({"xo": False, "rps": False, "dice": True}, cfg={**cfg, "fee_pct": Decimal("0"), "max": 0})
+    assert "کارمزد" not in free and "بدون سقف" in free and "ایکس‌او" not in free and "سنگ‌کاغذ‌قیچی" not in free
+    assert "«تاس ۱۰۰۰۰»" in free                                                  # مثال مرحلهٔ ۱ از بازی روشن است
+    none = PW.help_text({"xo": False, "rps": False, "dice": False}, cfg=cfg)
+    assert "«بازی ۱۰۰۰۰»" in none and "«تاس" not in none and "حداکثر 3 بازی باز" not in none
+    assert "هر مرحله 5 دقیقه" in free and "هر حرکت" not in free                    # فقط مهلت بازی‌های روشن
+    assert len(main) < 3500                                                       # در یک پیام تلگرام جا می‌شود
+
+
+@pytest.mark.asyncio
+async def test_main_group_incomplete_command_sends_the_full_help(db, psets):
+    async def reply(t, **kw):
+        replies.append(t)
+    replies = []
+    m = SimpleNamespace(text="بازی", chat=SimpleNamespace(id=-100), reply=reply)
+    await GM.platform_incomplete_bet_command(m)
+    assert len(replies) == 1 and "مراحل کار" in replies[0] and "ایکس‌او" in replies[0]
+    assert "حداقل 1,000 تومان (بدون سقف)" in replies[0] and "5 دقیقه" in replies[0]
+
+
 @pytest.mark.asyncio
 async def test_shirt_bandi_with_zwnj_reaches_coin_flip_regex():
     assert GM._BET_RE.match("شرط‌بندی ۱۰۰۰") and GM._INCOMPLETE_BET_RE.match("شرط‌بندی")

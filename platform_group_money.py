@@ -138,8 +138,8 @@ async def platform_incomplete_bet_command(msg: Message):
     if not await _bet_enabled():
         await msg.reply("❌ شرط‌بندی در بات‌ساز اصلی فعال نیست.")
         return
-    from platform_wager import GAMES, game_enabled, help_text
-    await msg.reply(help_text({g: await game_enabled(g) for g in GAMES}), parse_mode="HTML")
+    from platform_wager import GAMES, game_enabled, help_text, load_cfg
+    await msg.reply(help_text({g: await game_enabled(g) for g in GAMES}, cfg=await load_cfg()), parse_mode="HTML")
 
 @platform_group_money_router.message(
     F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}),

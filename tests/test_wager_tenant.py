@@ -645,3 +645,24 @@ async def test_tenant_owner_screens_say_group_games(db):
     assert "بازی‌های شرط‌بندی" not in WG.LOCKED_HINT and "بازی‌های گروهی" in WG.LOCKED_HINT
     text, rows = await WG.settings_extra(BOT)
     assert "بازی‌های گروهی" in text and "بازی‌های شرط‌بندی" not in text
+
+
+@pytest.mark.asyncio
+async def test_tenant_incomplete_command_explains_the_games_in_game_wording(db):
+    """PATCH_WAGER_HELP_V1 — «بازی» به‌تنهایی در ربات مشتری: راهنمای کامل؛ بازی‌های کیف‌پولی فقط بعد از فعال‌سازی."""
+    import tenant.shared.group_betting as GB
+    await enable_betting()
+    m, replies = _msg("بازی")
+    await GB.incomplete_bet_command(m, _bot())
+    assert "شیر یا خط" in replies[0] and "ایکس‌او" not in replies[0] and "تاس" not in replies[0]      # هنوز فعال نشده
+    await activate(db)
+    tenant._SETTING_CACHE.clear()
+    await tenant.set_setting(BOT, "wager_game_rps", "off")
+    m, replies = _msg("بازی")
+    await GB.incomplete_bet_command(m, _bot())
+    text = replies[0]
+    assert "🎮 <b>بازی با کیف‌پول</b>" in text and "مراحل کار" in text and "قبول و پیوستن" in text
+    assert "ایکس‌او" in text and "نماد خودش" in text and "تاس" in text and "عدد بزرگ‌تر" in text
+    assert "سنگ‌کاغذ‌قیچی" not in text                                                   # مالک خاموشش کرده
+    assert "هر مرحله 5 دقیقه" in text and "شرط‌بندی" not in text
+    assert "⚠️ بازی ریسک مالی دارد" in text
