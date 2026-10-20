@@ -56,6 +56,7 @@ _DOMAIN_RE = re.compile(
 _ORIGIN_TARGETS = {
     "crypto": "set:crypto",
     "apikey": "tadm:apikey",
+    "zarinpal": "set:zarinpal",   # === PATCH_GATEWAY_SERVER_IP_V1 === دکمهٔ «دامنهٔ اختصاصی» در تنظیمات زرین‌پال
 }
 
 

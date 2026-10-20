@@ -1,4 +1,5 @@
 from __future__ import annotations
+from html import escape as _html_escape
 from urllib.parse import urlparse
 
 from aiogram import F, Bot, Router
@@ -11,6 +12,7 @@ from sqlalchemy import select, update
 from config import Session
 from models import Bot as BotRow, BotUser, Order, Setting, WalletTxn
 import platform_zarinpal
+from tenant.gateways import server_ip as _sip   # === PATCH_GATEWAY_SERVER_IP_V1 ===
 
 # === PATCH_ZARINPAL_WALLET_MISSING_LOGGER_V1 ===
 # فایل در چند جا (kyc mismatch / اطلاعِ ادمین) از logger.exception استفاده
@@ -546,10 +548,12 @@ async def zarinpal_admin_text(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     from tenant.gateways.gateway_redirect import status_line as _gwr_status  # PATCH_GATEWAY_REDIRECT_LINK_V1
     _gwr_line = await _gwr_status(bot_id, "zarinpal")
     _base = await _callback_base(bot_id)   # PATCH_GATEWAY_OWN_DOMAIN_REQUIRED_V1
+    _ips, _ips_src = await _sip.get_server_ips()   # PATCH_GATEWAY_SERVER_IP_V1
     text = ("🔐 <b>درگاه زرین‌پال ربات</b>\n\n"
             f"وضعیت درگاه: {'✅ فعال' if enabled else '❌ غیرفعال'}\n"
             f"مرچنت‌ایدی: {'✅ ثبت شده' if merchant else '⚠️ ثبت نشده'}\n"
             f"دامنهٔ callback: {_base or '⛔ ثبت نشده'}\n"
+            f"{_sip.ip_line(_ips, _ips_src)}\n"
             f"{_gwr_line}\n"
             # === PATCH_ZARINPAL_FEE_V1 ===
             f"کارمزد درگاه: <b>{'پرداخت‌کننده' if fee_on else 'فروشنده (شما)'}</b>")
@@ -569,6 +573,8 @@ async def zarinpal_admin_text(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
         [InlineKeyboardButton(text="✏️ ثبت / ویرایش مرچنت‌ایدی", callback_data="zpt:merchant", style=ButtonStyle.PRIMARY)],
         # === PATCH_ZARINPAL_PER_BOT_DOMAIN_OVERRIDE_V1 ===
         [InlineKeyboardButton(text="🌐 ثبت/ویرایشِ دامنهٔ callback", callback_data="zpt:base", style=ButtonStyle.PRIMARY)],
+        # === PATCH_GATEWAY_SERVER_IP_V1 === ثبت و تأیید دامنهٔ اختصاصی ربات (DNS + SSL خودکار)
+        [InlineKeyboardButton(text="🌐 دامنهٔ اختصاصی ربات", callback_data="cdom:menu:zarinpal", style=ButtonStyle.PRIMARY)],
         # === PATCH_GATEWAY_REDIRECT_LINK_V1 ===
         [InlineKeyboardButton(text="🔗 لینک ریدایرکت", callback_data="gwr:menu:zarinpal", style=ButtonStyle.PRIMARY)],
         # === PATCH_ZARINPAL_FEE_V1 ===
@@ -636,16 +642,26 @@ async def zarinpal_admin_guide(cb: CallbackQuery, bot: Bot):
     row = await _owner_ok(cb, bot)
     if not row:
         return
+    # === PATCH_GATEWAY_SERVER_IP_V1 ===
+    # متن قبلی می‌گفت «دامنهٔ callback پیش‌فرض همان دامنهٔ مرکزی بات‌ساز است و نیازی به تنظیم ندارد»؛ ولی از
+    # PATCH_GATEWAY_OWN_DOMAIN_REQUIRED_V1 به بعد هیچ دامنهٔ پیش‌فرضی وجود ندارد و مالک باید دامنهٔ خودش را
+    # بدهد. مالک‌ها طبق همان متن اشتباه عمل می‌کردند. آی‌پی سرور هم (که زرین‌پال موقع ساخت درگاه می‌خواهد) اینجا نبود.
+    _ips, _ips_src = await _sip.get_server_ips()
     text = ("📖 <b>راهنمای اتصال زرین‌پال</b>\n\n"
-            "۱) Merchant ID همین ربات را از پنل زرین‌پال دریافت کنید.\n"
-            "۲) از گزینهٔ «✏️ ثبت / ویرایش مرچنت‌ایدی» همان کد را ذخیره کنید.\n"
-            "۳) درگاه را فعال کنید و «🧪 تست اتصال زرین‌پال» را بزنید.\n\n"
-            "دامنهٔ callback به‌صورت پیش‌فرض همان دامنهٔ مرکزیِ بات‌ساز است و "
-            "برای بیشترِ ربات‌ها نیازی به تنظیم ندارد. فقط اگر مرچنت‌ایدی‌تان را "
-            "در پنلِ زرین‌پال با یک دامنهٔ دیگر (مثلاً دامنهٔ خودتان) ثبت کرده‌اید، "
-            "از «🌐 ثبت/ویرایشِ دامنهٔ callback» همان دامنه را وارد کنید — وگرنه "
-            "زرین‌پال با خطای «عدم تطابقِ دامنه» رد می‌کند.\n\n"
-            "رمز کارت یا اطلاعات بانکی را در ربات وارد نکنید.")
+            "۱) در پنل زرین‌پال یک درگاه بساز و Merchant ID آن را بگیر؛ بعد از «✏️ ثبت / ویرایش مرچنت‌ایدی» "
+            "همان کد را ذخیره کن.\n\n"
+            "۲) <b>دامنه:</b> زرین‌پال بعد از پرداخت کاربر را به دامنهٔ تو برمی‌گرداند و بدون آن پرداخت تأیید "
+            "نمی‌شود. دامنهٔ اختصاصی ربات را وصل کن («🌐 دامنهٔ اختصاصی ربات»؛ رکوردهای DNS را همان‌جا دقیق "
+            "نشان می‌دهد و SSL خودکار است) یا دامنهٔ خودت را با «🌐 ثبت/ویرایش دامنهٔ callback» وارد کن. "
+            "<b>همین دامنه</b> را در پنل زرین‌پال (آدرس وب‌سایت درگاه) هم ثبت کن — وگرنه زرین‌پال با خطای "
+            "«عدم تطابق دامنه» رد می‌کند.\n\n"
+            "۳) <b>آی‌پی سرور:</b> زرین‌پال موقع ساخت درگاه «آی‌پی سرور» می‌خواهد (۱ تا ۵ آی‌پی، با کاما). "
+            "درخواست‌های پرداخت ربات تو از سرور بات‌ساز ارسال می‌شود، پس همین آی‌پی را وارد کن:\n"
+            f"{_sip.ip_line(_ips, _ips_src)}\n"
+            "اگر آی‌پی دیگری ثبت شود زرین‌پال خطای «Terminal is not valid … ip address» می‌دهد. "
+            "(پرداخت از روی سرور شخصی خودت ممکن نیست؛ ربات روی سرور بات‌ساز اجرا می‌شود.)\n\n"
+            "۴) درگاه را فعال کن و «🧪 تست اتصال زرین‌پال» را بزن.\n\n"
+            "رمز کارت یا اطلاعات بانکی را در ربات وارد نکن.")
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅️ بازگشت به تنظیمات زرین‌پال", callback_data="set:zarinpal", style=ButtonStyle.DANGER)],
     ])
@@ -693,16 +709,22 @@ async def zarinpal_admin_test(cb: CallbackQuery, bot: Bot):
         )
     else:
         hint = (
-            "این مرچنت‌ایدی احتمالاً با یک دامنهٔ دیگر (نه expresspanel.ir) توی پنلِ زرین‌پال ثبت شده. "
+            "این مرچنت‌ایدی احتمالا با یک دامنهٔ دیگر (غیر از دامنهٔ callback فعلی) توی پنل زرین‌پال ثبت شده. "
             "از «🌐 ثبت/ویرایشِ دامنهٔ callback» همون دامنه رو ثبت کن.\n\n"
             if "domain" in str(result).lower() or "دامنه" in str(result)
             else ""
         )
+        # === PATCH_GATEWAY_SERVER_IP_V1 ===
+        _ips, _ips_src = await _sip.get_server_ips()
+        if _sip.is_ip_error(result):
+            hint += ("⚠️ زرین‌پال درخواست را به‌خاطر <b>آی‌پی سرور یا مرچنت‌ایدی</b> نپذیرفت. در پنل زرین‌پال، "
+                     "بخش «آی‌پی سرور» همین درگاه باید دقیقا آی‌پی زیر باشد (و مرچنت‌ایدی هم مال همان درگاه):\n\n")
         await cb.message.answer(
             "❌ <b>تست اتصال زرین‌پال ناموفق بود.</b>\n\n"
-            f"جزئیات: <code>{result}</code>\n\n"
+            f"جزئیات: <code>{_html_escape(str(result))}</code>\n\n"
             f"{hint}"
-            "مرچنت‌ایدی، فعال‌بودن درگاه و تطابق دامنهٔ ثبت‌شده را بررسی کنید.",
+            f"{_sip.ip_line(_ips, _ips_src)}\n\n"
+            "مرچنت‌ایدی، فعال‌بودن درگاه، تطابق دامنهٔ ثبت‌شده و آی‌پی سرور را بررسی کنید.",
             parse_mode="HTML",
         )
 
