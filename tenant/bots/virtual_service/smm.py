@@ -8917,28 +8917,31 @@ async def _smm_myorders_paginated_content(bot_id: int, user_id: int, page: int,
     _warr_ids = None
     if warranty:
         _warr_ids = await _warranty_order_ids(bot_id, user_id)
-    async with Session() as s:
-        base_q = select(SmmOrder).where(
-            SmmOrder.bot_id == bot_id, SmmOrder.user_telegram_id == user_id)
-        if _warr_ids is not None:
-            base_q = base_q.where(SmmOrder.id.in_(_warr_ids or [-1]))
-        total = await s.scalar(select(func.count()).select_from(base_q.subquery()))
-        total = int(total or 0)
-        total_pages = max(1, (total + _SMM_MYORDERS_PAGE_SIZE - 1) // _SMM_MYORDERS_PAGE_SIZE)
-        page = min(page, total_pages)
-        # === PATCH_SMM_DIRECT_ENTRY_HOME_BACK_V1 ===
-        _suffix = ":mbtn" if home_cb == "mbtn:home" else ""
-        orders = (await s.scalars(
-            base_q.order_by(SmmOrder.id.desc())
-            .offset((page - 1) * _SMM_MYORDERS_PAGE_SIZE).limit(_SMM_MYORDERS_PAGE_SIZE)
-        )).all()
+    # === PATCH_SMM_DIRECT_ENTRY_HOME_BACK_V1 ===
+    _suffix = ":mbtn" if home_cb == "mbtn:home" else ""
+    if _warr_ids is None:
+        # === PATCH_CUSTOMER_UNIFIED_ORDERS_V1 === سفارش‌های استارز/تون/گیفت/ری‌اکشن/پریمیوم هم در «سفارش‌های من» می‌آیند
+        total, page, total_pages, items = await _my_unified_page(bot_id, user_id, page)
+    else:
+        async with Session() as s:
+            base_q = select(SmmOrder).where(
+                SmmOrder.bot_id == bot_id, SmmOrder.user_telegram_id == user_id,
+                SmmOrder.id.in_(_warr_ids or [-1]))
+            total = await s.scalar(select(func.count()).select_from(base_q.subquery()))
+            total = int(total or 0)
+            total_pages = max(1, (total + _SMM_MYORDERS_PAGE_SIZE - 1) // _SMM_MYORDERS_PAGE_SIZE)
+            page = min(page, total_pages)
+            items = [("s", o) for o in (await s.scalars(
+                base_q.order_by(SmmOrder.id.desc())
+                .offset((page - 1) * _SMM_MYORDERS_PAGE_SIZE).limit(_SMM_MYORDERS_PAGE_SIZE)
+            )).all()]
 
     _title = "🛡 <b>سفارشاتِ گارانتی‌دار</b>" if warranty else "📦 <b>سفارش‌های من</b>"
-    if not orders and warranty:
+    if not items and warranty:
         text = (f"{_title}\n\nسفارشی که ارائه‌دهنده برایش ریفیل (جبرانی) داشته باشد پیدا نشد.\n"
                 "(فقط سفارش‌هایِ ثبت‌شده رویِ پنل و تکمیل‌شده/در حال انجام بررسی می‌شوند.)")
         rows = []
-    elif not orders:
+    elif not items:
         text = "📦 <b>سفارش‌های من</b>\n\nهنوز هیچ سفارشی ثبت نکرده‌ای."
         rows = []
     else:
@@ -8952,7 +8955,22 @@ async def _smm_myorders_paginated_content(bot_id: int, user_id: int, page: int,
             InlineKeyboardButton(text="≡ قیمت ≡", callback_data="noop"),
             InlineKeyboardButton(text="≡ شناسه ≡", callback_data="noop"),
         ]]
-        for o in orders:
+        for _typ, o in items:
+            if _typ == "g":      # === PATCH_CUSTOMER_UNIFIED_ORDERS_V1 === استارز/تون/گیفت/ری‌اکشن/پریمیوم
+                _gl = _VS_GIFT_STATUS_LABELS.get((o.status or "").lower(), o.status or "نامشخص")
+                _gi = _vs_gift_item_label(o)
+                if len(_gi) > 16:
+                    _gi = _gi[:13] + "…"
+                _gcb = f"smmu:gview:{o.id}:{page}{_suffix}"
+                _gs = _vs_row_style(o.status, "g")
+                rows.append([
+                    InlineKeyboardButton(text=_gl.split()[0], callback_data=_gcb, style=_gs),
+                    InlineKeyboardButton(text=_gi, callback_data=_gcb, style=_gs),
+                    InlineKeyboardButton(text=f"{int(o.price_toman or 0) * max(1, int(o.quantity or 1)):,}ت",
+                                         callback_data=_gcb, style=_gs),
+                    InlineKeyboardButton(text=str(o.tracking_code or o.id), callback_data=_gcb, style=_gs),
+                ])
+                continue
             label = _SMM_STATUS_LABEL.get((o.status or "").lower(), o.status or "نامشخص")
             link_short = (o.link or "—")
             if len(link_short) > 16:
@@ -8992,6 +9010,91 @@ async def _smm_myorders_paginated_content(bot_id: int, user_id: int, page: int,
                                           style=ButtonStyle.PRIMARY)])
         rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=home_cb, style=ButtonStyle.DANGER)])
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _my_unified_page(bot_id: int, user_id: int, page: int):
+    """(total, page, total_pages, items) — فهرست ادغام‌شدهٔ «سفارش‌های من»: SMM ('s') + GiftOrder ('g').
+    === PATCH_CUSTOMER_UNIFIED_ORDERS_V1 ===
+    گزارش فدایی: «سفارشات استارز و تون و گیفت و ری‌اکشن استارزی توی لیست سفارشات من کاربر نمی‌آید».
+    «سفارش‌های من» فقط SmmOrder را می‌خواند، ولی این انواع در GiftOrder ذخیره می‌شوند (لیست ادمین از قبل
+    ادغام بود). همان روش ادغام ادمین: از هر نوع تا انتهای صفحهٔ خواسته‌شده می‌خوانیم، با زمان ثبت مرتب
+    می‌کنیم و صفحه را می‌بریم."""
+    size = _SMM_MYORDERS_PAGE_SIZE
+    need = max(1, page) * size
+    async with Session() as s:
+        buyer_pk = await s.scalar(select(BotUser.id).where(
+            BotUser.bot_id == bot_id, BotUser.telegram_id == user_id))
+        qs = [("s", select(SmmOrder).where(SmmOrder.bot_id == bot_id, SmmOrder.user_telegram_id == user_id), SmmOrder)]
+        if buyer_pk is not None:
+            qs.append(("g", select(GiftOrder).where(
+                GiftOrder.bot_id == bot_id, GiftOrder.buyer_user_id == buyer_pk), GiftOrder))
+        total = 0
+        merged = []
+        for typ, q, model in qs:
+            total += int(await s.scalar(select(func.count()).select_from(q.subquery())) or 0)
+            rows = (await s.scalars(q.order_by(model.created_at.desc(), model.id.desc()).limit(need))).all()
+            merged += [(typ, o) for o in rows]
+    merged.sort(key=lambda t: (t[1].created_at or datetime.min, t[1].id), reverse=True)
+    total_pages = max(1, (total + size - 1) // size)
+    page = min(max(1, page), total_pages)
+    return total, page, total_pages, merged[(page - 1) * size: page * size]
+
+
+async def _smm_my_gift_detail_content(bot_id: int, user_id: int, oid: int, back_page: int,
+                                      home_cb: str = "smmu:home") -> tuple[str, InlineKeyboardMarkup]:
+    """جزئیات یک سفارش استارز/تون/گیفت/ری‌اکشن/پریمیوم برای خود مشتری (بدون اطلاعات داخلی).
+    === PATCH_CUSTOMER_UNIFIED_ORDERS_V1 ==="""
+    async with Session() as s:
+        o = await s.get(GiftOrder, oid)
+        buyer = await s.get(BotUser, o.buyer_user_id) if o else None
+    _suffix = ":mbtn" if home_cb == "mbtn:home" else ""
+    back_btn = InlineKeyboardButton(text="⬅️ بازگشت به لیست", callback_data=f"smmu:myorders:{back_page}{_suffix}",
+                                    style=ButtonStyle.DANGER)
+    if not o or o.bot_id != bot_id or buyer is None or buyer.telegram_id != user_id:
+        return "❌ این سفارش پیدا نشد.", InlineKeyboardMarkup(inline_keyboard=[[back_btn]])
+    from tenant import _jalali_date_time
+    date_str, time_str = _jalali_date_time(o.created_at)
+    qty = max(1, int(o.quantity or 1))
+    label = _VS_GIFT_STATUS_LABELS.get((o.status or "").lower(), o.status or "نامشخص")
+    lines = [
+        "📦 <b>جزئیات سفارش</b>\n",
+        f"🛍 محصول: {_html_escape(_vs_gift_item_label(o))}",
+        f"🎯 مقصد: {_html_escape(o.dest_label or '—')}",
+        f"💰 مبلغ پرداختی: {int(o.price_toman or 0) * qty:,} تومان",
+        f"📊 وضعیت: {label}",
+        f"🔖 کد پیگیری: <code>{o.tracking_code or o.id}</code>",
+        f"🗓 تاریخ ثبت: {date_str} {time_str}",
+    ]
+    if qty > 1 and int(o.sent_qty or 0) and (o.status or "") not in ("sent", "completed", "done"):
+        lines.insert(4, f"📦 ارسال‌شده: {int(o.sent_qty or 0)} از {qty}")
+    rows = []
+    if o.tracking_code:
+        rows.append([InlineKeyboardButton(text="📞 پشتیبانی (پیگیری این سفارش)",
+                                          callback_data=f"gift:support:{o.tracking_code}")])
+    rows.append([back_btn])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@smm_router.callback_query(F.data.startswith("smmu:gview:"))
+async def smmu_gift_order_view(cb: CallbackQuery, bot: Bot):
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    if not row:
+        await cb.answer()
+        return
+    parts = cb.data.split(":")
+    try:
+        oid, back_page = int(parts[2]), int(parts[3])
+    except (IndexError, ValueError):
+        await cb.answer()
+        return
+    home_cb = "mbtn:home" if "mbtn" in parts[4:] else "smmu:home"
+    text, kb = await _smm_my_gift_detail_content(row.id, cb.from_user.id, oid, back_page, home_cb=home_cb)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
 
 
 async def _refillable_orders(bot_id: int, user_id: int):
@@ -15824,6 +15927,8 @@ async def _tgt_finalize_prm(bot: Bot, row, order_id: int, order: dict) -> str:
                 logger.exception("tgtools: خبر به مشتریِ پرمیوم ناموفق بود")
         return "completed"
     reason = str(order.get("message") or order.get("errorMessage") or "").strip()
+    if await _tgt_refund_cancelled(bot, row, order_id, reason, "سفارش پرمیوم"):   # PATCH_TGTOOLS_CANCEL_REFUND_V1
+        return "failed"
     await _tgt_revert_manual_prm(
         bot, row, order_id,
         "❌ TGTools سفارش را ناموفق اعلام کرد (طبقِ مستند، مبلغ به کیف‌پولِ TGTools برمی‌گردد)."
@@ -15959,7 +16064,7 @@ async def prm_tgt_check(cb: CallbackQuery, bot: Bot):
         await cb.answer(f"خطا در استعلام: {e.message}"[:190], show_alert=True)
         return
     res = await _tgt_finalize_prm(bot, row, order_id, cur)
-    await cb.answer({"completed": "✅ تحویل داده شده", "failed": "❌ ناموفق — به حالتِ دستی برگشت",
+    await cb.answer({"completed": "✅ تحویل داده شده", "failed": "❌ TGTools لغو/ناموفق اعلام کرد — وضعیت سفارش و پیام ادمین را ببین",
                      "pending": "⏳ هنوز در صف است"}[res], show_alert=True)
     if res != "pending":
         try:
@@ -18141,6 +18246,55 @@ def _tgt_spawn(bot: Bot, row, order_id: int, by_admin: bool = False) -> None:
     t.add_done_callback(_tgt_tasks.discard)
 
 
+async def _tgt_refund_cancelled(bot: Bot, row, order_id: int, reason: str, what: str) -> bool:
+    """=== PATCH_TGTOOLS_CANCEL_REFUND_V1 ===
+    گزارش فدایی: «وقتی TGTools سفارش استارز را لغو می‌کند پیام لغو برای مشتری نمی‌رود و پولش برنمی‌گردد».
+    قبلا هر رد TGTools فقط سفارش را به «در انتظار ادمین» برمی‌گرداند و هیچ خبری به مشتری نمی‌رفت؛ اگر ادمین
+    هم متوجه نمی‌شد، مشتری برای همیشه منتظر می‌ماند.
+    حالا وقتی TGTools سفارشی را که پذیرفته بود «Failed/لغو» اعلام می‌کند (طبق مستند پول به کیف‌پول TGTools برمی‌گردد،
+    پس سفارش قطعا انجام نشده): وجه کیف‌پول مشتری برمی‌گردد، وضعیت «بازگشت وجه» می‌شود، به مشتری خبر می‌رسد
+    (متن لغو تنظیم‌شده توسط مالک اعمال می‌شود) و ادمین هم باخبر می‌شود. فقط:
+      • پرداخت کیف‌پولی (کارت‌به‌کارت از کیف‌پول کم نشده؛ همان مسیر دستی)،
+      • وقتی هنوز چیزی تحویل نشده (sent_qty=0)،
+      • و مالک «🤖 TGTools ← بازگشت خودکار» را خاموش نکرده باشد (تنظیم tgtools_cancel_refund).
+    خروجی True یعنی رسیدگی شد و نباید به مسیر دستی برگردد."""
+    if (await _get_setting(row.id, "tgtools_cancel_refund", "1")) == "0":
+        return False
+    from tenant.bots.virtual_service.vs_discount import vsd_revert_order
+    async with Session() as s:
+        o = await s.get(GiftOrder, order_id, with_for_update=True)
+        if (not o or o.bot_id != row.id or o.status != "auto_processing"
+                or (o.pay_method or "wallet") != "wallet" or int(o.sent_qty or 0) > 0):
+            return False
+        buyer = await s.get(BotUser, o.buyer_user_id, with_for_update=True)
+        if buyer is None:
+            return False
+        refund = int(o.price_toman or 0) * max(1, int(o.quantity or 1))
+        o.status = "refunded"
+        o.fail_reason = (reason or "")[:500] or None
+        await vsd_revert_order(s, o, buyer.telegram_id)
+        buyer.balance = float(buyer.balance or 0) + refund
+        s.add(WalletTxn(bot_id=row.id, user_id=buyer.id, amount=refund, kind="charge",
+                        note=f"بازگشت وجه {what} (لغو توسط TGTools)"))
+        trk, buyer_tg = o.tracking_code, buyer.telegram_id
+        await s.commit()
+    try:
+        await bot.send_message(
+            buyer_tg,
+            f"❌ متاسفانه سفارشت توسط ارائه‌دهنده لغو شد و مبلغ {refund:,} تومان به کیف‌پولت برگشت.\n"
+            f"🔖 کد پیگیری: <code>{trk}</code>\n\n"
+            "اگر فکر می‌کنی اشتباهی رخ داده، از دکمهٔ پشتیبانی پیام بده.",
+            parse_mode="HTML", reply_markup=await _gift_support_kb(trk))
+    except Exception:
+        logger.exception("tgtools: خبر لغو به مشتری ناموفق بود")
+    await _notify_manual_order(
+        bot, row,
+        f"↩️ TGTools {what} #{await order_no(GiftOrder, order_id)} را لغو کرد؛ {refund:,} تومان خودکار به کیف‌پول مشتری "
+        f"برگشت و به او خبر داده شد.\n🔖 کد: {trk}" + (f"\nعلت: {_html_escape(reason)}" if reason else "") +
+        "\n\nاگر ترجیح می‌دهی در این حالت سفارش به «تحویل دستی» برگردد، در «🤖 TGTools» گزینهٔ «بازگشت خودکار وجه» را خاموش کن.")
+    return True
+
+
 async def _tgt_revert_manual(bot: Bot, row, order_id: int, reason: str, *, warn: bool = False) -> None:
     """برگرداندنِ سفارش به تحویلِ دستی + خبر به ادمین (با دکمه‌هایِ انجام شد/رد)."""
     from tenant import _notify_admins
@@ -18192,6 +18346,8 @@ async def _tgt_finalize(bot: Bot, row, order_id: int, order: dict) -> str:
         return "completed"
     # failed
     reason = str(order.get("message") or order.get("errorMessage") or "").strip()
+    if await _tgt_refund_cancelled(bot, row, order_id, reason, "سفارش استارز"):   # PATCH_TGTOOLS_CANCEL_REFUND_V1
+        return "failed"
     await _tgt_revert_manual(
         bot, row, order_id,
         "❌ TGTools سفارش را ناموفق اعلام کرد (طبقِ مستند، مبلغ به کیف‌پولِ TGTools برمی‌گردد)."
@@ -18534,7 +18690,7 @@ async def star_tgt_check(cb: CallbackQuery, bot: Bot):
         await cb.answer(f"خطا در استعلام: {e.message}"[:190], show_alert=True)
         return
     res = await _tgt_finalize(bot, row, order_id, cur)
-    await cb.answer({"completed": "✅ تحویل داده شده", "failed": "❌ ناموفق — به حالتِ دستی برگشت",
+    await cb.answer({"completed": "✅ تحویل داده شده", "failed": "❌ TGTools لغو/ناموفق اعلام کرد — وضعیت سفارش و پیام ادمین را ببین",
                      "pending": "⏳ هنوز در صف است"}[res], show_alert=True)
     if res != "pending":   # PATCH_ADMIN_MSG_CLOSE_V1
         try:
@@ -18727,6 +18883,8 @@ async def tgtools_fulfil_gift(bot: Bot, row, order_id: int, *, by_admin: bool = 
                 return
             if st == "failed":
                 reason = str(cur.get("message") or cur.get("errorMessage") or "").strip()
+                if await _tgt_refund_cancelled(bot, row, order_id, reason, "سفارش گیفت"):   # PATCH_TGTOOLS_CANCEL_REFUND_V1
+                    return
                 await _tgt_revert_manual_gift(
                     bot, row, order_id,
                     "❌ TGTools سفارش را ناموفق اعلام کرد (طبقِ مستند، مبلغ به کیف‌پولِ TGTools برمی‌گردد)."
@@ -19049,8 +19207,10 @@ async def _tgt_menu_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
             _tr = 0
         if _tr <= 0:
             lines.append("⚠️ نرخِ تومانیِ هر TON تنظیم نشده (در «مارکتِ NFT ← نرخ‌ها»)؛ تا آن موقع قیمتِ پرمیوم از فرمولِ استارزیِ قبلی می‌آید.")
+    _rfd_on = (await _get_setting(bot_id, "tgtools_cancel_refund", "1")) != "0"   # PATCH_TGTOOLS_CANCEL_REFUND_V1
     lines.append("• سفارش‌هایِ کارت‌به‌کارت بعد از تاییدِ رسیدِ خودت، با دکمهٔ «🤖 ارسال خودکار» می‌روند.\n"
                  "• هر خطایی → سفارش به تحویلِ دستی برمی‌گردد و خبرت می‌کنم.\n"
+                 f"• اگر TGTools سفارشی را که پذیرفته بود لغو کند: {'پول مشتری خودکار برمی‌گردد و پیام لغو برایش می‌رود ✅' if _rfd_on else 'سفارش به تحویل دستی برمی‌گردد (بازگشت خودکار خاموش است)'}.\n"
                  "• قیمتِ TGTools به TON است؛ نرخِ تومانیِ فروش را طوری بگذار که سود بماند.")
     rows = []
     rows.append([InlineKeyboardButton(text=("🔑 تغییرِ کلید" if key else "🔑 ثبتِ کلیدِ API"),
@@ -19068,6 +19228,11 @@ async def _tgt_menu_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
             text=("🎁 گیفتِ خودکار: روشن ✅" if gft_on else "🎁 گیفتِ خودکار: خاموش"),
             callback_data="ssl:tgt:gift",
             style=(ButtonStyle.SUCCESS if gft_on else ButtonStyle.PRIMARY))])
+        rows.append([InlineKeyboardButton(
+            text=("↩️ لغو توسط TGTools ← بازگشت خودکار وجه: روشن ✅" if _rfd_on
+                  else "↩️ لغو توسط TGTools ← بازگشت خودکار وجه: خاموش"),
+            callback_data="ssl:tgt:rfd",
+            style=(ButtonStyle.SUCCESS if _rfd_on else ButtonStyle.PRIMARY))])
         rows.append([InlineKeyboardButton(text="🔄 به‌روزرسانیِ موجودی", callback_data="ssl:tgt")])
         async with Session() as s:
             pend = (await s.scalars(select(GiftOrder).where(
@@ -19206,6 +19371,20 @@ async def ssl_tgt_gift_toggle(cb: CallbackQuery, bot: Bot):
     await _set_setting(row.id, "tgtools_gift", "0" if cur else "1")
     await cb.answer("خاموش شد؛ گیفت‌هایِ «تحویلِ دستی» مثلِ قبل دستی هستند (دکمهٔ «🤖 خرید با TGTools» همچنان هست)." if cur
                     else "روشن شد — گیفتِ کاتالوگیِ «تحویلِ دستی» (و بعد از تاییدِ رسیدِ کارت) خودکار با TGTools خریده می‌شود.",
+                    show_alert=True)
+    await _tgt_show_menu(cb, row.id)
+
+
+@smm_router.callback_query(F.data == "ssl:tgt:rfd")
+async def ssl_tgt_refund_toggle(cb: CallbackQuery, bot: Bot):
+    """=== PATCH_TGTOOLS_CANCEL_REFUND_V1 ==="""
+    row = await _tgt_owner_strict(cb, bot)
+    if not row:
+        return
+    cur = (await _get_setting(row.id, "tgtools_cancel_refund", "1")) != "0"
+    await _set_setting(row.id, "tgtools_cancel_refund", "0" if cur else "1")
+    await cb.answer("خاموش شد؛ اگر TGTools سفارشی را لغو کند، سفارش به تحویل دستی برمی‌گردد و مشتری خبری نمی‌گیرد." if cur
+                    else "روشن شد — اگر TGTools سفارشی را لغو کند، پول مشتری برمی‌گردد و پیام لغو برایش می‌رود.",
                     show_alert=True)
     await _tgt_show_menu(cb, row.id)
 

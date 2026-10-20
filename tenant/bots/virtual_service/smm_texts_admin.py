@@ -4,6 +4,8 @@ smm_texts_admin.py — PATCH_SMM_CUSTOM_TEXTS_V1
 """
 from __future__ import annotations
 
+import re
+
 from aiogram import Bot, F, Router
 from aiogram.enums import ButtonStyle
 from aiogram.fsm.context import FSMContext
@@ -21,6 +23,41 @@ smm_texts_router = Router()
 
 class TxtFSM(StatesGroup):
     edit = State()
+
+
+# === PATCH_TEXT_FORMATTING_V1 ===
+# گزارش فدایی: «می‌توانیم توی متن‌های اطلاع‌رسانی سفارش از حالت‌های متن تلگرام (بولد و …) استفاده کنیم؟»
+# پیام‌ها با HTML فرستاده می‌شوند، پس تگ‌های HTML کار می‌کردند، ولی متن بولد‌شده با خود تلگرام فقط به‌صورت
+# متن ساده ذخیره می‌شد (قالب گم می‌شد) و یک تگ ناقص باعث ارسال‌نشدن کل پیام می‌شد.
+_FORMAT_ENTITIES = {"bold", "italic", "underline", "strikethrough", "spoiler", "code", "pre", "text_link",
+                    "blockquote", "expandable_blockquote"}
+_TG_TAGS = {"b", "strong", "i", "em", "u", "ins", "s", "strike", "del", "code", "pre", "a", "tg-spoiler",
+            "blockquote", "tg-emoji"}
+_TAG_RE = re.compile(r"<(/?)([A-Za-z][A-Za-z0-9-]*)(?:\s[^<>]*)?>")
+
+
+def html_problem(text: str) -> str | None:
+    """None اگر متن برای ارسال با HTML تلگرام سالم است؛ وگرنه توضیح فارسی مشکل."""
+    stack: list[str] = []
+    pos = 0
+    for m in _TAG_RE.finditer(text):
+        if "<" in text[pos:m.start()]:
+            return "علامت «<» تنها یا تگ ناشناخته دارد (برای نوشتن خود علامت از &lt; استفاده کن)."
+        pos = m.end()
+        closing, name = m.group(1) == "/", m.group(2).lower()
+        if name not in _TG_TAGS:
+            return f"تگ «{name}» را تلگرام نمی‌شناسد (مجاز: b, i, u, s, code, pre, a, blockquote, tg-spoiler)."
+        if closing:
+            if not stack or stack[-1] != name:
+                return f"تگ بستن «{name}» جای درستی نیست."
+            stack.pop()
+        else:
+            stack.append(name)
+    if "<" in text[pos:]:
+        return "علامت «<» تنها یا تگ ناشناخته دارد (برای نوشتن خود علامت از &lt; استفاده کن)."
+    if stack:
+        return f"تگ «{stack[-1]}» بسته نشده."
+    return None
 
 
 # === PATCH_SMM_ADMIN_ALERT_TOGGLES_V1 === (کلیدِ تنظیم، برچسبِ دکمه)
@@ -146,6 +183,9 @@ async def smmtxt_edit(cb: CallbackQuery, bot: Bot, state: FSMContext):
         "متنِ تازه را بفرست. متغیرها مجازند، مثلاً <code>{{product_name}}</code> "
         "<code>{{quantity}}</code> <code>{{amount}}</code> <code>{{link}}</code> "
         "<code>{{order_id}}</code> (لیستِ کامل در منویِ قبلی).\n"
+        "🎨 قالب‌بندی: می‌توانی متن را در خود تلگرام بولد/ایتالیک/… کنی و بفرستی (یا از تگ استفاده کنی: "
+        "<code>&lt;b&gt;پررنگ&lt;/b&gt;</code> <code>&lt;i&gt;کج&lt;/i&gt;</code> <code>&lt;u&gt;زیرخط&lt;/u&gt;</code> "
+        "<code>&lt;code&gt;کپی‌شدنی&lt;/code&gt;</code> <code>&lt;blockquote&gt;نقل‌قول&lt;/blockquote&gt;</code>).\n"
         "برایِ برگشت به پیش‌فرض، کلمهٔ <code>پیشفرض</code> را بفرست.",
         reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
     await cb.answer()
@@ -158,15 +198,24 @@ async def smmtxt_save(msg: Message, bot: Bot, state: FSMContext):
     row = await _owner(msg, bot)
     data = await state.get_data()
     key = data.get("smmtxt_key")
-    await state.clear()
     if not row or key not in TEXTS:
+        await state.clear()
         return
     t = (msg.text or "").strip()
+    if t not in ("پیشفرض", "پیش‌فرض", "default"):
+        # === PATCH_TEXT_FORMATTING_V1 === بولد/ایتالیک/… که با خود تلگرام زده شده به HTML تبدیل می‌شود
+        if any(getattr(e, "type", None) in _FORMAT_ENTITIES for e in (msg.entities or [])):
+            t = (msg.html_text or t).strip()
+        _prob = html_problem(t)
+        if _prob:
+            await msg.answer(f"❌ قالب متن ایراد دارد: {_prob}\nاصلاحش کن و دوباره بفرست (یا لغو کن).")
+            return                      # حالت ویرایش باز می‌ماند
+    await state.clear()
     if t in ("پیشفرض", "پیش‌فرض", "default"):
         await set_setting(row.id, f"smm_txt_{key}", "")
         await msg.answer("♻️ به متنِ پیش‌فرض برگشت.")
     else:
-        await set_setting(row.id, f"smm_txt_{key}", t[:1000])
+        await set_setting(row.id, f"smm_txt_{key}", t[:2000])
         await msg.answer("✅ ذخیره شد.")
     await _show(msg, row.id)
 

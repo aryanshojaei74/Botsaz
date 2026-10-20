@@ -315,9 +315,12 @@ async def _order_values(names: set[str], bot_id: int | None, order) -> dict[str,
         v["order_time"] = _esc(f"{jd} — {jt}" if ca else "—")
     if "status" in names:
         st = getattr(o, "status", "") or ""
+        if getattr(o, "status_label", None):     # PATCH_VS_CUSTOM_TEXTS_CHAINS_V1: برچسب آماده (سفارش‌های استارز/تون/گیفت)
+            st = o.status_label
         try:
-            from tenant.bots.virtual_service.smm import _SMM_STATUS_LABEL
-            st = _SMM_STATUS_LABEL.get(st, st)
+            if not getattr(o, "status_label", None):
+                from tenant.bots.virtual_service.smm import _SMM_STATUS_LABEL
+                st = _SMM_STATUS_LABEL.get(st, st)
         except Exception:
             logger.exception("[text_vars] برچسبِ فارسیِ وضعیتِ سفارش خوانده نشد (کدِ خام نشان داده شد)")
         v["status"] = _esc(st or "—")
@@ -371,7 +374,7 @@ async def _order_values(names: set[str], bot_id: int | None, order) -> dict[str,
             logger.exception("[text_vars] خواندنِ ریفیلِ سفارش ناموفق بود")
         v["refill_id"], v["refill_status"] = rid, rst
     if "category" in names:
-        cat = "—"
+        cat = getattr(o, "category_label", None) or "—"
         pk = getattr(o, "smm_service_pk", None)
         if pk:
             try:
@@ -390,7 +393,7 @@ async def _order_values(names: set[str], bot_id: int | None, order) -> dict[str,
                 logger.exception("[text_vars] پیداکردنِ دستهٔ محصولِ سفارش ناموفق بود")
         v["category"] = _esc(cat)
     if "platform" in names:
-        plat = "—"
+        plat = getattr(o, "platform_label", None) or "—"
         pk = getattr(o, "smm_service_pk", None)
         if pk:
             try:
