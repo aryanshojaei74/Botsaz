@@ -142,6 +142,10 @@ async def test_pay_triggers_auto_purchase_once_and_completes(env):
     key, username, months, code = env["calls"]["buy"][0]
     assert (key, username, months) == ("tgt_FAKEKEY123456", "aliuser", 3) and code == f"b{env['bid']}-o{o.id}"
     assert await balance(env) == 5_000_000 - round(8.1585 * 100000 * 1.10)
+    for _ in range(100):                      # پیامِ «تکمیل شد» بعد از ثبتِ وضعیتِ sent از همان تسکِ پس‌زمینه می‌رود
+        if any("تکمیل شد" in t for t in env["cap"].texts(USER)):
+            break
+        await asyncio.sleep(0.02)
     assert any("تکمیل شد" in t for t in env["cap"].texts(USER))
 
 
