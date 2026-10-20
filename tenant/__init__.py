@@ -904,6 +904,7 @@ async def send_home_menu(target, bot_id: int, reply_markup=None, *,
                 reply_markup = await translate_kb_labels(bot_id, reply_markup, "en")
     except Exception:
         logger.exception("ترجمهٔ دکمه‌هایِ منویِ اصلی ناموفق بود؛ نسخهٔ فارسی نمایش داده می‌شود")
+    _flow_kb_clear(bot_id, getattr(getattr(target, "from_user", None), "id", None))   # PATCH_FLOW_BACK_KB_V1
     hidden = (not prefix) and await home_menu_text_hidden(bot_id)
     if hidden:
         # === PATCH_CUSTOM_HOME_MENU_TEXT_HIDE_V3 ===
@@ -2626,6 +2627,66 @@ def _last_menu_for(bot_id: int):
     if not hit or _time_bm.monotonic() - hit[1] > _LAST_MENU_TTL:
         return None
     return hit[0]
+
+
+# === PATCH_FLOW_BACK_KB_V1 ===
+# گزارش ایلیا: در منوی کیبوردی، با انتخاب سرویس کل کیبورد بسته می‌شد و «بازگشت به منو» هم از دست می‌رفت.
+# حالا کیبورد قبلی با یک کیبورد تک‌دکمه‌ای «⬅️ بازگشت به منو» عوض می‌شود: شلوغ نمی‌شود ولی راه برگشت داخل
+# منو می‌ماند. دکمه کاربر را به همان زیرمنویی که از آن آمده برمی‌گرداند (وگرنه صفحهٔ اصلی). حافظه‌ای است؛ اگر
+# ری‌استارت شود دکمه همچنان کار می‌کند ولی می‌رود صفحهٔ اصلی.
+_FLOW_KB: dict = {}
+_FLOW_KB_TTL = 6 * 3600
+
+
+def _flow_kb_mark(bot_id: int, uid: int, sub_id) -> None:
+    now = _time_bm.monotonic()
+    if len(_FLOW_KB) > 5000:
+        for k in [k for k, v in _FLOW_KB.items() if now - v[1] > _FLOW_KB_TTL]:
+            _FLOW_KB.pop(k, None)
+    _FLOW_KB[(int(bot_id), int(uid))] = (int(sub_id) if sub_id else None, now)
+
+
+def _flow_kb_peek(bot_id: int, uid: int):
+    """(فعال؟، شناسهٔ زیرمنوی مبدأ یا None)."""
+    hit = _FLOW_KB.get((int(bot_id), int(uid)))
+    if not hit or _time_bm.monotonic() - hit[1] > _FLOW_KB_TTL:
+        return False, None
+    return True, hit[0]
+
+
+def _flow_kb_clear(bot_id: int, uid: int | None) -> None:
+    if uid:
+        _FLOW_KB.pop((int(bot_id), int(uid)), None)
+
+
+async def _send_kb_bubble(msg_obj, bot_id: int, kb):
+    """کیبورد پایین فقط با ارسال یک پیام عوض می‌شود و پاک‌کردن همان پیام کیبورد را هم می‌اندازد (آزموده‌شده، بالاتر ببین)؛
+    پس پیام حامل با متن نامرئی می‌ماند و فقط بابل نامرئی *قبلی* پاک می‌شود تا تلنبار نشوند."""
+    chat_id = getattr(getattr(msg_obj, "chat", None), "id", None)
+    key = (bot_id, chat_id)
+    prev = _HIDDEN_HOME_BUBBLES.pop(key, None)
+    try:
+        sent = await msg_obj.answer(HOME_MENU_TEXT_HIDDEN_MARK, reply_markup=kb)
+    except Exception:
+        logger.warning("متن نامرئی کیبورد بازگشت رد شد؛ متن عادی فرستاده می‌شود (bot_id=%s)", bot_id)
+        return await msg_obj.answer("⬇️", reply_markup=kb)
+    if chat_id is not None:
+        _HIDDEN_HOME_BUBBLES[key] = sent.message_id
+        if prev and prev != sent.message_id:
+            try:
+                await sent.bot.delete_message(chat_id, prev)
+            except Exception:
+                logger.info("پاک‌کردن بابل نامرئی قبلی ممکن نشد (bot_id=%s)", bot_id)
+    return sent
+
+
+async def flow_back_kb(msg: Message, bot_id: int):
+    """جایگزین کیبورد منو در صفحه‌های مرحله‌ای خرید: فقط «⬅️ بازگشت به منو» (همیشه دیده می‌شود)."""
+    uid = msg.from_user.id
+    _flow_kb_mark(bot_id, uid, _last_menu_for(bot_id))
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=BTN_BACK_MENU)]], resize_keyboard=True,
+                             is_persistent=True)
+    return await _send_kb_bubble(msg, bot_id, kb)
 
 
 async def _cur_uid_mw(handler, event, data):
@@ -4490,6 +4551,44 @@ async def home_kb_pressed(msg: Message, bot: Bot, state: FSMContext):
     await tenant_start(msg, CommandObject(prefix="/", command="start", args=None), bot, state)
 
 
+async def _is_flow_back_press(msg: Message, bot: Bot) -> bool:
+    """=== PATCH_FLOW_BACK_KB_V1 === «⬅️ بازگشت به منو» از کیبورد تک‌دکمه‌ای صفحه‌های خرید؛ فقط وقتی آن کیبورد را ما
+    برای همین کاربر گذاشته‌ایم. در هر وضعیت FSM کار می‌کند (وگرنه وسط مرحله‌ای متنی به‌جای برگشت، ورودی کاربر حساب می‌شد)."""
+    if msg.text != BTN_BACK_MENU or msg.chat.type != "private" or not msg.from_user:
+        return False
+    row = await get_bot_row(bot)
+    return bool(row) and _flow_kb_peek(row.id, msg.from_user.id)[0]
+
+
+@tenant_router.message(_is_flow_back_press)
+async def flow_back_pressed(msg: Message, bot: Bot, state: FSMContext):
+    row = await get_bot_row(bot)
+    if not row:
+        return
+    uid = msg.from_user.id
+    if row.status == "paused" and not await is_owner_or_admin(row.id, uid, row.owner_id):
+        raise SkipHandler                      # پیام «در حال به‌روزرسانی» را هندلر عمومی می‌دهد
+    u = await get_or_create_user(row.id, uid, msg.from_user.full_name, msg.from_user.username or "")
+    if u.is_banned and not _is_platform_admin(uid):
+        return
+    _, sub_id = _flow_kb_peek(row.id, uid)
+    _flow_kb_clear(row.id, uid)
+    await state.clear()                        # مرحلهٔ نیمه‌کارهٔ خرید رها می‌شود
+    btn = None
+    if sub_id:
+        async with Session() as s:
+            btn = await s.get(MainButton, sub_id)
+        if (not btn or btn.bot_id != row.id or btn.action != "submenu"
+                or btn.id in await _disabled_btn_ids(row.id)):
+            btn = None                         # زیرمنو دیگر نیست/غیرفعال شده ⇒ صفحهٔ اصلی
+    if btn:
+        await _render_reply_submenu(msg, row.id, btn, state)
+        return
+    _set_last_menu(row.id, uid, None)
+    kb = await main_kb_or_remove(row.id, row.owner_id, uid)
+    await send_home_menu(msg, row.id, kb or ReplyKeyboardRemove())
+
+
 @tenant_router.message(CommandStart())
 async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FSMContext):
     await state.clear()
@@ -5528,7 +5627,14 @@ async def _render_reply_submenu(msg: Message, bot_id: int, btn: "MainButton", st
         await state.update_data(cur_submenu_id=btn.id)
         # === PATCH_FLOW_BACK_TO_SUBMENU_V1 === (ایلیا) صفحه‌هایِ خرید «بازگشت به منو» را به همین زیرمنو برمی‌گردانند، نه صفحهٔ اصلی
         _set_last_menu(bot_id, msg.from_user.id, btn.id)
+        _flow_kb_clear(bot_id, msg.from_user.id)        # PATCH_FLOW_BACK_KB_V1 — کیبورد زیرمنو جایگزین کیبورد تک‌دکمه‌ای شد
         await msg.answer(_sm_head, reply_markup=kb)
+        _stale = _HIDDEN_HOME_BUBBLES.pop((bot_id, getattr(getattr(msg, "chat", None), "id", None)), None)
+        if _stale:                                      # بابل نامرئی کیبورد تک‌دکمه‌ای دیگر لازم نیست (کیبورد تازه‌تر آمد)
+            try:
+                await msg.bot.delete_message(msg.chat.id, _stale)
+            except Exception:
+                logger.info("پاک‌کردن بابل نامرئی قبلی ممکن نشد (bot_id=%s)", bot_id)
     elif not btn.message:
         await msg.answer("🗂 این زیرمنو هنوز دکمه‌ای ندارد.")
 

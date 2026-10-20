@@ -18,10 +18,14 @@ def _msg(is_bot=False, text="(C) برنزی"):
 
     async def answer(t, **k):
         sent.append((t, k.get("reply_markup")))
+        mid = 100 + len(sent)
 
         async def delete():
             sent.append("deleted")
-        return SimpleNamespace(delete=delete)
+
+        async def delete_message(chat_id, message_id):
+            sent.append(("del", message_id))
+        return SimpleNamespace(delete=delete, message_id=mid, bot=SimpleNamespace(delete_message=delete_message))
     object.__setattr__(m, "answer", answer)
     return m, sent
 
@@ -33,10 +37,20 @@ async def _run(monkeypatch, msg, mode):
     await VU._drop_reply_kb(msg, 1)
 
 
-async def test_keyboard_mode_user_press_removes_then_deletes(monkeypatch):
+async def test_keyboard_mode_user_press_swaps_in_the_one_button_back_keyboard(monkeypatch):
+    """PATCH_FLOW_BACK_KB_V1 — کیبورد قبلی برداشته می‌شود ولی «⬅️ بازگشت به منو» داخل منو می‌ماند (و پیام حامل پاک نمی‌شود)."""
+    from aiogram.types import ReplyKeyboardMarkup
+    tenant._HIDDEN_HOME_BUBBLES.clear()
+    tenant._FLOW_KB.clear()
     m, sent = _msg()
     await _run(monkeypatch, m, "reply")
-    assert isinstance(sent[0][1], ReplyKeyboardRemove) and sent[1] == "deleted"
+    text, kb = sent[0]
+    assert text == tenant.HOME_MENU_TEXT_HIDDEN_MARK and isinstance(kb, ReplyKeyboardMarkup)
+    assert [[b.text for b in row] for row in kb.keyboard] == [[tenant.BTN_BACK_MENU]] and kb.is_persistent
+    assert "deleted" not in sent                                  # حذف پیام حامل کیبورد را هم می‌اندازد
+    assert tenant._flow_kb_peek(1, 5) == (True, None)
+    tenant._FLOW_KB.clear()
+    tenant._HIDDEN_HOME_BUBBLES.clear()
 
 
 async def test_skipped_for_inline_mode_and_bot_messages(monkeypatch):

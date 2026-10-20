@@ -125,20 +125,20 @@ _vpn_action_inflight: set[str] = set()
 # === PATCH_FLOW_DROP_REPLY_KB_V1 ===
 # گزارشِ ایلیا: در منویِ کیبوردی، وقتی مشتری دکمهٔ خرید (مثلاً «(C) برنزی») را می‌زند و وارد صفحه‌هایِ مرحله‌ای
 # (انتخابِ سرور، نامِ دلخواه، حجم/روز/تعدادِ دلخواه) می‌شود، منویِ کیبوردیِ قبلی هنوز زیرِ صفحه می‌ماند و شلوغ/گیج‌کننده است.
-# تلگرام فقط با یک پیام می‌گذارد کیبوردِ پایین پاک شود؛ پس یک پیامِ نامرئی با ReplyKeyboardRemove می‌فرستیم و پاکش می‌کنیم.
+# === PATCH_FLOW_BACK_KB_V1 === ولی با برداشتن کامل کیبورد «بازگشت به منو» هم از دست می‌رفت (گزارش بعدی ایلیا): حالا
+# کیبورد قبلی با یک کیبورد تک‌دکمه‌ای «⬅️ بازگشت به منو» عوض می‌شود (tenant.flow_back_kb)؛ دکمه به همان زیرمنو برمی‌گردد.
 # فقط وقتی فراخوان «پیامِ واقعیِ کاربر» باشد (یعنی از یک دکمهٔ کیبوردی آمده، نه از کلیکِ اینلاین) و ربات در حالتِ کیبوردی باشد.
 async def _drop_reply_kb(msg, bot_id: int) -> None:
     try:
         if not (isinstance(msg, Message) and msg.text and getattr(msg, "from_user", None)
                 and not msg.from_user.is_bot):
             return
-        from tenant import get_setting, HOME_MENU_TEXT_HIDDEN_MARK
+        from tenant import get_setting, flow_back_kb
         if await get_setting(bot_id, "menu_mode", "reply") == "inline":
             return
-        m = await msg.answer(HOME_MENU_TEXT_HIDDEN_MARK, reply_markup=ReplyKeyboardRemove())
-        await m.delete()
+        await flow_back_kb(msg, bot_id)
     except Exception:
-        logger.info("vpn: برداشتنِ کیبوردِ قبلی ممکن نشد (بی‌اهمیت)")
+        logger.info("vpn: جایگزینی کیبورد قبلی با کیبورد بازگشت ممکن نشد (بی‌اهمیت)")
 
 
 async def _with_home_row(kb: InlineKeyboardMarkup, bot_id: int) -> InlineKeyboardMarkup:
