@@ -513,3 +513,74 @@ def test_fix_media_refuses_to_rewrite_requirements_when_the_text_may_be_truncate
     rc, out = _run_main(monkeypatch, capsys, _Store({"requirements.txt": REQ_OLD, "bot.py": BOT_OLD}),
                         ["--fix-media", "--restart"], tmp_path)
     assert "--restart بدون --apply اثری ندارد" in out
+
+
+# ═══════════ PATCH_HOSTED_MEDIA_EXPORT_V1 — --export / --send ═══════════
+
+def test_build_multipart_has_fields_file_and_closing_boundary():
+    boundary, body = CH.build_multipart({"chat_id": "42", "caption": "c"}, "document", 'a"b.py', "x = 1\n".encode())
+    text = body.decode()
+    assert text.count(f"--{boundary}\r\n") == 3 and text.rstrip().endswith(f"--{boundary}--")   # ۲ فیلد + ۱ فایل + مرز پایانی
+    assert 'name="chat_id"\r\n\r\n42' in text and 'name="caption"\r\n\r\nc' in text
+    assert 'name="document"; filename="a_b.py"' in text and "x = 1\n" in text      # گیومهٔ نام فایل بی‌خطر شد
+
+
+def test_export_dry_run_writes_the_fixed_files_and_never_touches_the_server(monkeypatch, capsys, tmp_path):
+    store = _Store({"requirements.txt": REQ_OLD, "bot.py": BOT_OLD})
+    out_dir = tmp_path / "out"
+    rc, out = _run_main(monkeypatch, capsys, store, ["--export", str(out_dir)], tmp_path / "bk")
+    assert store.posts == [] and store.actions == [] and store.files["requirements.txt"] == REQ_OLD
+    fixed_req = (out_dir / "requirements.txt").read_text(encoding="utf-8")
+    fixed_bot = (out_dir / "bot.py").read_text(encoding="utf-8")
+    assert fixed_req == "aiogram==3.4\nmoviepy==1.0.3\nqrcode[pil]\nimageio-ffmpeg\n"
+    assert CH.SHIM_MARK in fixed_bot and "from moviepy.editor import VideoFileClip" in fixed_bot
+    compile(fixed_bot, "bot.py", "exec")
+    readme = (out_dir / "README.txt").read_text(encoding="utf-8")
+    assert "requirements.txt" in readme and "1.0.3" in readme and "bot.py" in readme and "برمی‌گردد" in readme
+    assert str(out_dir) in out and "requirements.txt" in out and "bot.py" in out
+
+
+def test_export_after_apply_gives_the_current_already_fixed_versions(monkeypatch, capsys, tmp_path):
+    store = _Store({"requirements.txt": REQ_OLD, "bot.py": BOT_OLD})
+    _run_main(monkeypatch, capsys, store, ["--fix-media", "--apply"], tmp_path / "bk")
+    fixed = dict(store.files)
+    posts = len(store.posts)
+    out_dir = tmp_path / "out2"
+    rc, out = _run_main(monkeypatch, capsys, store, ["--export", str(out_dir)], tmp_path / "bk")
+    assert len(store.posts) == posts                                               # دوباره چیزی نوشته نشد
+    assert (out_dir / "requirements.txt").read_text(encoding="utf-8") == fixed["requirements.txt"]
+    assert (out_dir / "bot.py").read_text(encoding="utf-8") == fixed["bot.py"]
+    assert "چیزی برای نوشتن نیست" in out
+
+
+def test_export_send_delivers_each_file_and_the_note_to_the_platform_admin_without_printing_the_token(monkeypatch, capsys, tmp_path):
+    store = _Store({"requirements.txt": REQ_OLD, "bot.py": BOT_OLD})
+    docs, msgs = [], []
+    monkeypatch.setattr(CH, "tg_send_document", lambda tok, chat, name, content, caption="": (docs.append((tok, chat, name, content, caption)) or (True, "")))
+    monkeypatch.setattr(CH, "tg_send_message", lambda tok, chat, text: (msgs.append((tok, chat, text)) or (True, "")))
+    monkeypatch.setattr(CH, "_load_env_file", lambda path: {})
+    monkeypatch.setenv("PLATFORM_BOT_TOKEN", "123456789:SECRET_TOKEN_VALUE_abcdefghijklmnopqrstuvwxyz")
+    monkeypatch.setenv("PLATFORM_ADMIN_ID", "4242")
+    rc, out = _run_main(monkeypatch, capsys, store, ["--export", str(tmp_path / "o"), "--send"], tmp_path / "bk")
+    assert [(d[0][:10], d[1], d[2]) for d in docs] == [("123456789:", 4242, "requirements.txt"), ("123456789:", 4242, "bot.py")]
+    assert docs[0][3].decode() == "aiogram==3.4\nmoviepy==1.0.3\nqrcode[pil]\nimageio-ffmpeg\n" and "klexshopbot" in docs[0][4]
+    assert len(msgs) == 1 and msgs[0][1] == 4242 and "requirements.txt" in msgs[0][2]
+    assert "SECRET_TOKEN_VALUE" not in out and store.posts == []
+
+
+def test_export_send_without_token_reports_it_and_keeps_the_files(monkeypatch, capsys, tmp_path):
+    store = _Store({"requirements.txt": REQ_OLD, "bot.py": BOT_OLD})
+    monkeypatch.setattr(CH, "_load_env_file", lambda path: {})
+    monkeypatch.setenv("PLATFORM_BOT_TOKEN", "")
+    monkeypatch.setenv("PLATFORM_ADMIN_ID", "0")
+    rc, out = _run_main(monkeypatch, capsys, store, ["--export", str(tmp_path / "o"), "--send"], tmp_path / "bk")
+    assert "PLATFORM_BOT_TOKEN" in out and (tmp_path / "o" / "bot.py").exists() and rc == 1
+
+
+def test_export_warns_when_a_file_contains_a_bot_token_and_skips_projects_without_moviepy(monkeypatch, capsys, tmp_path):
+    store = _Store({"requirements.txt": REQ_OLD, "bot.py": BOT_OLD + f'TOKEN = "{OLD}"\n'})
+    rc, out = _run_main(monkeypatch, capsys, store, ["--export", str(tmp_path / "o")], tmp_path / "bk")
+    assert "توکن ربات هست" in out and OLD not in out                                # هشدار، بدون چاپ توکن
+    store2 = _Store({"requirements.txt": "aiogram\n", "bot.py": "print('hi')\n"})
+    rc, out2 = _run_main(monkeypatch, capsys, store2, ["--export", str(tmp_path / "o2")], tmp_path / "bk")
+    assert "فایلی برای export نیست" in out2 and not (tmp_path / "o2").exists()

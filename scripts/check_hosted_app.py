@@ -14,6 +14,10 @@ scripts/check_hosted_app.py — تشخیصِ فقط‌خواندنیِ «توک�
   ۷) --fix-media [--apply] [--restart] [--verify] (PATCH_HOSTED_MEDIA_FIX_V1): اصلاح همان مشکل ۶ — requirements.txt
      (moviepy==1.0.3 + imageio-ffmpeg) و در صورت نیاز یک خط شیم Pillow در کد مشتری؛ بدون --apply فقط پیش‌نمایش.
      با --restart اپ ری‌استارت می‌شود و با --verify داخل کانتینر آزمون واقعی moviepy/ffmpeg اجرا می‌شود.
+  ۹) --export [پوشه] [--send] (PATCH_HOSTED_MEDIA_EXPORT_V1): نسخهٔ نهایی و کامل فایل‌های اصلاح‌شده (requirements.txt و فایل‌هایی که
+     moviepy.editor را ایمپورت می‌کنند) را در یک پوشه می‌گذارد تا به مشتری داده شود و در به‌روزرسانی‌های بعدی اصلاح نپرد؛ با
+     --send همان‌ها را (با PLATFORM_BOT_TOKEN) برای ادمین پلتفرم (PLATFORM_ADMIN_ID) در تلگرام می‌فرستد. بدون --apply چیزی
+     روی سرور میزبانی نوشته نمی‌شود (نسخهٔ اصلاح‌شده از روی فایل‌های فعلی ساخته می‌شود).
   ۶) ffmpeg / moviepy (PATCH_HOSTED_MEDIA_CHECK_V1): «این سرویس فعال نیست (ffmpeg یا moviepy نصب نیست)» با وجود
      افزودن moviepy به requirements — علت رایج: moviepy ۲ دیگر moviepy.editor ندارد، یا برنامهٔ ffmpeg در ایمیج نیست.
 
@@ -36,6 +40,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 
 TOKEN_RE = re.compile(r"\d{6,}:[A-Za-z0-9_-]{30,}")
 TOKEN_KEYS = ("BOT_TOKEN", "TOKEN", "TELEGRAM_TOKEN", "TELEGRAM_BOT_TOKEN", "API_TOKEN")
@@ -326,17 +331,88 @@ def short_diff(old: str, new: str, limit: int = 40) -> list:
     return d[:limit] + ([f"… ({len(d) - limit} خط دیگر)"] if len(d) > limit else [])
 
 
-def backup_originals(app_name: str, files: dict) -> str:
-    root = os.environ.get("BOTSAZ_BACKUP_DIR") or os.path.join(
+def _backup_root() -> str:
+    return os.environ.get("BOTSAZ_BACKUP_DIR") or os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hosted_backups")
-    d = os.path.join(root, re.sub(r"[^A-Za-z0-9_.-]", "_", app_name or "app"), time.strftime("%Y%m%d-%H%M%S"))
+
+
+def _safe_dest(base_dir: str, pth: str) -> str:
+    parts = [x for x in pth.replace("\\", "/").split("/") if x not in ("", ".", "..")]
+    return os.path.join(base_dir, *parts) if parts else os.path.join(base_dir, "file")
+
+
+def write_files(base_dir: str, files: dict) -> dict:
+    """فایل‌ها را زیر base_dir می‌نویسد (مسیرها بی‌خطر می‌شوند). خروجی: {مسیر پروژه: مسیر روی دیسک}."""
+    out = {}
     for pth, txt in files.items():
-        parts = [x for x in pth.replace("\\", "/").split("/") if x not in ("", ".", "..")]
-        dest = os.path.join(d, *parts) if parts else os.path.join(d, "file")
+        dest = _safe_dest(base_dir, pth)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         with open(dest, "w", encoding="utf-8", newline="") as fh:
             fh.write(txt)
+        out[pth] = dest
+    return out
+
+
+def backup_originals(app_name: str, files: dict) -> str:
+    d = os.path.join(_backup_root(), re.sub(r"[^A-Za-z0-9_.-]", "_", app_name or "app"), time.strftime("%Y%m%d-%H%M%S"))
+    write_files(d, files)
     return d
+
+
+# === PATCH_HOSTED_MEDIA_EXPORT_V1 ===
+def export_note(app_name: str, finals: dict) -> str:
+    """متن کوتاه برای مشتری؛ بر پایهٔ محتوای نهایی هر فایل (چه همین الان اصلاح شده، چه از قبل درست بوده)."""
+    lines = [f"📦 فایل‌های اصلاح‌شده برای اپ {app_name} (ویدیو ← ویدیو مسیج)", ""]
+    for pth, txt in finals.items():
+        if os.path.basename(pth).lower() == "requirements.txt":
+            spec = req_spec(txt, "moviepy")[1]
+            lines.append(f"• {pth} — moviepy روی نسخهٔ {spec.lstrip('=') or '؟'} ثابت است و imageio-ffmpeg دارد")
+        elif SHIM_MARK in txt:
+            lines.append(f"• {pth} — سه خط شیم Pillow قبل از «from moviepy.editor import …» دارد")
+        else:
+            lines.append(f"• {pth} — (بدون تغییر؛ فقط برای کامل بودن مجموعه)")
+    lines += ["", "این‌ها را در پروژهٔ خودت جایگزین کن و برای همهٔ آپلودها و به‌روزرسانی‌های بعدی هم از همین نسخه‌ها شروع کن؛ "
+                  "اگر نسخهٔ قدیمی فایل‌ها را دوباره آپلود کنی این اصلاح برمی‌گردد و «ویدیو مسیج» دوباره پیام «نصب نیست» می‌دهد."]
+    return "\n".join(lines)
+
+
+def build_multipart(fields: dict, file_field: str, filename: str, content: bytes):
+    boundary = "----botsaz" + uuid.uuid4().hex
+    safe_name = re.sub(r'["\r\n]', "_", filename)
+    parts = [f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode("utf-8")
+             for k, v in fields.items()]
+    parts.append((f'--{boundary}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{safe_name}"\r\n'
+                  "Content-Type: application/octet-stream\r\n\r\n").encode("utf-8"))
+    parts.append(content)
+    parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+    return boundary, b"".join(parts)
+
+
+def _tg_call(token: str, method: str, body: bytes, content_type: str, timeout: int = 60):
+    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/{method}", data=body, method="POST",
+                                 headers={"Content-Type": content_type})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            j = json.loads(r.read().decode("utf-8", "ignore"))
+            return bool(j.get("ok")), str(j.get("description", ""))
+    except urllib.error.HTTPError as e:
+        try:
+            d = json.loads(e.read().decode("utf-8", "ignore")).get("description", "")
+        except Exception:  # noqa: BLE001
+            d = ""
+        return False, f"HTTP {e.code} {d}".strip()
+    except Exception as e:  # noqa: BLE001 — متن خطا چاپ نمی‌شود (ممکن است آدرس حاوی توکن باشد)
+        return False, type(e).__name__
+
+
+def tg_send_document(token: str, chat_id, filename: str, content: bytes, caption: str = ""):
+    boundary, body = build_multipart({"chat_id": str(chat_id), "caption": caption[:900]}, "document", filename, content)
+    return _tg_call(token, "sendDocument", body, f"multipart/form-data; boundary={boundary}")
+
+
+def tg_send_message(token: str, chat_id, text: str):
+    return _tg_call(token, "sendMessage", urllib.parse.urlencode({"chat_id": chat_id, "text": text[:4000]}).encode(),
+                    "application/x-www-form-urlencoded")
 
 
 def _post_form(base: str, secret: str, path: str, fields: dict, timeout: int = 60):
@@ -429,6 +505,11 @@ def main() -> int:
                     help="requirements.txt (moviepy==1.0.3 + imageio-ffmpeg) و در صورت نیاز شیم Pillow را درست می‌کند؛ "
                          "بدون --apply فقط پیش‌نمایش")
     ap.add_argument("--apply", action="store_true", help="با --fix-media: واقعا بنویس (نسخهٔ اصلی پشتیبان می‌شود)")
+    ap.add_argument("--export", nargs="?", const="", default=None, metavar="DIR",
+                    help="نسخهٔ نهایی و کامل فایل‌های اصلاح‌شده را در پوشه‌ای (پیش‌فرض: hosted_backups/<اپ>/<زمان>/fixed) "
+                         "می‌گذارد تا به مشتری داده شود؛ چیزی روی سرور میزبانی نمی‌نویسد")
+    ap.add_argument("--send", action="store_true",
+                    help="با --export: همان فایل‌ها را برای ادمین پلتفرم (PLATFORM_ADMIN_ID) در تلگرام بفرست")
     ap.add_argument("--restart", action="store_true", help="با --apply: بعد از نوشتن اپ را ری‌استارت کن")
     ap.add_argument("--verify", action="store_true",
                     help="داخل کانتینر اپ آزمون واقعی moviepy/ffmpeg را اجرا کن (docker exec)")
@@ -637,7 +718,7 @@ def main() -> int:
     # === PATCH_HOSTED_MEDIA_FIX_V1 ===
     app_name = env.get("name") or str(app_id)
     restarted = False
-    if a.fix_media:
+    if a.fix_media or a.apply or a.export is not None:
         print("\n۷) اصلاح ffmpeg / moviepy (--fix-media" + (" --apply" if a.apply else " — فقط پیش‌نمایش") + ")")
         uses, editor, resize_used, shim_present = media_usage(py_texts)
         changes: dict[str, tuple[str, str]] = {}
@@ -677,6 +758,49 @@ def main() -> int:
             print(f"\n  ── {pth}")
             for dl in short_diff(old, new):
                 print("    " + dl)
+        if a.export is not None:
+            # === PATCH_HOSTED_MEDIA_EXPORT_V1 === نسخهٔ نهایی: فایل اصلاح‌شده، یا (اگر از قبل درست بوده) همان فایل فعلی
+            finals: dict[str, str] = {}
+            if uses:
+                if req_t and req_txt is not None:
+                    finals[req_t] = changes[req_t][1] if req_t in changes else req_txt
+                for pth, txt in py_texts.items():
+                    if len([k for k in finals if k.lower().endswith(".py")]) >= 3:
+                        break
+                    if pth.lower().endswith(".py") and _EDITOR_IMPORT.search(txt):
+                        finals[pth] = changes[pth][1] if pth in changes else txt
+            if not finals:
+                print("\n  ℹ️ فایلی برای export نیست (کد moviepy را ایمپورت نمی‌کند).")
+            else:
+                exp_dir = a.export or os.path.join(_backup_root(), re.sub(r"[^A-Za-z0-9_.-]", "_", app_name or "app"),
+                                                    time.strftime("%Y%m%d-%H%M%S"), "fixed")
+                on_disk = write_files(exp_dir, finals)
+                note = export_note(app_name, finals)
+                write_files(exp_dir, {"README.txt": note + "\n"})
+                print(f"\n  📦 {len(finals)} فایل نهایی در {exp_dir} ذخیره شد:")
+                for pth, disk in on_disk.items():
+                    print(f"    • {pth}  →  {disk}")
+                    if TOKEN_RE.search(finals[pth]):
+                        print("      ⚠️ داخل این فایل توکن ربات هست؛ فقط برای خود مشتری بفرست.")
+                if a.send:
+                    tok = os.getenv("PLATFORM_BOT_TOKEN") or envf.get("PLATFORM_BOT_TOKEN", "")
+                    admin_raw = os.getenv("PLATFORM_ADMIN_ID") or envf.get("PLATFORM_ADMIN_ID", "")
+                    if not tok or not str(admin_raw).strip().lstrip("-").isdigit() or int(admin_raw) == 0:
+                        print("  ❌ PLATFORM_BOT_TOKEN یا PLATFORM_ADMIN_ID در .env پیدا نشد؛ ارسال تلگرام ممکن نیست "
+                              "(فایل‌ها همان‌جا در پوشه هستند).")
+                        problems += 1
+                    else:
+                        sent_ok = True
+                        for pth, txt in finals.items():
+                            fname = pth.replace("/", "__")
+                            okd, why = tg_send_document(tok, int(admin_raw), fname, txt.encode("utf-8"),
+                                                        f"{pth} — اپ {app_name}")
+                            print(f"  {'✅' if okd else '❌'} ارسال به ادمین: {pth}" + ("" if okd else f" — {why}"))
+                            sent_ok = sent_ok and okd
+                        if sent_ok:
+                            tg_send_message(tok, int(admin_raw), note)
+                        else:
+                            problems += 1
         if not changes:
             print("  ✅ چیزی برای نوشتن نیست.")
         elif not a.apply:
