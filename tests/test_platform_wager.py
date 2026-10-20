@@ -36,6 +36,12 @@ async def db(monkeypatch):
     await engine.dispose()
 
 
+
+@pytest.fixture(autouse=True)
+def _no_tap_gate(monkeypatch):
+    monkeypatch.setattr(PW, "TAP_GAP_SECS", 0)
+    PW._tap_last.clear()
+
 async def bal(db, uid):
     async with db() as s:
         u = await s.scalar(select(models.PlatformUser).where(models.PlatformUser.telegram_id == uid))
@@ -612,7 +618,7 @@ def test_help_text_explains_how_to_play_step_by_step_with_rules_and_limits():
     cfg = {"min": 1000, "max": 500_000, "fee_pct": Decimal("5"), "ttl": 300, "move": 180, "move_sim": 300}
     on = {"xo": True, "rps": True, "dice": True}
     main = PW.help_text(on, cfg=cfg)
-    for must in ("مراحل کار", "قبول و پیوستن", "ریپلای", "لغو", "نماد خودش", "3 راند", "بزرگ‌تر برنده است یا عدد کوچک‌تر",
+    for must in ("مراحل کار", "قبول و پیوستن", "ریپلای", "لغو", "نماد خودش", "3 راند", "بزرگ‌تر، کوچک‌تر، زوج یا فرد برنده است",
                  "پرتاب تاس", "شیر یا خط", "ایکس‌او: هر حرکت 3 دقیقه", "هر مرحله 5 دقیقه", "از 1,000 تومان تا 500,000 تومان",
                  "کارمزد: 5٪", "حداکثر 3 بازی باز", "ادمین ناشناس", "شرط‌بندی ریسک مالی"):
         assert must in main, must
@@ -1030,3 +1036,60 @@ async def test_handler_rapid_taps_edit_in_order_and_stale_tap_redraws(db, psets)
     assert shown, "هیچ ویرایشی انجام نشد"
     # آخرین ویرایش باید همان وضعیت نهایی (نوبت first و هر دو خانه پر) باشد، نه صفحهٔ قدیمی
     assert shown[-1] == PW.render(row)[0] if isinstance(PW.render(row), tuple) else shown[-1] == PW.render(row)
+
+
+# === PATCH_WAGER_DICE_PARITY_V1 / PATCH_WAGER_TAP_GATE_V1 ===
+
+def test_dice_creator_wins_rules():
+    f = PW.dice_creator_wins
+    assert f("hi", 5, 3) is True and f("hi", 3, 5) is False and f("hi", 4, 4) is None
+    assert f("lo", 3, 5) is True and f("lo", 5, 3) is False
+    assert f("even", 2, 3) is True and f("even", 3, 2) is False
+    assert f("even", 2, 4) is None and f("even", 3, 5) is None
+    assert f("odd", 3, 2) is True and f("odd", 2, 3) is False and f("odd", 1, 5) is None
+
+
+@pytest.mark.asyncio
+async def test_dice_even_odd_option_settles_and_draws(db):
+    for mode, rolls, expect in (("even", (2, 3), "creator"), ("odd", (2, 3), "opponent"), ("even", (4, 6), "draw")):
+        w = await new(db, game="dice", opt=mode)
+        w = await join(db, w)
+        assert PW._dice_mode(w) == mode and "زوج" in PW._rule_line(w) + "زوج" and PW._rule_line(w)
+        for uid, v in zip((A, B), rolls):
+            assert (await PW.dice_claim(w.id, uid)).err is None
+            await PW.dice_record(w.id, uid, v)
+        row = await wager(db, w.id)
+        if expect == "draw":
+            assert row.status == "draw"
+        else:
+            assert row.status == "settled" and row.winner_id == (A if expect == "creator" else B)
+    assert await total(db) == 300_500
+
+
+@pytest.mark.asyncio
+async def test_dice_option_keyboard_has_parity_buttons_and_accepts_them(db):
+    w = await new(db, game="dice", opt=None)
+    data = [b.callback_data for row in PW._opt_keyboard(w) for b in row]
+    assert any(d.endswith(":even") for d in data) and any(d.endswith(":odd") for d in data)
+    assert (await PW.set_option(w.id, A, "odd")).err is None
+    assert (await PW.set_option(w.id, A, "bogus")).err
+
+
+@pytest.mark.asyncio
+async def test_finished_game_tap_returns_wager_for_final_redraw(db):
+    w = await join(db, await new(db))
+    first = (await wager(db, w.id)).turn_id
+    await expire(db, w.id)
+    r = await PW.xo_move(w.id, first, 0, 180)           # مهلت گذشته ⇒ تسویه
+    assert r.err and r.w is not None
+    r = await PW.xo_move(w.id, first, 1, 180)           # بعد از پایان: دیگر در حال بازی نیست
+    assert r.err and r.w is not None and r.w.status in ("settled", "draw", "expired")
+
+
+def test_tap_gate_blocks_rapid_repeats_per_player(monkeypatch):
+    monkeypatch.setattr(PW, "TAP_GAP_SECS", 0.5)
+    PW._tap_last.clear()
+    assert PW.tap_gate(1, A) is False and PW.tap_gate(1, A) is True
+    assert PW.tap_gate(1, B) is False and PW.tap_gate(2, A) is False and PW.tap_gate(1, A, 7) is False
+    monkeypatch.setattr(PW, "TAP_GAP_SECS", 0)
+    assert PW.tap_gate(1, A) is False

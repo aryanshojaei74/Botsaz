@@ -212,6 +212,9 @@ async def tw_xo(cb: CallbackQuery, bot: Bot):
         return
     parts = (cb.data or "").split(":")
     wid, cell = _wid(cb), (int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else -1)
+    if core.tap_gate(wid, cb.from_user.id, row.id):      # PATCH_WAGER_TAP_GATE_V1: ضربهٔ اسپم نادیده گرفته می‌شود
+        await cb.answer()
+        return
     cfg = await core.load_cfg(row.id)
     async with core._wlock(wid):      # PATCH_WAGER_XO_STALE_UI_V1: ویرایش پیام داخل قفل (نامرتب نرسد)
         r = await core.xo_move(wid, cb.from_user.id, cell, cfg["move"], bot_id=row.id)
@@ -227,6 +230,9 @@ async def tw_rps(cb: CallbackQuery, bot: Bot):
         return
     parts = (cb.data or "").split(":")
     wid, choice = _wid(cb), (parts[3] if len(parts) > 3 else "")
+    if core.tap_gate(wid, cb.from_user.id, row.id):
+        await cb.answer()
+        return
     cfg = await core.load_cfg(row.id)
     async with core._wlock(wid):
         r = await core.rps_pick(wid, cb.from_user.id, choice, bot_id=row.id, sim_secs=cfg["move_sim"])

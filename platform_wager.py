@@ -55,7 +55,8 @@ RPS_WINS = 3                   # هر کس زودتر ۳ راند ببرد بر�
 RPS_MAX_ROUNDS = 15            # سقف راندها؛ اگر کسی به ۳ برد نرسید ⇒ مساوی و برگشت مبلغ هر دو
 MOVE_SIM_DEFAULT = 300         # مهلت هر مرحلهٔ بازی‌های هم‌زمان (تاس / سنگ‌کاغذ‌قیچی) = ۵ دقیقه
 OPT_XO = ("X", "O")            # انتخاب سازنده در ایکس‌او: نماد خودش
-OPT_DICE = ("hi", "lo")        # انتخاب سازنده در تاس: عدد بزرگ‌تر برنده است (hi) یا کوچک‌تر (lo)
+OPT_DICE = ("hi", "lo", "even", "odd")   # انتخاب سازنده در تاس: بزرگ‌تر (hi) / کوچک‌تر (lo) / زوج (even) / فرد (odd) برنده است
+TAP_GAP_SECS = 0.7            # PATCH_WAGER_TAP_GATE_V1: فاصلهٔ کمینهٔ ضربه‌های یک بازیکن روی یک بازی (ضد اسپم دکمه)
 SYM = {"X": "❌", "O": "⭕"}
 RPS_FA = {"r": "🪨 سنگ", "p": "📄 کاغذ", "s": "✂️ قیچی"}
 _BEATS = {"r": "s", "p": "r", "s": "p"}
@@ -207,7 +208,42 @@ def _xo_sym(w: PlatformWager, uid: int | None) -> str:
 
 
 def _dice_mode(w: PlatformWager) -> str:
-    return "lo" if _st(w).get("opt") == "lo" else "hi"
+    opt = _st(w).get("opt")
+    return opt if opt in OPT_DICE else "hi"
+
+
+def dice_creator_wins(mode: str, a: int, b: int):
+    """=== PATCH_WAGER_DICE_PARITY_V1 === a = تاس سازنده، b = تاس حریف. True/False ⇒ برنده؛ None ⇒ مساوی.
+    hi/lo: عدد بزرگ‌تر/کوچک‌تر (مساوی ⇒ None). even/odd: هر کس تاسش با انتخاب سازنده هم‌پاریته است می‌برد؛
+    اگر هر دو یا هیچ‌کدام هم‌پاریته بودند مساوی است."""
+    if mode in ("even", "odd"):
+        want = 0 if mode == "even" else 1
+        ca, cb_ = (a % 2 == want), (b % 2 == want)
+        return None if ca == cb_ else ca
+    if a == b:
+        return None
+    return (a > b) if mode == "hi" else (a < b)
+
+
+_tap_last: dict = {}
+
+
+def tap_gate(wid: int, uid: int, bot_id: int = 0) -> bool:
+    """=== PATCH_WAGER_TAP_GATE_V1 === True یعنی این ضربه اسپم است (کمتر از TAP_GAP_SECS بعد از ضربهٔ قبلی همین بازیکن
+    روی همین بازی) و باید نادیده گرفته شود. ضربه‌های مجاز زمان‌شان ثبت می‌شود."""
+    if TAP_GAP_SECS <= 0:
+        return False
+    import time as _time
+    now = _time.monotonic()
+    key = (bot_id, wid, uid)
+    last = _tap_last.get(key)
+    if last is not None and now - last < TAP_GAP_SECS:
+        return True
+    if len(_tap_last) > 5000:
+        for k in [k for k, v in _tap_last.items() if now - v > 30]:
+            _tap_last.pop(k, None)
+    _tap_last[key] = now
+    return False
 
 
 def _fee_for(amount: int, pct: Decimal) -> int:
@@ -433,6 +469,14 @@ async def expire_one(wid: int):
 
 # ───────────────────────── حرکت‌ها ─────────────────────────
 
+def _stale_w(w, game: str, bot_id: int = 0):
+    """=== PATCH_WAGER_TAP_GATE_V1 === بازی تمام‌شده/منقضی: w برگردانده می‌شود تا هندلر پیام را روی نتیجهٔ نهایی بکشد
+    (قبلا فقط «این بازی در حال بازی نیست» می‌آمد و دکمه‌های کهنه روی پیام می‌ماند)."""
+    if w is not None and (w.bot_id or 0) == bot_id and w.game == game and w.status != "playing":
+        return w
+    return None
+
+
 def _playing(w, uid: int, game: str, bot_id: int = 0):
     if not w or (w.bot_id or 0) != bot_id or w.status != "playing" or w.game != game:
         return _t("این {bet} در حال بازی نیست.", bot_id)
@@ -446,7 +490,7 @@ async def xo_move(wid: int, uid: int, cell: int, move_secs: int, bot_id: int = 0
         w = await s.get(PlatformWager, wid, with_for_update=True)
         err = _playing(w, uid, "xo", bot_id)
         if err:
-            return _res(err=err)
+            return _res(w=_stale_w(w, "xo", bot_id), err=err)
         if w.expires_at and w.expires_at <= _now():
             await _timeout_locked(s, w)
             await s.commit()
@@ -483,7 +527,7 @@ async def rps_pick(wid: int, uid: int, choice: str, bot_id: int = 0, sim_secs: i
         w = await s.get(PlatformWager, wid, with_for_update=True)
         err = _playing(w, uid, "rps", bot_id)
         if err:
-            return _res(err=err)
+            return _res(w=_stale_w(w, "rps", bot_id), err=err)
         if w.expires_at and w.expires_at <= _now():
             await _timeout_locked(s, w)
             await s.commit()
@@ -523,7 +567,7 @@ async def dice_claim(wid: int, uid: int, bot_id: int = 0):
         w = await s.get(PlatformWager, wid, with_for_update=True)
         err = _playing(w, uid, "dice", bot_id)
         if err:
-            return _res(err=err)
+            return _res(w=_stale_w(w, "dice", bot_id), err=err)
         if w.expires_at and w.expires_at <= _now():
             await _timeout_locked(s, w)
             await s.commit()
@@ -568,10 +612,10 @@ async def dice_record(wid: int, uid: int, value: int, bot_id: int = 0):
         w.state = json.dumps(st)
         if len(rolls) == 2:
             a, b = rolls[str(w.creator_id)], rolls[str(w.opponent_id)]
-            if a == b:
+            creator_wins = dice_creator_wins(_dice_mode(w), a, b)    # بزرگ‌تر / کوچک‌تر / زوج / فرد (None ⇒ مساوی)
+            if creator_wins is None:
                 await _refund_both(s, w, "draw", "draw")
             else:
-                creator_wins = (a > b) if _dice_mode(w) == "hi" else (a < b)    # انتخاب سازنده: بزرگ‌تر یا کوچک‌تر
                 await _settle_win(s, w, w.creator_id if creator_wins else w.opponent_id, "win")
         await s.commit()
         return _res(w=w)
@@ -675,7 +719,11 @@ def _rule_line(w: PlatformWager) -> str:
         mine = st["opt"]
         return f"🎯 نماد سازنده: {SYM[mine]} | نماد حریف: {SYM['O' if mine == 'X' else 'X']}"
     if w.game == "dice" and st.get("opt") in OPT_DICE:
-        return "📜 قانون: " + ("عدد <b>بزرگ‌تر</b> برنده است." if st["opt"] == "hi" else "عدد <b>کوچک‌تر</b> برنده است.")
+        return "📜 قانون: " + {
+            "hi": "عدد <b>بزرگ‌تر</b> برنده است.", "lo": "عدد <b>کوچک‌تر</b> برنده است.",
+            "even": "هر کس <b>عدد زوج</b> بیاورد برنده است (هر دو زوج یا هر دو فرد ⇒ مساوی).",
+            "odd": "هر کس <b>عدد فرد</b> بیاورد برنده است (هر دو زوج یا هر دو فرد ⇒ مساوی).",
+        }[st["opt"]]
     if w.game == "rps":
         return f"📜 قانون: هر کس زودتر <b>{RPS_WINS} راند</b> ببرد برنده است (راند مساوی تکرار می‌شود)."
     return ""
@@ -743,7 +791,9 @@ def _opt_keyboard(w: PlatformWager) -> list[list[InlineKeyboardButton]]:
         return [[_btn(w, "❌ ضربدر (X)", callback_data=f"{px}:o:{w.id}:X", style=ButtonStyle.PRIMARY),
                  _btn(w, "⭕ دایره (O)", callback_data=f"{px}:o:{w.id}:O", style=ButtonStyle.PRIMARY)]]
     return [[_btn(w, "🔼 عدد بزرگ‌تر برنده", callback_data=f"{px}:o:{w.id}:hi", style=ButtonStyle.PRIMARY)],
-            [_btn(w, "🔽 عدد کوچک‌تر برنده", callback_data=f"{px}:o:{w.id}:lo", style=ButtonStyle.PRIMARY)]]
+            [_btn(w, "🔽 عدد کوچک‌تر برنده", callback_data=f"{px}:o:{w.id}:lo", style=ButtonStyle.PRIMARY)],
+            [_btn(w, "2️⃣ عدد زوج برنده", callback_data=f"{px}:o:{w.id}:even", style=ButtonStyle.PRIMARY),
+             _btn(w, "1️⃣ عدد فرد برنده", callback_data=f"{px}:o:{w.id}:odd", style=ButtonStyle.PRIMARY)]]
 
 
 def _rps_playing_text(w: PlatformWager, head: str) -> str:
@@ -771,7 +821,7 @@ def render(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
         cancel = _btn(w, "❌ لغو", callback_data=f"{_px(w)}:cancel:{w.id}", style=ButtonStyle.DANGER)
         if _needs_setup(w):
             ask = ("سازنده، با کدام نماد بازی می‌کنی؟ حریف نماد دیگر را می‌گیرد."
-                   if w.game == "xo" else "سازنده، کدام عدد برنده است؟ بزرگ‌تر یا کوچک‌تر؟")
+                   if w.game == "xo" else "سازنده، کدام عدد برنده است؟ بزرگ‌تر، کوچک‌تر، زوج یا فرد؟")
             text = (f"{_head(w)}\n\n👤 سازنده: {_who(w, w.creator_id)}\n{target}{_money_lines(w)}\n\n"
                     f"🎛 <b>{ask}</b>\n(فقط سازنده می‌تواند انتخاب کند؛ بعد از انتخاب، حریف می‌تواند بپیوندد.)")
             return text, InlineKeyboardMarkup(inline_keyboard=[*_opt_keyboard(w), [cancel]])
@@ -837,7 +887,7 @@ def help_text(enabled: dict[str, bool], bot_id: int = 0, cfg: dict | None = None
                   "نشان داده می‌شود؛ راند مساوی تکرار می‌شود. امتیاز هر نفر زیر پیام نوشته می‌شود.", ""]
     if enabled.get("dice"):
         lines += ["🎲 <b>تاس</b>: «تاس ۱۰۰۰۰»",
-                  "اول سازنده انتخاب می‌کند عدد بزرگ‌تر برنده است یا عدد کوچک‌تر. بعد هر نفر یک‌بار دکمهٔ «🎲 پرتاب تاس» "
+                  "اول سازنده انتخاب می‌کند عدد بزرگ‌تر، کوچک‌تر، زوج یا فرد برنده است. بعد هر نفر یک‌بار دکمهٔ «🎲 پرتاب تاس» "
                   "را می‌زند (تاس را خود تلگرام می‌اندازد). عدد مساوی = برگشت پول.", ""]
     lines += ["🪙 <b>شیر یا خط</b>: «بازی ۱۰۰۰۰» یا «شرطبندی ۱۰۰۰۰»",
               "نتیجه کاملا شانسی است و با قرعه معلوم می‌شود؛ برنده کل مبلغ را می‌گیرد.", "",
@@ -1015,6 +1065,9 @@ async def wager_cancel(cb: CallbackQuery):
 async def wager_xo(cb: CallbackQuery):
     parts = (cb.data or "").split(":")
     wid, cell = _wid(cb), (int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else -1)
+    if tap_gate(wid, cb.from_user.id):          # PATCH_WAGER_TAP_GATE_V1: ضربهٔ اسپم نادیده گرفته می‌شود
+        await cb.answer()
+        return
     cfg = await load_cfg()
     # === PATCH_WAGER_XO_STALE_UI_V1 ===
     # گزارش فدایی: «نوبت منه می‌زنم می‌گه نوبت تو نیست، طرف هم می‌زنه همین را می‌گه، بعد زمان تموم می‌شه و پول می‌ره
@@ -1032,6 +1085,9 @@ async def wager_xo(cb: CallbackQuery):
 async def wager_rps(cb: CallbackQuery):
     parts = (cb.data or "").split(":")
     wid, choice = _wid(cb), (parts[3] if len(parts) > 3 else "")
+    if tap_gate(wid, cb.from_user.id):
+        await cb.answer()
+        return
     cfg = await load_cfg()
     async with _wlock(wid):
         r = await rps_pick(wid, cb.from_user.id, choice, sim_secs=cfg["move_sim"])

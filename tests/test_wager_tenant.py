@@ -101,6 +101,12 @@ async def activate(db, bot=BOT):
 
 # ───────── هسته با کیف‌پول BotUser ─────────
 
+
+@pytest.fixture(autouse=True)
+def _no_tap_gate(monkeypatch):
+    monkeypatch.setattr(PW, "TAP_GAP_SECS", 0)
+    PW._tap_last.clear()
+
 @pytest.mark.asyncio
 async def test_tenant_wager_uses_bot_wallet_and_ledger_not_platform(db):
     w = await new(db)
