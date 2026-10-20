@@ -199,6 +199,18 @@ def diagnose_media_deps(texts: dict, req_txt, dockerfile, log_lines) -> list:
     if (uses_moviepy or uses_ffmpeg_bin):
         out.append(("ℹ️", "بعد از تغییر requirements/Dockerfile باید «ساخت دوباره (rebuild)» انجام شود؛ ری‌استارت ساده ایمیج قبلی "
                           "را بالا می‌آورد و بسته‌های تازه نصب نمی‌شوند."))
+    # moviepy 1.0.3 در resize از Image.ANTIALIAS استفاده می‌کند که Pillow>=10 آن را حذف کرده ⇒ AttributeError
+    if uses_moviepy and re.search(r"\.resize\(|\bresize\(|vfx\.resize|fx\(\s*resize", code) \
+            and not re.search(r"Image\.ANTIALIAS\s*=", code) and (uses_editor or not moviepy_is_v2(mp_spec)):
+        out.append(("⚠️", "کد از resize استفاده می‌کند؛ با moviepy 1.0.3 و Pillow>=10 خطای «module PIL.Image has no attribute ANTIALIAS» "
+                          "می‌دهد. اگر بعد از پین‌کردن moviepy این خطا آمد، بالای همان فایل بنویس: "
+                          "«import PIL.Image; PIL.Image.ANTIALIAS = PIL.Image.LANCZOS»."))
+    shown = 0
+    for pth, txt in py.items():                                  # خط‌های کد که moviepy/resize/crop/subclip را صدا می‌زنند
+        for i, ln in enumerate(txt.splitlines(), 1):
+            if shown < 8 and re.search(r"moviepy|\.resize\(|\.crop\(|\.subclip\(|ffmpeg", ln):
+                out.append(("ℹ️", f"کد {pth}:{i}: {ln.strip()[:140]}"))
+                shown += 1
     for ln in log_hit[-4:]:
         out.append(("ℹ️", "لاگ: " + ln.strip()[:170]))
     return out

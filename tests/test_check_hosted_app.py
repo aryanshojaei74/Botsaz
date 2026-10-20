@@ -284,3 +284,15 @@ def test_owner_lookup_single_app_runs_the_checks(monkeypatch, capsys):
         srv.shutdown()
     out = capsys.readouterr().out
     assert "اپ این کاربر" in out and "klexshop" in out and "══ اپ" in out
+
+
+def test_resize_with_old_moviepy_warns_about_the_antialias_shim_and_shows_code_lines():
+    code = {"bot.py": "from moviepy.editor import VideoFileClip\n"
+                      "clip = VideoFileClip(p).crop(width=480, height=480).resize((640, 640))\n"}
+    res = CH.diagnose_media_deps(code, "moviepy\n", "FROM python:3.12\n", [])
+    t = _text(res)
+    assert "ANTIALIAS" in t and "LANCZOS" in t and "bot.py:2" in t and ".resize((640, 640))" in t
+    shimmed = {"bot.py": code["bot.py"] + "import PIL.Image\nPIL.Image.ANTIALIAS = PIL.Image.LANCZOS\n"}
+    assert "ANTIALIAS" not in _text(CH.diagnose_media_deps(shimmed, "moviepy==1.0.3\n", "FROM python:3.12\n", [])).split("کد bot.py")[0]
+    new_style = {"bot.py": "from moviepy import VideoFileClip\nclip = VideoFileClip(p).resized((640, 640))\n"}
+    assert "ANTIALIAS" not in _text(CH.diagnose_media_deps(new_style, "moviepy\n", "FROM python:3.12\n", []))
