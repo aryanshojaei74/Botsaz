@@ -58,7 +58,7 @@ def _nm(text: str | None) -> str:
 
 def rule_keys(text: str | None) -> tuple[str, ...] | None:
     """زنجیرهٔ کلیدهای متن قابل‌تنظیم برای این پیام پیش‌فرض، یا None اگر پیام سفارش نیست."""
-    t = _nm(text)[:160]
+    t = _nm((text or "")[:240])[:160]       # این تابع برای هر پیام خروجی صدا زده می‌شود؛ فقط ابتدای متن لازم است
     for pat, chain in RULES:
         if (pat.match(t) if hasattr(pat, "match") else t.startswith(pat)):
             return chain
