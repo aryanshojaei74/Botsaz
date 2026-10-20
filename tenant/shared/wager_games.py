@@ -213,10 +213,10 @@ async def tw_xo(cb: CallbackQuery, bot: Bot):
     parts = (cb.data or "").split(":")
     wid, cell = _wid(cb), (int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else -1)
     cfg = await core.load_cfg(row.id)
-    async with core._wlock(wid):
+    async with core._wlock(wid):      # PATCH_WAGER_XO_STALE_UI_V1: ویرایش پیام داخل قفل (نامرتب نرسد)
         r = await core.xo_move(wid, cb.from_user.id, cell, cfg["move"], bot_id=row.id)
-    if r.w is not None:
-        await _show(cb, r.w)
+        if r.w is not None:
+            await _show(cb, r.w)
     await cb.answer(r.err or "", show_alert=bool(r.err))
 
 
@@ -230,8 +230,8 @@ async def tw_rps(cb: CallbackQuery, bot: Bot):
     cfg = await core.load_cfg(row.id)
     async with core._wlock(wid):
         r = await core.rps_pick(wid, cb.from_user.id, choice, bot_id=row.id, sim_secs=cfg["move_sim"])
-    if r.w is not None:
-        await _show(cb, r.w)
+        if r.w is not None:
+            await _show(cb, r.w)
     await cb.answer(r.err or r.note or "", show_alert=bool(r.err))
 
 

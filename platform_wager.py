@@ -451,12 +451,14 @@ async def xo_move(wid: int, uid: int, cell: int, move_secs: int, bot_id: int = 0
             await _timeout_locked(s, w)
             await s.commit()
             return _res(w=w, err="مهلت حرکت تمام شده بود؛ بازی تمام شد.")
+        # === PATCH_WAGER_XO_STALE_UI_V1 === روی خطا هم w برمی‌گردد تا هندلر پیام بازی را با وضعیت واقعی دوباره
+        # بکشد (اگر ویرایش قبلی پیام دیر/نامرتب رسیده باشد، صفحهٔ کهنه خودبه‌خود اصلاح می‌شود).
         if w.turn_id != uid:
-            return _res(err="نوبت تو نیست.")
+            return _res(w=w, err="نوبت تو نیست.")
         st = _st(w)
         board = st.get("board") or [""] * 9
         if not 0 <= cell < 9 or board[cell]:
-            return _res(err="این خانه پر است.")
+            return _res(w=w, err="این خانه پر است.")
         board[cell] = _xo_sym(w, uid)
         st["board"] = board
         w.state = json.dumps(st)
@@ -1014,10 +1016,15 @@ async def wager_xo(cb: CallbackQuery):
     parts = (cb.data or "").split(":")
     wid, cell = _wid(cb), (int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else -1)
     cfg = await load_cfg()
+    # === PATCH_WAGER_XO_STALE_UI_V1 ===
+    # گزارش فدایی: «نوبت منه می‌زنم می‌گه نوبت تو نیست، طرف هم می‌زنه همین را می‌گه، بعد زمان تموم می‌شه و پول می‌ره
+    # واسه اون». علت: بعد از هر حرکت، ویرایش پیام بیرون از قفل انجام می‌شد؛ دو حرکت پشت‌سرهم ویرایش‌هایشان
+    # می‌توانست نامرتب به تلگرام برسد و صفحه روی وضعیت قدیمی («نوبت حریف») بماند، در حالی که دیتابیس نوبت
+    # تو را می‌گفت. حالا ویرایش داخل همان قفل است (به ترتیب ثبت) و ضربهٔ نابه‌جا هم صفحه را تازه می‌کند.
     async with _wlock(wid):
         r = await xo_move(wid, cb.from_user.id, cell, cfg["move"])
-    if r.w is not None:
-        await _show(cb.message, r.w)
+        if r.w is not None:
+            await _show(cb.message, r.w)
     await cb.answer(r.err or "", show_alert=bool(r.err))
 
 
@@ -1028,8 +1035,8 @@ async def wager_rps(cb: CallbackQuery):
     cfg = await load_cfg()
     async with _wlock(wid):
         r = await rps_pick(wid, cb.from_user.id, choice, sim_secs=cfg["move_sim"])
-    if r.w is not None:
-        await _show(cb.message, r.w)
+        if r.w is not None:
+            await _show(cb.message, r.w)
     await cb.answer(r.err or r.note or "", show_alert=bool(r.err))
 
 

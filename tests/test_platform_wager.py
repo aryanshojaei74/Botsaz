@@ -975,3 +975,57 @@ async def test_main_bot_keeps_explicit_bet_wording(db):
     text, _ = PW.render(w)
     assert "🎰 <b>شرط‌بندی تاس</b>" in text and "مبلغ شرط هر نفر" in text and "شرط‌بندی ریسک مالی" in text
     assert PW.words(0)["bet"] == "شرط‌بندی" and PW.words(7)["bet"] == "بازی"
+
+
+# === PATCH_WAGER_XO_STALE_UI_V1 === «نوبت تو نیست» با صفحهٔ کهنه و ضربه‌های پشت‌سرهم ===
+
+@pytest.mark.asyncio
+async def test_xo_wrong_turn_returns_fresh_state_for_redraw(db):
+    w = await join(db, await new(db))
+    first = (await wager(db, w.id)).turn_id
+    second = B if first == A else A
+    r = await PW.xo_move(w.id, second, 0, 180)
+    assert r.err and r.w is not None and r.w.turn_id == first      # صفحه می‌تواند با نوبت واقعی دوباره کشیده شود
+    assert (await PW.xo_move(w.id, first, 0, 180)).err is None
+    r = await PW.xo_move(w.id, second, 0, 180)                      # خانهٔ پر
+    assert r.err and r.w is not None
+
+
+@pytest.mark.asyncio
+async def test_handler_rapid_taps_edit_in_order_and_stale_tap_redraws(db, psets):
+    m, _ = _msg("اکس او ۱۰۰۰")
+    await PW.wager_create(m)
+    async with db() as s:
+        wid = (await s.scalar(select(models.PlatformWager))).id
+    edits = []
+    await PW.wager_option(_cb(f"pgw:o:{wid}:X", A, edits))
+    await PW.wager_join(_cb(f"pgw:join:{wid}", B, edits))
+    first = (await wager(db, wid)).turn_id
+    second = B if first == A else A
+
+    shown = []
+    delays = iter([0.05, 0.0, 0.0, 0.0])
+
+    def slow_cb(data, uid):
+        cb = _cb(data, uid, edits)
+
+        async def edit_text(t, **kw):
+            await asyncio.sleep(next(delays, 0.0))      # ویرایش اول کند است؛ بدون قفل، دومی از آن جلو می‌زد
+            shown.append(t)
+        cb.message.edit_text = edit_text
+        return cb
+
+    # ضربهٔ اول معتبر + چند ضربهٔ بعدی همان بازیکن (دیگر نوبتش نیست) + حرکت حریف، همه هم‌زمان
+    await asyncio.gather(
+        PW.wager_xo(slow_cb(f"pgw:x:{wid}:0", first)),
+        PW.wager_xo(slow_cb(f"pgw:x:{wid}:1", first)),
+        PW.wager_xo(slow_cb(f"pgw:x:{wid}:1", first)),
+        PW.wager_xo(slow_cb(f"pgw:x:{wid}:4", second)),
+    )
+    row = await wager(db, wid)
+    board = json.loads(row.state)["board"]
+    assert board[0] and board[4] and not board[1]
+    assert row.turn_id == first
+    assert shown, "هیچ ویرایشی انجام نشد"
+    # آخرین ویرایش باید همان وضعیت نهایی (نوبت first و هر دو خانه پر) باشد، نه صفحهٔ قدیمی
+    assert shown[-1] == PW.render(row)[0] if isinstance(PW.render(row), tuple) else shown[-1] == PW.render(row)
