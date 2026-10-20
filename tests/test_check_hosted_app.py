@@ -63,7 +63,7 @@ def test_end_to_end_finds_hardcoded_old_token(monkeypatch, capsys):
         srv.shutdown()
     out = capsys.readouterr().out
     assert rc == 1
-    assert "main.py" in out and "با توکنِ ثبت‌شده فرق دارد" in out      # توکنِ قدیمیِ سخت‌کدشده
+    assert "main.py" in out and "ثبت‌شده فرق دارد" in out      # توکن قدیمی سخت‌کدشده
     assert OLD not in out and GOOD not in out                             # توکنِ کامل چاپ نمی‌شود
     assert "Unauthorized" in out
 
@@ -296,3 +296,220 @@ def test_resize_with_old_moviepy_warns_about_the_antialias_shim_and_shows_code_l
     assert "ANTIALIAS" not in _text(CH.diagnose_media_deps(shimmed, "moviepy==1.0.3\n", "FROM python:3.12\n", [])).split("کد bot.py")[0]
     new_style = {"bot.py": "from moviepy import VideoFileClip\nclip = VideoFileClip(p).resized((640, 640))\n"}
     assert "ANTIALIAS" not in _text(CH.diagnose_media_deps(new_style, "moviepy\n", "FROM python:3.12\n", []))
+
+
+# ═══════════ PATCH_HOSTED_MEDIA_FIX_V1 — --fix-media / --apply / --restart / --verify ═══════════
+import urllib.parse as _up
+
+REQ_OLD = "aiogram==3.4\nmoviepy\nqrcode[pil]\n"
+BOT_OLD = ("import os\ntry:\n    from moviepy.editor import VideoFileClip\n    OK = True\nexcept ImportError:\n    OK = False\n\n"
+           "def f(c):\n    return c.resize(newsize=(384, 384))\n")
+
+
+class _Store:
+    def __init__(self, files):
+        self.files = dict(files)
+        self.posts, self.actions = [], []
+        self.corrupt = False
+        self.size_lie = {}
+
+
+def _handler(store):
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, body):
+            raw = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_GET(self):
+            u = _up.urlparse(self.path)
+            q = _up.parse_qs(u.query)
+            if u.path.endswith("/env"):
+                self._send({"name": "klexshopbot", "env": [{"key": "BOT_TOKEN", "value": GOOD}], "needed": []})
+            elif u.path.endswith("/files"):
+                self._send({"files": [{"path": p, "size": store.size_lie.get(p, len(t.encode()))}
+                                      for p, t in store.files.items()]})
+            elif u.path.endswith("/filetext"):
+                self._send({"text": store.files.get(q["path"][0], "")})
+            else:
+                self._send({"logs": "started\n"})
+
+        def do_POST(self):
+            form = _up.parse_qs(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode())
+            if self.path.endswith("/filetext"):
+                path, text = form["path"][0], form["text"][0]
+                store.posts.append(path)
+                if store.corrupt and ("imageio-ffmpeg" in text or CH.SHIM_MARK in text):
+                    text = text[:-5]                                     # سرور خراب: محتوا ناقص ذخیره می‌شود
+                store.files[path] = text
+            elif self.path.endswith("/action"):
+                store.actions.append(form["action"][0])
+            self._send({"ok": True})
+    return H
+
+
+def _run_main(monkeypatch, capsys, store, argv, tmp_path):
+    srv = HTTPServer(("127.0.0.1", 0), _handler(store))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("VIP_ADMIN_SECRET", "s")
+    monkeypatch.setenv("VIP_API_BASE", f"http://127.0.0.1:{srv.server_port}")
+    monkeypatch.setenv("BOTSAZ_BACKUP_DIR", str(tmp_path))
+    monkeypatch.setattr(CH, "get_me", lambda t: "✅ معتبر: @x")
+    monkeypatch.setattr(sys, "argv", ["check_hosted_app.py", "5", *argv])
+    try:
+        rc = CH.main()
+    finally:
+        srv.shutdown()
+    return rc, capsys.readouterr().out
+
+
+def test_plan_requirements_fix_pins_old_style_code_and_leaves_new_style_alone():
+    new, notes = CH.plan_requirements_fix(REQ_OLD, True)
+    assert new == "aiogram==3.4\nmoviepy==1.0.3\nqrcode[pil]\nimageio-ffmpeg\n" and any("1.0.3" in n for n in notes)
+    assert CH.plan_requirements_fix(new, True)[0] is None                         # دومین اجرا: تغییری نیست
+    new2, _ = CH.plan_requirements_fix("moviepy>=2.1\n", False)
+    assert new2 == "moviepy>=2.1\nimageio-ffmpeg\n"                               # کد سبک ۲.x ⇒ نسخه دست‌نخورده
+    new3, _ = CH.plan_requirements_fix("aiogram\n", True)
+    assert new3 == "aiogram\nmoviepy==1.0.3\nimageio-ffmpeg\n"                    # اصلا moviepy نبود
+    new4, _ = CH.plan_requirements_fix("moviepy==2.0.0  # x\nimageio_ffmpeg==0.5.1\n", True)
+    assert new4 == "moviepy==1.0.3\nimageio_ffmpeg==0.5.1\n"                      # imageio_ffmpeg با زیرخط هم شناخته می‌شود
+    assert CH.plan_requirements_fix(None, True)[0] is None
+
+
+def test_plan_shim_patch_keeps_indentation_compiles_and_is_idempotent():
+    new = CH.plan_shim_patch(BOT_OLD)
+    assert new is not None
+    compile(new, "x", "exec")
+    lines = new.splitlines()
+    i = next(k for k, ln in enumerate(lines) if "moviepy.editor" in ln)
+    assert lines[i - 3].startswith("    import PIL.Image as _PILImage") and "ANTIALIAS" in lines[i - 2] + lines[i - 1]
+    assert lines[i - 1].startswith("        _PILImage.ANTIALIAS") or lines[i - 1].startswith("    _PILImage.ANTIALIAS")
+    assert CH.plan_shim_patch(new) is None                                        # دوباره اضافه نمی‌شود
+    assert CH.plan_shim_patch("print('hi')\n") is None
+    top = CH.plan_shim_patch("from moviepy.editor import (\n    VideoFileClip,\n)\nclip.resize(1)\n")
+    compile(top, "x", "exec")
+    assert top.startswith("import PIL.Image as _PILImage")
+
+
+def test_size_matches_allows_crlf_but_not_truncation():
+    assert CH.size_matches("a\nb\n", 4) and CH.size_matches("a\nb\n", 6)           # فایل CRLF
+    assert not CH.size_matches("a\nb\n", 5000)
+
+
+def test_fix_media_dry_run_writes_nothing(monkeypatch, capsys, tmp_path):
+    store = _Store({"requirements.txt": REQ_OLD, "bot.py": BOT_OLD})
+    rc, out = _run_main(monkeypatch, capsys, store, ["--fix-media"], tmp_path)
+    assert store.posts == [] and store.actions == [] and store.files["requirements.txt"] == REQ_OLD
+    assert "پیش‌نمایش" in out and "moviepy==1.0.3" in out and "_PILImage.ANTIALIAS" in out and "--apply" in out
+    assert not list(tmp_path.iterdir())                                           # پشتیبان هم نساخت
+
+
+def test_fix_media_apply_writes_backs_up_restarts_and_is_idempotent(monkeypatch, capsys, tmp_path):
+    store = _Store({"requirements.txt": REQ_OLD, "bot.py": BOT_OLD})
+    waits = []
+    monkeypatch.setattr(CH, "verify_in_container", lambda name, wait=0, poll=10: (waits.append((name, wait)) or (True, "[c] OK moviepy 1.0.3")))
+    rc, out = _run_main(monkeypatch, capsys, store, ["--fix-media", "--apply", "--restart", "--verify"], tmp_path)
+    assert store.files["requirements.txt"] == "aiogram==3.4\nmoviepy==1.0.3\nqrcode[pil]\nimageio-ffmpeg\n"
+    assert CH.SHIM_MARK in store.files["bot.py"] and store.files["bot.py"].count("from moviepy.editor") == 1
+    compile(store.files["bot.py"], "bot.py", "exec")
+    assert store.actions == ["restart"] and "ری‌استارت درخواست شد" in out
+    assert waits == [("klexshopbot", 150)]                                        # بعد از ری‌استارت منتظر ساخت ایمیج می‌ماند
+    backups = list(tmp_path.rglob("requirements.txt")) + list(tmp_path.rglob("bot.py"))
+    assert {b.name: b.read_text(encoding="utf-8") for b in backups} == {"requirements.txt": REQ_OLD, "bot.py": BOT_OLD}
+    assert "klexshopbot" in str(backups[0])
+    posts_before = len(store.posts)
+    rc2, out2 = _run_main(monkeypatch, capsys, store, ["--fix-media", "--apply", "--restart"], tmp_path)
+    assert len(store.posts) == posts_before and store.actions == ["restart"] and "چیزی برای نوشتن نیست" in out2
+
+
+def test_fix_media_restores_the_original_when_the_server_stores_it_wrong(monkeypatch, capsys, tmp_path):
+    store = _Store({"requirements.txt": REQ_OLD, "bot.py": BOT_OLD})
+    store.corrupt = True
+    rc, out = _run_main(monkeypatch, capsys, store, ["--fix-media", "--apply", "--restart"], tmp_path)
+    assert store.files == {"requirements.txt": REQ_OLD, "bot.py": BOT_OLD}        # هر دو به حالت اول برگشتند
+    assert "نسخهٔ اصلی برگردانده شد" in out and store.actions == [] and rc == 1    # با نوشتن خراب ری‌استارت نمی‌کند
+
+
+def test_fix_media_refuses_to_patch_code_when_the_text_may_be_truncated(monkeypatch, capsys, tmp_path):
+    store = _Store({"requirements.txt": REQ_OLD, "bot.py": BOT_OLD})
+    store.size_lie = {"bot.py": 99_999}
+    rc, out = _run_main(monkeypatch, capsys, store, ["--fix-media", "--apply"], tmp_path)
+    assert store.files["bot.py"] == BOT_OLD and "ناقص باشد" in out
+    assert "moviepy==1.0.3" in store.files["requirements.txt"]                    # requirements با این‌حال درست شد
+
+
+def test_fix_media_does_nothing_for_projects_without_moviepy(monkeypatch, capsys, tmp_path):
+    store = _Store({"requirements.txt": "aiogram\n", "bot.py": "print('hi')\n"})
+    rc, out = _run_main(monkeypatch, capsys, store, ["--fix-media", "--apply"], tmp_path)
+    assert store.posts == [] and "moviepy را ایمپورت نمی‌کند" in out
+
+
+def test_fix_media_new_style_code_keeps_moviepy_version(monkeypatch, capsys, tmp_path):
+    store = _Store({"requirements.txt": "moviepy\n", "bot.py": "from moviepy import VideoFileClip\nclip.resized((1, 1))\n"})
+    rc, out = _run_main(monkeypatch, capsys, store, ["--fix-media", "--apply"], tmp_path)
+    assert store.files["requirements.txt"] == "moviepy\nimageio-ffmpeg\n"
+    assert store.files["bot.py"] == "from moviepy import VideoFileClip\nclip.resized((1, 1))\n"
+
+
+def _fake_docker(results):
+    calls = []
+
+    def fake(args, input_text=None, timeout=90):
+        calls.append(args)
+        return results.pop(0) if len(results) > 1 else results[0]
+    return fake, calls
+
+
+OK_LINE = "x\nOK moviepy 1.0.3 numpy 2.1.0 pillow 11.0 frame (24, 24, 3) ffmpeg /usr/bin/ffmpeg\n"
+
+
+def test_verify_in_container_success_failure_and_python_fallback(monkeypatch):
+    ps = (0, "botsaz_klexshopbot\nother_app\n", "")
+    fake, calls = _fake_docker([ps, (0, OK_LINE, "")])
+    monkeypatch.setattr(CH, "_docker", fake)
+    ok, msg = CH.verify_in_container("klexshopbot")
+    assert ok and "[botsaz_klexshopbot]" in msg and "moviepy 1.0.3" in msg
+    assert calls[1][:3] == ["exec", "-i", "botsaz_klexshopbot"] and calls[1][3:] == ["python", "-"]
+
+    fake, calls = _fake_docker([ps, (1, "", "Traceback\nModuleNotFoundError: No module named 'moviepy.editor'\n")])
+    monkeypatch.setattr(CH, "_docker", fake)
+    ok, msg = CH.verify_in_container("klexshopbot")
+    assert not ok and "No module named 'moviepy.editor'" in msg
+
+    fake, calls = _fake_docker([ps, (127, "", "executable file not found in $PATH"), (0, OK_LINE, "")])
+    monkeypatch.setattr(CH, "_docker", fake)
+    ok, _ = CH.verify_in_container("klexshopbot")
+    assert ok and calls[2][3] == "python3"                                        # python نبود ⇒ python3
+
+
+def test_verify_in_container_container_lookup_and_waiting(monkeypatch):
+    monkeypatch.setattr(CH, "_docker", _fake_docker([(0, "other\n", "")])[0])
+    ok, msg = CH.verify_in_container("klexshopbot")
+    assert not ok and "پیدا نشد" in msg
+    monkeypatch.setattr(CH, "_docker", _fake_docker([(0, "app_klexshopbot\napp_klexshopbot2\n", "")])[0])
+    ok, msg = CH.verify_in_container("klexshopbot")
+    assert not ok and "app_klexshopbot" in msg and "app_klexshopbot2" in msg      # چند نامزد ⇒ حدس نمی‌زند
+    monkeypatch.setattr(CH, "_docker", _fake_docker([(1, "", "docker daemon down")])[0])
+    ok, msg = CH.verify_in_container("klexshopbot")
+    assert not ok and "docker daemon down" in msg
+    # ری‌استارت: اول کانتینر هنوز بالا نیامده، بعد بالا می‌آید
+    seq = [(0, "", ""), (0, "app_klexshopbot\n", ""), (0, OK_LINE, "")]
+    monkeypatch.setattr(CH, "_docker", _fake_docker(seq)[0])
+    monkeypatch.setattr(CH.time, "sleep", lambda s: None)
+    ok, _ = CH.verify_in_container("klexshopbot", wait=30, poll=1)
+    assert ok
+
+
+def test_fix_media_refuses_to_rewrite_requirements_when_the_text_may_be_truncated(monkeypatch, capsys, tmp_path):
+    store = _Store({"requirements.txt": REQ_OLD, "bot.py": BOT_OLD})
+    store.size_lie = {"requirements.txt": 99_999}
+    rc, out = _run_main(monkeypatch, capsys, store, ["--fix-media", "--apply"], tmp_path)
+    assert store.files["requirements.txt"] == REQ_OLD and "ناقص باشد" in out and "moviepy==1.0.3" in out
+    rc, out = _run_main(monkeypatch, capsys, _Store({"requirements.txt": REQ_OLD, "bot.py": BOT_OLD}),
+                        ["--fix-media", "--restart"], tmp_path)
+    assert "--restart بدون --apply اثری ندارد" in out
