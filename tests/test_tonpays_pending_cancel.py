@@ -256,7 +256,7 @@ async def test_cancel_and_new_settles_instead_when_it_was_paid(db, monkeypatch):
         return True, "پرداخت تایید و کیف پول شارژ شد.", 50000
 
     async def boom(*a, **k):
-        raise AssertionError("فاکتورِ جدید نباید ساخته شود")
+        raise AssertionError("فاکتور جدید نباید ساخته شود")
     monkeypatch.setattr(TP, "cancel_at_gateway", cag)
     monkeypatch.setattr(TP, "settle_charge", settle)
     monkeypatch.setattr(TP, "_create_invoice", boom)
@@ -280,3 +280,117 @@ async def test_pending_after_cancel_does_not_loop(db, monkeypatch):
     msg = Msg()
     await TP._create_invoice(object(), SimpleNamespace(id=bid), msg, USER, 70000, after_cancel=True)
     assert msg.sent[-1][1].get("reply_markup") is None
+
+
+# ═══════════ PATCH_TONPAYS_DOCS_AUDIT_V1 — تطبیق با مستندات رسمی ═══════════
+
+async def test_cancel_at_gateway_result_classes(monkeypatch):
+    async def pend(key, inv, custom=False):
+        return {"status": "pending", "paid": False}
+    monkeypatch.setattr(TP, "check_invoice", pend)
+    cases = [(TP.TonPaysError("x", "INVOICE_NOT_FOUND", 404), "cancelled"),
+             (TP.TonPaysError("x", "RATE_LIMIT_EXCEEDED", 429), "retry"),
+             (TP.TonPaysError("x", "", 502), "retry"),
+             (TP.TonPaysError("x", "BUYER_INVOICE_BUSY", 409), "retry"),
+             (TP.TonPaysError("x", "INVALID_API_KEY", 401), "error"),
+             (OSError("network down"), "retry")]
+    for exc, want in cases:
+        async def cancel(key, inv, custom=False, _e=exc):
+            raise _e
+        monkeypatch.setattr(TP, "cancel_invoice", cancel)
+        assert (await TP.cancel_at_gateway("K", "TP-X"))[0] == want, (exc, want)
+
+    async def nf(key, inv, custom=False):
+        raise TP.TonPaysError("x", "INVOICE_NOT_FOUND", 404)
+    monkeypatch.setattr(TP, "check_invoice", nf)                   # فاکتور در درگاه نیست ⇒ چیزی باز نمانده
+    assert (await TP.cancel_at_gateway("K", "TP-X"))[0] == "cancelled"
+
+
+async def test_cancel_and_new_keeps_invoice_open_when_gateway_cancel_failed(db, monkeypatch):
+    maker, bid = db
+
+    async def cag(key, inv, custom=False):
+        return "retry", "timeout"
+
+    async def boom(*a, **k):
+        raise AssertionError("فاکتور جدید نباید ساخته شود")
+    monkeypatch.setattr(TP, "cancel_at_gateway", cag)
+    monkeypatch.setattr(TP, "_create_invoice", boom)
+    cb = Cb("tonp:cnew:tpOLD:70000")
+    await TP.tonp_cancel_and_new(cb, object())
+    text, kw = cb.message.sent[-1]
+    assert "درگاه" in text and "دوباره" in text
+    assert [b.callback_data for r in kw["reply_markup"].inline_keyboard for b in r] == ["tonp:verify:tpOLD", "tonp:cnew:tpOLD:70000"]
+    async with maker() as s:
+        assert (await s.scalar(select(models.TonPaysCharge.status))) == "waiting"      # محلی «لغوشده» نشد
+
+
+async def test_plain_cancel_keeps_invoice_open_when_gateway_cancel_failed(db, monkeypatch):
+    maker, bid = db
+
+    async def cag(key, inv, custom=False):
+        return "retry", "502"
+    monkeypatch.setattr(TP, "cancel_at_gateway", cag)
+    cb = Cb("tonp:cancel:tpOLD")
+    await TP.tonp_cancel(cb, object())
+    assert cb.alerts and "درگاه" in cb.alerts[-1]
+    async with maker() as s:
+        assert (await s.scalar(select(models.TonPaysCharge.status))) == "waiting"
+
+
+def test_remainder_notice_hides_receipt_button_after_receipt_was_sent():
+    info = {"status": "action_required_less", "need_action_kind": "less", "remaining_amount": 12000,
+            "remaining_card_number": "6219861012345678", "remaining_card_holder": "Shop Card",
+            "remaining_receipt_received": False}
+    text, kb = TP.action_notice("tonp", "tpX", info, False)
+    datas = [b.callback_data for r in kb.inline_keyboard for b in r if b.callback_data]
+    assert "tonp:rcpt:tpX" in datas and "tonp:verify:tpX" in datas and "۱۲" not in text and "120,000 ریال" in text
+    text2, kb2 = TP.action_notice("tonp", "tpX", {**info, "remaining_receipt_received": True}, False)
+    datas2 = [b.callback_data for r in kb2.inline_keyboard for b in r if b.callback_data]
+    assert "tonp:rcpt:tpX" not in datas2 and "tonp:verify:tpX" in datas2 and "فرستاده‌ای" in text2
+
+
+def test_documented_error_codes_have_farsi_text():
+    for code in ("INVOICE_ID_MISMATCH", "BUYER_HAS_PENDING_INVOICE", "BUYER_HAS_PROCESSING_INVOICE",
+                 "BUYER_HAS_NEED_ACTION_LESS", "BUYER_HAS_NEED_ACTION_MORE", "BUYER_INVOICE_BUSY",
+                 "CANCEL_NOT_ALLOWED_PROCESSING", "CANCEL_NOT_ALLOWED_NEED_ACTION_LESS",
+                 "CANCEL_NOT_ALLOWED_NEED_ACTION_MORE", "INVOICE_ALREADY_CANCELED", "INVOICE_EXPIRED",
+                 "REFUND_NOT_ALLOWED", "REFUND_AMOUNT_UNKNOWN", "INVALID_REFUND_CARD", "INVALID_REFUND_HOLDER",
+                 "REFUND_ALREADY_OPEN", "NOT_PENDING", "REMAINDER_INVOICE_MISSING", "EMPTY_RECEIPT",
+                 "INVALID_RECEIPT_TYPE", "RECEIPT_TOO_LARGE", "RATE_LIMIT_EXCEEDED", "INVOICE_NOT_FOUND"):
+        assert TP.ERROR_FA.get(code), code
+
+
+async def test_platform_bot_keeps_invoice_open_when_gateway_cancel_failed(monkeypatch):
+    import platform_tonpays as PT
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as c:
+        await c.run_sync(models.Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(PT, "Session", maker)
+    async with maker() as s:
+        s.add(models.PlatformTonPaysCharge(user_telegram_id=USER, order_id="ptOLD", invoice_id="TP-OLD",
+                                           request_amount=50000, final_amount=50037, status="waiting"))
+        await s.commit()
+
+    async def cag(key, inv, custom=False):
+        return "retry", "502"
+
+    async def gk(custom):
+        return "KEY"
+
+    async def boom(*a, **k):
+        raise AssertionError("فاکتور جدید نباید ساخته شود")
+    monkeypatch.setattr(PT, "cancel_at_gateway", cag)
+    monkeypatch.setattr(PT, "_get_key", gk)
+    monkeypatch.setattr(PT, "_create_invoice", boom)
+    cb = Cb("ptonp:cnew:ptOLD:70000")
+    await PT.ptonp_cancel_and_new(cb, object())
+    text, kw = cb.message.sent[-1]
+    assert "درگاه" in text and "ptonp:cnew:ptOLD:70000" in str(kw["reply_markup"])
+    cb2 = Cb("ptonp:cancel:ptOLD")
+    await PT.ptonp_cancel(cb2)
+    assert cb2.alerts and "درگاه" in cb2.alerts[-1]
+    async with maker() as s:
+        assert (await s.scalar(select(models.PlatformTonPaysCharge.status))) == "waiting"
+    await engine.dispose()

@@ -556,6 +556,10 @@ async def ptonp_cancel_and_new(cb: CallbackQuery, bot: Bot):
     if res == "blocked":
         await cb.message.answer("⚠️ " + why + "\nبا «✅ پرداخت کردم» وضعیت را بررسی کن.")
         return
+    if res == "retry":     # PATCH_TONPAYS_DOCS_AUDIT_V1 — لغو در درگاه نشد؛ فاکتور همچنان باز و قابل لغو می‌ماند
+        from tenant.gateways.tonpays import RETRY_CANCEL_TEXT
+        await cb.message.answer(RETRY_CANCEL_TEXT, reply_markup=pending_kb("ptonp", order_id, amount))
+        return
     async with Session() as s:
         await s.execute(
             sa_update(PlatformTonPaysCharge)
@@ -765,6 +769,10 @@ async def ptonp_cancel(cb: CallbackQuery):
         return
     if _res == "blocked":
         await cb.answer(_why, show_alert=True)
+        return
+    if _res == "retry":    # PATCH_TONPAYS_DOCS_AUDIT_V1
+        from tenant.gateways.tonpays import RETRY_CANCEL_TEXT
+        await cb.answer(RETRY_CANCEL_TEXT, show_alert=True)
         return
     async with Session() as s:
         # لغوِ اتمی: نوشتنِ بی‌شرط می‌توانست وضعیتِ «paid» را که هم‌زمان ثبت

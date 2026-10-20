@@ -246,6 +246,7 @@ ERROR_FA = {
     "REFUND_AMOUNT_UNKNOWN": "مبلغِ مازاد هنوز در درگاه ثبت نشده؛ کمی بعد دوباره امتحان کن.",
     "INVALID_REFUND_CARD": "شمارهٔ کارت نامعتبر است.",
     "INVALID_REFUND_HOLDER": "نامِ صاحبِ کارت لازم است.",
+    "INVOICE_ID_MISMATCH": "شناسهٔ فاکتور ارسالی با آدرس درخواست یکی نیست.",   # PATCH_TONPAYS_DOCS_AUDIT_V1
     "REFUND_ALREADY_OPEN": "درخواستِ عودت برایِ این فاکتور قبلاً ثبت شده است.",
     "NOT_PENDING": "رسید فقط وقتی پذیرفته می‌شود که فاکتورِ مابقی در انتظارِ پرداخت باشد.",
     "REMAINDER_INVOICE_MISSING": "فاکتورِ مابقی برایِ این پرداخت باز نیست.",
@@ -434,7 +435,7 @@ async def cancel_invoice(api_key: str, invoice_id: str, custom: bool = False) ->
 
 async def cancel_at_gateway(api_key: str, invoice_id: str, custom: bool = False) -> tuple[str, str]:
     """لغوِ امنِ فاکتور: اول استعلام (اگر پرداخت شده، لغو نمی‌شود).
-    خروجی: ("paid"|"cancelled"|"blocked"|"error", توضیح). «blocked» = درگاه لغو را نپذیرفت چون فاکتور
+    خروجی: ("paid"|"cancelled"|"blocked"|"retry"|"error", توضیح). «retry» = خطای موقت درگاه/شبکه؛ فاکتور هنوز باز است. «blocked» = درگاه لغو را نپذیرفت چون فاکتور
     در انتظارِ تأیید / مبلغِ کمتر / مبلغِ بیشتر است (کاربر واریز کرده؛ نباید فاکتورِ جدید بسازد)."""
     if not api_key or not invoice_id:
         return "error", "درگاه تنظیم نشده است."
@@ -449,19 +450,25 @@ async def cancel_at_gateway(api_key: str, invoice_id: str, custom: bool = False)
             return "blocked", ERROR_FA.get("CANCEL_NOT_ALLOWED_" + st.upper().replace("ACTION_REQUIRED_", "NEED_ACTION_"),
                                            "این فاکتور لغو نمی‌شود.")
     except TonPaysError as e:
+        if e.code == "INVOICE_NOT_FOUND":
+            return "cancelled", ""        # === PATCH_TONPAYS_DOCS_AUDIT_V1 === فاکتوری نیست که باز مانده باشد
         logger.info("tonpays cancel: precheck failed %s: %s", invoice_id, e)
     try:
         await cancel_invoice(api_key, invoice_id, custom)
         return "cancelled", ""
     except TonPaysError as e:
-        if e.code in ("INVOICE_ALREADY_CANCELED", "INVOICE_EXPIRED"):
+        if e.code in ("INVOICE_ALREADY_CANCELED", "INVOICE_EXPIRED", "INVOICE_NOT_FOUND"):
             return "cancelled", ""
         if (e.code or "").startswith("CANCEL_NOT_ALLOWED"):
             return "blocked", str(e)
+        # === PATCH_TONPAYS_DOCS_AUDIT_V1 === خطای موقت (سقف درخواست / مشغول / ۵xx): فاکتور هنوز در درگاه باز است
+        # و مستندات می‌گوید تا آن باز است فاکتور جدید ساخته نمی‌شود ⇒ نباید محلی «لغوشده» حساب شود.
+        if e.code in ("RATE_LIMIT_EXCEEDED", "BUYER_INVOICE_BUSY") or int(e.status or 0) >= 500:
+            return "retry", str(e)
         return "error", str(e)
-    except Exception as e:  # noqa: BLE001 — خطایِ شبکه
+    except Exception as e:  # noqa: BLE001 — خطای شبکه (فاکتور ممکن است هنوز باز باشد)
         logger.warning("tonpays cancel failed %s: %s", invoice_id, e)
-        return "error", str(e)
+        return "retry", str(e)
 
 
 async def refund_card(api_key: str, invoice_id: str, card_number: str, card_holder: str,
@@ -525,8 +532,11 @@ def action_notice(prefix: str, order_id: str, info: dict, custom: bool) -> tuple
             lines += ["💳 واریز به کارتِ زیر:", f"<code>{card}</code>"]
             if holder:
                 lines.append(f"🧑 به نام: <b>{holder}</b>")
-        lines += ["", "بعد از واریزِ مابقی، پرداخت خودکار تأیید می‌شود. اگر نشد، «📎 ارسال رسیدِ مابقی» را بزن "
-                      "و تصویرِ رسید را بفرست."]
+        got = bool(info.get("remaining_receipt_received"))    # PATCH_TONPAYS_DOCS_AUDIT_V1 — رسید مابقی قبلا رفته
+        lines += ["", ("✅ رسید مابقی را فرستاده‌ای و در انتظار بررسی درگاه است؛ بعد از تأیید، کیف پولت شارژ می‌شود."
+                       if got else
+                       "بعد از واریز مابقی، پرداخت خودکار تأیید می‌شود. اگر نشد، «📎 ارسال رسید مابقی» را بزن "
+                       "و تصویر رسید را بفرست.")]
         rows = []
         copy = []
         if rem:
@@ -536,7 +546,8 @@ def action_notice(prefix: str, order_id: str, info: dict, custom: bool) -> tuple
             copy.append(InlineKeyboardButton(text="📋 کپی شماره کارت", copy_text=CopyTextButton(text=digits)))
         if copy:
             rows.append(copy)
-        rows.append([InlineKeyboardButton(text="📎 ارسال رسیدِ مابقی", callback_data=f"{prefix}:rcpt:{order_id}")])
+        if not got:
+            rows.append([InlineKeyboardButton(text="📎 ارسال رسید مابقی", callback_data=f"{prefix}:rcpt:{order_id}")])
         rows.append([InlineKeyboardButton(text="✅ واریز کردم، بررسی کن", callback_data=f"{prefix}:verify:{order_id}")])
         return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
     if st == "action_required_more" or info.get("need_action_kind") == "more":
@@ -559,6 +570,10 @@ def pending_text(amount: int | None = None) -> str:
             "تا آن باز است، پرداختِ جدید ساخته نمی‌شود.\n\n"
             "اگر به آن واریز کرده‌اید، <b>لغو نکنید</b> و با پشتیبانی در تماس باشید؛ "
             "در غیرِ این صورت «لغو و پرداختِ جدید» را بزنید.")
+
+
+RETRY_CANCEL_TEXT = ("⚠️ لغو فاکتور در درگاه الان انجام نشد (مشکل موقت ارتباط). فاکتور هنوز باز است؛ "
+                     "چند لحظه بعد دوباره «لغو و پرداخت جدید» را بزن.")
 
 
 def pending_kb(prefix: str, order_id: str, amount: int) -> InlineKeyboardMarkup:
@@ -1709,6 +1724,9 @@ async def tonp_cancel_and_new(cb: CallbackQuery, bot: Bot):
     if res == "blocked":   # در انتظارِ تأیید / مبلغِ کمتر / مبلغِ بیشتر ⇒ لغو نمی‌شود، فاکتورِ جدید هم نه
         await cb.message.answer("⚠️ " + why + "\nبا «✅ پرداخت کردم» وضعیت را بررسی کن.")
         return
+    if res == "retry":     # PATCH_TONPAYS_DOCS_AUDIT_V1 — لغو در درگاه نشد؛ فاکتور همچنان باز و قابل لغو می‌ماند
+        await cb.message.answer(RETRY_CANCEL_TEXT, reply_markup=pending_kb("tonp", order_id, amount))
+        return
     async with Session() as s:
         await s.execute(
             sa_update(TonPaysCharge)
@@ -1750,6 +1768,9 @@ async def tonp_cancel(cb: CallbackQuery, bot: Bot):
         _paid_text = ("✅ " + text) if ok else text
     elif res == "blocked":
         await cb.answer(_why, show_alert=True)
+        return
+    elif res == "retry":   # PATCH_TONPAYS_DOCS_AUDIT_V1
+        await cb.answer(RETRY_CANCEL_TEXT, show_alert=True)
         return
     else:
         async with Session() as s:
