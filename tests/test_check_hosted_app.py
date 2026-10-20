@@ -175,3 +175,65 @@ def test_fix_token_does_nothing_when_registered_token_is_valid(monkeypatch, caps
     finally:
         srv.shutdown()
     assert posted == [] and "نیازی به تغییر نیست" in capsys.readouterr().out
+
+
+# ═══════════ PATCH_HOSTED_MEDIA_CHECK_V1 — ffmpeg / moviepy ═══════════
+
+def _marks(res):
+    return [m for m, _ in res]
+
+
+def _text(res):
+    return "\n".join(t for _, t in res)
+
+
+def test_req_spec_and_moviepy_version_rules():
+    assert CH.req_spec("aiogram==3\nmoviepy==1.0.3\n", "moviepy") == (True, "==1.0.3")
+    assert CH.req_spec("MoviePy>=1.0.3  # x\n", "moviepy") == (True, ">=1.0.3")
+    assert CH.req_spec("moviepy\n", "moviepy") == (True, "")
+    assert CH.req_spec("imageio-ffmpeg\n", "moviepy") == (False, "")
+    assert CH.req_spec("imageio_ffmpeg==0.5.1\n", "imageio-ffmpeg") == (True, "==0.5.1")
+    for spec, v2 in (("", True), (">=1.0.3", True), ("==2.1.1", True), ("==1.0.3", False), ("<2", False),
+                     ("<2.0", False), ("<=1.0.3", False), ("~=1.0.3", False), (">=1.0,<2", False), ("<2.1", True)):
+        assert CH.moviepy_is_v2(spec) is v2, spec
+
+
+EDITOR_CODE = {"bot.py": "from moviepy.editor import VideoFileClip\n\ndef to_note(p):\n    return VideoFileClip(p)\n"}
+
+
+def test_moviepy_editor_with_unpinned_moviepy_is_the_reported_failure():
+    res = CH.diagnose_media_deps(EDITOR_CODE, "aiogram\nmoviepy\n", "FROM python:3.12\nRUN pip install -r r.txt\n", [])
+    assert "❌" in _marks(res)
+    t = _text(res)
+    assert "moviepy.editor" in t and "moviepy==1.0.3" in t and "rebuild" in t
+    pinned = CH.diagnose_media_deps(EDITOR_CODE, "moviepy==1.0.3\n", "FROM python:3.12\n", [])
+    assert "❌" not in _marks(pinned)                                             # با ۱.x ایمپورت editor درست است
+    new_import = CH.diagnose_media_deps({"bot.py": "from moviepy import VideoFileClip\n"}, "moviepy\n",
+                                        "FROM python:3.12\n", [])
+    assert "❌" not in _marks(new_import)                                         # ایمپورت ۲.x با ۲.x درست است
+
+
+def test_moviepy_missing_from_requirements_or_requirements_file_missing():
+    res = CH.diagnose_media_deps(EDITOR_CODE, "aiogram\n", "FROM python:3.12\n", [])
+    assert "❌" in _marks(res) and "نیست" in _text(res)
+    res = CH.diagnose_media_deps(EDITOR_CODE, None, "FROM python:3.12\n", [])
+    assert "❌" in _marks(res) and "requirements.txt در پروژه نیست" in _text(res)
+
+
+def test_ffmpeg_binary_needs_dockerfile_or_imageio_ffmpeg():
+    code = {"bot.py": "import subprocess\nsubprocess.run(['ffmpeg', '-i', 'a.mp4', 'b.mp4'])\n"}
+    bad = CH.diagnose_media_deps(code, "aiogram\n", "FROM python:3.12-slim\nRUN pip install aiogram\n", [])
+    assert "❌" in _marks(bad) and "apt-get install -y ffmpeg" in _text(bad)
+    ok_docker = CH.diagnose_media_deps(code, "aiogram\n", "FROM python:3.12-slim\nRUN apt-get update && apt-get install -y ffmpeg\n", [])
+    assert "❌" not in _marks(ok_docker)
+    ok_pip = CH.diagnose_media_deps(code, "aiogram\nimageio-ffmpeg\n", "FROM python:3.12-slim\n", [])
+    assert "❌" not in _marks(ok_pip)
+    no_docker = CH.diagnose_media_deps(code, "aiogram\n", None, [])
+    assert "docker exec" in _text(no_docker)                                       # بدون Dockerfile: دستور چک داخل کانتینر
+
+
+def test_logs_alone_trigger_the_section_and_unrelated_projects_stay_silent():
+    res = CH.diagnose_media_deps({"bot.py": "print('hi')\n"}, "aiogram\n", None,
+                                 ["x", "ModuleNotFoundError: No module named 'moviepy.editor'"])
+    assert any("moviepy.editor" in t for _, t in res)
+    assert CH.diagnose_media_deps({"bot.py": "print('hi')\n"}, "aiogram\n", "FROM python:3.12\n", ["ok"]) == []

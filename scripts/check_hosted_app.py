@@ -10,6 +10,9 @@ scripts/check_hosted_app.py — تشخیصِ فقط‌خواندنیِ «توک�
      (علتِ رایجِ «توکنِ تازه را زدم ولی باز Unauthorized می‌دهد»: برنامه توکنِ قدیمیِ فایل را می‌خواند).
   ۳) لاگ: خطِ Unauthorized/Conflict دقیقاً از کجا می‌آید؛ ممکن است Unauthorized از یک APIِ دیگرِ کدِ مشتری
      باشد (مثلاً کلیدِ پنلِ SMM) و ربطی به توکنِ تلگرام نداشته باشد.
+  ۴) ماژول گم‌شده (No module named …) در لاگ و مقایسه با requirements.txt.
+  ۶) ffmpeg / moviepy (PATCH_HOSTED_MEDIA_CHECK_V1): «این سرویس فعال نیست (ffmpeg یا moviepy نصب نیست)» با وجود
+     افزودن moviepy به requirements — علت رایج: moviepy ۲ دیگر moviepy.editor ندارد، یا برنامهٔ ffmpeg در ایمیج نیست.
 
 اجرا از /opt/botsaz (شناسهٔ اپ همان id در «کاربران و ربات‌ها»):
 
@@ -124,6 +127,78 @@ def get_me(token: str) -> str:
         return f"❌ تلگرام رد کرد (HTTP {e.code}) {d}"
     except Exception as e:  # noqa: BLE001
         return f"⚠️ ارتباط با تلگرام ناموفق: {type(e).__name__}"
+
+
+# === PATCH_HOSTED_MEDIA_CHECK_V1 ===
+def req_spec(requirements: str, pip_name: str):
+    """(بسته در requirements هست؟، مشخصهٔ نسخه مثل '==1.0.3' یا '' برای بدون پین)."""
+    want = _norm_pkg(pip_name)
+    for ln in (requirements or "").splitlines():
+        ln = ln.split("#", 1)[0].strip()
+        if not ln or ln.startswith("-"):
+            continue
+        m = re.match(r"([A-Za-z0-9_.\-]+)\s*(?:\[[^\]]*\])?\s*(.*)$", ln)
+        if m and _norm_pkg(m.group(1)) == want:
+            return True, re.sub(r"\s+", "", m.group(2).split(";", 1)[0])
+    return False, ""
+
+
+def moviepy_is_v2(spec: str) -> bool:
+    """با این مشخصه pip کدام نسخهٔ moviepy را نصب می‌کند: ۲.x (که moviepy.editor را ندارد) یا ۱.x؟
+    بدون پین یا فقط کف نسخه (>=) ⇒ آخرین نسخه = ۲.x."""
+    spec = (spec or "").lower()
+    m = re.search(r"(?:==|~=|<=|<)\s*(\d+)(?:\.(\d+))?", spec)
+    if m:
+        major = int(m.group(1))
+        if "<" in spec and "<=" not in spec and "==" not in spec:      # <2 ، <2.0 ⇒ ۱.x
+            return major > 2 or (major == 2 and int(m.group(2) or 0) > 0)
+        return major >= 2
+    return True
+
+
+def diagnose_media_deps(texts: dict, req_txt, dockerfile, log_lines) -> list:
+    """وابستگی‌های ویدیو/صدا (moviepy، ffmpeg) در برابر کد پروژه، requirements.txt، Dockerfile و لاگ.
+    خروجی: فهرست (نشانه، پیام) با نشانه‌های ❌ مشکل قطعی، ⚠️ احتمال، ℹ️ توضیح."""
+    out: list = []
+    py = {p: t for p, t in (texts or {}).items() if p.lower().endswith(".py")}
+    code = "\n".join(py.values())
+    uses_editor = bool(re.search(r"^\s*(?:from|import)\s+moviepy\.editor\b", code, re.M))
+    uses_moviepy = bool(re.search(r"^\s*(?:from|import)\s+moviepy\b", code, re.M))
+    uses_ffmpeg_bin = bool(re.search(r"(?:subprocess\.\w+\([^)]*['\"]ffmpeg['\"]|shutil\.which\(\s*['\"]ffmpeg|"
+                                     r"^\s*(?:from|import)\s+ffmpeg\b|ffmpeg-python|\bffmpeg\s+-i\b)", code, re.M | re.S))
+    log_hit = [ln for ln in (log_lines or []) if re.search(r"moviepy|ffmpeg|imageio", ln, re.I)]
+    if not (uses_moviepy or uses_ffmpeg_bin or log_hit):
+        return out
+    has_mp, mp_spec = req_spec(req_txt or "", "moviepy") if req_txt is not None else (False, "")
+    has_iio, _ = req_spec(req_txt or "", "imageio-ffmpeg") if req_txt is not None else (False, "")
+    docker_ffmpeg = bool(dockerfile and re.search(r"\bffmpeg\b", dockerfile, re.I))
+    if uses_moviepy:
+        if req_txt is None:
+            out.append(("❌", "requirements.txt در پروژه نیست ⇒ moviepy اصلا نصب نمی‌شود."))
+        elif not has_mp:
+            out.append(("❌", "کد moviepy را ایمپورت می‌کند ولی «moviepy» در requirements.txt نیست."))
+        elif uses_editor and moviepy_is_v2(mp_spec):
+            out.append(("❌", f"کد «from moviepy.editor import …» دارد ولی requirements «moviepy{mp_spec or ' (بدون پین)'}» است؛ "
+                              "moviepy ۲.x ماژول moviepy.editor را حذف کرده ⇒ ImportError ⇒ پیام «moviepy نصب نیست». "
+                              "راه‌حل: «moviepy==1.0.3» بگذار، یا ایمپورت را به «from moviepy import VideoFileClip» عوض کن."))
+        elif has_mp and not uses_editor and not moviepy_is_v2(mp_spec):
+            out.append(("ℹ️", f"moviepy{mp_spec} (نسخهٔ ۱.x) پین شده؛ اگر کد تازه‌تر می‌خواهی ایمپورت‌ها را با ۲.x یکی کن."))
+    if uses_ffmpeg_bin and not (docker_ffmpeg or has_iio or has_mp):
+        out.append(("❌", "کد برنامهٔ ffmpeg را صدا می‌زند ولی نه در Dockerfile نصب شده (apt-get install -y ffmpeg) و نه "
+                          "«imageio-ffmpeg» در requirements است."))
+    if (uses_moviepy or uses_ffmpeg_bin) and dockerfile is None:
+        out.append(("ℹ️", "Dockerfile در پروژه نیست؛ اگر ایمیج را سرور میزبانی می‌سازد، داخل کانتینر چک کن: "
+                          "«docker exec <کانتینر> ffmpeg -version» و «… python -c 'import moviepy; print(moviepy.__version__)'»."))
+    elif (uses_moviepy or uses_ffmpeg_bin) and not docker_ffmpeg and not has_iio:
+        out.append(("⚠️", "در Dockerfile اسمی از ffmpeg نیست و «imageio-ffmpeg» هم در requirements نیست؛ moviepy ۱.x/۲.x معمولا "
+                          "خودش imageio-ffmpeg را (با باینری ffmpeg) نصب می‌کند، ولی اگر بیلد بدون اینترنت/با کش قدیمی بوده "
+                          "نصب نشده. «imageio-ffmpeg» را صریح اضافه کن یا ffmpeg را در Dockerfile بنویس."))
+    if (uses_moviepy or uses_ffmpeg_bin):
+        out.append(("ℹ️", "بعد از تغییر requirements/Dockerfile باید «ساخت دوباره (rebuild)» انجام شود؛ ری‌استارت ساده ایمیج قبلی "
+                          "را بالا می‌آورد و بسته‌های تازه نصب نمی‌شوند."))
+    for ln in log_hit[-4:]:
+        out.append(("ℹ️", "لاگ: " + ln.strip()[:170]))
+    return out
 
 
 def main() -> int:
@@ -276,6 +351,28 @@ def main() -> int:
             for ln in tg:
                 print("    ", ln[:120])
             print("  راهنما: «Updater/Dispatcher» ⇒ python-telegram-bot==13.15 | «Application/ApplicationBuilder» ⇒ python-telegram-bot>=20")
+
+    # === PATCH_HOSTED_MEDIA_CHECK_V1 ===
+    def _fetch(path: str):
+        okf, df = _api(base, secret, "GET", f"/api/hosting/admin/{app_id}/filetext", {"path": path})
+        return (df.get("text") or "") if okf else None
+    names = {f.get("path", ""): f for f in files}
+    py_texts = dict(texts)
+    for pth, f in names.items():                              # فایل‌های پایتون بزرگ‌تر/بیشتر از سقف اسکن هم برای ایمپورت‌ها
+        if pth.lower().endswith(".py") and pth not in py_texts and len(py_texts) < 80 and f.get("size", 0) <= 500_000 \
+                and not any(x in pth for x in ("venv/", ".git/", "site-packages/", "node_modules/")):
+            t = _fetch(pth)
+            if t:
+                py_texts[pth] = t
+    req_t = next((pth for pth in names if os.path.basename(pth).lower() == "requirements.txt"), None)
+    dock_t = next((pth for pth in names if os.path.basename(pth).lower() == "dockerfile"), None)
+    media = diagnose_media_deps(py_texts, _fetch(req_t) if req_t else None, _fetch(dock_t) if dock_t else None, lines)
+    if media:
+        print("\n۶) ffmpeg / moviepy (ویدیو ← ویدیو مسیج و …)")
+        for mark, msg_ in media:
+            print(f"  {mark} {msg_}")
+            if mark == "❌":
+                problems += 1
 
     if a.fix_token:
         print("\n۵) اصلاحِ توکنِ پنل (--fix-token)")
