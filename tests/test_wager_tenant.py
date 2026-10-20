@@ -1,3 +1,4 @@
+import json
 """PATCH_WAGER_TENANT_V1 / PATCH_WAGER_ADDON_V1 — شرط‌بندی در ربات‌های مستأجر + فروش افزونه از ربات اصلی."""
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -70,8 +71,10 @@ async def txns(db, bot=BOT):
         return [t.kind for t in (await s.scalars(select(models.WalletTxn).where(models.WalletTxn.bot_id == bot).order_by(models.WalletTxn.id))).all()]
 
 
-async def new(db, game="xo", amount=10_000, cfg=CFG, creator=U1, bot=BOT, target=None):
-    w, err = await PW.create_wager(game, -100, (creator, f"u{creator}", f"u{creator}"), amount, target, cfg, bot_id=bot)
+async def new(db, game="xo", amount=10_000, cfg=CFG, creator=U1, bot=BOT, target=None, opt="auto"):
+    if opt == "auto":
+        opt = {"xo": "X", "dice": "hi"}.get(game)
+    w, err = await PW.create_wager(game, -100, (creator, f"u{creator}", f"u{creator}"), amount, target, cfg, bot_id=bot, opt=opt)
     assert err is None, err
     return w
 
@@ -266,7 +269,7 @@ async def test_create_requires_master_and_game_switch(db):
     assert "ایکس‌او" in replies[0] and "فعال نیست" in replies[0] and await bu(db, U1) == 100_000
     m, replies = _msg("تاس 5000")                                  # بازی دیگر روشن است
     await WG.tw_create(m, _bot())
-    assert "شرط‌بندی تاس" in replies[0] and await bu(db, U1) == 95_000
+    assert "بازی تاس" in replies[0] and "شرط‌بندی" not in replies[0] and await bu(db, U1) == 95_000
 
 
 @pytest.mark.asyncio
@@ -290,12 +293,26 @@ async def test_full_game_through_tenant_callbacks_and_cross_bot_rejection(db):
         row = await s.scalar(select(models.PlatformWager))
         assert row.message_id == 900 and row.bot_id == BOT
         wid = row.id
+    assert "نماد" in replies[0] and "join" not in str(replies[0])                  # اول سازنده نماد را انتخاب می‌کند
     edits = []
+    await WG.tw_join(_cb(f"twg:join:{wid}", U2, edits), _bot())                      # قبل از انتخاب سازنده نمی‌شود
+    assert edits[-1][0] == "ANSWER" and edits[-1][2] is True and (await wager(db, wid)).status == "pending"
+    await WG.tw_option(_cb(f"twg:o:{wid}:O", U2, edits), _bot())                     # فقط سازنده می‌تواند انتخاب کند
+    assert edits[-1][0] == "ANSWER" and edits[-1][2] is True
+    assert not json.loads((await wager(db, wid)).state).get("opt")
+    await WG.tw_option(_cb(f"twg:o:{wid}:O", U1, edits), _bot())
+    assert json.loads((await wager(db, wid)).state)["opt"] == "O"
+    shown = [e for e in edits if e[0] != "ANSWER"][-1]                               # آخرین پیام ویرایش‌شده
+    assert "نماد سازنده: ⭕" in shown[0] and "قبول و پیوستن" in str(shown[1])         # حالا حریف می‌تواند بپیوندد
+    await WG.tw_option(_cb(f"twg:o:{wid}:X", U1, edits), _bot())                     # دوباره انتخاب نمی‌شود
+    assert edits[-1][0] == "ANSWER" and edits[-1][2] is True
+    assert json.loads((await wager(db, wid)).state)["opt"] == "O"
     await WG.tw_join(_cb(f"twg:join:{wid}", U1, edits), _bot())                      # سازنده نمی‌تواند
     assert edits[-1][0] == "ANSWER" and edits[-1][2] is True
     await WG.tw_join(_cb(f"twg:join:{wid}", U2, edits), _bot())
     row = await wager(db, wid)
     assert row.status == "playing" and await bu(db, U2) == 80_000
+    assert PW._xo_sym(row, U1) == "O" and PW._xo_sym(row, U2) == "X"
     # همان کلید callback از ربات دیگر (با توکن دیگر) هیچ اثری ندارد
     other = _bot("6:T")
     await WG.tw_xo(_cb(f"twg:x:{wid}:0", row.turn_id, edits), other)
@@ -321,6 +338,7 @@ async def test_tenant_dice_and_rps_callbacks(db, monkeypatch):
     await WG.tw_create(m, _bot())
     wid = (await _last(db)).id
     edits = []
+    await WG.tw_option(_cb(f"twg:o:{wid}:lo", U1, edits), _bot())                    # کوچک‌تر برنده است
     await WG.tw_join(_cb(f"twg:join:{wid}", U2, edits), _bot())
     rolls = iter([2, 6])
 
@@ -333,14 +351,18 @@ async def test_tenant_dice_and_rps_callbacks(db, monkeypatch):
     await WG.tw_dice(_cb(f"twg:d:{wid}", U1, edits), TBot())
     await WG.tw_dice(_cb(f"twg:d:{wid}", U2, edits), TBot())
     row = await wager(db, wid)
-    assert row.status == "settled" and row.winner_id == U2 and await bu(db, U2) == 102_000
+    assert row.status == "settled" and row.winner_id == U1 and await bu(db, U1) == 102_000     # ۲ < ۶ و «کوچک‌تر برنده»
     m, _ = _msg("سنگ کاغذ قیچی 3000", uid=U3)
     await WG.tw_create(m, _bot())
     wid = (await _last(db)).id
     await WG.tw_join(_cb(f"twg:join:{wid}", U1, edits), _bot())
-    await WG.tw_rps(_cb(f"twg:r:{wid}:r", U3, edits), _bot())
-    await WG.tw_rps(_cb(f"twg:r:{wid}:s", U1, edits), _bot())
-    assert (await wager(db, wid)).winner_id == U3
+    for rnd in range(1, 4):                                                          # ۳ راندی: هر کس زودتر ۳ راند ببرد
+        await WG.tw_rps(_cb(f"twg:r:{wid}:r", U3, edits), _bot())
+        await WG.tw_rps(_cb(f"twg:r:{wid}:s", U1, edits), _bot())
+        row = await wager(db, wid)
+        assert (row.status == "playing") == (rnd < 3), rnd
+    shown = [e for e in edits if e[0] != "ANSWER"][-1]
+    assert row.winner_id == U3 and "بازی" in shown[0] and "امتیاز" in shown[0] and "شرط‌بندی" not in shown[0]
 
 
 async def _last(db):
@@ -390,7 +412,7 @@ async def test_expiry_loop_settles_and_edits_with_the_bots_own_token(db, monkeyp
     await expire(db, w.id)
     await expire(db, plat.id)
     assert await WG.expire_wagers_once() == 1                                      # فقط مستأجر؛ ربات اصلی کار خودش را می‌کند
-    assert calls and calls[0][0] == "5:T" and calls[0][2] == 77 and "شرط‌بندی" in calls[0][3]
+    assert calls and calls[0][0] == "5:T" and calls[0][2] == 77 and "بازی ایکس‌او" in calls[0][3] and "شرط‌بندی" not in calls[0][3]
     assert (await wager(db, w.id)).status == "expired" and await bu(db, U1) == 100_000
     assert (await wager(db, plat.id)).status == "pending"
     assert await WG.expire_wagers_once() == 0
@@ -575,3 +597,51 @@ async def test_admin_sale_settings_in_hub(db, sale_env, monkeypatch):
     await SALE.wgrs_price_save(m, state)
     assert state.cleared and sale_env.store["wager_sale_price"] == "150000"
     assert await SALE.sale_price() == 150_000
+
+
+# ═══════════ PATCH_WAGER_UPGRADE_V1 — نام «بازی» در ربات‌های مشتری (هشدار ریسک مالی سر جایش) ═══════════
+
+NOTICE_GAME = "⚠️ بازی ریسک مالی دارد؛ فقط با پولی بازی کن که از دست‌دادنش برایت مشکلی نیست."
+
+
+@pytest.mark.asyncio
+async def test_tenant_texts_say_game_with_the_risk_warning_and_main_bot_keeps_bet_wording(db):
+    pend = await new(db, "dice")
+    text, kb = PW.render(pend)
+    assert "🎮 <b>بازی تاس</b>" in text and NOTICE_GAME in text and "مبلغ ورودی هر نفر" in text
+    assert "شرط‌بندی" not in text and "مبلغ شرط" not in text
+    for game in PW.GAMES:                                                    # همهٔ مرحله‌ها و بازی‌ها
+        p = await new(db, game, creator=U3, amount=1000)
+        for stage in (p, await join(p, U2)):
+            t = PW.render(stage)[0]
+            assert "شرط‌بندی" not in t and "مبلغ شرط" not in t, (game, t)
+        await expire(db, p.id)
+        await PW.sweep_expired(None, BOT)
+        assert "شرط‌بندی" not in PW.render(await wager(db, p.id))[0]
+    assert "شرط‌بندی ریسک مالی" in PW.words(0)["notice"] and "بازی ریسک مالی" in PW.words(BOT)["notice"]
+
+
+@pytest.mark.asyncio
+async def test_tenant_errors_and_wallet_notes_say_game(db):
+    w = await new(db)
+    errs = [(await PW.join_wager(w.id, (U1, "x", "x"), 180, bot_id=BOT)).err,                 # سازنده خودش
+            (await PW.join_wager(w.id, (U2, "x", "x"), 180, bot_id=BOT2)).err,                 # ربات دیگر
+            (await PW.cancel_wager(w.id, U2, bot_id=BOT)).err]                                 # غیرسازنده
+    assert all(errs) and not any("شرط‌بندی" in e for e in errs), errs
+    for _ in range(PW.MAX_ACTIVE):
+        await PW.create_wager("rps", -100, (U3, "x", "x"), 1000, None, CFG, bot_id=BOT)
+    over = await PW.create_wager("rps", -100, (U3, "x", "x"), 1000, None, CFG, bot_id=BOT)
+    assert over[1] and "بازی باز" in over[1] and "شرط‌بندی" not in over[1]
+    await join(w)
+    async with db() as s:
+        notes = [t.note for t in (await s.scalars(select(models.WalletTxn).where(models.WalletTxn.bot_id == BOT))).all()]
+    assert notes and all("شرط‌بندی" not in n for n in notes) and any("بازی" in n for n in notes), notes
+
+
+@pytest.mark.asyncio
+async def test_tenant_owner_screens_say_group_games(db):
+    from platform_wager_sale import LEGAL_NOTE
+    assert "شرط‌بندی" in LEGAL_NOTE                                           # به خریدار (مالک ربات) صریح گفته می‌شود
+    assert "بازی‌های شرط‌بندی" not in WG.LOCKED_HINT and "بازی‌های گروهی" in WG.LOCKED_HINT
+    text, rows = await WG.settings_extra(BOT)
+    assert "بازی‌های گروهی" in text and "بازی‌های شرط‌بندی" not in text

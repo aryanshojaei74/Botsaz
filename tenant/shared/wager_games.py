@@ -1,7 +1,9 @@
-"""شرط‌بندی ایکس‌او / سنگ‌کاغذ‌قیچی / تاس در گروه ربات‌های مستأجر (کیف‌پول همان ربات).
+"""بازی‌های گروهی ایکس‌او / سنگ‌کاغذ‌قیچی / تاس با مبلغ کیف‌پول در گروه ربات‌های مستأجر (کیف‌پول همان ربات).
 
 === PATCH_WAGER_TENANT_V1 ===
-• فعال‌سازی: مالک ربات از ربات اصلی (ربات‌های من ← انتخاب ربات ← «بازی‌های شرط‌بندی») مبلغی که مدیر بات‌ساز تعیین
+• === PATCH_WAGER_UPGRADE_V1 === نام در ربات‌های مشتری «بازی» است (با هشدار ریسک مالی)؛ سازنده نماد ایکس‌او و قانون
+  تاس (بزرگ‌تر/کوچک‌تر برنده) را انتخاب می‌کند؛ سنگ‌کاغذ‌قیچی ۳ راندی است.
+• فعال‌سازی: مالک ربات از ربات اصلی (ربات‌های من ← انتخاب ربات ← «بازی‌های گروهی») مبلغی که مدیر بات‌ساز تعیین
   کرده را می‌پردازد؛ ردیف BotAddon ساخته می‌شود. بدون آن، این بازی‌ها در آن ربات کار نمی‌کنند (و فقط به مالک/ادمین
   توضیح داده می‌شود). شیر یا خط قدیمی (group_betting.py) از این کنترل جداست و دست‌نخورده.
 • فقط برای ربات‌هایی که قابلیت‌های گروهی کیف‌پولی دارند (خدمات مجازی / VPN رشد و حرفه‌ای)، مثل انتقال و شیر یا خط.
@@ -31,10 +33,10 @@ logger = _get_logger(__name__)
 
 wager_games_router = Router(name="wager_games")
 
-ANON_NOTICE = ("❌ با حالت «ادمین ناشناس» یا هویت کانال نمی‌شود شرط بست (معلوم نیست کیف‌پول چه کسی باید کم شود). "
+ANON_NOTICE = ("❌ با حالت «ادمین ناشناس» یا هویت کانال نمی‌شود بازی ساخت (معلوم نیست کیف‌پول چه کسی باید کم شود). "
                "حالت ناشناس را خاموش کن و دوباره بنویس.")
-LOCKED_HINT = ("🔒 بازی‌های شرط‌بندی (ایکس‌او، سنگ‌کاغذ‌قیچی، تاس) برای این ربات فعال نشده است.\n"
-               "فعال‌سازی: ربات اصلی بات‌ساز ← ربات‌های من ← همین ربات ← «🎰 بازی‌های شرط‌بندی».\n\n"
+LOCKED_HINT = ("🔒 بازی‌های گروهی (ایکس‌او، سنگ‌کاغذ‌قیچی، تاس) برای این ربات فعال نشده است.\n"
+               "فعال‌سازی: ربات اصلی بات‌ساز ← ربات‌های من ← همین ربات ← «🎮 بازی‌های گروهی».\n\n"
                "(این پیام فقط برای مالک/ادمین ربات نمایش داده می‌شود.)")
 
 
@@ -83,7 +85,7 @@ async def tw_create(msg: Message, bot: Bot):
         logger.exception("tenant wager: create failed (bot=%s chat=%s user=%s)", row.id, msg.chat.id, msg.from_user.id)
         extra = f"\n({type(e).__name__}: {str(e)[:150]})" if is_admin else ""
         try:
-            await msg.reply("❌ ساخت شرط‌بندی با خطا روبه‌رو شد؛ چند لحظه بعد دوباره امتحان کن." + extra)
+            await msg.reply("❌ ساخت بازی با خطا روبه‌رو شد؛ چند لحظه بعد دوباره امتحان کن." + extra)
         except Exception:  # noqa: BLE001
             logger.exception("tenant wager: could not report the failure")
 
@@ -94,7 +96,7 @@ async def _create_and_post(msg: Message, bot: Bot, row, game: str, amount: int) 
         await msg.reply("❌ قابلیت بازی در این ربات فعال نیست.")
         return
     if not await core.game_enabled(game, row.id):
-        await msg.reply(f"❌ شرط‌بندی {core.GAME_FA[game]} در این ربات فعال نیست.")
+        await msg.reply(f"❌ بازی {core.GAME_FA[game]} در این ربات فعال نیست.")
         return
     target = _reply_target(msg)
     if target and (target.is_bot or target.id == msg.from_user.id):
@@ -164,15 +166,30 @@ async def tw_join(cb: CallbackQuery, bot: Bot):
         if peek is not None and peek.bot_id == row.id and not await core.game_enabled(peek.game, row.id):
             await cb.answer("این بازی فعال نیست.", show_alert=True)
             return
-        r = await core.join_wager(wid, _tuple(cb.from_user), cfg["move"], bot_id=row.id)
+        r = await core.join_wager(wid, _tuple(cb.from_user), cfg["move"], bot_id=row.id, sim_secs=cfg["move_sim"])
     if r.w is not None:
         await _show(cb, r.w)
-    await cb.answer(r.err or "به شرط‌بندی پیوستی؛ موفق باشی!", show_alert=bool(r.err))
+    await cb.answer(r.err or "به بازی پیوستی؛ موفق باشی!", show_alert=bool(r.err))
 
 
 async def _peek(wid: int):
     async with Session() as s:
         return await s.get(PlatformWager, wid)
+
+
+@wager_games_router.callback_query(F.data.startswith("twg:o:"))
+async def tw_option(cb: CallbackQuery, bot: Bot):
+    """انتخاب سازنده: نماد ایکس‌او / برنده‌بودن عدد بزرگ‌تر یا کوچک‌تر در تاس."""
+    row = await _cb_row(cb, bot)
+    if not row:
+        return
+    parts = (cb.data or "").split(":")
+    wid, val = _wid(cb), (parts[3] if len(parts) > 3 else "")
+    async with core._wlock(wid):
+        r = await core.set_option(wid, cb.from_user.id, val, bot_id=row.id)
+    if r.w is not None and not r.err:
+        await _show(cb, r.w)
+    await cb.answer(r.err or r.note or "", show_alert=bool(r.err))
 
 
 @wager_games_router.callback_query(F.data.startswith("twg:cancel:"))
@@ -210,8 +227,9 @@ async def tw_rps(cb: CallbackQuery, bot: Bot):
         return
     parts = (cb.data or "").split(":")
     wid, choice = _wid(cb), (parts[3] if len(parts) > 3 else "")
+    cfg = await core.load_cfg(row.id)
     async with core._wlock(wid):
-        r = await core.rps_pick(wid, cb.from_user.id, choice, bot_id=row.id)
+        r = await core.rps_pick(wid, cb.from_user.id, choice, bot_id=row.id, sim_secs=cfg["move_sim"])
     if r.w is not None:
         await _show(cb, r.w)
     await cb.answer(r.err or r.note or "", show_alert=bool(r.err))
@@ -252,10 +270,10 @@ async def tw_dice(cb: CallbackQuery, bot: Bot):
 async def settings_extra(bot_id: int) -> tuple[str, list[list[InlineKeyboardButton]]]:
     """متن و ردیف‌های اضافه برای صفحهٔ «تنظیمات بازی»: وضعیت فعال‌سازی و روشن/خاموش هر بازی."""
     if not await addon_active(bot_id, WAGER_ADDON):
-        return ("\n\n🔒 <b>بازی‌های شرط‌بندی</b> (ایکس‌او، سنگ‌کاغذ‌قیچی، تاس): فعال نشده.\n"
-                "فعال‌سازی: ربات اصلی بات‌ساز ← ربات‌های من ← این ربات ← «🎰 بازی‌های شرط‌بندی»."), []
+        return ("\n\n🔒 <b>بازی‌های گروهی</b> (ایکس‌او، سنگ‌کاغذ‌قیچی، تاس): فعال نشده.\n"
+                "فعال‌سازی: ربات اصلی بات‌ساز ← ربات‌های من ← این ربات ← «🎮 بازی‌های گروهی»."), []
     flags = {g: await core.game_enabled(g, bot_id) for g in core.GAMES}
-    text = "\n\n🎮 <b>بازی‌های شرط‌بندی</b> (با کلید «وضعیت» بالا روشن/خاموش می‌شوند):\n" + "\n".join(
+    text = "\n\n🎮 <b>بازی‌های گروهی</b> (با کلید «وضعیت» بالا روشن/خاموش می‌شوند):\n" + "\n".join(
         f"{'✅' if flags[g] else '❌'} {core.GAME_FA[g]}" for g in core.GAMES)
     rows = [[InlineKeyboardButton(text=f"{'🔴 خاموش' if flags[g] else '🟢 روشن'}: {core.GAME_FA[g]}",
                                   callback_data=f"twg:set:{g}") for g in core.GAMES]]
@@ -334,7 +352,7 @@ async def wager_expiry_loop(interval_sec: int = 20):
         try:
             n = await expire_wagers_once()
             if n:
-                logger.info("wager_expiry_loop: %s شرط تسویه/برگشت شد", n)
+                logger.info("wager_expiry_loop: %s بازی تسویه/برگشت شد", n)
         except Exception:  # noqa: BLE001
             logger.exception("wager_expiry_loop: اجرای دور ناموفق بود")
         await asyncio.sleep(interval_sec)

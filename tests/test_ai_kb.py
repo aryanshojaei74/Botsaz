@@ -69,8 +69,8 @@ def test_manual_config_question_gets_stock_and_delivery_topics():
 
 
 @pytest.mark.parametrize("q,needle", [
-    ("چطور بازی شرط بندی ایکس او رو برای رباتم فعال کنم؟ قیمتش چقدره", "بازی‌های شرط‌بندی ربات"),
-    ("بازی xo توی گروه کار نمیکنه", "راه‌اندازی و استفاده از بازی‌های شرط‌بندی"),
+    ("چطور بازی شرط بندی ایکس او رو برای رباتم فعال کنم؟ قیمتش چقدره", "بازی‌های گروهی ربات"),
+    ("بازی xo توی گروه کار نمیکنه", "راه‌اندازی و استفاده از بازی‌های گروهی"),
     ("اگه یکی توی گروه توهین کرد چطور گزارش بدم", "گزارش یه عضو تو همین گروه"),
     ("تست رایگان حجمش رو ۱ گیگ گذاشتم ولی ۲ گیگ میده", "تست رایگان VPN — دو جا"),
     ("میخوام کارت به کارت از فاکتور خرید برداشته بشه", "خاموش کردن کارت‌به‌کارت فقط توی فاکتور"),
@@ -131,7 +131,7 @@ async def test_system_prompt_has_no_markdown_or_marks_but_keeps_facts(monkeypatc
     assert "**" not in prompt and not MARKS.search(prompt)
     assert "انبار کانفیگ‌های دستی" in prompt and "سفارشی مدیر" in prompt
     full = await G._build_ai_system_prompt("")                                          # بدونِ سوال: همهٔ دانش
-    assert "**" not in full and not MARKS.search(full) and "بازی‌های شرط‌بندی ربات" in full
+    assert "**" not in full and not MARKS.search(full) and "بازی‌های گروهی ربات" in full
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,7 @@
-"""فروش افزونهٔ «بازی‌های شرط‌بندی» به ربات‌های مستأجر، از ربات اصلی.
+"""فروش افزونهٔ «بازی‌های گروهی» (ایکس‌او / سنگ‌کاغذ‌قیچی / تاس با مبلغ کیف‌پول) به ربات‌های مستأجر، از ربات اصلی.
 
 === PATCH_WAGER_ADDON_V1 ===
-مسیر مالک: ربات‌های من ← انتخاب ربات ← «🎰 بازی‌های شرط‌بندی» ← پرداخت (از کیف‌پول بات‌ساز) ← فعال.
+مسیر مالک: ربات‌های من ← انتخاب ربات ← «🎮 بازی‌های گروهی» ← پرداخت (از کیف‌پول بات‌ساز) ← فعال.
 قیمت و روشن/خاموش فروش را مدیر اصلی از «🎮 بازی‌ها و شرط‌بندی» تعیین می‌کند (پیش‌فرض ۱۰۰٬۰۰۰ تومان).
 پرداخت یک‌بار و دائمی است (BotAddon)؛ بعد از آن ایکس‌او/سنگ‌کاغذ‌قیچی/تاس در گروه همان ربات کار می‌کند
 (tenant/shared/wager_games.py). مدیر اصلی برای ربات خودش رایگان فعال می‌کند. خرید دوباره‌کاری و کسر دوباره ندارد
@@ -28,7 +28,9 @@ logger = _get_logger(__name__)
 platform_wager_sale_router = Router(name="platform_wager_sale")
 
 DEFAULT_PRICE = 100_000
-LEGAL_NOTE = "⚠️ مسئولیت قانونی راه‌اندازی و استفاده از شرط‌بندی در گروه و کشور شما با صاحب ربات است."
+# برای مالک ربات (خریدار) عمدا صریح است: بازی‌ها با پول کیف‌پول انجام می‌شود
+LEGAL_NOTE = ("⚠️ این بازی‌ها با پول کیف‌پول کاربران انجام می‌شود (شرط‌بندی مالی بین بازیکن‌ها). "
+              "مسئولیت قانونی راه‌اندازی و استفاده از آن در گروه و کشور شما با صاحب ربات است.")
 
 
 class WagerSaleFSM(StatesGroup):
@@ -62,7 +64,7 @@ async def mybot_button(bot_id: int, field: str | None, plan: str | None):
     active = await bot_addons.addon_active(bot_id)
     if not active and not await sale_enabled():
         return None
-    return hx_button("🎰 بازی‌های شرط‌بندی" + (" ✅" if active else ""), callback_data=f"wgr:menu:{bot_id}")
+    return hx_button("🎮 بازی‌های گروهی" + (" ✅" if active else ""), callback_data=f"wgr:menu:{bot_id}")
 
 
 async def _owned_bot(cb: CallbackQuery, bot_id: int):
@@ -88,14 +90,16 @@ async def _menu_content(r: BotRow, uid: int):
     active = await bot_addons.addon_active(r.id)
     price = 0 if uid == PLATFORM_ADMIN_ID else await sale_price()
     head = (
-        f"🎰 <b>بازی‌های شرط‌بندی برای @{r.username}</b>\n\n"
+        f"🎮 <b>بازی‌های گروهی برای @{r.username}</b>\n\n"
         "با فعال‌سازی، کاربران ربات تو می‌توانند داخل گروه، با موجودی کیف‌پول همین ربات، "
-        "<b>ایکس‌او، سنگ‌کاغذ‌قیچی و تاس</b> شرط‌بندی کنند. برنده جایزه را می‌گیرد.\n\n"
+        "<b>ایکس‌او، سنگ‌کاغذ‌قیچی و تاس</b> بازی کنند. برنده جایزه را می‌گیرد.\n\n"
         "• برای کاربران کاملا اختیاری است: هر کس خودش دستور را می‌نویسد یا روی «قبول» می‌زند.\n"
         "• کارمزد (اختیاری)، حداقل و حداکثر مبلغ، زمان انتظار و روشن/خاموش‌کردن هر بازی دست خودت است "
         "(در ربات خودت: دکمه‌ها و تنظیمات ← تنظیمات گروه ← تنظیمات بازی).\n"
+        "• ایکس‌او: سازنده نماد خودش (❌ یا ⭕) را انتخاب می‌کند. تاس: سازنده تعیین می‌کند عدد بزرگ‌تر برنده است یا "
+        "کوچک‌تر. سنگ‌کاغذ‌قیچی: هر کس زودتر ۳ راند ببرد برنده است. تاس و سنگ‌کاغذ‌قیچی ۵ دقیقه مهلت دارند.\n"
         "• تاس را خود تلگرام می‌اندازد؛ مبلغ‌ها اتمیک جابه‌جا و در مساوی یا لغو برگردانده می‌شود.\n"
-        "• شرط‌بندی با شیر یا خط همین الان برای ربات‌های واجد شرایط جداست و به این خرید وابسته نیست.\n\n")
+        "• بازی «شیر یا خط» همین الان برای ربات‌های واجد شرایط جداست و به این خرید وابسته نیست.\n\n")
     if active:
         body = ("✅ <b>برای این ربات فعال است.</b>\n\n"
                 "مراحل استفاده:\n"
@@ -159,12 +163,12 @@ async def wgr_buy(cb: CallbackQuery):
             return
         if price and float(u.balance) < price:
             await s.commit()
-            await _insufficient_balance(cb, price, note="برای فعال‌سازی بازی‌های شرط‌بندی لازم است.")
+            await _insufficient_balance(cb, price, note="برای فعال‌سازی بازی‌های گروهی لازم است.")
             return
         if price:
             u.balance = float(u.balance) - price
             s.add(PlatformTxn(user_telegram_id=uid, amount=-price, kind="purchase",
-                              note=f"فعال‌سازی بازی‌های شرط‌بندی برای @{r.username}"[:200]))
+                              note=f"فعال‌سازی بازی‌های گروهی برای @{r.username}"[:200]))
         s.add(BotAddon(bot_id=r.id, addon=bot_addons.WAGER_ADDON, amount=price, paid_by=uid,
                        source="free" if not price else "wallet"))
         try:
@@ -177,7 +181,7 @@ async def wgr_buy(cb: CallbackQuery):
     await cb.answer("✅ فعال شد")
     paid = f"\n💳 {_rial(price)} از کیف‌پول بات‌ساز تو کسر شد." if price else ""
     await cb.message.answer(
-        f"✅ بازی‌های شرط‌بندی برای @{r.username} فعال شد (حداکثر تا ۱۵ ثانیه دیگر در ربات اعمال می‌شود).{paid}\n\n"
+        f"✅ بازی‌های گروهی برای @{r.username} فعال شد (حداکثر تا ۱۵ ثانیه دیگر در ربات اعمال می‌شود).{paid}\n\n"
         "مراحل: ربات را در گروه ادمین کن ← در ربات: دکمه‌ها و تنظیمات ← تنظیمات گروه ← «🎲 تنظیمات بازی» ← "
         "بازی را روشن کن ← در گروه بنویس <code>xo 10000</code> یا <code>تاس 10000</code>.",
         parse_mode="HTML")
@@ -185,7 +189,7 @@ async def wgr_buy(cb: CallbackQuery):
         if not is_admin:
             await cb.bot.send_message(
                 PLATFORM_ADMIN_ID,
-                f"🎰 فعال‌سازی بازی‌های شرط‌بندی: @{r.username} (مالک {uid}) — {_rial(price)}")
+                f"🎮 فعال‌سازی بازی‌های گروهی: @{r.username} (مالک {uid}) — {_rial(price)}")
     except Exception:  # noqa: BLE001
         logger.info("wager sale: admin notice skipped")
 
@@ -222,7 +226,7 @@ async def wgrs_price_start(cb: CallbackQuery, state: FSMContext):
         await cb.answer("فقط مدیر اصلی", show_alert=True)
         return
     await state.set_state(WagerSaleFSM.price)
-    await cb.message.answer("💵 قیمت فعال‌سازی بازی‌های شرط‌بندی برای هر ربات را به تومان بفرست (مثلا 100000؛ صفر = رایگان):")
+    await cb.message.answer("💵 قیمت فعال‌سازی بازی‌های گروهی برای هر ربات را به تومان بفرست (مثلا 100000؛ صفر = رایگان):")
     await cb.answer()
 
 

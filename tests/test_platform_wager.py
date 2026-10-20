@@ -1,5 +1,6 @@
 """PATCH_PLATFORM_WAGER_V1 — شرط‌بندی ایکس‌او / سنگ‌کاغذ‌قیچی / تاس با کیف‌پول بات‌ساز."""
 import asyncio
+import json
 from datetime import datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -51,8 +52,11 @@ async def wager(db, wid):
         return await s.get(models.PlatformWager, wid)
 
 
-async def new(db, game="xo", amount=10_000, cfg=CFG, target=None, creator=A):
-    w, err = await PW.create_wager(game, -100, (creator, f"u{creator}", f"u{creator}"), amount, target, cfg)
+async def new(db, game="xo", amount=10_000, cfg=CFG, target=None, creator=A, opt="auto"):
+    """opt="auto": انتخاب سازنده را (X برای ایکس‌او، hi برای تاس) از پیش می‌گذارد؛ opt=None ⇒ مثل دستور واقعی بعدا پرسیده می‌شود."""
+    if opt == "auto":
+        opt = {"xo": "X", "dice": "hi"}.get(game)
+    w, err = await PW.create_wager(game, -100, (creator, f"u{creator}", f"u{creator}"), amount, target, cfg, opt=opt)
     assert err is None, err
     return w
 
@@ -262,26 +266,77 @@ async def test_xo_move_after_deadline_settles_instead(db):
 
 # ───────── سنگ‌کاغذ‌قیچی ─────────
 
+async def rps_round(wid, a, b, sim=300):
+    """یک راند کامل: A انتخاب a، B انتخاب b."""
+    r = await PW.rps_pick(wid, A, a, sim_secs=sim)
+    assert r.err is None, r.err
+    r = await PW.rps_pick(wid, B, b, sim_secs=sim)
+    assert r.err is None, r.err
+    return r.w
+
+
 @pytest.mark.asyncio
-async def test_rps_hidden_until_both_then_win(db):
+async def test_rps_first_to_three_rounds_with_hidden_picks_and_scoreboard(db):
     w = await join(db, await new(db, "rps", cfg=FEE10))
     r = await PW.rps_pick(w.id, A, "r")
     assert r.err is None and r.w.status == "playing"
     text, _ = PW.render(r.w)
-    assert "سنگ" not in text.split("انتخاب کرد")[0] or "🪨" not in text      # انتخاب فاش نشده
-    assert (await PW.rps_pick(w.id, A, "p")).err                              # انتخاب دوباره
-    r = await PW.rps_pick(w.id, B, "s")                                       # سنگ بر قیچی
-    assert r.w.status == "settled" and r.w.winner_id == A
+    assert "🪨" not in text and "✅ انتخاب کرد" in text and "⏳ منتظر انتخاب" in text      # انتخاب فاش نشده
+    assert "۳ راند" in text or "3 راند" in text
+    assert (await PW.rps_pick(w.id, A, "p")).err                              # انتخاب دوباره در همان راند
+    r = await PW.rps_pick(w.id, B, "s")                                       # راند ۱: سنگ بر قیچی ⇒ A
+    assert r.w.status == "playing"
+    text, _ = PW.render(r.w)
+    assert "راند 1: @u101 🪨 ⚔️ ✂️ @u202" in text and "امتیاز: <b>1</b>" in text and "راند 2" in text   # بعد از راند، انتخاب‌ها فاش
+    w2 = await rps_round(w.id, "p", "r")                                      # راند ۲: کاغذ بر سنگ ⇒ A (۲-۰)
+    assert w2.status == "playing"
+    w3 = await rps_round(w.id, "s", "p")                                      # راند ۳: قیچی بر کاغذ ⇒ A (۳-۰)
+    assert w3.status == "settled" and w3.winner_id == A and w3.end_reason == "win"
     assert await bal(db, A) == 100_000 - 10_000 + 18_000 and await bal(db, B) == 90_000
+    final, kb = PW.render(await wager(db, w.id))
+    assert "امتیاز" in final and "راند 3" in final and "برنده" in final and not kb.inline_keyboard
 
 
 @pytest.mark.asyncio
-async def test_rps_draw_refunds_and_invalid_inputs(db):
+async def test_rps_draw_round_repeats_and_comeback_is_possible(db):
     w = await join(db, await new(db, "rps"))
     assert (await PW.rps_pick(w.id, A, "x")).err and (await PW.rps_pick(w.id, C, "r")).err
-    await PW.rps_pick(w.id, A, "p")
-    r = await PW.rps_pick(w.id, B, "p")
-    assert r.w.status == "draw" and await bal(db, A) == 100_000 and await bal(db, B) == 100_000
+    w1 = await rps_round(w.id, "p", "p")                                       # مساوی ⇒ بازی ادامه دارد
+    assert w1.status == "playing" and "مساوی" in PW.render(w1)[0]
+    st = json.loads(w1.state)
+    assert st["round"] == 2 and st["score"] == {str(A): 0, str(B): 0}
+    await rps_round(w.id, "r", "s")                                            # A: ۱
+    await rps_round(w.id, "s", "r")                                            # B: ۱
+    await rps_round(w.id, "r", "s")                                            # A: ۲
+    await rps_round(w.id, "s", "r")                                            # B: ۲
+    last = await rps_round(w.id, "s", "r")                                     # B: ۳ ⇒ برگشت و پیروزی B
+    assert last.status == "settled" and last.winner_id == B
+    assert await bal(db, B) == 100_000 + 10_000 and await bal(db, A) == 90_000
+
+
+@pytest.mark.asyncio
+async def test_rps_round_deadline_resets_and_too_many_draws_refund_both(db):
+    w = await join(db, await new(db, "rps", amount=2000))
+    first_deadline = (await wager(db, w.id)).expires_at
+    w1 = await rps_round(w.id, "r", "r", sim=77)
+    left = (w1.expires_at - datetime.utcnow()).total_seconds()
+    assert 70 <= left <= 80 and w1.expires_at != first_deadline               # مهلت راند بعد تازه شد
+    for _ in range(PW.RPS_MAX_ROUNDS - 1):
+        w1 = await rps_round(w.id, "p", "p")
+    assert w1.status == "draw" and w1.winner_id is None
+    assert await bal(db, A) == 100_000 and await bal(db, B) == 100_000
+    assert "برگشت" in PW.render(w1)[0]
+
+
+@pytest.mark.asyncio
+async def test_rps_timeout_in_later_round_forfeits_only_the_one_who_did_not_pick(db):
+    w = await join(db, await new(db, "rps", amount=2000))
+    await rps_round(w.id, "r", "s")                                            # A: ۱
+    await PW.rps_pick(w.id, B, "p")                                            # راند ۲: فقط B انتخاب کرد
+    await expire(db, w.id)
+    assert await PW.sweep_expired(None) == 1
+    w = await wager(db, w.id)
+    assert w.status == "settled" and w.winner_id == B and w.end_reason == "forfeit"
 
 
 @pytest.mark.asyncio
@@ -438,12 +493,20 @@ async def test_handler_full_xo_game_via_callbacks(db, psets):
         row = await s.scalar(select(models.PlatformWager))
         assert row.message_id == 500
         wid = row.id
+    assert "نماد" in replies[0]
     edits = []
+    await PW.wager_join(_cb(f"pgw:join:{wid}", B, edits))                               # قبل از انتخاب سازنده نمی‌شود
+    assert edits[-1][0] == "ANSWER" and edits[-1][2] is True and (await wager(db, wid)).status == "pending"
+    await PW.wager_option(_cb(f"pgw:o:{wid}:O", B, edits))                              # فقط سازنده انتخاب می‌کند
+    assert edits[-1][0] == "ANSWER" and edits[-1][2] is True
+    await PW.wager_option(_cb(f"pgw:o:{wid}:O", A, edits))
+    assert json.loads((await wager(db, wid)).state)["opt"] == "O"
     await PW.wager_join(_cb(f"pgw:join:{wid}", A, edits))                               # سازنده نمی‌تواند
     assert edits[-1][0] == "ANSWER" and edits[-1][2] is True
     await PW.wager_join(_cb(f"pgw:join:{wid}", B, edits))
     row = await wager(db, wid)
     assert row.status == "playing" and await bal(db, B) == 99_000
+    assert PW._xo_sym(row, A) == "O" and PW._xo_sym(row, B) == "X"
     first = row.turn_id
     second = B if first == A else A
     for uid, cell in ((first, 0), (second, 3), (first, 1), (second, 4), (first, 2)):
@@ -464,6 +527,7 @@ async def test_handler_dice_uses_telegram_value(db, psets, monkeypatch):
     async with db() as s:
         wid = (await s.scalar(select(models.PlatformWager))).id
     edits = []
+    await PW.wager_option(_cb(f"pgw:o:{wid}:hi", A, edits))
     await PW.wager_join(_cb(f"pgw:join:{wid}", B, edits))
     rolls = iter([3, 5])
 
@@ -484,6 +548,7 @@ async def test_handler_dice_send_failure_does_not_lose_turn(db, psets):
     async with db() as s:
         wid = (await s.scalar(select(models.PlatformWager))).id
     edits = []
+    await PW.wager_option(_cb(f"pgw:o:{wid}:hi", A, edits))
     await PW.wager_join(_cb(f"pgw:join:{wid}", B, edits))
 
     class Broken:
@@ -501,11 +566,13 @@ async def test_money_is_conserved_across_mixed_games(db):
     fees = 0
     # شرط برنده‌دار با کارمزد
     w = await join(db, await new(db, "rps", amount=4000, cfg=FEE10))
-    await PW.rps_pick(w.id, A, "r"); await PW.rps_pick(w.id, B, "s")
+    for _ in range(PW.RPS_WINS):
+        await rps_round(w.id, "r", "s")
     fees += 800
-    # مساوی
+    # مساوی (سقف راندها)
     w = await join(db, await new(db, "rps", amount=4000, cfg=FEE10))
-    await PW.rps_pick(w.id, A, "r"); await PW.rps_pick(w.id, B, "r")
+    for _ in range(PW.RPS_MAX_ROUNDS):
+        await rps_round(w.id, "r", "r")
     # لغو و انقضا
     c = await new(db, amount=3000); await PW.cancel_wager(c.id, A)
     e = await new(db, amount=3000); await expire(db, e.id); await PW.sweep_expired(None)
@@ -763,3 +830,115 @@ def test_diag_script_imports():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert callable(mod.main) and "platform_wager_dice" in dict(mod.KEYS)
+
+
+# ═══════════ PATCH_WAGER_UPGRADE_V1 — انتخاب سازنده، قانون تاس، نماد ایکس‌او، راندهای سنگ‌کاغذ‌قیچی ═══════════
+
+@pytest.mark.asyncio
+async def test_xo_and_dice_wait_for_creator_option_before_join(db):
+    for game, ask, good in (("xo", "نماد", "O"), ("dice", "بزرگ", "lo")):
+        w = await new(db, game, opt=None)
+        text, kb = PW.render(w)
+        datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+        assert ask in text and any(":o:" in d for d in datas) and any(":cancel:" in d for d in datas)
+        assert not any(":join:" in d for d in datas)                           # تا قبل از انتخاب سازنده دکمهٔ پیوستن نیست
+        before = await bal(db, B)
+        r = await PW.join_wager(w.id, (B, "b", "b"), 180)
+        assert r.err and "انتخاب" in r.err and await bal(db, B) == before        # دکمهٔ قدیمی هم کار نمی‌کند
+        assert (await PW.set_option(w.id, B, good)).err                         # فقط سازنده
+        assert (await PW.set_option(w.id, A, "zzz")).err                        # مقدار نامعتبر
+        ok = await PW.set_option(w.id, A, good)
+        assert ok.err is None and json.loads(ok.w.state)["opt"] == good
+        assert (await PW.set_option(w.id, A, good)).err                         # دوباره انتخاب نمی‌شود
+        text, kb = PW.render(ok.w)
+        datas = [b.callback_data for row in kb.inline_keyboard for b in row]
+        assert any(":join:" in d for d in datas) and not any(":o:" in d for d in datas)
+        assert (await join(db, ok.w)).status == "playing"
+    w = await new(db, "rps", opt=None)                                          # سنگ‌کاغذ‌قیچی انتخابی ندارد
+    assert any(":join:" in b.callback_data for row in PW.render(w)[1].inline_keyboard for b in row)
+
+
+@pytest.mark.asyncio
+async def test_option_survives_join_and_expired_unchosen_wager_refunds(db):
+    w = await join(db, await new(db, "dice", opt="lo"))
+    assert json.loads(w.state)["opt"] == "lo" and "rolls" in json.loads(w.state)
+    p = await new(db, "xo", opt=None, amount=3000)
+    await expire(db, p.id)
+    assert (await PW.set_option(p.id, A, "X")).err                              # مهلت گذشته ⇒ برگشت مبلغ، نه ثبت انتخاب
+    assert (await wager(db, p.id)).status == "expired" and await bal(db, A) == 100_000 - 10_000
+
+
+@pytest.mark.asyncio
+async def test_dice_rule_creator_picks_bigger_or_smaller_wins(db):
+    for mode, a, b, winner in (("hi", 6, 2, A), ("lo", 6, 2, B), ("lo", 1, 5, A), ("hi", 1, 5, B)):
+        w = await join(db, await new(db, "dice", opt=mode))
+        text, _ = PW.render(w)
+        assert ("بزرگ‌تر" if mode == "hi" else "کوچک‌تر") in text
+        await PW.dice_claim(w.id, A); await PW.dice_record(w.id, A, a)
+        await PW.dice_claim(w.id, B)
+        r = await PW.dice_record(w.id, B, b)
+        assert r.w.status == "settled" and r.w.winner_id == winner, (mode, a, b)
+    for mode in ("hi", "lo"):                                                   # مساوی ⇒ برگشت هر دو
+        w = await join(db, await new(db, "dice", opt=mode))
+        await PW.dice_claim(w.id, A); await PW.dice_record(w.id, A, 3)
+        await PW.dice_claim(w.id, B)
+        assert (await PW.dice_record(w.id, B, 3)).w.status == "draw"
+    assert await bal(db, A) == await bal(db, B)                                 # هر دو یک‌بار برده و یک‌بار باخته‌اند
+
+
+@pytest.mark.asyncio
+async def test_dice_timeout_five_minutes_for_simultaneous_games_and_three_for_xo(db):
+    d = await PW.join_wager((await new(db, "dice", opt="hi")).id, (B, "b", "b"), 180, sim_secs=300)
+    left = (d.w.expires_at - datetime.utcnow()).total_seconds()
+    assert 295 <= left <= 300 and "5 دقیقه" in PW.render(d.w)[0]
+    x = await PW.join_wager((await new(db, "xo", opt="X")).id, (B, "b", "b"), 180, sim_secs=300)
+    assert 175 <= (x.w.expires_at - datetime.utcnow()).total_seconds() <= 180 and "3 دقیقه" in PW.render(x.w)[0]
+    r = await PW.join_wager((await new(db, "rps")).id, (B, "b", "b"), 180, sim_secs=300)
+    assert 295 <= (r.w.expires_at - datetime.utcnow()).total_seconds() <= 300
+
+
+@pytest.mark.asyncio
+async def test_xo_creator_symbol_choice_decides_marks_and_winner(db):
+    for starter in (A, B):
+        w = await join(db, await new(db, "xo", opt="O"))                          # سازنده A «دایره»
+        async with db() as s:
+            row = await s.get(models.PlatformWager, w.id)
+            row.turn_id = starter
+            await s.commit()
+        other = B if starter == A else A
+        text, _ = PW.render(await wager(db, w.id))
+        assert "⭕ @u101" in text and "❌ @u202" in text
+        w = await play_xo(db, w, [(starter, 0), (other, 3), (starter, 1), (other, 4), (starter, 2)])
+        assert w.status == "settled" and w.winner_id == starter
+        board = json.loads(w.state)["board"]
+        assert board[0] == ("O" if starter == A else "X") and board[3] == ("X" if starter == A else "O")
+    assert await bal(db, A) == await bal(db, B)                                  # هر دو یک‌بار برده‌اند
+
+
+def test_legacy_rows_without_option_keep_old_behaviour():
+    legacy = SimpleNamespace(state="{}", creator_id=A)
+    assert PW._xo_sym(legacy, A) == "X" and PW._xo_sym(legacy, B) == "O" and PW._dice_mode(legacy) == "hi"
+    assert not PW._needs_setup(SimpleNamespace(status="playing", game="xo", state="{}"))   # بازی در جریان قبل از ارتقا گیر نمی‌کند
+
+
+def test_game_prefix_and_coin_flip_are_not_confused():
+    assert PW.parse_command("بازی تاس ۱۰۰۰") == ("dice", 1000)
+    assert PW.parse_command("بازی xo 20,000") == ("xo", 20_000)
+    assert PW.parse_command("بازی سنگ کاغذ قیچی 500") == ("rps", 500)
+    assert PW.parse_command("بازی 1000") is None                                # شیر یا خط است، نه این بازی‌ها
+
+
+@pytest.mark.asyncio
+async def test_cfg_has_five_minute_default_for_simultaneous_games(db, psets):
+    cfg = await PW.load_cfg()
+    assert cfg["move"] == 180 and cfg["move_sim"] == 300
+    psets["platform_wager_move_sim_secs"] = "600"
+    assert (await PW.load_cfg())["move_sim"] == 600
+
+
+@pytest.mark.asyncio
+async def test_main_bot_keeps_explicit_bet_wording(db):
+    w = await new(db, "dice", opt="hi")
+    text, _ = PW.render(w)
+    assert "🎰 <b>شرط‌بندی تاس</b>" in text and "مبلغ شرط هر نفر" in text and "شرط‌بندی ریسک مالی" in text
+    assert PW.words(0)["bet"] == "شرط‌بندی" and PW.words(7)["bet"] == "بازی"
