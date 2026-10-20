@@ -237,3 +237,50 @@ def test_logs_alone_trigger_the_section_and_unrelated_projects_stay_silent():
                                  ["x", "ModuleNotFoundError: No module named 'moviepy.editor'"])
     assert any("moviepy.editor" in t for _, t in res)
     assert CH.diagnose_media_deps({"bot.py": "print('hi')\n"}, "aiogram\n", "FROM python:3.12\n", ["ok"]) == []
+
+
+def _owner_env(monkeypatch, apps):
+    import asyncio
+    import config
+    import models
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    async def setup():
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as c:
+            await c.run_sync(models.Base.metadata.create_all)
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        async with maker() as s:
+            for owner, name in apps:
+                s.add(models.HostedApp(owner_id=owner, name=name))
+            await s.commit()
+        return maker
+    maker = asyncio.run(setup())
+    monkeypatch.setattr(config, "Session", maker)
+    monkeypatch.setenv("VIP_ADMIN_SECRET", "s")
+
+
+def test_owner_lookup_without_apps_and_with_several_apps(monkeypatch, capsys):
+    _owner_env(monkeypatch, [(111, "klexshop"), (111, "klexshop2"), (222, "other")])
+    monkeypatch.setattr(sys, "argv", ["check_hosted_app.py", "--owner", "333"])
+    assert CH.main() == 2
+    assert "اپی ثبت نشده" in capsys.readouterr().out
+    monkeypatch.setattr(sys, "argv", ["check_hosted_app.py", "--owner", "111"])
+    assert CH.main() == 2
+    out = capsys.readouterr().out
+    assert "2 اپ دارد" in out and "klexshop" in out and "klexshop2" in out and "other" not in out
+
+
+def test_owner_lookup_single_app_runs_the_checks(monkeypatch, capsys):
+    _owner_env(monkeypatch, [(8757601463, "klexshop")])
+    srv = HTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("VIP_API_BASE", f"http://127.0.0.1:{srv.server_port}")
+    monkeypatch.setattr(CH, "get_me", lambda t: "✅ معتبر: @x")
+    monkeypatch.setattr(sys, "argv", ["check_hosted_app.py", "--owner", "8757601463"])
+    try:
+        CH.main()
+    finally:
+        srv.shutdown()
+    out = capsys.readouterr().out
+    assert "اپ این کاربر" in out and "klexshop" in out and "══ اپ" in out

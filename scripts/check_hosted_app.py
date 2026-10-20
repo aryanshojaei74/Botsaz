@@ -18,6 +18,7 @@ scripts/check_hosted_app.py — تشخیصِ فقط‌خواندنیِ «توک�
 
     venv/bin/python scripts/check_hosted_app.py 17
     venv/bin/python scripts/check_hosted_app.py --name pyhdbkm
+    venv/bin/python scripts/check_hosted_app.py --owner 8757601463   # نام اپ را نمی‌دانی: تلگرام‌آیدی مالک (از تیکت)
 """
 from __future__ import annotations
 
@@ -187,7 +188,9 @@ def diagnose_media_deps(texts: dict, req_txt, dockerfile, log_lines) -> list:
         out.append(("❌", "کد برنامهٔ ffmpeg را صدا می‌زند ولی نه در Dockerfile نصب شده (apt-get install -y ffmpeg) و نه "
                           "«imageio-ffmpeg» در requirements است."))
     if (uses_moviepy or uses_ffmpeg_bin) and dockerfile is None:
-        out.append(("ℹ️", "Dockerfile در پروژه نیست؛ اگر ایمیج را سرور میزبانی می‌سازد، داخل کانتینر چک کن: "
+        out.append(("ℹ️", "Dockerfile در پروژه نیست ⇒ (اپ از نوع python) ایمیج را سرور میزبانی با قالب خودش می‌سازد و فقط "
+                          "بسته‌های pip نصب می‌شوند؛ ffmpeg سیستمی در آن نیست مگر از راه «imageio-ffmpeg» (باینری ffmpeg داخل خود بسته است) "
+                          "یا اینکه مشتری Dockerfile بگذارد. داخل کانتینر چک کن: "
                           "«docker exec <کانتینر> ffmpeg -version» و «… python -c 'import moviepy; print(moviepy.__version__)'»."))
     elif (uses_moviepy or uses_ffmpeg_bin) and not docker_ffmpeg and not has_iio:
         out.append(("⚠️", "در Dockerfile اسمی از ffmpeg نیست و «imageio-ffmpeg» هم در requirements نیست؛ moviepy ۱.x/۲.x معمولا "
@@ -205,6 +208,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("app_id", nargs="?", type=int)
     ap.add_argument("--name")
+    ap.add_argument("--owner", type=int,
+                    help="تلگرام‌آیدی مالک اپ (مثلا از تیکت)؛ اگر نام اپ را نمی‌دانی. چند اپ داشت فهرست می‌دهد")
     ap.add_argument("--fix-token", action="store_true",
                     help="اگر BOT_TOKENِ ثبت‌شده را تلگرام رد می‌کند و در فایل‌هایِ پروژه دقیقاً یک توکنِ دیگرِ "
                          "معتبر هست، همان را در متغیرِ BOT_TOKENِ پنل می‌گذارد (تنها حالتی که چیزی را عوض می‌کند)")
@@ -230,8 +235,32 @@ def main() -> int:
             async with Session() as s:
                 return await s.scalar(select(HostedApp.id).where(HostedApp.name == a.name))
         app_id = asyncio.run(_find())
+    if not app_id and a.owner:
+        # === PATCH_HOSTED_MEDIA_CHECK_V1 === مالک ⇒ اپ(ها) از روی دیتابیس مشترک
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        import asyncio
+        from sqlalchemy import select
+        from config import Session
+        from models import HostedApp
+
+        async def _by_owner():
+            async with Session() as s:
+                return (await s.execute(select(HostedApp.id, HostedApp.name, HostedApp.status, HostedApp.runtime)
+                                        .where(HostedApp.owner_id == a.owner).order_by(HostedApp.id))).all()
+        owned = asyncio.run(_by_owner())
+        if not owned:
+            print(f"برای تلگرام‌آیدی {a.owner} اپی ثبت نشده.")
+            return 2
+        if len(owned) > 1:
+            print(f"این کاربر {len(owned)} اپ دارد؛ یکی را با شناسه انتخاب کن:")
+            for oid, oname, ost, ort in owned:
+                print(f"  • id={oid}  نام={oname}  وضعیت={ost}  نوع={ort}")
+            print("مثال:  venv/bin/python scripts/check_hosted_app.py", owned[0][0])
+            return 2
+        app_id = owned[0][0]
+        print(f"اپ این کاربر: id={app_id}  نام={owned[0][1]}  وضعیت={owned[0][2]}  نوع={owned[0][3]}")
     if not app_id:
-        print("شناسهٔ اپ لازم است (یا --name).")
+        print("شناسهٔ اپ لازم است (یا --name یا --owner).")
         return 2
 
     problems = 0
