@@ -2852,6 +2852,23 @@ async def _nav_is_staff(bot, uid: int) -> bool:
     return res
 
 
+_PAUSED_NOTICE: dict = {}
+
+
+def _paused_notice_due(bot_id: int, chat_id: int, secs: float = 900.0) -> bool:
+    """=== PATCH_PAUSED_NOTICE_THROTTLE_V1 === آیا الان نوبت فرستادن «ربات خاموش است» به این چت است؟ (هر چت هر secs ثانیه یک‌بار)"""
+    import time as _t
+    now = _t.monotonic()
+    last = _PAUSED_NOTICE.get((bot_id, chat_id))
+    if last is not None and now - last < secs:
+        return False
+    if len(_PAUSED_NOTICE) > 5000:
+        for k in [k for k, v in _PAUSED_NOTICE.items() if now - v > secs]:
+            _PAUSED_NOTICE.pop(k, None)
+    _PAUSED_NOTICE[(bot_id, chat_id)] = now
+    return True
+
+
 def _nav_install(bot) -> None:
     sess = getattr(bot, "session", None)
     if sess is None or getattr(sess, "_nav_hist_mw", False):
@@ -2862,7 +2879,8 @@ def _nav_install(bot) -> None:
         name = type(method).__name__
         mk = getattr(method, "reply_markup", None)
         # === PATCH_VS_CUSTOM_TEXTS_ALL_ORDERS_V1 === متنِ دلخواهِ ثبت/تکمیل/ردِ سفارش برایِ استارز/تون/گیفت/ری‌اکشن
-        if name == "SendMessage" and isinstance(getattr(method, "text", None), str) \
+        # PATCH_VS_CUSTOM_TEXTS_EDIT_V1: پیامی که با «ویرایش» جایگزین می‌شود (EditMessageText) هم مثل ارسال جدید شناسایی شود
+        if name in ("SendMessage", "EditMessageText") and isinstance(getattr(method, "text", None), str) \
                 and isinstance(getattr(method, "chat_id", None), int) and method.chat_id > 0:
             from tenant.shared.vs_msg_override import rule_key as _vs_rule_key
             if _vs_rule_key(method.text):
@@ -4624,7 +4642,10 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
     if msg.chat.type in ("group", "supergroup"):
         return
     if row.status == "paused" and not await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id):
-        await msg.answer("🛠 ربات در حال به‌روزرسانی می‌باشد. لطفاً چند دقیقهٔ دیگر دوباره امتحان کنید.")
+        # === PATCH_PAUSED_NOTICE_THROTTLE_V1 === گزارش فدایی: «وقتی ربات را خاموش می‌کنیم، در گروه برای هر پیام می‌گوید
+        # ربات خاموش است و اسپم می‌کند». در گروه هیچ پاسخی نمی‌دهیم؛ در چت خصوصی هم هر ۱۵ دقیقه یک‌بار.
+        if msg.chat.type == "private" and _paused_notice_due(row.id, msg.chat.id):
+            await msg.answer("🛠 ربات در حال به‌روزرسانی می‌باشد. لطفا چند دقیقهٔ دیگر دوباره امتحان کنید.")
         return
     u, was_created = await get_or_create_user(
         row.id, msg.from_user.id, msg.from_user.full_name,
@@ -6364,7 +6385,10 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
     if not row:
         return
     if row.status == "paused" and not await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id):
-        await msg.answer("🛠 ربات در حال به‌روزرسانی می‌باشد. لطفاً چند دقیقهٔ دیگر دوباره امتحان کنید.")
+        # === PATCH_PAUSED_NOTICE_THROTTLE_V1 === گزارش فدایی: «وقتی ربات را خاموش می‌کنیم، در گروه برای هر پیام می‌گوید
+        # ربات خاموش است و اسپم می‌کند». در گروه هیچ پاسخی نمی‌دهیم؛ در چت خصوصی هم هر ۱۵ دقیقه یک‌بار.
+        if msg.chat.type == "private" and _paused_notice_due(row.id, msg.chat.id):
+            await msg.answer("🛠 ربات در حال به‌روزرسانی می‌باشد. لطفا چند دقیقهٔ دیگر دوباره امتحان کنید.")
         return
     bot_id = row.id
     u = await get_or_create_user(bot_id, msg.from_user.id, msg.from_user.full_name,

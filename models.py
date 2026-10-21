@@ -2295,6 +2295,9 @@ class SmmService(Base):
     # بار بروزرسانیِ لیستِ سرویس‌ها از پنل پر می‌شود. NULL یعنی پنل
     # توضیحاتی نداده یا سرویس دستی است.
     provider_desc: Mapped[str | None] = mapped_column(Text)
+    # === PATCH_SMM_DESC_TRANSLATE_V1 === ترجمهٔ فارسی provider_desc و هش متن مبدأ (تا فقط با تغییر متن دوباره ترجمه شود)
+    provider_desc_fa: Mapped[str | None] = mapped_column(Text)
+    provider_desc_fa_hash: Mapped[str | None] = mapped_column(String(16))
     # === PATCH_SMM_MULTI_PANEL_V1 ===
     # این سرویس از کدام پنل گرفته شده؛ NULL یعنی از همان پنلِ پیش‌فرضِ
     # قدیمی (Setting.smm_api_url/smm_api_key) — سرویس‌های ساخته‌شده قبل

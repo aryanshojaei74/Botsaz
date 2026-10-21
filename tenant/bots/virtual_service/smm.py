@@ -163,6 +163,9 @@ async def ensure_smm_columns(force: bool = False):
             ("type_key", "VARCHAR(30)", "VARCHAR(30)"),
             # === PATCH_SMM_PROVIDER_DESC_V1 ===
             ("provider_desc", "TEXT", "TEXT"),
+            # === PATCH_SMM_DESC_TRANSLATE_V1 ===
+            ("provider_desc_fa", "TEXT", "TEXT"),
+            ("provider_desc_fa_hash", "VARCHAR(16)", "VARCHAR(16)"),
             # === PATCH_SMM_INPUT_KIND_V1 ===
             ("input_kind", "VARCHAR(10) DEFAULT ''", "VARCHAR(10) DEFAULT ''"),
         ],
@@ -723,6 +726,42 @@ def _strip_provider_commands(text: str) -> str:
     return "\n".join(kept).strip()
 
 
+_TR_LOCKS: dict[str, "asyncio.Lock"] = {}
+
+
+async def _provider_text_fa(svc, text: str) -> str:
+    """=== PATCH_SMM_DESC_TRANSLATE_V1 === ترجمهٔ فارسی توضیحات ارائه‌دهنده (کش‌شده در ردیف سرویس)؛ در هر خطا متن اصلی."""
+    from tenant.shared.fa_translate import needs_translation, text_hash, translate_fa
+    if not needs_translation(text):
+        return text
+    h = text_hash(text)
+    if getattr(svc, "provider_desc_fa_hash", None) == h and getattr(svc, "provider_desc_fa", None):
+        return svc.provider_desc_fa
+    lock = _TR_LOCKS.setdefault(h, asyncio.Lock())
+    async with lock:
+        if getattr(svc, "provider_desc_fa_hash", None) == h and getattr(svc, "provider_desc_fa", None):
+            return svc.provider_desc_fa              # همزمان یکی دیگر ترجمه‌اش کرد
+        tr = await translate_fa(text)
+        if len(_TR_LOCKS) > 500:
+            _TR_LOCKS.clear()
+    if not tr:
+        return text
+    try:
+        svc.provider_desc_fa, svc.provider_desc_fa_hash = tr, h
+    except Exception:
+        logger.debug("provider_desc_fa روی شیء ست نشد (بی‌اهمیت)")
+    sid = getattr(svc, "id", None)
+    if sid:
+        try:
+            async with Session() as s:
+                await s.execute(update(SmmService).where(SmmService.id == sid).values(
+                    provider_desc_fa=tr, provider_desc_fa_hash=h))
+                await s.commit()
+        except Exception:
+            logger.exception("ذخیرهٔ ترجمهٔ توضیحات ناموفق بود")
+    return tr
+
+
 async def build_description(bot_id: int, svc) -> str:
     """متنِ توضیحاتِ محصول برایِ نمایش به مشتری.
 
@@ -745,6 +784,8 @@ async def build_description(bot_id: int, svc) -> str:
         return _desc_block(manual)  # PATCH_SMM_DESC_BLOCKQUOTE_V1
 
     provider = _strip_provider_commands((getattr(svc, "provider_desc", "") or "").strip())
+    if provider and await _get_setting(bot_id, "smm_desc_translate", "1") != "0":
+        provider = await _provider_text_fa(svc, provider)    # PATCH_SMM_DESC_TRANSLATE_V1
     if provider:
         body = _html_escape(provider)
         if manual:
@@ -1034,6 +1075,11 @@ async def smm_admin_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     rows.append([InlineKeyboardButton(
         text=f"\U0001f4f2 توضیحاتِ محصول: {_dm_txt}",
         callback_data="smm:descmode")])
+    # === PATCH_SMM_DESC_TRANSLATE_V1 ===
+    _dtr = await _get_setting(bot_id, "smm_desc_translate", "1") != "0"
+    rows.append([InlineKeyboardButton(
+        text=("\U0001f310 ترجمهٔ خودکار توضیحات به فارسی: " + ("روشن" if _dtr else "خاموش")),
+        callback_data="smm:desctr")])
     _bc = await _get_setting(bot_id, "smm_btn_cols", "1")
     _bn = await _get_setting(bot_id, "smm_btn_count", "1")
     # === PATCH_SMM_PRICE_VIEW_MODE_V1 ===
@@ -5516,6 +5562,19 @@ async def smm_desc_mode(cb: CallbackQuery, bot: Bot):
     await _set_setting(row.id, "smm_desc_mode", nxt)
     await cb.answer("توضیحاتِ محصول: " + {"off": "خاموش", "manual": "فقط دستی",
                                           "auto": "خودکار + دستی"}[nxt])
+    await smm_menu(cb, bot)
+
+
+@smm_router.callback_query(F.data == "smm:desctr")
+async def smm_desc_translate_toggle(cb: CallbackQuery, bot: Bot):
+    """=== PATCH_SMM_DESC_TRANSLATE_V1 === روشن/خاموش ترجمهٔ خودکار توضیحات انگلیسی ارائه‌دهنده به فارسی."""
+    row = await _owner(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    cur = await _get_setting(row.id, "smm_desc_translate", "1") != "0"
+    await _set_setting(row.id, "smm_desc_translate", "0" if cur else "1")
+    await cb.answer("ترجمهٔ خودکار توضیحات: " + ("خاموش" if cur else "روشن"))
     await smm_menu(cb, bot)
 
 
