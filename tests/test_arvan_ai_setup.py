@@ -110,3 +110,31 @@ async def test_finish_setup_tries_bearer_then_apikey_and_saves_only_on_success(m
     monkeypatch.setattr(AR, "_arvan_autonomous_call", always_fail)
     await RK._finish_setup(M(), SimpleNamespace(id=7), "https://g.ir/m/X/v1", "KEY123456789")
     assert saved == {} and "ذخیره نشد" in msgs[-1] and "HTTP 500" in msgs[-1]
+
+
+def test_url_candidates():
+    assert AS.url_candidates("https://g.ir/m/GPT-4.1/AB/v1/") == ["https://g.ir/m/GPT-4.1/AB/v1", "https://g.ir/m/GPT-4.1/AB"]
+    assert AS.url_candidates("https://g.ir/m/GPT-4.1/AB") == ["https://g.ir/m/GPT-4.1/AB", "https://g.ir/m/GPT-4.1/AB/v1"]
+    assert AS.url_candidates("https://g.ir/m/X/v1/chat/completions")[0] == "https://g.ir/m/X/v1"
+
+
+@pytest.mark.asyncio
+async def test_finish_setup_falls_back_to_v1_url_variant(monkeypatch):
+    from types import SimpleNamespace
+    from tenant.gateways import receipt_ai_key as RK
+    from tenant.gateways import auto_receipt as AR
+    saved = {}
+
+    async def fake_call(prompt, img, creds=None):
+        return ("OK", None) if creds["url"].endswith("/v1") else (None, "HTTP 404")
+
+    async def fake_set(bot_id, key, value):
+        saved[key] = value
+
+    class M:
+        async def answer(self, t, **kw):
+            pass
+    monkeypatch.setattr(AR, "_arvan_autonomous_call", fake_call)
+    monkeypatch.setattr(RK, "_set", fake_set)
+    await RK._finish_setup(M(), SimpleNamespace(id=7), "https://g.ir/m/GPT-4.1/AB", "KEY123456789")
+    assert saved["receipt_ai_url"] == "https://g.ir/m/GPT-4.1/AB/v1"

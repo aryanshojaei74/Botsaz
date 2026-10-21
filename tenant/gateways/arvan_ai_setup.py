@@ -66,6 +66,19 @@ def endpoint_from_create(resp) -> str:
     return url.rstrip("/") if url.startswith("https://") else ""
 
 
+def url_candidates(url: str) -> list[str]:
+    """=== PATCH_ARVAN_URL_V1 === فیلد «endpoint» آروان گاهی تا «/v1» است و گاهی نه، و تماس OpenAI-سازگار روی <base>/chat/completions
+    می‌رود. پس چند شکل محتمل (اصلی، با /v1، بدون /chat/completions) را به‌ترتیب امتحان می‌کنیم."""
+    u = (url or "").strip().rstrip("/")
+    u = re.sub(r"/chat/completions$", "", u)
+    out = [u]
+    if not u.endswith("/v1"):
+        out.append(u + "/v1")
+    else:
+        out.append(u[:-3])
+    return [x for i, x in enumerate(out) if x and x not in out[:i]]
+
+
 def slug_name(bot_id: int) -> str:
     return f"botsaz-receipt-{int(bot_id)}"
 

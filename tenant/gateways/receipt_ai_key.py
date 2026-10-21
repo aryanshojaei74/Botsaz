@@ -193,25 +193,33 @@ _CANCEL_KB = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="�
 
 
 async def _finish_setup(msg: Message, row, url: str, key: str) -> None:
-    """تست واقعی تماس (اول Bearer، بعد Apikey)؛ فقط در موفقیت ذخیره می‌شود."""
+    """تست واقعی تماس (چند شکل آدرس × اول Bearer بعد Apikey)؛ فقط در موفقیت ذخیره می‌شود. PATCH_ARVAN_URL_V1"""
+    import html as _h
     from tenant.gateways.auto_receipt import _arvan_autonomous_call
-    last_err = ""
-    for k in (key, "Apikey " + key):
-        text, err = await _arvan_autonomous_call("فقط کلمهٔ OK را جواب بده.", None, creds={"url": url, "key": k})
-        if text:
-            await _set(row.id, "receipt_ai_url", url)
-            await _set(row.id, "receipt_ai_key", k)
-            return await msg.answer(
-                "✅ <b>ذخیره شد و اتصال برقرار است.</b>\n\nاز این پس رسیدهای این ربات با حساب آروان خودت بررسی می‌شود. "
-                "حالا می‌توانی «🤖 تایید خودکار رسید» را روشن کنی.",
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-                    text="🤖 رفتن به تایید خودکار رسید", callback_data="set:auto_approve_toggle")]]))
-        last_err = err or last_err
+    from tenant.gateways.arvan_ai_setup import url_candidates
+    attempts: list[str] = []
+    for cand in url_candidates(url):
+        for k in (key, "Apikey " + key):
+            text, err = await _arvan_autonomous_call("فقط کلمهٔ OK را جواب بده.", None, creds={"url": cand, "key": k})
+            if text:
+                await _set(row.id, "receipt_ai_url", cand)
+                await _set(row.id, "receipt_ai_key", k)
+                return await msg.answer(
+                    "✅ <b>ذخیره شد و اتصال برقرار است.</b>\n\nاز این پس رسیدهای این ربات با حساب آروان خودت بررسی می‌شود. "
+                    "حالا می‌توانی «🤖 تایید خودکار رسید» را روشن کنی.",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                        text="🤖 رفتن به تایید خودکار رسید", callback_data="set:auto_approve_toggle")]]))
+            attempts.append(f"{cand[-30:]} | {'Apikey' if k.startswith('Apikey ') else 'Bearer'} <- {(err or '?')[:110]}")
     await msg.answer(
         "❌ endpoint پیدا/ساخته شد ولی تست تماس جواب نداد، پس ذخیره نشد.\n"
-        f"دلیل: {last_err or 'نامشخص'}\n\nمعمولا یعنی مدل انتخابی هنوز آماده نیست یا حساب آروان اعتبار ندارد. چند دقیقه بعد دوباره امتحان کن، "
-        "یا آدرس و کلید را دستی ثبت کن.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        f"آدرس endpoint: <code>{_h.escape(url)}</code>\n"
+        + "\n".join(f"• <code>{_h.escape(a)}</code>" for a in attempts[-4:])
+        + "\n\nاگر ۴۰۴ است معمولا یعنی endpoint تازه ساخته شده و هنوز آماده نیست؛ چند دقیقه صبر کن و دوباره امتحان کن. "
+        "این متن را برای پشتیبانی بفرست تا بررسی کنیم، یا آدرس و کلید را دستی ثبت کن.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
             text="⬅️ بازگشت", callback_data="rai:menu")]]))
+
 
 
 @receipt_ai_router.callback_query(F.data == "rai:auto")
