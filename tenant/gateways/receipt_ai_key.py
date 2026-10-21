@@ -12,6 +12,7 @@ RECEIPT_AI_REQUIRE_OWN_KEY=0 می‌شود به رفتارِ قدیمیِ «کل
 from __future__ import annotations
 
 import os
+import re
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ButtonStyle
@@ -38,6 +39,7 @@ REQUIRE_OWN_KEY = os.getenv("RECEIPT_AI_REQUIRE_OWN_KEY", "1").strip() != "0"
 class RaiFSM(StatesGroup):
     url = State()
     key = State()
+    auto_key = State()      # PATCH_ARVAN_AI_AUTOSETUP_V1: کلید حساب آروان برای راه‌اندازی خودکار
 
 
 async def _get(bot_id: int, key: str) -> str:
@@ -85,13 +87,16 @@ async def _menu(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
                    "هزینهٔ هوش مصنوعی فقط از حسابِ آروانِ خودتِ تو کم می‌شود، نه از پلتفرم."
                    if REQUIRE_OWN_KEY else
                    "الان رسیدها با کلیدِ پلتفرم بررسی می‌شود؛ اگر کلیدِ خودت را ثبت کنی هزینه با خودت می‌شود.")]
-    lines += ["", "<b>روشِ گرفتنِ کلید:</b>",
-              "۱) در سایتِ آروان‌کلاود (arvancloud.ir) وارد بخشِ «هوش مصنوعی / AI Services» شو.",
-              "۲) یک مدل با <b>پشتیبانی از عکس</b> (مثلاً GPT-4.1 یا Gemini) را فعال کن.",
-              "۳) آدرسِ API (مثلاً <code>https://arvancloudai.ir/gateway/models/GPT-4.1/XXXX/v1</code>) و "
-              "کلیدِ API را از همان صفحه کپی کن و اینجا بفرست."]
-    rows = [[InlineKeyboardButton(text=("✏️ تغییرِ کلید" if cr else "➕ ثبتِ آدرس و کلید"),
-                                  callback_data="rai:set", style=ButtonStyle.SUCCESS)]]
+    lines += ["", "<b>روش ساده (پیشنهادی): اتصال خودکار</b>",
+              "۱) در پنل آروان‌کلاود (arvancloud.ir) از بخش «کلیدهای API» یک کلید بساز (دسترسی «هوش مصنوعی» داشته باشد).",
+              "۲) دکمهٔ «⚡️ اتصال خودکار» را بزن و فقط همان کلید را بفرست؛ ربات endpointهایت را پیدا می‌کند یا خودش یکی با مدل "
+              "دارای پشتیبانی عکس (مثلا GPT-4.1) می‌سازد.",
+              "", "<b>روش دستی:</b> آدرس API (مثلا <code>https://arvancloudai.ir/gateway/models/GPT-4.1/XXXX/v1</code>) و "
+              "کلید همان endpoint را از پنل آروان کپی کن و با «➕ ثبت آدرس و کلید» بفرست."]
+    rows = [[InlineKeyboardButton(text="⚡️ اتصال خودکار (فقط کلید حساب آروان)",
+                                  callback_data="rai:auto", style=ButtonStyle.SUCCESS)],
+            [InlineKeyboardButton(text=("✏️ تغییر کلید (دستی)" if cr else "➕ ثبت آدرس و کلید (دستی)"),
+                                  callback_data="rai:set", style=ButtonStyle.PRIMARY)]]
     if cr:
         rows.append([InlineKeyboardButton(text="🗑 حذفِ کلید", callback_data="rai:del", style=ButtonStyle.DANGER)])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="set:card", style=ButtonStyle.DANGER)])
@@ -181,6 +186,134 @@ async def rai_key(msg: Message, bot: Bot, state: FSMContext):
         "حالا می‌توانی «🤖 تایید خودکار رسید» را روشن کنی.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
             text="🤖 رفتن به تایید خودکار رسید", callback_data="set:auto_approve_toggle")]]))
+
+
+# === PATCH_ARVAN_AI_AUTOSETUP_V1 === اتصال خودکار: کلید حساب ← انتخاب endpoint یا ساخت endpoint تازه ← تست واقعی ← ذخیره
+_CANCEL_KB = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❌ لغو", callback_data="rai:menu")]])
+
+
+async def _finish_setup(msg: Message, row, url: str, key: str) -> None:
+    """تست واقعی تماس (اول Bearer، بعد Apikey)؛ فقط در موفقیت ذخیره می‌شود."""
+    from tenant.gateways.auto_receipt import _arvan_autonomous_call
+    last_err = ""
+    for k in (key, "Apikey " + key):
+        text, err = await _arvan_autonomous_call("فقط کلمهٔ OK را جواب بده.", None, creds={"url": url, "key": k})
+        if text:
+            await _set(row.id, "receipt_ai_url", url)
+            await _set(row.id, "receipt_ai_key", k)
+            return await msg.answer(
+                "✅ <b>ذخیره شد و اتصال برقرار است.</b>\n\nاز این پس رسیدهای این ربات با حساب آروان خودت بررسی می‌شود. "
+                "حالا می‌توانی «🤖 تایید خودکار رسید» را روشن کنی.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                    text="🤖 رفتن به تایید خودکار رسید", callback_data="set:auto_approve_toggle")]]))
+        last_err = err or last_err
+    await msg.answer(
+        "❌ endpoint پیدا/ساخته شد ولی تست تماس جواب نداد، پس ذخیره نشد.\n"
+        f"دلیل: {last_err or 'نامشخص'}\n\nمعمولا یعنی مدل انتخابی هنوز آماده نیست یا حساب آروان اعتبار ندارد. چند دقیقه بعد دوباره امتحان کن، "
+        "یا آدرس و کلید را دستی ثبت کن.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="⬅️ بازگشت", callback_data="rai:menu")]]))
+
+
+@receipt_ai_router.callback_query(F.data == "rai:auto")
+async def rai_auto(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    if not await _owner(cb, bot):
+        return await cb.answer()
+    await state.clear()
+    await state.set_state(RaiFSM.auto_key)
+    await cb.message.answer(
+        "⚡️ <b>اتصال خودکار</b>\n\n<b>کلید API حساب آروان</b> را بفرست (پنل آروان ← کلیدهای API؛ دسترسی «هوش مصنوعی» لازم است).\n"
+        "پیامت بعد از خواندن پاک می‌شود و کلید فقط برای همین ربات ذخیره می‌شود.", reply_markup=_CANCEL_KB)
+    await cb.answer()
+
+
+@receipt_ai_router.message(RaiFSM.auto_key, F.text)
+async def rai_auto_key(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner(msg, bot)
+    if not row:
+        return
+    key = (msg.text or "").strip()
+    if key == "/cancel":
+        await state.clear()
+        return await msg.answer("لغو شد.")
+    if len(key) < 10 or " " in key.replace("Apikey ", "").replace("apikey ", ""):
+        return await msg.answer("⚠️ کلید معتبر به نظر نمی‌رسد. دوباره بفرست:")
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+    wait = await msg.answer("⏳ در حال خواندن endpointهای حساب آروان…")
+    from tenant.gateways import arvan_ai_setup as AS
+    eps, err = await AS.list_endpoints(key)
+    if err:
+        return await wait.edit_text(f"❌ {err}", reply_markup=_CANCEL_KB)
+    await state.clear()
+    key = re.sub(r"^(Bearer|Apikey)\s+", "", key, flags=re.I)
+    await state.update_data(rai_acct_key=key, rai_eps=eps)
+    rows = [[InlineKeyboardButton(text=f"🔌 {e['name'] or e['id'][:8]}" + (f" — {e['model']}" if e["model"] else ""),
+                                  callback_data=f"rai:ep:{i}")] for i, e in enumerate(eps[:8])]
+    rows.append([InlineKeyboardButton(text="➕ ساخت endpoint تازه (پیشنهادی)", callback_data="rai:mk", style=ButtonStyle.SUCCESS)])
+    rows.append([InlineKeyboardButton(text="❌ لغو", callback_data="rai:menu")])
+    await wait.edit_text(
+        (f"✅ کلید پذیرفته شد. {len(eps)} endpoint در حسابت هست؛ یکی را انتخاب کن (باید مدلش عکس را بفهمد):"
+         if eps else "✅ کلید پذیرفته شد، ولی endpointی در حسابت نیست. یکی بساز:"),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@receipt_ai_router.callback_query(F.data.regexp(r"^rai:ep:\d+$"))
+async def rai_pick_ep(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return await cb.answer()
+    d = await state.get_data()
+    eps, key = d.get("rai_eps") or [], d.get("rai_acct_key")
+    i = int(cb.data.split(":")[2])
+    if not key or i >= len(eps):
+        return await cb.answer("منقضی شد؛ دوباره «اتصال خودکار» را بزن.", show_alert=True)
+    await cb.answer("⏳ در حال تست…")
+    await state.clear()
+    await _finish_setup(cb.message, row, eps[i]["url"], key)
+
+
+@receipt_ai_router.callback_query(F.data == "rai:mk")
+async def rai_make_ep(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return await cb.answer()
+    d = await state.get_data()
+    key = d.get("rai_acct_key")
+    if not key:
+        return await cb.answer("منقضی شد؛ دوباره «اتصال خودکار» را بزن.", show_alert=True)
+    from tenant.gateways import arvan_ai_setup as AS
+    await cb.answer("⏳ …")
+    models, err = await AS.list_vision_models(key)
+    if err or not models:
+        return await cb.message.answer(
+            f"❌ {err or 'مدلی با پشتیبانی عکس پیدا نشد.'}\nمی‌توانی endpoint را در پنل آروان بسازی و دستی ثبت کنی.", reply_markup=_CANCEL_KB)
+    await state.update_data(rai_models=models)
+    rows = [[InlineKeyboardButton(text=f"🧠 {m['name']}" + (f" ({m['provider']})" if m["provider"] else ""),
+                                  callback_data=f"rai:md:{i}")] for i, m in enumerate(models)]
+    rows.append([InlineKeyboardButton(text="❌ لغو", callback_data="rai:menu")])
+    await cb.message.answer("کدام مدل؟ (برای خواندن عکس رسید، GPT-4.1 یا مشابهش بهتر است):",
+                            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@receipt_ai_router.callback_query(F.data.regexp(r"^rai:md:\d+$"))
+async def rai_pick_model(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return await cb.answer()
+    d = await state.get_data()
+    models, key = d.get("rai_models") or [], d.get("rai_acct_key")
+    i = int(cb.data.split(":")[2])
+    if not key or i >= len(models):
+        return await cb.answer("منقضی شد؛ دوباره «اتصال خودکار» را بزن.", show_alert=True)
+    from tenant.gateways import arvan_ai_setup as AS
+    await cb.answer("⏳ در حال ساخت endpoint…")
+    url, err = await AS.create_endpoint(key, row.id, models[i]["id"])
+    if err:
+        return await cb.message.answer(f"❌ {err}", reply_markup=_CANCEL_KB)
+    await state.clear()
+    await _finish_setup(cb.message, row, url, key)
 
 
 @receipt_ai_router.callback_query(F.data == "rai:del")
