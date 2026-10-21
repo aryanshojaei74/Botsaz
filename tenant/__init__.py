@@ -5965,6 +5965,10 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
                                   support_contact=support_contact, btn=btn)
     elif action == "my_services":
         await show_my_services(bot, msg, bot_id, msg.from_user.id)
+    # === PATCH_RENEW_SERVICE_PICKER_V1 ===
+    elif action == "renew_service":
+        from tenant.bots.vpn.vpn_user import show_renew_services
+        await show_renew_services(bot, msg, bot_id, msg.from_user.id)
     elif action == "profile":
         await show_profile(msg, bot_id, u)
     elif action == "free_trial":
@@ -14302,6 +14306,10 @@ _SIMPLE_ACTIONS: dict[str, tuple[str, str, frozenset | None]] = {
     "profile":     ("👤 پروفایل من", "این دکمه حالا «پروفایل من» را نمایش می‌دهد.", None),
     "my_services": ("📡 سرویس‌های من", "این دکمه حالا «سرویس‌های من» (سرویس‌های VPN خودکار) را نمایش می‌دهد.",
                     frozenset({"vpn_sales"})),
+    # === PATCH_RENEW_SERVICE_PICKER_V1 ===
+    "renew_service": ("♻️ تمدید سرویس (انتخاب سرویس)",
+                      "این دکمه حالا فهرست سرویس‌های قابل‌تمدید کاربر را نشان می‌دهد و مستقیم به تمدید همان سرویس می‌برد.",
+                      frozenset({"vpn_sales"})),
     "my_configs":  ("📦 کانفیگ‌های من", "این دکمه حالا «کانفیگ‌های من» (کانفیگ‌های خریداری‌شدهٔ دستی) را نمایش می‌دهد.",
                     frozenset({"vpn_sales"})),
     "vpn_help":    ("🧩 آموزش اتصال", "این دکمه حالا «آموزش اتصال» (راهنمای اندروید/آیفون/ویندوز) را نمایش می‌دهد.",

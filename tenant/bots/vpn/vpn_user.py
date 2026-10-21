@@ -5994,6 +5994,46 @@ async def show_my_services(bot: Bot, msg: Message, bot_id: int, tg_id: int):
         logger.exception("خطای نادیده‌گرفته‌شده (ذخیرهٔ آیدیِ پیامِ لیستِ سرویس‌ها)")
 
 
+# === PATCH_RENEW_SERVICE_PICKER_V1 ===
+# درخواست Rocket: دکمهٔ صفحهٔ اصلی «♻️ تمدید سرویس» که مشتری را مستقیم به تمدید همان سرویسی ببرد که خریده؛
+# بدون اینکه اول «سرویس‌های من» ← سرویس ← تمدید را بزند. هر سرویس قابل‌تمدید یک دکمه است و به همان مسیر
+# تمدید موجود (vren:) می‌رود؛ پس قیمت، پلن‌ها، تخفیف نماینده و پرداخت دقیقا مثل قبل است.
+async def renewable_services(bot_id: int, tg_id: int) -> list[tuple[int, str, str]]:
+    """سرویس‌های پنلی کاربر که ادمین تمدیدشان را روشن کرده و پنلشان فعال است: [(id, عنوان، وضعیت)]."""
+    out: list[tuple[int, str, str]] = []
+    async with Session() as s:
+        accts = (await s.scalars(select(PanelAccount).where(
+            PanelAccount.bot_id == bot_id, PanelAccount.user_telegram_id == tg_id,
+            PanelAccount.reseller_made.is_not(True),
+            PanelAccount.status.notin_(("hidden", "refunded", "refunding")))
+            .order_by(PanelAccount.id.desc()))).all()
+        for a in accts:
+            panel = await _panel_for_account(s, bot_id, a)
+            if not panel or not panel.enabled:
+                continue
+            if (await _vc(bot_id, "renew_enabled", panel.panel_key)) != "1":
+                continue
+            out.append((a.id, _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb), a.status or "active"))
+    return out
+
+
+async def show_renew_services(bot: Bot, msg: Message, bot_id: int, tg_id: int):
+    items = await renewable_services(bot_id, tg_id)
+    from tenant import inline_back_row
+    back = await inline_back_row(bot_id)
+    if not items:
+        await msg.answer("♻️ سرویسی که امکان تمدید داشته باشد پیدا نشد.\n\n"
+                         "اگر سرویس خریده‌ای، از «📡 سرویس‌های من» وضعیتش را ببین؛ یا از «خرید سرویس جدید» سرویس تازه بگیر.",
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=[back] if back else []))
+        return
+    rows = [[InlineKeyboardButton(text=f"{'🟢' if st == 'active' else '🔴'} ♻️ {title}", callback_data=f"vren:{aid}")]
+            for aid, title, st in items]
+    if back:
+        rows.append(back)
+    await msg.answer("♻️ <b>تمدید سرویس</b>\n\nسرویسی را که می‌خواهی تمدید کنی انتخاب کن:",
+                     reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
 @vpn_user_router.callback_query(F.data == "vsvc:home")
 async def vpn_service_home(cb: CallbackQuery, bot: Bot):
     """بازگشت به منوی اصلی ربات."""

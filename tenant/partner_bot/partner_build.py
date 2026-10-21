@@ -166,6 +166,7 @@ _BY_FIELD: dict[str, list[tuple[str, str]]] = {
         # نیازمندِ PATCH_SHAHAN_BUY_BUTTON_V1 در tenant/__init__.py
         ("buy_vpn_shahan",        "🟤 خرید از پنل شاهان"),
         ("my_services",           "📡 سرویس‌های من"),
+        ("renew_service",         "♻️ تمدید سرویس"),
         ("free_trial",            "🎁 تست رایگان VPN"),
         ("vpn_help",              "🧩 آموزش اتصال VPN"),
     ],
