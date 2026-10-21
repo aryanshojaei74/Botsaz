@@ -176,6 +176,8 @@ from tenant.bots.vpn.vpn_metered import mtr_router   # PATCH_METERED_PLAN_V1
 tenant_router.include_router(mtr_router)
 from tenant.bots.vpn.stock_delivery import sd_router   # PATCH_STOCK_MANUAL_DELIVERY_V1
 tenant_router.include_router(sd_router)
+from tenant.bots.vpn.stock_give import sg_router   # PATCH_STOCK_GIVE_TO_USER_V1
+tenant_router.include_router(sg_router)
 from tenant.shared.period_stats import pst_router   # PATCH_PERIOD_STATS_V1
 tenant_router.include_router(pst_router)
 # === PATCH_KYC_V1 ===
@@ -22412,6 +22414,9 @@ def cfg_manage_kb(plan: str = "") -> InlineKeyboardMarkup:
         # === PATCH_STOCK_MANUAL_DELIVERY_V1 === صفِ تحویلِ دستیِ کانفیگ آماده (زیرِ همین انبار)
         [InlineKeyboardButton(text="📬 صف تحویل (تحویل دستیِ کانفیگ آماده)", callback_data="sdl:menu",
                               style=ButtonStyle.PRIMARY)],
+        # === PATCH_STOCK_GIVE_TO_USER_V1 === دادن دستی کانفیگ انبار (آماده/نامحدود) به یک کاربر
+        [InlineKeyboardButton(text="🎁 افزودن کانفیگ انبار به کاربر", callback_data="sg:menu",
+                              style=ButtonStyle.SUCCESS)],
         # ── کانفیگ آماده ──
         [InlineKeyboardButton(text="🛒 کانفیگ آماده", callback_data="noop")],
         [InlineKeyboardButton(text="➕ افزودن کانفیگ آماده", callback_data="tadm:cfg:add", style=ButtonStyle.SUCCESS)],
