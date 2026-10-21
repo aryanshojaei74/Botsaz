@@ -241,6 +241,9 @@ from platform_premium_emoji import platform_premium_emoji_router
 from platform_sticker_admin import platform_sticker_admin_router
 router.include_router(platform_premium_emoji_router)
 router.include_router(platform_sticker_admin_router)
+# === PATCH_PLATFORM_RUBIKA_BRIDGE_V1 ===
+from platform_rubika import platform_rubika_router
+router.include_router(platform_rubika_router)
 
 # ---------------- ثابت‌ها ----------------
 FIELDS = {
