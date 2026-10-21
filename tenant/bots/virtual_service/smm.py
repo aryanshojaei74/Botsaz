@@ -9382,6 +9382,16 @@ async def _smm_myorder_detail_content(bot_id: int, user_id: int, oid: int, back_
 def panel_err_friendly(raw: str, what: str = "درخواست") -> str:
     """پاسخِ خامِ پنل را به یک جملهٔ کوتاه و قابل‌فهم برای مشتری تبدیل می‌کند (نه متنِ فنیِ دقیق)."""
     t = (raw or "").lower()
+    # === PATCH_SMM_I18N_ERR_KEYS_V1 === بعضی پنل‌ها (مثل WhaleSMM) به‌جایِ متن، کلیدِ ترجمه می‌دهند:
+    # «error.incorrect_order_id» / «error.refill_not_found». کلید را به کلماتِ ساده تبدیل می‌کنیم
+    # تا همان شاخه‌هایِ پایین تشخیصش بدهند، و چیزِ خام هرگز به مشتری نمایش داده نشود.
+    _m = re.search(r"\berror[._]([a-z0-9_.]+)", t)
+    if _m:
+        t = _m.group(1).replace("_", " ").replace(".", " ")
+    if "refill" in t and any(k in t for k in ("not found", "no refill", "incorrect", "invalid")):
+        return "ریفیلی با این شناسه روی پنل پیدا نشد."
+    if "incorrect order" in t or "invalid order" in t or "order id" in t and "not" in t:
+        return "این سفارش روی پنل پیدا نشد؛ با پشتیبانی هماهنگ کن."
     # محدودیت‌هایِ زمانیِ رایجِ پنل‌ها — قبلاً به پیامِ کلیِ «بعداً امتحان کن» می‌افتادند
     # و مشتری نمی‌فهمید چرا ریفیل رد شد.
     if any(k in t for k in ("expired", "period has", "منقضی")):
