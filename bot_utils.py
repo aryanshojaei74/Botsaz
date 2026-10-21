@@ -72,7 +72,8 @@ async def set_tenant_webhook(token: str) -> bool:
     for attempt in range(3):
         try:
             async with _temp_bot(token) as tb:
-                await tb.set_webhook(url, drop_pending_updates=True)
+                from webhook_utils import TENANT_ALLOWED_UPDATES   # PATCH_JOIN_CHAT_MEMBER_V1
+                await tb.set_webhook(url, drop_pending_updates=True, allowed_updates=TENANT_ALLOWED_UPDATES)
             return True
         except Exception:
             logger.exception("set_tenant_webhook ناموفق (تلاش %s/3)", attempt + 1)

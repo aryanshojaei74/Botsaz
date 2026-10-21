@@ -22,7 +22,8 @@ async def main():
     for b in bots:
         try:
             tb = Bot(b.token)
-            await tb.set_webhook(f"{WEBHOOK_BASE}/webhook/{b.token}", drop_pending_updates=True)
+            await tb.set_webhook(f"{WEBHOOK_BASE}/webhook/{b.token}", drop_pending_updates=True,
+                                 allowed_updates=__import__("webhook_utils").TENANT_ALLOWED_UPDATES)
             await tb.session.close()
             ok += 1
             print(f"  ✅ @{b.username or b.id}")

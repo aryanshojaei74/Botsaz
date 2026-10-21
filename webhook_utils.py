@@ -31,6 +31,9 @@ PLATFORM_ALLOWED_UPDATES = [
     "my_chat_member", "chat_member", "chat_join_request",
 ]
 
+# === PATCH_JOIN_CHAT_MEMBER_V1 === ربات مستأجر هم باید آپدیت chat_member را بگیرد (خوش‌آمد اعضایی که از لینک دعوت می‌آیند).
+TENANT_ALLOWED_UPDATES = PLATFORM_ALLOWED_UPDATES
+
 from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
 

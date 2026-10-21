@@ -16,7 +16,7 @@ from aiogram.enums import ButtonStyle, ChatType
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import ChatPermissions, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import ChatMemberUpdated, ChatPermissions, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import delete, select
 
 from config import Session
@@ -484,14 +484,17 @@ async def tenant_guard_commands(msg: Message, bot: Bot):
         return
 
 
-@tenant_group_guard_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.new_chat_members)
-async def tenant_guard_new_members(msg: Message, bot: Bot):
-    row = await _get_row(bot)
-    if not row or not await _allowed(row, msg.chat.id):
-        raise SkipHandler
+async def _tenant_handle_join(bot: Bot, row, chat_id: int, member) -> None:
+    """=== PATCH_JOIN_CHAT_MEMBER_V1 === خوش‌آمد + کپچای یک عضو (مشترک بین پیام سرویس و آپدیت chat_member)."""
     captcha_on = (await _get(row.id, "group_guard_captcha_enabled", "0")) == "1"
     welcome_on = (await _get(row.id, "group_guard_welcome_enabled", "0")) == "1"
-    for member in msg.new_chat_members or []:
+    msg = type("_M", (), {})()                  # فقط «chat.id» و «answer» لازم است
+    msg.chat = type("_C", (), {"id": chat_id})()
+
+    async def _answer(text, **kw):
+        return await bot.send_message(chat_id, text, **kw)
+    msg.answer = _answer
+    for member in [member]:
         if member.is_bot:
             continue
         # === PATCH_WELCOME_INDEPENDENT_OF_CAPTCHA_V1 ===
@@ -524,6 +527,36 @@ async def tenant_guard_new_members(msg: Message, bot: Bot):
                 await _schedule_captcha_expiry(bot, msg.chat.id, member.id, row, sent.message_id, timeout)
             except Exception:
                 logger.exception("tenant captcha setup failed")
+
+
+@tenant_group_guard_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.new_chat_members)
+async def tenant_guard_new_members(msg: Message, bot: Bot):
+    row = await _get_row(bot)
+    if not row or not await _allowed(row, msg.chat.id):
+        raise SkipHandler
+    from tenant.shared import join_dedupe as _jd
+    for member in msg.new_chat_members or []:
+        if member.is_bot or not _jd.claim(row.id, msg.chat.id, member.id):
+            continue                              # قبلا از مسیر chat_member پردازش شده
+        await _tenant_handle_join(bot, row, msg.chat.id, member)
+    raise SkipHandler
+
+
+@tenant_group_guard_router.chat_member(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}))
+async def tenant_guard_chat_member(event: ChatMemberUpdated, bot: Bot):
+    """ورودهایی که پیام سرویس new_chat_members ندارند (مثلا از لینک دعوت)؛ نیازمند allowed_updates شامل chat_member."""
+    from tenant.shared import join_dedupe as _jd
+    old, new = event.old_chat_member, event.new_chat_member
+    if not _jd.is_join(old.status, new.status, getattr(new, "is_member", None)):
+        raise SkipHandler
+    member = new.user
+    if member.is_bot:
+        raise SkipHandler
+    row = await _get_row(bot)
+    if not row or not await _allowed(row, event.chat.id):
+        raise SkipHandler
+    if _jd.claim(row.id, event.chat.id, member.id):
+        await _tenant_handle_join(bot, row, event.chat.id, member)
     raise SkipHandler
 
 

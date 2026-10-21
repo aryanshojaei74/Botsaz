@@ -331,7 +331,8 @@ async def set_tenant_webhook(token: str) -> bool:
         try:
             live = Bot(token=token)
             try:
-                await live.set_webhook(url, drop_pending_updates=True)
+                await live.set_webhook(url, drop_pending_updates=True,
+                                       allowed_updates=__import__("webhook_utils").TENANT_ALLOWED_UPDATES)   # PATCH_JOIN_CHAT_MEMBER_V1
             finally:
                 await live.session.close()
             return True
@@ -17868,7 +17869,8 @@ async def _apply_token_migration(old_bot_id: int, new_token: str) -> tuple[bool,
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     try:
         async with _temp_bot(new_token) as nb:
-            await nb.set_webhook(f"{WEBHOOK_BASE}/webhook/{new_token}", drop_pending_updates=True)
+            await nb.set_webhook(f"{WEBHOOK_BASE}/webhook/{new_token}", drop_pending_updates=True,
+                                 allowed_updates=__import__("webhook_utils").TENANT_ALLOWED_UPDATES)
     except Exception as e:
         print("_apply_token_migration: activate new bot webhook failed:", e)
 
@@ -19088,8 +19090,9 @@ async def adm_health_scan(cb: CallbackQuery, bot: Bot):
             if WEBHOOK_BASE:
                 expected = f"{WEBHOOK_BASE}/webhook/{b.token}"
                 wh = await tb.get_webhook_info()
-                if wh.url != expected:
-                    await tb.set_webhook(expected, drop_pending_updates=False)
+                if wh.url != expected or "chat_member" not in (wh.allowed_updates or []):   # PATCH_JOIN_CHAT_MEMBER_V1
+                    await tb.set_webhook(expected, drop_pending_updates=False,
+                                         allowed_updates=__import__("webhook_utils").TENANT_ALLOWED_UPDATES)
                     webhook_fixed += 1
         try:
             await _aio.wait_for(_do(), timeout=8)
@@ -19518,9 +19521,10 @@ async def _do_reconnect(bot: Bot, bots_list, *, fix_status: bool = True,
             if WEBHOOK_BASE:
                 expected = f"{WEBHOOK_BASE}/webhook/{b.token}"
                 wh = await _aio_rc.wait_for(tb.get_webhook_info(), timeout=6)
-                if wh.url != expected:
+                if wh.url != expected or "chat_member" not in (wh.allowed_updates or []):   # PATCH_JOIN_CHAT_MEMBER_V1
                     await _aio_rc.wait_for(
-                        tb.set_webhook(expected, drop_pending_updates=False), timeout=9)
+                        tb.set_webhook(expected, drop_pending_updates=False,
+                                       allowed_updates=__import__("webhook_utils").TENANT_ALLOWED_UPDATES), timeout=9)
                 wh_ok = True
             if fix_status:
                 async with Session() as s:

@@ -337,23 +337,48 @@ async def _welcome_new_members(msg: Message, bot: Bot, chat: CommunityChat) -> N
         return
     if chat.welcome_delete_service_msg:
         await _delete_silently(bot, msg.chat.id, msg.message_id)
-    template = chat.welcome_text or "سلام {نام} عزیز، به {گروه} خوش اومدی! 🌹"
+    from tenant.shared import join_dedupe as _jd
     for member in msg.new_chat_members:
         if member.is_bot and member.id == bot.id:
             continue  # اضافه‌شدنِ خودِ ربات، پیامِ خوش‌آمد نمی‌خواهد
-        text = _render_welcome(template, member.full_name, msg.chat.title or "")
-        await _bump_stat(chat.id, "stat_welcomed")  # PATCH_COMMUNITY_STATS_V1
-        try:
-            sent = await bot.send_message(msg.chat.id, text)
-            if chat.welcome_delete_after_sec > 0:
-                import asyncio
-                async def _later(cid=msg.chat.id, mid=sent.message_id,
-                                 sec=chat.welcome_delete_after_sec):
-                    await asyncio.sleep(sec)
-                    await _delete_silently(bot, cid, mid)
-                asyncio.create_task(_later())
-        except Exception:
-            logger.exception("ارسالِ پیامِ خوش‌آمد ناموفق بود")
+        if not _jd.claim(chat.bot_id, msg.chat.id, member.id):
+            continue   # PATCH_JOIN_CHAT_MEMBER_V1: قبلا از مسیر chat_member خوش‌آمد گفته شده
+        await _send_welcome(bot, chat, msg.chat.id, msg.chat.title or "", member)
+
+
+async def _send_welcome(bot: Bot, chat: CommunityChat, chat_id: int, title: str, member) -> None:
+    """یک پیام خوش‌آمد برای یک عضو (مشترک بین پیام سرویس و آپدیت chat_member)."""
+    template = chat.welcome_text or "سلام {نام} عزیز، به {گروه} خوش اومدی! 🌹"
+    text = _render_welcome(template, member.full_name, title)
+    await _bump_stat(chat.id, "stat_welcomed")  # PATCH_COMMUNITY_STATS_V1
+    try:
+        sent = await bot.send_message(chat_id, text)
+        if chat.welcome_delete_after_sec > 0:
+            import asyncio
+            async def _later(cid=chat_id, mid=sent.message_id, sec=chat.welcome_delete_after_sec):
+                await asyncio.sleep(sec)
+                await _delete_silently(bot, cid, mid)
+            asyncio.create_task(_later())
+    except Exception:
+        logger.exception("ارسال پیام خوش‌آمد ناموفق بود")
+
+
+@community_router.chat_member(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}))
+async def handle_member_joined_update(event: ChatMemberUpdated, bot: Bot):
+    """=== PATCH_JOIN_CHAT_MEMBER_V1 === ورودهایی که پیام سرویس new_chat_members ندارند (مثلا از لینک دعوت)."""
+    from tenant.shared import join_dedupe as _jd
+    old, new = event.old_chat_member, event.new_chat_member
+    if not _jd.is_join(old.status, new.status, getattr(new, "is_member", None)) or new.user.is_bot:
+        raise SkipHandler
+    row = await _get_bot_row(bot)
+    if not row or row.field != FIELD_KEY:
+        raise SkipHandler
+    chat = await _get_chat_row(row.id, event.chat.id)
+    if not chat or not chat.welcome_on:
+        raise SkipHandler
+    if _jd.claim(chat.bot_id, event.chat.id, new.user.id):
+        await _send_welcome(bot, chat, event.chat.id, event.chat.title or "", new.user)
+    raise SkipHandler
 
 
 # ═══════════════════════════════════════════

@@ -42,9 +42,11 @@ async def _check_one(b_id: int, token: str, status: str) -> tuple[str, str] | No
             kind = None
             if expected:
                 wh = await asyncio.wait_for(tb.get_webhook_info(), timeout=8)
-                if wh.url != expected:
+                from webhook_utils import TENANT_ALLOWED_UPDATES   # PATCH_JOIN_CHAT_MEMBER_V1
+                if wh.url != expected or "chat_member" not in (wh.allowed_updates or []):
                     await asyncio.wait_for(
-                        tb.set_webhook(expected, drop_pending_updates=False), timeout=10)
+                        tb.set_webhook(expected, drop_pending_updates=False,
+                                       allowed_updates=TENANT_ALLOWED_UPDATES), timeout=10)
                     kind = "webhook"
         if status == "disabled_bad_token":
             async with Session() as s:

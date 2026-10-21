@@ -399,7 +399,8 @@ async def adm_bot_transfer_new_token(msg: Message, state: FSMContext, bot: Bot):
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     try:
         async with _temp_bot(new_token) as nb:
-            await nb.set_webhook(f"{WEBHOOK_BASE}/webhook/{new_token}", drop_pending_updates=True)
+            await nb.set_webhook(f"{WEBHOOK_BASE}/webhook/{new_token}", drop_pending_updates=True,
+                                 allowed_updates=__import__("webhook_utils").TENANT_ALLOWED_UPDATES)
     except Exception as e:
         print("adm_bot_transfer_new_token: activate new bot failed:", e)
 
