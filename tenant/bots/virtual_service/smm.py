@@ -9592,8 +9592,23 @@ async def smmu_request_cancel(cb: CallbackQuery, bot: Bot):
         return
     await cb.answer("در حالِ ارسالِ درخواستِ لغو به پنل…")
     api_url, api_key, _ = await _panel_creds(row.id, o.panel_pk)
-    d = await smm_api.cancel_order(api_url, api_key, o.panel_order_id)
-    ok, note = _parse_cancel_response(d, o.panel_order_id)
+    # === PATCH_SMM_CANCEL_ALWAYS_REPLY_V1 === گزارش فدایی: «وقتی پنل خطا می‌دهد ربات به کاربر نمی‌گوید و گیر می‌کند».
+    # تایم‌اوت/استثنا هم باید پیام بدهد، و خطای واقعی پنل (غیر ۲۰۰) به‌جای «پاسخی نیامد» نشان داده شود.
+    try:
+        d = await asyncio.wait_for(smm_api.cancel_order(api_url, api_key, o.panel_order_id), timeout=45)
+    except asyncio.TimeoutError:
+        logger.warning("[cancel] پنل در ۴۵ ثانیه پاسخ نداد (order=%s)", oid)
+        await cb.message.answer("⏳ پنل دیر جواب داد. درخواست لغوت ممکن است ثبت شده باشد؛ چند دقیقه بعد وضعیت سفارش را "
+                                "ببین و اگر تغییری نکرد دوباره امتحان کن.")
+        return
+    except Exception:
+        logger.exception("[cancel] درخواست لغو خطا داد (order=%s)", oid)
+        await cb.message.answer("❌ ارسال درخواست لغو به پنل با خطا مواجه شد. کمی بعد دوباره امتحان کن یا به پشتیبانی بگو.")
+        return
+    if d is None:
+        ok, note = False, (smm_api.last_error(api_url) or "پاسخی از پنل دریافت نشد.")
+    else:
+        ok, note = _parse_cancel_response(d, o.panel_order_id)
     if not ok:
         logger.info("[cancel] پاسخِ پنل (order=%s): %s", oid, note)
         await cb.message.answer("❌ " + panel_err_friendly(note, "درخواستِ لغو"))

@@ -38,6 +38,7 @@ charge_bonus_router = Router(name="charge_bonus")
 KEY_ON = "chg_bonus_on"          # "1" = روشن
 KEY_TIERS = "chg_bonus_tiers"    # «300000=20;1000000=25»
 KEY_CAP = "chg_bonus_cap"        # سقفِ بونوسِ هر شارژ (تومان)، ۰/خالی = بدونِ سقف
+KEY_METHODS = "chg_bonus_methods"   # PATCH_CHARGE_BONUS_METHODS_V1: روش‌های بونوس‌دار («card,zarinpal»)؛ خالی = همهٔ روش‌ها
 BONUS_KIND = "charge_bonus"      # ≤ ۲۰ کاراکتر (ستونِ WalletTxn.kind)
 
 # شارژهایِ واقعیِ درگاه/دستی (تراکنش‌هایِ «charge» عمومی فقط با این یادداشت‌ها: بقیه بازگشتِ وجه/جایزه‌اند)
@@ -46,6 +47,45 @@ TOPUP_KINDS = frozenset({
     "abangateway_charge", "hesabpay_charge", "zibal_charge", "zarinpal_charge", "apay_charge",
 })
 TOPUP_NOTE_PREFIXES = ("AUTO:شارژ خودکار", "شارژ با استارز", "شارژ سفارش #")
+
+# === PATCH_CHARGE_BONUS_METHODS_V1 === گزارش فدایی: «بتونیم تنظیم کنیم با چه روش‌هایی شارژ کنند بونوس بگیرند».
+# کلید روش ⇒ (برچسب، kindهای WalletTxn، پیشوند یادداشت شارژهای عمومی «charge»)
+METHODS: dict[str, tuple[str, tuple[str, ...], tuple[str, ...]]] = {
+    "card":        ("💳 کارت‌به‌کارت", (), ("AUTO:شارژ خودکار", "شارژ سفارش #")),
+    "stars":       ("⭐️ استارز تلگرام", (), ("شارژ با استارز",)),
+    "zarinpal":    ("🔐 زرین‌پال", ("zarinpal_charge",), ()),
+    "zibal":       ("🟦 زیبال", ("zibal_charge",), ()),
+    "apay":        ("🅰️ آپی", ("apay_charge",), ()),
+    "crypto":      ("🪙 ارز دیجیتال/تون", ("crypto_charge", "nowpay_charge", "tonpays_charge"), ()),
+    "swap":        ("🔄 سواپ‌ولت", ("swap_charge",), ()),
+    "uniquepay":   ("🟣 یونیک‌پی", ("uniquepay_charge",), ()),
+    "abangateway": ("🏦 آبان‌گیت‌وی", ("abangateway_charge",), ()),
+    "hesabpay":    ("🇦🇫 حساب‌پی", ("hesabpay_charge",), ()),
+}
+
+
+def method_of(t) -> str | None:
+    """روش پرداخت یک تراکنش شارژ (کلید METHODS) یا None اگر ناشناخته است."""
+    k = getattr(t, "kind", "") or ""
+    note = getattr(t, "note", "") or ""
+    for key, (_lbl, kinds, prefixes) in METHODS.items():
+        if k in kinds or (k == "charge" and prefixes and note.startswith(prefixes)):
+            return key
+    return None
+
+
+def parse_methods(raw: str | None) -> set[str]:
+    """مجموعهٔ روش‌های فعال؛ خالی/نامعتبر ⇒ مجموعهٔ تهی (یعنی «همهٔ روش‌ها»، رفتار قبلی)."""
+    return {m.strip() for m in (raw or "").split(",") if m.strip() in METHODS}
+
+
+def method_allowed(t, enabled: set[str]) -> bool:
+    """بدون محدودیت (enabled تهی) یا روش این شارژ در فهرست ⇒ مجاز. روش ناشناخته فقط وقتی محدودیتی نیست مجاز است."""
+    if not enabled:
+        return True
+    m = method_of(t)
+    return m is not None and m in enabled
+
 
 _FA = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 _ITEM = re.compile(r"(\d[\d,٬،.]*)\s*(?:=|:|=>|->|→|—|-|\s)\s*(\d+(?:\.\d+)?)\s*(?:%|٪)?")
@@ -109,10 +149,12 @@ def _is_topup(t) -> bool:
 
 def _apply(session, t) -> None:
     rows = session.execute(select(Setting.key, Setting.value).where(
-        Setting.bot_id == t.bot_id, Setting.key.in_((KEY_ON, KEY_TIERS, KEY_CAP)))).all()
+        Setting.bot_id == t.bot_id, Setting.key.in_((KEY_ON, KEY_TIERS, KEY_CAP, KEY_METHODS)))).all()
     cfg = {k: v for k, v in rows}
     if cfg.get(KEY_ON) != "1":
         return
+    if not method_allowed(t, parse_methods(cfg.get(KEY_METHODS))):
+        return                                   # PATCH_CHARGE_BONUS_METHODS_V1: این روش پرداخت بونوس ندارد
     try:
         cap = int(float(cfg.get(KEY_CAP) or 0))
     except ValueError:
@@ -195,7 +237,9 @@ async def wallet_hint(bot_id: int) -> str:
     if not tiers:
         return ""
     lines = "\n".join(f"   ◂ شارژ {a:,} تومان به بالا: <b>{p:g}٪</b> بونوس" for a, p in tiers)
-    return f"\n\n🎁 <b>بونوسِ شارژ</b>\n{lines}"
+    en = parse_methods(await get_setting(bot_id, KEY_METHODS, ""))
+    only = ("\n   ⚠️ فقط با: " + "، ".join(METHODS[m][0] for m in METHODS if m in en)) if en else ""
+    return f"\n\n🎁 <b>بونوس شارژ</b>\n{lines}{only}"
 
 
 # ───────────────────────── پنلِ مدیریت ─────────────────────────
@@ -203,6 +247,31 @@ async def wallet_hint(bot_id: int) -> str:
 class ChargeBonusFSM(StatesGroup):
     tiers = State()
     cap = State()
+
+
+def _methods_text(en: set[str]) -> str:
+    return "همهٔ روش‌ها" if not en else "، ".join(METHODS[m][0] for m in METHODS if m in en)
+
+
+async def methods_page(bot_id: int):
+    from tenant import get_setting
+    en = parse_methods(await get_setting(bot_id, KEY_METHODS, ""))
+    rows, row = [], []
+    for key, (lbl, _k, _p) in METHODS.items():
+        on = (not en) or key in en
+        row.append(InlineKeyboardButton(text=("✅ " if on else "⬜️ ") + lbl, callback_data=f"cbn:m:{key}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="✅ همهٔ روش‌ها", callback_data="cbn:m:all", style=ButtonStyle.SUCCESS)])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:chgbonus", style=ButtonStyle.DANGER)])
+    txt = ("🎛 <b>روش‌های پرداخت بونوس‌دار</b>\n\nفقط شارژهایی که با روش‌های علامت‌دار (✅) انجام شود بونوس می‌گیرند. "
+           "هر روش را بزن تا روشن/خاموش شود.\n\n"
+           f"الان: <b>{_methods_text(en)}</b>\n\n"
+           "<i>اگر همه را خاموش کنی دوباره «همهٔ روش‌ها» فعال می‌شود (بونوس برای همه).</i>")
+    return txt, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def page(bot_id: int):
@@ -213,13 +282,15 @@ async def page(bot_id: int):
         cap = int(float(await get_setting(bot_id, KEY_CAP, "0") or 0))
     except ValueError:
         cap = 0
+    en_methods = parse_methods(await get_setting(bot_id, KEY_METHODS, ""))
     txt = (
         "🎁 <b>بونوسِ شارژِ کیف پول</b>\n\n"
         "وقتی کاربر کیف‌پولش را (با هر درگاهی) شارژ کند و مبلغ به یکی از پله‌هایِ زیر برسد، درصدِ بونوسِ "
         "همان پله هم خودکار به موجودی‌اش اضافه می‌شود و برایش پیام می‌آید.\n\n"
         f"وضعیت: <b>{'✅ روشن' if on else '❌ خاموش'}</b>\n\n"
         f"<b>پله‌ها:</b>\n{_pretty(tiers)}\n\n"
-        f"سقفِ بونوسِ هر شارژ: <b>{f'{cap:,} تومان' if cap else 'بدونِ سقف'}</b>\n\n"
+        f"سقف بونوس هر شارژ: <b>{f'{cap:,} تومان' if cap else 'بدون سقف'}</b>\n"
+        f"روش‌های بونوس‌دار: <b>{_methods_text(en_methods)}</b>\n\n"
         "<i>مثال: شارژِ ۳۰۰٬۰۰۰ تومانی با پلهٔ «۳۰۰٬۰۰۰ ⇒ ۲۰٪» می‌شود ۳۶۰٬۰۰۰ تومان موجودی. "
         "بازگشتِ وجه، جایزهٔ بازی و تنظیمِ دستیِ ادمین بونوس نمی‌گیرند.</i>")
     rows = [
@@ -227,6 +298,7 @@ async def page(bot_id: int):
                               style=(ButtonStyle.DANGER if on else ButtonStyle.SUCCESS))],
         [InlineKeyboardButton(text="✏️ تنظیمِ پله‌ها", callback_data="cbn:tiers")],
         [InlineKeyboardButton(text="🔝 سقفِ بونوس", callback_data="cbn:cap")],
+        [InlineKeyboardButton(text="🎛 روش‌های پرداخت بونوس‌دار", callback_data="cbn:methods", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:finance", style=ButtonStyle.DANGER)],
     ]
     return txt, InlineKeyboardMarkup(inline_keyboard=rows)
@@ -252,6 +324,45 @@ async def tadm_chgbonus(cb: CallbackQuery, bot: Bot):
         return
     await _show(cb, row.id, edit=True)
     await cb.answer()
+
+
+@charge_bonus_router.callback_query(F.data == "cbn:methods")
+async def cbn_methods(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    txt, kb = await methods_page(row.id)
+    try:
+        await cb.message.edit_text(txt, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(txt, reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
+
+
+@charge_bonus_router.callback_query(F.data.regexp(r"^cbn:m:[a-z]+$"))
+async def cbn_method_toggle(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok, get_setting, set_setting
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    key = cb.data.rsplit(":", 1)[1]
+    en = parse_methods(await get_setting(row.id, KEY_METHODS, ""))
+    if key == "all":
+        en = set()
+    elif key in METHODS:
+        cur = en or set(METHODS)                 # «همه» ⇒ از مجموعهٔ کامل شروع کن
+        cur = cur - {key} if key in cur else cur | {key}
+        en = set() if (not cur or cur == set(METHODS)) else cur
+    else:
+        return await cb.answer()
+    await set_setting(row.id, KEY_METHODS, ",".join(m for m in METHODS if m in en))
+    txt, kb = await methods_page(row.id)
+    try:
+        await cb.message.edit_text(txt, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        logger.debug("charge_bonus: ویرایش صفحهٔ روش‌ها ممکن نشد (بی‌اهمیت)")
+    await cb.answer("ثبت شد")
 
 
 @charge_bonus_router.callback_query(F.data == "cbn:toggle")
