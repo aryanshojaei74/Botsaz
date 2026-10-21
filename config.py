@@ -135,7 +135,13 @@ try:
     _orig_aiohttp_init = _AiohttpSessionT.__init__
 
     def _fast_timeout_init(self, *args, **kwargs):
-        kwargs.setdefault("timeout", 12.0)
+        # === PATCH_TG_TIMEOUT_ENV_V1 === مسیر کند سرور به تلگرام (اتصال ~۷ث + TLS ~۱۶ث) با ۱۲ ثانیه هیچ‌وقت جواب نمی‌گرفت؛
+        # با TG_REQUEST_TIMEOUT (ثانیه، ۵ تا ۱۲۰) در .env می‌شود موقتا بالا برد. پیش‌فرض همان ۱۲.
+        try:
+            _tg_to = min(120.0, max(5.0, float(os.getenv("TG_REQUEST_TIMEOUT", "12") or 12)))
+        except ValueError:
+            _tg_to = 12.0
+        kwargs.setdefault("timeout", _tg_to)
         _orig_aiohttp_init(self, *args, **kwargs)
         # این سرور مسیرِ IPv6 ندارد (ENETUNREACH)؛ فقط IPv4 را امتحان کن تا نه جستجوی AAAA و نه تلاشِ بی‌نتیجهٔ v6 انجام شود.
         # با TG_FORCE_IPV4=0 خاموش می‌شود. اگر پراکسی تنظیم شده، connector دست‌نخورده می‌ماند.
