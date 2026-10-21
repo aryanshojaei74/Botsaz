@@ -67,3 +67,12 @@ def test_paused_notice_throttle():
     assert tenant._paused_notice_due(1, 10) is True
     assert tenant._paused_notice_due(1, 10) is False
     assert tenant._paused_notice_due(1, 11) is True and tenant._paused_notice_due(2, 10) is True
+
+
+def test_order_notices_get_no_nav_footer():
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔁", callback_data="smmu:reorder:5")]])
+    assert tenant._is_order_notice("✅ سفارش شما با موفقیت ثبت شد! 🎉\n🔖 کد پیگیری: <code>AB</code>", None)
+    assert tenant._is_order_notice("✔ متن دلخواه مالک بدون الگو", kb)                      # از روی دکمهٔ سفارش
+    plain = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="x", callback_data="smmu:svc:1")]])
+    assert not tenant._is_order_notice("🛍 صفحهٔ محصول", plain) and not tenant._is_order_notice(None, None)

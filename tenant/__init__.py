@@ -2854,6 +2854,26 @@ async def _nav_is_staff(bot, uid: int) -> bool:
 
 _PAUSED_NOTICE: dict = {}
 
+# === PATCH_ORDER_MSG_NO_NAV_FOOTER_V1 ===
+_ORDER_KB_PREFIXES = ("smmu:reorder:", "smmu:restart", "gift:support:")
+
+
+def _is_order_notice(text, mk) -> bool:
+    """پیام ثبت/تکمیل/لغو سفارش (از روی متن پیش‌فرض یا دکمه‌های مخصوص سفارش). زیر این پیام‌ها فوتر «بازگشت به منوی قبل /
+    منوی اصلی» نمی‌آید (درخواست فدایی)."""
+    try:
+        from tenant.shared.vs_msg_override import rule_key as _rk
+        if isinstance(text, str) and _rk(text):
+            return True
+    except Exception:
+        logger.debug("rule_key failed (بی‌اهمیت)")
+    if isinstance(mk, InlineKeyboardMarkup):
+        for r in mk.inline_keyboard:
+            for b in r:
+                if str(getattr(b, "callback_data", "") or "").startswith(_ORDER_KB_PREFIXES):
+                    return True
+    return False
+
 
 def _paused_notice_due(bot_id: int, chat_id: int, secs: float = 900.0) -> bool:
     """=== PATCH_PAUSED_NOTICE_THROTTLE_V1 === آیا الان نوبت فرستادن «ربات خاموش است» به این چت است؟ (هر چت هر secs ثانیه یک‌بار)"""
@@ -2879,6 +2899,8 @@ def _nav_install(bot) -> None:
         name = type(method).__name__
         mk = getattr(method, "reply_markup", None)
         # === PATCH_VS_CUSTOM_TEXTS_ALL_ORDERS_V1 === متنِ دلخواهِ ثبت/تکمیل/ردِ سفارش برایِ استارز/تون/گیفت/ری‌اکشن
+        # PATCH_ORDER_MSG_NO_NAV_FOOTER_V1: تشخیص قبل از جایگزینی متن دلخواه (متن دلخواه دیگر با الگو نمی‌خواند)
+        _order_notice = name in ("SendMessage", "EditMessageText") and _is_order_notice(getattr(method, "text", None), mk)
         # PATCH_VS_CUSTOM_TEXTS_EDIT_V1: پیامی که با «ویرایش» جایگزین می‌شود (EditMessageText) هم مثل ارسال جدید شناسایی شود
         if name in ("SendMessage", "EditMessageText") and isinstance(getattr(method, "text", None), str) \
                 and isinstance(getattr(method, "chat_id", None), int) and method.chat_id > 0:
@@ -2918,6 +2940,8 @@ def _nav_install(bot) -> None:
                     mk = _hk0
             except Exception:
                 logger.debug("home_kb: جایگزینیِ ReplyKeyboardRemove ممکن نشد (بی‌اهمیت)")
+        if _order_notice:
+            return await orig(bot_, method, timeout=timeout)       # PATCH_ORDER_MSG_NO_NAV_FOOTER_V1
         uid = _CUR_UID.get()
         if (name not in ("SendMessage", "EditMessageText") or not isinstance(mk, InlineKeyboardMarkup)
                 or not uid or getattr(method, "chat_id", None) != uid
