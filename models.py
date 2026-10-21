@@ -2260,6 +2260,8 @@ class SmmCategory(Base):
     # اینستاگرام). فقط دامنه‌اش موقعِ خرید چک می‌شود تا کاربر لینکِ
     # پلتفرمِ اشتباه نفرستد. NULL یعنی این دسته چک نمی‌شود (رفتارِ قبلی).
     link_pattern: Mapped[str | None] = mapped_column(String(300))
+    # === PATCH_SMM_CATEGORY_DESC_V1 === توضیحات مشترک همهٔ سرویس‌های این دسته (وقتی پنل توضیح نمی‌فرستد و خود سرویس هم دستی ندارد)
+    description: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

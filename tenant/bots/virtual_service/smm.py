@@ -170,6 +170,8 @@ async def ensure_smm_columns(force: bool = False):
             ("input_kind", "VARCHAR(10) DEFAULT ''", "VARCHAR(10) DEFAULT ''"),
         ],
         "smm_orders": [("panel_status", "VARCHAR(30)", "VARCHAR(30)")],
+        # === PATCH_SMM_CATEGORY_DESC_V1 ===
+        "smm_categories": [("description", "TEXT", "TEXT")],
         # === PATCH_SMM_PROVIDER_DETAIL_V1 ===
         "smm_panels": [
             ("auto_check_enabled", "BOOLEAN DEFAULT 0", "BOOLEAN DEFAULT FALSE"),
@@ -242,6 +244,7 @@ class SmmFSM(StatesGroup):
     cat_name = State()          # ادمین اسمِ دستهٔ جدید را می‌نویسد (بعدِ انتخابِ پلتفرم)
     cat_margin = State()        # ادمین درصدِ سودِ مخصوصِ یک دسته را می‌نویسد
     cat_rename = State()        # ادمین اسمِ جدیدِ یک دستهٔ موجود را می‌نویسد
+    cat_desc = State()          # PATCH_SMM_CATEGORY_DESC_V1: ادمین توضیحات مشترک دسته را می‌نویسد
     # === PATCH_SMM_CATEGORY_LINK_PATTERN_V1 ===
     cat_linkpattern = State()  # ادمین نمونه‌لینکِ این دسته را می‌نویسد
     # === PATCH_SMM_PLATFORM_RENAME_V1 ===
@@ -762,6 +765,20 @@ async def _provider_text_fa(svc, text: str) -> str:
     return tr
 
 
+async def _category_description(svc) -> str:
+    """=== PATCH_SMM_CATEGORY_DESC_V1 === توضیحات مشترک دستهٔ این سرویس ('' اگر دسته/توضیحی نیست)."""
+    cid = getattr(svc, "category_pk", None)
+    if not cid:
+        return ""
+    try:
+        async with Session() as s:
+            c = await s.get(SmmCategory, cid)
+        return ((c.description if c else "") or "").strip()[:1500]
+    except Exception:
+        logger.exception("خواندن توضیحات دسته ناموفق بود")
+        return ""
+
+
 async def build_description(bot_id: int, svc) -> str:
     """متنِ توضیحاتِ محصول برایِ نمایش به مشتری.
 
@@ -781,6 +798,10 @@ async def build_description(bot_id: int, svc) -> str:
 
     manual = (getattr(svc, "description", "") or "").strip()
     if mode == "manual":
+        if not manual:
+            _cd = await _category_description(svc)       # PATCH_SMM_CATEGORY_DESC_V1
+            if _cd:
+                return _desc_block(_html_escape(_cd))
         return _desc_block(manual)  # PATCH_SMM_DESC_BLOCKQUOTE_V1
 
     provider = _strip_provider_commands((getattr(svc, "provider_desc", "") or "").strip())
@@ -791,6 +812,12 @@ async def build_description(bot_id: int, svc) -> str:
         if manual:
             body += f"\n{_html_escape(manual)}"
         return _desc_block(body)  # PATCH_SMM_DESC_BLOCKQUOTE_V1
+
+    if not manual:
+        # === PATCH_SMM_CATEGORY_DESC_V1 === نه توضیح پنل هست نه دستی خود سرویس ⇒ توضیحات مشترک دسته (اگر ادمین نوشته)
+        _cd = await _category_description(svc)
+        if _cd:
+            return _desc_block(_html_escape(_cd))
 
     lines = []
     try:
@@ -7900,12 +7927,18 @@ async def smm_cat_detail_content(bot_id: int, cid: int) -> tuple[str, InlineKeyb
         f"سودِ مخصوصِ این دسته: <b>{margin_txt}</b>\n"
         f"{_lt_line}"
         f"نمونه‌لینکِ این دسته: {lp_txt}\n"
+        f"توضیحات مشترک دسته: {'✅ ثبت شده' if (c.description or '').strip() else 'ثبت نشده'}\n"
         f"تعدادِ سرویس‌هایِ این دسته: <b>{n_svc or 0}</b>"
     )
     kb_rows = [
         [InlineKeyboardButton(text="✏️ تغییرِ نام", callback_data=f"smm:cat:rename:{cid}")],
         [InlineKeyboardButton(text="📈 تنظیمِ سودِ این دسته", callback_data=f"smm:cat:margin:{cid}")],
+        [InlineKeyboardButton(text=("📝 ویرایش توضیحات دسته" if (c.description or "").strip() else "📝 افزودن توضیحات دسته"),
+                              callback_data=f"smm:cat:desc:{cid}", style=ButtonStyle.PRIMARY)],
     ]
+    if (c.description or "").strip():
+        kb_rows.append([InlineKeyboardButton(text="🗑 حذف توضیحات دسته", callback_data=f"smm:cat:descclear:{cid}",
+                                             style=ButtonStyle.DANGER)])
     if _lt_supported:   # فعلاً فقط تلگرام و اینستاگرام
         kb_rows.append([InlineKeyboardButton(text="🔗 تنظیمِ نوعِ لینک", callback_data=f"smm:cat:ltypes:{cid}",
                                              style=ButtonStyle.PRIMARY)])
@@ -7972,6 +8005,72 @@ async def smm_cat_rename_in(msg: Message, bot: Bot, state: FSMContext):
             await s.commit()
     text, kb = await smm_cat_detail_content(row.id, cid)
     await msg.answer("✅ اسم تغییر کرد.\n\n" + text, reply_markup=kb, parse_mode="HTML")
+
+
+# === PATCH_SMM_CATEGORY_DESC_V1 === گزارش فدایی: پنل WhaleSMM اصلا توضیحات نمی‌فرستد؛ یک متن فارسی برای کل دسته
+# زیر همهٔ محصولات آن دسته نشان داده می‌شود (مگر محصول توضیح پنل/دستی خودش را داشته باشد).
+@smm_router.callback_query(F.data.regexp(r"^smm:cat:desc:\d+$"))
+async def smm_cat_desc_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    cid = int(cb.data.rsplit(":", 1)[1])
+    async with Session() as s:
+        c = await s.get(SmmCategory, cid)
+    if not c or c.bot_id != row.id:
+        return await cb.answer("دسته پیدا نشد.", show_alert=True)
+    await state.set_state(SmmFSM.cat_desc)
+    await state.update_data(cat_id=cid)
+    cur = f"\n\nمتن فعلی:\n<code>{_html_escape((c.description or '')[:600])}</code>" if (c.description or "").strip() else ""
+    await cb.message.answer(
+        "📝 <b>توضیحات مشترک دسته</b>\n\nمتنی که می‌خواهی زیر <b>همهٔ محصولات این دسته</b> نشان داده شود را بفرست "
+        "(مثلا سرعت، ضمانت، نکات سفارش؛ حداکثر ۱۵۰۰ حرف). اگر محصولی توضیح خودش را داشته باشد، همان نشان داده می‌شود."
+        + cur, parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="❌ لغو", callback_data=f"smm:cat:view:{cid}", style=ButtonStyle.DANGER)]]))
+    await cb.answer()
+
+
+@smm_router.message(SmmFSM.cat_desc, F.text)
+async def smm_cat_desc_in(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner(msg, bot)
+    if not row:
+        await state.clear()
+        return
+    data = await state.get_data()
+    cid = data.get("cat_id")
+    text = (msg.text or "").strip()
+    await state.clear()
+    if not cid or not text:
+        return
+    async with Session() as s:
+        c = await s.get(SmmCategory, cid)
+        if c and c.bot_id == row.id:
+            c.description = text[:1500]
+            await s.commit()
+    t, kb = await smm_cat_detail_content(row.id, cid)
+    await msg.answer("✅ توضیحات دسته ذخیره شد.\n\n" + t, reply_markup=kb, parse_mode="HTML")
+
+
+@smm_router.callback_query(F.data.regexp(r"^smm:cat:descclear:\d+$"))
+async def smm_cat_desc_clear(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    cid = int(cb.data.rsplit(":", 1)[1])
+    async with Session() as s:
+        c = await s.get(SmmCategory, cid)
+        if c and c.bot_id == row.id:
+            c.description = None
+            await s.commit()
+    t, kb = await smm_cat_detail_content(row.id, cid)
+    await cb.answer("🗑 حذف شد")
+    try:
+        await cb.message.edit_text(t, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(t, reply_markup=kb, parse_mode="HTML")
 
 
 @smm_router.callback_query(F.data.startswith("smm:cat:margin:"))
