@@ -10995,9 +10995,18 @@ async def chadm_decide(cb: CallbackQuery, bot: Bot, state: FSMContext):
                     await cb.message.edit_reply_markup(reply_markup=None)
                 except Exception:
                     logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
-            from tenant.gateways.wallet_receipt import build_wallet_charge_message_for_bot
-            wtext, wkb = await build_wallet_charge_message_for_bot(row.id, o.amount, u.balance, "card")
-            await bot.send_message(u.telegram_id, wtext, reply_markup=wkb)
+            try:
+                from tenant.gateways.wallet_receipt import build_wallet_charge_message_for_bot
+                wtext, wkb = await build_wallet_charge_message_for_bot(row.id, o.amount, u.balance, "card")
+                await bot.send_message(u.telegram_id, wtext, reply_markup=wkb)
+            except Exception as _e:
+                # === PATCH_DELIVERY_GUARD_V1 === شارژ انجام شد ولی پیامِ تأیید به مشتری نرفت ⇒ ادمین خبر بگیرد
+                logger.exception("پیامِ شارژِ تأییدشده به مشتری ارسال نشد (order=%s)", oid)
+                from tenant.shared.delivery_guard import alert_admin_delivery_failed
+                await alert_admin_delivery_failed(
+                    bot, cb.from_user.id,
+                    f"شارژِ کیف‌پول {int(o.amount):,} تومان (سفارش #{await order_no(Order, oid)}) — موجودیِ مشتری شارژ شد",
+                    u, _e)
         else:
             # === PATCH_RECEIPT_CHANNEL_REJECT_FIX_V1 ===
             # باگ: وقتی رسید توی «کانالِ تاییدِ رسید» پست شده بود (نه دی‌ام)،

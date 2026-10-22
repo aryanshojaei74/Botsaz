@@ -988,7 +988,11 @@ async def _rcadm_decide_impl(cb: CallbackQuery, bot: Bot, state: FSMContext):
                         assigned.append(cfg)
                 await s.commit()
             from tenant.shared.extras import handle_referral_purchase
-            await handle_referral_purchase(row.id, u.telegram_id, bot, amount=float(o.amount or 0))
+            # === PATCH_DELIVERY_GUARD_V1 === خطایِ پاداشِ دعوت نباید کلِ تأیید را بکُشد (دکمه‌ها می‌ماند و مشتری چیزی نمی‌گرفت)
+            try:
+                await handle_referral_purchase(row.id, u.telegram_id, bot, amount=float(o.amount or 0))
+            except Exception:
+                logger.exception("پاداشِ دعوت ناموفق بود (تأیید ادامه می‌یابد)")
             await cb.answer("تایید شد ✅")
             try:
                 original = cb.message.caption or cb.message.text or ""
@@ -1002,13 +1006,21 @@ async def _rcadm_decide_impl(cb: CallbackQuery, bot: Bot, state: FSMContext):
                     await cb.message.edit_reply_markup(reply_markup=None)
                 except Exception:
                     logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
-            if sd_queued_id:        # PATCH_STOCK_MANUAL_DELIVERY_V1
-                await _sd.announce(bot, sd_queued_id)
-            else:
-                for cfg in assigned:
-                    await send_config_to_user(bot, u.telegram_id, cfg)
-                await bot.send_message(u.telegram_id, "✅ پرداخت شما تایید شد!",
-                                       reply_markup=await inline_back_kb(row.id))
+            try:
+                if sd_queued_id:        # PATCH_STOCK_MANUAL_DELIVERY_V1
+                    await _sd.announce(bot, sd_queued_id)
+                else:
+                    for cfg in assigned:
+                        await send_config_to_user(bot, u.telegram_id, cfg)
+                    await bot.send_message(u.telegram_id, "✅ پرداخت شما تایید شد!",
+                                           reply_markup=await inline_back_kb(row.id))
+            except Exception as _e:
+                # === PATCH_DELIVERY_GUARD_V1 === تحویل به مشتری شکست خورد؛ ادمین باید همان لحظه بفهمد
+                logger.exception("تحویلِ سفارشِ تأییدشده به مشتری ناموفق بود (order=%s)", oid)
+                from tenant.shared.delivery_guard import alert_admin_delivery_failed
+                await alert_admin_delivery_failed(
+                    bot, cb.from_user.id, f"سفارش #{await order_no(Order, oid)} ({o.volume_gb} گیگ / {o.days} روز)",
+                    u, _e, cfgs=assigned)
             # === PATCH_PURCHASE_ALERT_CARD_COVERAGE_V1 ===
             try:
                 from tenant import _purchase_alert
