@@ -2926,11 +2926,91 @@ def _paused_notice_due(bot_id: int, chat_id: int, secs: float = 900.0) -> bool:
     return True
 
 
+# === PATCH_URL_BUTTON_GUARD_V1 ===
+# گزارش (لاگ ۱۷:۰۷): «TelegramBadRequest: BUTTON_URL_INVALID» وسطِ هندلرِ «برگشت به منوی اصلی». یک دکمهٔ
+# لینک‌دارِ خراب (لینکِ پشتیبانی/راهنما/مینی‌اپِ بدونِ https و …) که مالکِ ربات گذاشته، کلِ پیام را رد می‌کرد؛
+# محافظ فقط در /start بود، ولی ۴۶+ مسیرِ دیگر (از جمله ارسالِ کانفیگ/پیامِ تأیید به مشتری) نداشتند.
+# این محافظ در لایهٔ ارسال است: اگر تلگرام BUTTON_URL_INVALID داد، دکمه‌هایِ لینکِ نامعتبر را برمی‌داریم و
+# همان پیام را دوباره می‌فرستیم (اگر باز هم رد شد، همهٔ دکمه‌هایِ لینک/مینی‌اپ را برمی‌داریم تا پیام برسد).
+_URL_OK_RE = re.compile(r"^(?:https?://[^\s/]+\.[^\s/]+\S*|tg://\S+|https?://t\.me/\S+)$", re.IGNORECASE)
+_url_btn_warned: dict[int, float] = {}
+
+
+def _url_ok(u: str | None) -> bool:
+    return bool(u) and bool(_URL_OK_RE.match(str(u).strip()))
+
+
+def _strip_url_buttons(mk, aggressive: bool):
+    """دکمه‌هایِ لینک/مینی‌اپِ نامعتبر (یا در حالتِ aggressive همهٔ آن‌ها) را از کیبورد برمی‌دارد؛ خالی ⇒ None."""
+    if isinstance(mk, InlineKeyboardMarkup):
+        rows = []
+        for r in mk.inline_keyboard:
+            keep = []
+            for b in r:
+                wa = getattr(b, "web_app", None)
+                bad = ((b.url and (aggressive or not _url_ok(b.url)))
+                       or (wa is not None and (aggressive or not _url_ok(getattr(wa, "url", None))))
+                       or (getattr(b, "login_url", None) is not None and aggressive))
+                if not bad:
+                    keep.append(b)
+            if keep:
+                rows.append(keep)
+        return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+    if isinstance(mk, ReplyKeyboardMarkup):
+        rows = []
+        for r in mk.keyboard:
+            keep = [b for b in r if not (getattr(b, "web_app", None) is not None
+                                         and (aggressive or not _url_ok(getattr(b.web_app, "url", None))))]
+            if keep:
+                rows.append(keep)
+        return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True) if rows else None
+    return mk
+
+
+async def _warn_owner_bad_url_button(bot_) -> None:
+    """به مالکِ ربات (حداکثر هر ۶ ساعت) می‌گوید یکی از دکمه‌هایش لینکِ نامعتبر دارد."""
+    try:
+        row = await get_bot_row(bot_)
+        if not row or time.monotonic() - _url_btn_warned.get(row.id, float("-inf")) < 6 * 3600:
+            return
+        _url_btn_warned[row.id] = time.monotonic()
+        await bot_.send_message(
+            row.owner_id,
+            "⚠️ یکی از دکمه‌هایِ لینک‌دارِ رباتت (مثلاً لینکِ پشتیبانی، راهنما یا مینی‌اپ) آدرسِ نامعتبر دارد؛ "
+            "تلگرام پیام را رد می‌کرد و من دکمهٔ خراب را موقتاً برداشتم تا پیام‌ها به مشتری‌ها برسد.\n"
+            "لینکِ دکمه‌ها را بررسی کن (باید با https:// یا t.me/ شروع شود و بدونِ فاصله باشد).")
+    except Exception:
+        logger.exception("url_button_guard: هشدار به مالکِ ربات ارسال نشد")
+
+
 def _nav_install(bot) -> None:
     sess = getattr(bot, "session", None)
     if sess is None or getattr(sess, "_nav_hist_mw", False):
         return
-    orig = sess.make_request
+    _orig_raw = sess.make_request
+
+    async def orig(bot_, method, timeout=None):
+        try:
+            return await _orig_raw(bot_, method, timeout=timeout)
+        except TelegramBadRequest as e:
+            mk0 = getattr(method, "reply_markup", None)
+            if "BUTTON_URL_INVALID" not in str(e) or mk0 is None:
+                raise
+            logger.error("[url_button_guard] %s با BUTTON_URL_INVALID رد شد؛ دکمه‌هایِ لینکِ خراب برداشته می‌شود: %s",
+                         type(method).__name__, e)
+            last_exc = e
+            for aggressive in (False, True):
+                fixed = _strip_url_buttons(mk0, aggressive)
+                try:
+                    res = await _orig_raw(bot_, method.model_copy(update={"reply_markup": fixed}), timeout=timeout)
+                except TelegramBadRequest as e2:
+                    if "BUTTON_URL_INVALID" not in str(e2):
+                        raise
+                    last_exc = e2
+                    continue
+                await _warn_owner_bad_url_button(bot_)
+                return res
+            raise last_exc
 
     async def _wrapped(bot_, method, timeout=None):
         name = type(method).__name__
