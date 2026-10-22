@@ -3477,8 +3477,13 @@ def _sched_now() -> "datetime.datetime":
     === PATCH_TIMED_DISCOUNT_TZ_FIX_V1 ===
     ساعتِ خودِ سرور رویِ تهران است و parse_fa_datetime هم همان را می‌دهد،
     پس اینجا هم باید همان مبنا باشد تا مقایسه‌ها درست دربیاید.
+
+    === PATCH_SCHED_NOW_EXPLICIT_TZ_V1 ===
+    گزارشِ ادمین: «الان ۱:۵۱ شب است ولی صفحه ۲۲:۲۰ نشان می‌دهد». بعد از بازسازیِ سرور ساعتِ سیستم UTC شد
+    و datetime.now() دیگر تهران نبود (۳:۳۰ عقب) — هم نمایش غلط بود و هم شروع/پایانِ تخفیف ۳:۳۰ دیر/زود
+    اعمال می‌شد. حالا مستقل از ساعتِ سیستم، صریحاً تهران است.
     """
-    return datetime.datetime.now()
+    return datetime.datetime.now(ZoneInfo("Asia/Tehran")).replace(tzinfo=None)
 
 
 def _sched_fmt(dt) -> str:
