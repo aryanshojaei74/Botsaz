@@ -60,3 +60,71 @@ def test_settings_page_shows_model_and_button(monkeypatch):
     text, kb = asyncio.run(ai.smm_ai_settings_content(1, "smm"))
     assert "my/model" in text
     assert any(b.callback_data == "smmai:setmodel:smm" for r in kb.inline_keyboard for b in r)
+
+
+def test_groq_retries_without_reasoning_effort_on_400_and_records_errors(monkeypatch):
+    calls = []
+
+    class Resp:
+        def __init__(self, status, data):
+            self.status, self._d = status, data
+
+        async def json(self, content_type=None):
+            return self._d
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    class Sess:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def post(self, url, json=None, headers=None):
+            calls.append(dict(json))
+            if "reasoning_effort" in json:
+                return Resp(400, {"error": {"message": "reasoning_effort not supported"}})
+            return Resp(200, {"choices": [{"message": {"content": "سلام"}}]})
+
+    monkeypatch.setattr(ai.aiohttp, "ClientSession", Sess)
+    assert asyncio.run(ai._ask_groq("k", "hi", "sys", "openai/gpt-oss-120b")) == "سلام"
+    assert len(calls) == 2 and "reasoning_effort" not in calls[1]
+
+
+def test_failure_reason_is_exposed(monkeypatch):
+    class Resp:
+        status = 401
+
+        async def json(self, content_type=None):
+            return {"error": {"message": "Invalid API Key"}}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+    class Sess:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def post(self, *a, **k):
+            return Resp()
+
+    monkeypatch.setattr(ai.aiohttp, "ClientSession", Sess)
+    assert asyncio.run(ai.ask_ai("groq", "gsk_x", "hi", model="m")) is None
+    assert "401" in ai.last_error["msg"] and "Invalid API Key" in ai.last_error["msg"]

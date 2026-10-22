@@ -319,6 +319,7 @@ class SmmFSM(StatesGroup):
     # === PATCH_TON_SELL_V1 === فروشِ تون (TON) — همیشه دستی، مثلِ فروشِ استارز
     ton_amount_in = State()       # مشتری مقدارِ تون را می‌نویسد (اعشاری مجاز)
     ton_wallet_in = State()       # مشتری آدرسِ کیف‌پولِ TON مقصد را می‌فرستد
+    ton_memo_in = State()         # PATCH_TON_MEMO_V1 — کامنت/ممو (اختیاری)
     ton_rate_in = State()         # ادمین نرخِ هر ۱ تون به تومان را می‌نویسد
     ton_margin_in = State()       # PATCH_AUTO_RATE_TON_V1 — درصدِ سودِ نرخِ خودکار
     ton_min_in = State()          # ادمین حداقلِ مقدار را می‌نویسد
@@ -16364,7 +16365,7 @@ async def ssl_orders(cb: CallbackQuery, bot: Bot):
             GiftOrder.bot_id == row.id, GiftOrder.gift_id.like("starsell_%"),
             GiftOrder.status == "awaiting_admin").order_by(GiftOrder.id.desc())
         orders = (await s.scalars(q.limit(per).offset(page * per))).all()
-        rows_data = [(o.id, o.star_count, o.price_toman, o.dest_label, o.tracking_code)
+        rows_data = [(o.id, o.star_count, o.price_toman, o.dest_label, o.tracking_code, o.dest_memo)
                      for o in orders]
     if not rows_data:
         await cb.answer("سفارشِ در انتظاری نیست.", show_alert=True)
@@ -16882,12 +16883,13 @@ async def ton_amount_in(msg: Message, bot: Bot, state: FSMContext):
 
 
 @smm_router.message(SmmFSM.ton_wallet_in, F.text)
-async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext):
+async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext, _wallet: str | None = None,
+                        _memo: str | None = None):
     from tenant import get_bot_row, get_or_create_user, _gen_tracking, _notify_admins
     row = await get_bot_row(bot)
     if not row:
         return
-    wallet = (msg.text or "").strip()
+    wallet = _wallet or (msg.text or "").strip()
     # === PATCH_VS_DISCOUNT_V1 === متنی که آدرسِ TON نیست ولی کدِ تخفیفِ معتبر است ⇒ کد اعمال می‌شود
     if not _looks_like_ton_address(wallet):
         from tenant.bots.virtual_service.vs_discount import vsd_enabled
@@ -16927,6 +16929,18 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext):
         await msg.answer("این سفارش دیگر معتبر نیست؛ دوباره از فروشگاه شروع کن.")
         return
     price = round(amount * rate)
+
+    # === PATCH_TON_MEMO_V1 === آدرس‌هایِ صرافی/کیف‌پولِ امانی برایِ واریز «کامنت/ممو» می‌خواهند؛ بدونِ آن تون گم می‌شود
+    if _memo is None and (await _get_setting(row.id, "ton_memo_ask", "1")) == "1":
+        await state.update_data(ton_wallet_pending=wallet)
+        await state.set_state(SmmFSM.ton_memo_in)
+        from tenant import smart_cancel_kb
+        await msg.answer(
+            f"✅ آدرس ثبت شد:\n<code>{_html_escape(wallet)}</code>\n\n"
+            "📝 اگر این آدرس (مثلاً صرافی) برایِ واریز <b>کامنت / ممو (Memo/Tag)</b> می‌خواهد، همین‌جا بفرست.\n"
+            "اگر لازم نیست، بنویس: <b>ندارم</b>",
+            parse_mode="HTML", reply_markup=await smart_cancel_kb(bot))
+        return
 
     buyer, _ = await get_or_create_user(
         row.id, msg.from_user.id, msg.from_user.full_name, msg.from_user.username or "",
@@ -16976,6 +16990,7 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext):
         order = GiftOrder(bot_id=row.id, buyer_user_id=b.id, gift_id=f"tonsell_{centi}",
                           gift_emoji="💎", star_count=centi, price_toman=price,
                           dest_telegram_id=msg.from_user.id, dest_label=wallet[:120],
+                          dest_memo=(_memo or None),   # PATCH_TON_MEMO_V1
                           status="awaiting_admin", pay_method="wallet", tracking_code=trk,
                           discount_code_id=_dc_id, discount_amount=int(_dc_amt or 0))   # PATCH_VS_DISCOUNT_V1
         s.add(order)
@@ -16993,7 +17008,9 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext):
         f"💎 سفارشِ تون (TON) — #{await order_no(GiftOrder, order_id)}\n"
         f"مقدار: {amount:g} TON\n💰 {price:,} تومان\n"
         f"🎯 آدرسِ کیف‌پول: <code>{wallet}</code>\n"
-        f"🔖 کد: {trk}\n\n"
+        + (f"📝 کامنت/ممو: <code>{_html_escape(_memo)}</code>\n" if _memo else "📝 کامنت/ممو: ندارد\n")
+        + _ton_buyer_block(msg.from_user)   # PATCH_TON_MEMO_V1 — مشخصاتِ خریدار
+        + f"🔖 کد: {trk}\n\n"
         "این تون را باید خودت واقعاً به آدرسِ بالا بفرستی، بعد در «💎 فروشِ تون ← "
         "سفارش‌هایِ در انتظار» (یا با دکمه‌هایِ زیر) تأییدش کنی.",
         InlineKeyboardMarkup(inline_keyboard=[[
@@ -17001,6 +17018,32 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext):
                                  style=ButtonStyle.SUCCESS),
             InlineKeyboardButton(text="↩️ رد و بازگشتِ وجه", callback_data=f"ton:refund:{order_id}",
                                  style=ButtonStyle.DANGER)]]))
+
+
+def _ton_buyer_block(user) -> str:
+    """=== PATCH_TON_MEMO_V1 === مشخصاتِ خریدار در پیامِ ادمین (قبلاً اصلاً نبود)."""
+    name = _html_escape((getattr(user, "full_name", "") or "—")[:60])
+    lines = [f"👤 خریدار: {name}", f"🆔 آیدی: <code>{user.id}</code>"]
+    lines.append(f"🔗 یوزرنیم: @{user.username}" if getattr(user, "username", None) else "🔗 یوزرنیم: ندارد")
+    return "\n".join(lines) + "\n"
+
+
+@smm_router.message(SmmFSM.ton_memo_in, F.text)
+async def ton_memo_in(msg: Message, bot: Bot, state: FSMContext):
+    """=== PATCH_TON_MEMO_V1 === کامنت/ممو را می‌گیرد و سفارش را نهایی می‌کند."""
+    data = await state.get_data()
+    wallet = data.get("ton_wallet_pending")
+    if not wallet:
+        await state.clear()
+        await msg.answer("جلسه منقضی شد؛ دوباره از فروشگاهِ تون شروع کن.")
+        return
+    raw = (msg.text or "").strip()
+    memo = "" if raw in ("ندارم", "ندارد", "نه", "-", "ندارم.") else raw
+    if len(memo) > 120:
+        await msg.answer("❌ کامنت/ممو خیلی بلند است (حداکثر ۱۲۰ کاراکتر). دوباره بفرست یا بنویس «ندارم».")
+        return
+    await state.set_state(SmmFSM.ton_wallet_in)
+    await ton_wallet_in(msg, bot, state, _wallet=wallet, _memo=memo)
 
 
 # ───────── سفارش‌هایِ در انتظارِ تون (ادمین) ─────────
@@ -17027,9 +17070,10 @@ async def ton_orders(cb: CallbackQuery, bot: Bot):
         return
     rows = []
     lines = ["💎 <b>سفارش‌هایِ در انتظارِ تون</b>\n"]
-    for oid, centi, price, wallet, trk in rows_data:
+    for oid, centi, price, wallet, trk, memo in rows_data:
         amount = (centi or 0) / _TON_CENTI
-        lines.append(f"#{await order_no(GiftOrder, oid)} — {amount:g} TON — {price:,} تومان\n🎯 <code>{wallet}</code>  🔖 {trk}")
+        lines.append(f"#{await order_no(GiftOrder, oid)} — {amount:g} TON — {price:,} تومان\n🎯 <code>{wallet}</code>  🔖 {trk}"
+                     + (f"\n📝 ممو: <code>{_html_escape(memo)}</code>" if memo else ""))
         rows.append([InlineKeyboardButton(text=f"✅ تأیید ارسال #{await order_no(GiftOrder, oid)}",
                                           callback_data=f"ton:done:{oid}")])
         rows.append([InlineKeyboardButton(text=f"❌ لغو و بازپرداخت #{await order_no(GiftOrder, oid)}",

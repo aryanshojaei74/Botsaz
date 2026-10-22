@@ -1673,6 +1673,43 @@ async def tenant_antispam_lock_cb_mw(handler, event, data):
     return await handler(event, data)
 
 
+# === PATCH_KYC_LOCK_V1 === کاربرِ «محدودشده» (kyc_blocked) در کلِ ربات — نه فقط شارژ — بسته است
+@tenant_router.message.outer_middleware
+async def tenant_kyc_lock_msg_mw(handler, event, data):
+    u = getattr(event, "from_user", None)
+    if not u or u.is_bot:
+        return await handler(event, data)
+    from tenant.shared import kyc_lock as _kl
+    bot = data.get("bot") or event.bot
+    row = await get_bot_row(bot)
+    if not row or not await _kl.is_locked(row.id, u.id):
+        return await handler(event, data)
+    if await is_owner_or_admin(row.id, u.id, row.owner_id) or _is_platform_admin(u.id):
+        return await handler(event, data)
+    fsm = data.get("state")
+    st = await fsm.get_state() if fsm is not None else None
+    if not await _kl.message_gate(event, row.id, st):
+        return
+    return await handler(event, data)
+
+
+@tenant_router.callback_query.outer_middleware
+async def tenant_kyc_lock_cb_mw(handler, event, data):
+    u = getattr(event, "from_user", None)
+    if not u:
+        return await handler(event, data)
+    from tenant.shared import kyc_lock as _kl
+    bot = data.get("bot") or event.bot
+    row = await get_bot_row(bot)
+    if not row or not await _kl.is_locked(row.id, u.id):
+        return await handler(event, data)
+    if await is_owner_or_admin(row.id, u.id, row.owner_id) or _is_platform_admin(u.id):
+        return await handler(event, data)
+    if not await _kl.callback_gate(event, row.id):
+        return
+    return await handler(event, data)
+
+
 async def force_join_msg(bot: Bot, msg: Message, not_joined: list[dict]):
     # === PATCH_FORCEJOIN_BTN_COLOR_V1 ===
     row_pre = await get_bot_row(bot)

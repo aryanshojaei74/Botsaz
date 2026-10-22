@@ -2024,6 +2024,8 @@ class GiftOrder(Base):
     price_toman: Mapped[int] = mapped_column(Integer)
     dest_telegram_id: Mapped[int] = mapped_column(BigInteger)
     dest_label: Mapped[str] = mapped_column(String(120))  # برایِ نمایش (خودم/یوزرنیم)
+    # === PATCH_TON_MEMO_V1 === کامنت/ممویِ مقصدِ واریزِ تون (برایِ کیف‌پول‌هایِ صرافی که بدونِ آن واریز گم می‌شود)
+    dest_memo: Mapped[str | None] = mapped_column(String(160))
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending/sent/failed/refunded
     fail_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

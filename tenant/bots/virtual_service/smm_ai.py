@@ -112,6 +112,20 @@ def _openai_compat_tuning(model: str) -> dict:
     return {"max_tokens": 400}
 
 
+# === PATCH_SMM_AI_LAST_ERROR_V1 === آخرین خطایِ ارائه‌دهنده؛ ادمین موقعِ تستِ مدل/کلید دلیلِ واقعی را ببیند
+# (قبلاً فقط «جواب نداد» می‌گفت و معلوم نبود کلید/مدل/شبکه/محدودیت است).
+last_error: dict = {"msg": ""}
+
+
+def _short_err(status, data) -> str:
+    try:
+        err = data.get("error") if isinstance(data, dict) else None
+        detail = (err.get("message") if isinstance(err, dict) else err) or data
+    except Exception:
+        detail = data
+    return f"HTTP {status}: {str(detail)[:200]}"
+
+
 def _strip_think(text: str) -> str:
     import re as _re
     return _re.sub(r"(?is)<think>.*?</think>", "", text or "").strip()
@@ -136,6 +150,7 @@ async def _ask_anthropic(api_key: str, user_content: str, system_prompt: str = _
             data = await r.json(content_type=None)
             if r.status != 200:
                 logger.info(f"[SMM_AI] Claude جوابِ غیرِ۲۰۰ داد: status={r.status} body={data!r}")
+                last_error["msg"] = _short_err(r.status, data)
                 return None
             blocks = data.get("content") or []
             text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
@@ -159,6 +174,7 @@ async def _ask_openai(api_key: str, user_content: str, system_prompt: str = _SYS
             data = await r.json(content_type=None)
             if r.status != 200:
                 logger.info(f"[SMM_AI] ChatGPT جوابِ غیرِ۲۰۰ داد: status={r.status} body={data!r}")
+                last_error["msg"] = _short_err(r.status, data)
                 return None
             choices = data.get("choices") or []
             if not choices:
@@ -190,6 +206,7 @@ async def _ask_gemini(api_key: str, user_content: str, system_prompt: str = _SYS
             data = await r.json(content_type=None)
             if r.status != 200:
                 logger.info(f"[SMM_AI] Gemini جوابِ غیرِ۲۰۰ داد: status={r.status} body={data!r}")
+                last_error["msg"] = _short_err(r.status, data)
                 return None
             cands = data.get("candidates") or []
             if not cands:
@@ -214,18 +231,30 @@ async def _ask_groq(api_key: str, user_content: str, system_prompt: str = _SYSTE
     headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
     t = aiohttp.ClientTimeout(total=_TIMEOUT)
     async with aiohttp.ClientSession(timeout=t) as s:
-        async with s.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers) as r:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        async with s.post(url, json=payload, headers=headers) as r:
             data = await r.json(content_type=None)
-            if r.status != 200:
-                # === PATCH_SMM_AI_GROUP_V1 ===
-                logger.info(f"[SMM_AI] Groq جوابِ غیرِ۲۰۰ داد: status={r.status} body={data!r}")
-                return None
-            choices = data.get("choices") or []
-            if not choices:
-                logger.info(f"[SMM_AI] Groq پاسخ داد ولی choices خالی بود: {data!r}")
-                return None
-            text = _strip_think((choices[0].get("message") or {}).get("content", ""))
-            return text.strip() or None
+            status = r.status
+        if status == 400 and "reasoning_effort" in payload:
+            # بعضی مدل‌ها پارامترِ reasoning_effort را نمی‌پذیرند؛ یک‌بار بدونِ آن امتحان کن
+            payload = {k: v for k, v in payload.items() if k != "reasoning_effort"}
+            async with s.post(url, json=payload, headers=headers) as r2:
+                data = await r2.json(content_type=None)
+                status = r2.status
+        if status != 200:
+            # === PATCH_SMM_AI_GROUP_V1 ===
+            last_error["msg"] = _short_err(status, data)
+            logger.info(f"[SMM_AI] Groq جوابِ غیرِ۲۰۰ داد: status={status} body={data!r}")
+            return None
+        choices = data.get("choices") or []
+        if not choices:
+            last_error["msg"] = "پاسخِ بدونِ choices"
+            logger.info(f"[SMM_AI] Groq پاسخ داد ولی choices خالی بود: {data!r}")
+            return None
+        text = _strip_think((choices[0].get("message") or {}).get("content", ""))
+        if not text.strip():
+            last_error["msg"] = "مدل جوابِ خالی داد (احتمالاً سقفِ توکن خرجِ فکرکردن شد)"
+        return text.strip() or None
 
 
 _PROVIDER_FUNCS = {
@@ -288,10 +317,12 @@ async def ask_ai(provider: str, api_key: str, question: str, context: str = "",
     if context:
         user_content = f"{context}\n\nسؤالِ مشتری: {question.strip()}"
     system_prompt = system_prompt or _SYSTEM_PROMPT
+    last_error["msg"] = ""
     try:
         model = model or await _get_model(bot_id, provider)
         return _clean_ai_answer(await fn(api_key, user_content, system_prompt, model))
-    except Exception:
+    except Exception as e:
+        last_error["msg"] = f"{type(e).__name__}: {str(e)[:150]}"
         logger.exception(f"[SMM_AI] خطایِ غیرمنتظره در فراخوانیِ {provider}")
         return None
 
@@ -665,8 +696,11 @@ async def smmai_setmodel_in(msg: Message, bot: Bot, state: FSMContext):
         if key:
             await msg.answer("⏳ در حالِ تستِ مدل...")
             if not await ask_ai(await _get_provider(row.id), key, "سلام", model=val):
-                await msg.answer("❌ این مدل با کلیدِ فعلی جواب نداد (نام اشتباه است یا به آن دسترسی نداری). "
-                                 "نامِ دقیق را از سایتِ ارائه‌دهنده کپی کن و دوباره بفرست، یا /cancel بزن.")
+                await msg.answer("❌ این مدل با کلیدِ فعلی جواب نداد.\n"
+                                 f"🔎 دلیلِ ارائه‌دهنده: <code>{html.escape(last_error['msg'] or 'نامشخص (پاسخی نیامد)')}</code>\n\n"
+                                 "اگر 401/403 است مشکل از کلید/دسترسی است؛ اگر 404/400 است نامِ مدل را دقیق از سایتِ "
+                                 "ارائه‌دهنده کپی کن؛ اگر تایم‌اوت است ارتباطِ سرور با ارائه‌دهنده مشکل دارد. "
+                                 "دوباره بفرست یا /cancel بزن.", parse_mode="HTML")
                 return
         await _set_setting(row.id, "smm_ai_model", val)
         note = f"✅ مدل روی <code>{html.escape(val)}</code> تنظیم شد."
@@ -716,7 +750,9 @@ async def smmai_setkey_in(msg: Message, bot: Bot, state: FSMContext):
     await msg.answer("⏳ در حالِ بررسیِ کلید...")
     reply = await ask_ai(provider, key, "سلام", bot_id=row.id)
     if not reply:
-        await msg.answer("❌ این کلید کار نکرد. دوباره بررسی کن و بفرست، یا /cancel بزن.")
+        await msg.answer("❌ این کلید کار نکرد.\n"
+                         f"🔎 دلیل: <code>{html.escape(last_error['msg'] or 'نامشخص (پاسخی نیامد)')}</code>\n\n"
+                         "دوباره بررسی کن و بفرست، یا /cancel بزن.", parse_mode="HTML")
         return
     await _set_setting(row.id, "smm_ai_api_key", key)
     await _set_setting(row.id, "smm_ai_enabled", "1")

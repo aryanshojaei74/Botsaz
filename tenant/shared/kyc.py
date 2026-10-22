@@ -181,18 +181,19 @@ async def check_charge(bot_id: int, user, amount) -> tuple[bool, str]:
     return False, msg
 
 
-async def note_charge(bot_id: int, user_id: int) -> None:
+async def note_charge(bot_id: int, user_id: int) -> bool:
     """بعد از هر شارژِ موفق: اگر کاربرِ سطح ۱ از سقف رد شده، حسابش را
-    خودکار مسدود کن تا احرازِ سطح ۲ را انجام دهد (خواسته صریحِ ادمین)."""
+    خودکار مسدود کن تا احرازِ سطح ۲ را انجام دهد (خواسته صریحِ ادمین).
+    True یعنی همین الان مسدود شد."""
     if not await enabled(bot_id):
-        return
+        return False
     async with Session() as s:
         u = await s.get(BotUser, user_id)
         if not u or int(u.kyc_level or 0) != 1 or u.kyc_blocked:
-            return
+            return False
         cap = await cap_for(bot_id, 1)
         if cap <= 0:
-            return
+            return False
         used = await charged_today(bot_id, user_id)
         if used > cap:
             u.kyc_blocked = True
@@ -200,6 +201,8 @@ async def note_charge(bot_id: int, user_id: int) -> None:
             await s.commit()
             logger.info("[KYC] bot=%s user=%s مسدود شد (used=%s cap=%s)",
                         bot_id, user_id, used, cap)
+            return True
+    return False
 
 
 async def gate(bot_id: int, telegram_id: int, amount) -> str | None:
@@ -235,7 +238,10 @@ async def after_charge(bot_id: int, user_id: int) -> None:
     یعنی «مسدودسازیِ خودکارِ سطح ۱ بعد از عبور از سقف» عملاً مرده بود.
     """
     try:
-        await note_charge(bot_id, user_id)
+        if await note_charge(bot_id, user_id):
+            # === PATCH_KYC_LOCK_V1 === کاربر باید همان لحظه بفهمد حسابش محدود شده و چه کند
+            from tenant.shared.kyc_lock import notify_blocked
+            await notify_blocked(bot_id, user_id)
     except Exception:
         logger.exception("[KYC] after_charge ناموفق بود (bot=%s user=%s)",
                          bot_id, user_id)
