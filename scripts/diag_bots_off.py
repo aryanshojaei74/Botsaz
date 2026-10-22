@@ -13,6 +13,7 @@ scripts/diag_bots_off.py — تشخیصِ فقط‌خواندنیِ «ربات�
 
     venv/bin/python scripts/diag_bots_off.py
     venv/bin/python scripts/diag_bots_off.py --no-live           # بدونِ تماس با تلگرام
+    venv/bin/python scripts/diag_bots_off.py --err-minutes 10    # فقط خطاهایِ ۱۰ دقیقهٔ اخیر (بعد از ری‌استارت)
     venv/bin/python scripts/diag_bots_off.py --bot-username Jx07tR_JoYP4_bot
 """
 from __future__ import annotations
@@ -48,7 +49,8 @@ def classify(info: dict, expected: str | None, now: dt.datetime) -> list[str]:
         out.append("وبهوک رویِ آدرسِ دیگری است (ربات/سرورِ دیگری وبهوک را عوض کرده)")
     led = info.get("last_error_date")
     if led and now - led <= ERR_RECENT:
-        out.append(f"خطایِ تحویلِ اخیر: {(info.get('last_error_message') or '')[:120]}")
+        age = int((now - led).total_seconds() // 60)
+        out.append(f"خطایِ تحویلِ اخیر ({age} دقیقه پیش): {(info.get('last_error_message') or '')[:120]}")
     if (info.get("pending") or 0) >= PENDING_STUCK:
         out.append(f"{info['pending']} آپدیتِ گیرکرده در صف")
     return out
@@ -152,7 +154,11 @@ async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-live", action="store_true", help="تماس با تلگرام نگیر")
     ap.add_argument("--bot-username", help="فقط همین ربات را در بخشِ زنده چک کن")
+    ap.add_argument("--err-minutes", type=int, default=60,
+                    help="فقط خطاهایِ تحویلی که در این چند دقیقهٔ اخیر بوده‌اند (پیش‌فرض ۶۰). بعد از ری‌استارت ۱۰ بگذار.")
     a = ap.parse_args()
+    global ERR_RECENT
+    ERR_RECENT = dt.timedelta(minutes=max(1, a.err_minutes))
     await db_report()
     await hosted_report()
     if not a.no_live:
