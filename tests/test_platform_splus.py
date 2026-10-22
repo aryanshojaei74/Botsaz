@@ -135,3 +135,8 @@ def test_poll_dispatches_every_message_and_saves_offset(monkeypatch):
     store, _, _, bot = _env(monkeypatch, _upd(_msg(7, 1, text="a"), _msg(7, 2, text="b")))
     assert asyncio.run(sp.poll_once(bot)) == 2 and seen == ["a", "b"]
     assert store[sp.K_OFFSET] == "102"
+
+
+def test_parsed_items_carry_message_id():
+    m = sp.parse_updates(_upd(_msg(7, 41, text="x")))[0][0]
+    assert m["message_id"] == 41

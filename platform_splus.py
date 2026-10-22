@@ -114,7 +114,8 @@ def parse_updates(resp: dict) -> tuple[list[dict], int | None]:
                 "last_name": str(frm.get("last_name") or chat.get("last_name") or ""),
                 "username": str(frm.get("username") or chat.get("username") or ""),
                 "text": str(m.get("text") or m.get("caption") or ""), "kind": "other",
-                "file_id": "", "file_name": "", "file_type": "", "phone": ""}
+                "file_id": "", "file_name": "", "file_type": "", "phone": "",
+                "message_id": m.get("message_id")}
         c = m.get("contact") if isinstance(m.get("contact"), dict) else None
         if c and c.get("phone_number") and str(c.get("user_id") or item["user_id"]) == item["user_id"]:
             item.update(kind="contact", phone=str(c["phone_number"]))

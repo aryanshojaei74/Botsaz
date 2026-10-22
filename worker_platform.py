@@ -70,6 +70,8 @@ from platform_splus import splus_poll_loop
 from platform_msg_tickets import ticket_reminder_loop
 # === PATCH_OFFSITE_BACKUP_V1 ===
 from platform_offsite_backup import offsite_backup_loop
+# === PATCH_PLATFORM_SADMIN_V1 ===
+from platform_sadmin import sadmin_loop
 
 
 async def _worker_startup():
@@ -113,6 +115,8 @@ async def _worker_startup():
         ticket_reminder_loop(mp.platform_bot),
         # === PATCH_OFFSITE_BACKUP_V1 === بک‌آپِ رمزگذاری‌شده به تلگرامِ مدیر
         offsite_backup_loop(mp.platform_bot),
+        # === PATCH_PLATFORM_SADMIN_V1 === پنلِ مدیریت در سروش (ورود با کدِ تلگرام)
+        sadmin_loop(mp.platform_bot),
     ):
         mp.spawn(_coro)
 
