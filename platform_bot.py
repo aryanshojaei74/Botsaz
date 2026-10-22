@@ -250,6 +250,9 @@ router.include_router(platform_splus_router)
 # === PATCH_PLATFORM_MSG_TICKETS_V1 ===
 from platform_msg_tickets import platform_tickets_router
 router.include_router(platform_tickets_router)
+# === PATCH_PLATFORM_ADD_DAYS_V1 ===
+from platform_add_days import platform_add_days_router
+router.include_router(platform_add_days_router)
 
 # ---------------- ثابت‌ها ----------------
 FIELDS = {
