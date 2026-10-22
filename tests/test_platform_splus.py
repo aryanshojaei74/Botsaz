@@ -142,3 +142,19 @@ def test_idle_without_token(monkeypatch):
     monkeypatch.setattr(sp, "_get", _get)
     monkeypatch.setattr(sp, "PLATFORM_ADMIN_ID", 42)
     assert asyncio.run(sp.poll_once(object())) == 0
+
+
+def test_timeouts_are_quiet_until_repeated(monkeypatch):
+    store, calls, sent, bot = _env(monkeypatch, {"ok": False, "error": "تایم‌اوت"})
+    monkeypatch.setattr(sp, "_last_warn", float("-inf"))
+    monkeypatch.setattr(sp, "_timeouts", 0)
+    rs = [asyncio.run(sp.poll_once(bot)) for _ in range(sp.TIMEOUT_WARN_AFTER)]
+    assert rs[:-1] == [0] * (sp.TIMEOUT_WARN_AFTER - 1) and rs[-1] == -1 and len(sent) == 1
+    up = [c[1] for c in calls if c[0] == "getUpdates"][0]
+    assert up["timeout"] == sp.POLL_LONG_SECS
+
+
+def test_ok_poll_resets_timeout_counter(monkeypatch):
+    _, _, sent, bot = _env(monkeypatch, _upd())
+    monkeypatch.setattr(sp, "_timeouts", 4)
+    assert asyncio.run(sp.poll_once(bot)) == 0 and sp._timeouts == 0 and not sent

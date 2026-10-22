@@ -49,6 +49,9 @@ _CHAT_RE = re.compile(r"چت سروش:\s*(-?\d+)")
 _WARN_COOLDOWN = 3600.0
 _last_warn = float("-inf")
 _bg_tasks: set = set()
+POLL_LONG_SECS = 10
+TIMEOUT_WARN_AFTER = 6      # تایم‌اوتِ پشتِ‌سرهم تا قبلِ هشدار به مدیر
+_timeouts = 0
 
 BTN_CONTACT = "💬 پیام به ادمین"
 BTN_PHONE = "📱 ارسالِ شمارهٔ من"
@@ -301,10 +304,20 @@ async def poll_once(bot) -> int:
     if not token or (await _get(K_ENABLED, "1")) != "1" or not PLATFORM_ADMIN_ID:
         return 0
     offset = (await _get(K_OFFSET)).strip()
-    body: dict = {"limit": 50, "timeout": 0}
+    # long-poll کوتاه: سروش وقتی پیامِ تازه نیست پاسخ را نگه می‌دارد؛ با timeout=0 هم گاهی تا
+    # ۲۵ ثانیه معطل می‌ماند و «تایم‌اوت» می‌خورد. پس صریحاً ۱۰ ثانیه می‌خواهیم و مهلتِ کلاینت بیشتر است.
+    body: dict = {"limit": 50, "timeout": POLL_LONG_SECS}
     if offset.isdigit():
         body["offset"] = int(offset)
-    resp = await api_call(token, "getUpdates", body)
+    resp = await api_call(token, "getUpdates", body, timeout=POLL_LONG_SECS + 20)
+    global _timeouts
+    if not resp.get("ok") and resp.get("error") == "تایم‌اوت":
+        # دورِ بدونِ پیام (یا کندیِ لحظه‌ای) خطا نیست؛ فقط اگر چند بارِ پشتِ‌سرهم شد هشدار بده
+        _timeouts += 1
+        if _timeouts < TIMEOUT_WARN_AFTER:
+            return 0
+    elif resp.get("ok"):
+        _timeouts = 0
     if not resp.get("ok"):
         err = str(resp.get("error") or resp)[:200]
         logger.warning("splus: getUpdates ناموفق: %s", err)
