@@ -9437,6 +9437,8 @@ def _parse_cancel_response(d, order_id) -> tuple[bool, str]:
     items = d if isinstance(d, list) else [d]
     if not items:
         return False, "پاسخِ نامعتبر از پنل."
+    # === PATCH_SMM_CANCEL_MATCH_ORDER_V1 === پاسخِ چندسفارشی: ردیفِ همین سفارش اول بررسی شود
+    items = sorted(items, key=lambda x: 0 if isinstance(x, dict) and str(x.get("order")) == str(order_id) else 1)
     for it in items:
         if not isinstance(it, dict):
             continue

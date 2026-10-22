@@ -38,6 +38,7 @@ class FakePanel:
         ]
         self.refill_response = ("json", 200, {"refill": "48211"})
         self.status_response = ("json", 200, {"status": "Pending"})
+        self.bulk_response = None          # پاسخِ استعلامِ گروهی (refills=...) ؛ None ⇒ همان status_response
         self.calls: list[tuple[str, dict]] = []
         self.services_delay = 0.0
 
@@ -52,6 +53,8 @@ class FakePanel:
         if action == "refill":
             return self._respond(self.refill_response)
         if action == "refill_status":
+            if "refills" in form and self.bulk_response is not None:
+                return self._respond(self.bulk_response)
             return self._respond(self.status_response)
         return web.json_response({"error": "unknown action"})
 
@@ -916,3 +919,70 @@ async def test_warranty_shortcut_failure_does_not_break_the_orders_list(db, pane
     monkeypatch.setattr(smm, "_has_refillable_orders", boom)
     text, kb = await smm._smm_myorders_paginated_content(bot_id, CUSTOMER, 1)
     assert "سفارش‌های من" in text and "smmu:home" in [b.callback_data for r in kb.inline_keyboard for b in r]
+
+
+# ═════════════ ۵) استعلامِ گروهیِ ریفیل (PATCH_SMM_REFILL_BULK_V1) ═════════════
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [
+    [{"refill": 1, "status": "Completed"}, {"refill": 2, "status": {"error": "Refill not found"}},
+     {"refill": 3, "status": "Rejected"}],
+    {"1": {"status": "Completed"}, "2": {"error": "Refill not found"}, "3": {"status": {"status": "Rejected"}}},
+])
+async def test_bulk_refill_status_shapes(panel, body):
+    panel.bulk_response = ("json", 200, body)
+    res = await smm_api.get_refills_status_bulk(panel.url, "K", [1, 2, 3])
+    assert res == {"1": {"status": "Completed"}, "2": {"error": "Refill not found"}, "3": {"status": "Rejected"}}
+    assert panel.calls[-1][1]["refills"] == "1,2,3" and "refill" not in panel.calls[-1][1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spec", [("json", 200, {"error": "bad"}), ("json", 404, {}), ("text", 500, "boom"),
+                                  ("json", 200, [])])
+async def test_bulk_refill_status_unsupported_returns_none(panel, spec):
+    panel.bulk_response = spec
+    assert await smm_api.get_refills_status_bulk(panel.url, "K", [1, 2]) is None
+    assert await smm_api.get_refills_status_bulk("https://paystars.uz/api", "K", [1, 2]) is None
+
+
+@pytest.mark.asyncio
+async def test_poll_uses_one_bulk_request_for_many_refills_and_notifies_each(db, panel):
+    maker, bot_id, sent = db
+    for rid in ("11", "12", "13"):
+        oid = await _order(maker, bot_id)
+        await _pending_refill(maker, bot_id, oid, rid=rid)
+    panel.bulk_response = ("json", 200, [{"refill": 11, "status": "Completed"},
+                                         {"refill": 12, "status": "In progress"},
+                                         {"refill": 13, "status": "Rejected"}])
+    st = await RF.poll_once()
+    assert panel.count("refill_status") == 1 and panel.calls[-1][1]["refills"] == "11,12,13"
+    assert st["checked"] == 3 and st["completed"] == 1 and st["rejected"] == 1 and len(sent) == 2
+
+
+@pytest.mark.asyncio
+async def test_poll_falls_back_to_single_requests_when_bulk_unsupported_or_partial(db, panel):
+    maker, bot_id, sent = db
+    for rid in ("21", "22"):
+        oid = await _order(maker, bot_id)
+        await _pending_refill(maker, bot_id, oid, rid=rid)
+    panel.bulk_response = ("json", 200, [{"refill": 21, "status": "Completed"}])      # ۲۲ جا افتاده
+    panel.status_response = ("json", 200, {"status": "Rejected"})
+    st = await RF.poll_once()
+    singles = [f for a, f in panel.calls if a == "refill_status" and "refill" in f]
+    assert [f["refill"] for f in singles] == ["22"] and st["completed"] == 1 and st["rejected"] == 1
+
+
+@pytest.mark.asyncio
+async def test_single_pending_refill_still_uses_single_request(db, panel):
+    maker, bot_id, sent = db
+    oid = await _order(maker, bot_id)
+    await _pending_refill(maker, bot_id, oid, rid="31")
+    panel.status_response = ("json", 200, {"status": "Pending"})
+    await RF.poll_once()
+    assert panel.calls[-1][1].get("refill") == "31" and "refills" not in panel.calls[-1][1]
+
+
+def test_cancel_parser_prefers_the_row_of_this_order():
+    d = [{"order": 5, "cancel": {"error": "Incorrect order ID"}}, {"order": 7, "cancel": {"status": "Completed"}}]
+    assert smm._parse_cancel_response(d, 7) == (True, "Completed")
+    assert smm._parse_cancel_response(d, 5)[0] is False

@@ -41,6 +41,7 @@ TERMINAL = ("completed", "rejected", "expired")
 _REQUESTING_STALE = timedelta(minutes=2)
 _EXPIRE_AFTER = timedelta(days=10)
 _MIN_POLL_GAP = timedelta(seconds=60)
+_BULK_CHUNK = 50          # PATCH_SMM_REFILL_BULK_V1: حداکثر شناسه در هر استعلامِ گروهی
 
 STATUS_LABEL = {
     "requesting": "⏳ در حالِ ثبت",
@@ -317,6 +318,34 @@ async def poll_once(limit: int = 200) -> dict:
         return stats
 
     creds_cache: dict[tuple[int, Optional[int]], tuple[str, str, str]] = {}
+    # === PATCH_SMM_REFILL_BULK_V1 === چند ریفیلِ هم‌پنل ⇒ یک درخواستِ گروهی (refills=1,2,3) به‌جایِ N درخواست.
+    # هر خطا/ناقص‌بودنِ پاسخ ⇒ همان استعلامِ تک‌به‌تکِ قبلی (رفتارِ پیشین دست‌نخورده).
+    bulk: dict[tuple[str, str, str], dict] = {}
+    try:
+        groups: dict[tuple[str, str], list[str]] = {}
+        for _pk, _bot, _o, _panel_pk, _rid, _st, _cr, _up in due:
+            if _cr and now - _cr > _EXPIRE_AFTER:
+                continue
+            if _up and now - _up < _MIN_POLL_GAP:
+                continue
+            _ck = (_bot, _panel_pk)
+            if _ck not in creds_cache:
+                creds_cache[_ck] = await _panel_creds(_bot, _panel_pk)
+            _u, _k, _ = creds_cache[_ck]
+            if _u and _k:
+                groups.setdefault((_u, _k), []).append(str(_rid))
+        for (_u, _k), ids in groups.items():
+            ids = list(dict.fromkeys(ids))
+            if len(ids) < 2:
+                continue
+            for i in range(0, len(ids), _BULK_CHUNK):
+                part = ids[i:i + _BULK_CHUNK]
+                res = await smm_api.get_refills_status_bulk(_u, _k, part)
+                for rid_s, val in (res or {}).items():
+                    bulk[(_u, _k, rid_s)] = val
+    except Exception:
+        logger.exception("[refill] استعلامِ گروهیِ ریفیل ناموفق بود؛ تک‌به‌تک ادامه می‌دهیم")
+        bulk = {}
     for rid_pk, bot_id, order_pk, panel_pk, panel_refill_id, cur_status, created_at, updated_at in due:
         try:
             if created_at and now - created_at > _EXPIRE_AFTER:
@@ -331,7 +360,9 @@ async def poll_once(limit: int = 200) -> dict:
             api_url, api_key, _ = creds_cache[ck]
             if not api_url or not api_key:
                 continue
-            res = await smm_api.get_refill_status(api_url, api_key, panel_refill_id)
+            res = bulk.get((api_url, api_key, str(panel_refill_id)))
+            if res is None:
+                res = await smm_api.get_refill_status(api_url, api_key, panel_refill_id)
             stats["checked"] += 1
             if res.get("error"):
                 stats["errors"] += 1

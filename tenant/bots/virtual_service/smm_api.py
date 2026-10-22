@@ -585,6 +585,44 @@ async def get_refill_status(api_url: str, api_key: str, refill_id) -> dict:
     return {"error": err or "پاسخِ نامعتبر از پنل"}
 
 
+def _refill_status_value(st) -> dict:
+    """مقدارِ status در پاسخِ گروهی (رشته | {"status"/"name"} | {"error"}) ⇒ {"status": ..} یا {"error": ..}."""
+    for _ in range(3):                      # {"status": {"status": "Rejected"}} هم باز می‌شود
+        if not isinstance(st, dict):
+            break
+        if st.get("error"):
+            return {"error": str(st["error"])}
+        st = st.get("status") or st.get("name")
+    if st in (None, "") or isinstance(st, dict):
+        return {"error": "پنل وضعیتِ ریفیل را نداد"}
+    return {"status": str(st)}
+
+
+async def get_refills_status_bulk(api_url: str, api_key: str, refill_ids: list) -> dict | None:
+    """=== PATCH_SMM_REFILL_BULK_V1 === وضعیتِ چند ریفیل در یک درخواست (مستندات: refill_status با «refills»
+    جداشده با کاما؛ پاسخ: [{"refill": 1, "status": "Completed"}, {"refill": 2, "status": {"error": "Refill not found"}}]).
+
+    خروجی: {refill_id_str: {"status": ..} | {"error": ..}} یا None اگر پنل حالتِ گروهی را نپذیرفت (پاسخِ
+    نامعتبر/خطایِ کلی) — فراخوان باید به استعلامِ تک‌به‌تک برگردد. شناسه‌هایی که در پاسخ نیامدند در خروجی نیستند."""
+    if _is_paystars(api_url) or not refill_ids:
+        return None
+    resp = await _post_ex(api_url, {"key": api_key, "action": "refill_status",
+                                    "refills": ",".join(str(x) for x in refill_ids)})
+    d = resp.data
+    if resp.status != 200 or d is None or (isinstance(d, dict) and d.get("error")):
+        return None
+    out: dict[str, dict] = {}
+    if isinstance(d, list):
+        for it in d:
+            if isinstance(it, dict) and it.get("refill") not in (None, ""):
+                out[str(it["refill"])] = _refill_status_value(it.get("status", it))
+    elif isinstance(d, dict):
+        for k, v in d.items():
+            if str(k) in {str(x) for x in refill_ids}:
+                out[str(k)] = _refill_status_value(v)
+    return out or None
+
+
 async def cancel_order(api_url: str, api_key: str, order_id) -> dict | list | None:
     """درخواستِ لغو برای یک سفارش (اکشنِ استانداردِ cancel). اکثرِ پنل‌ها
     آرایه برمی‌گردونن: [{"order": id, "cancel": {"status": "Completed"}}]
