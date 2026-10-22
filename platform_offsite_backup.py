@@ -181,7 +181,7 @@ async def offsite_backup_loop(platform_bot) -> None:
                     _last_warn = time.monotonic()
                     await platform_bot.send_message(PLATFORM_ADMIN_ID, "⚠️ بک‌آپِ بیرونی با خطا مواجه شد؛ لاگ را ببین.")
             except Exception:
-                pass
+                logger.exception("offsite: هشدارِ خطایِ حلقه به مدیر ارسال نشد")
         await asyncio.sleep(900)
 
 
