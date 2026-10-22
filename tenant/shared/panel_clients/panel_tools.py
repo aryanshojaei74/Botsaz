@@ -40,7 +40,7 @@ panel_tools_router = Router()
 BACKUP_MAGIC = "BOTSAZ_VPN_ACCOUNTS_V1"
 _BACKUP_CHOICES = (0, 1, 3, 6, 12, 24)
 _MARZBAN_FAMILY = ("marzban", "rebecca", "pasargad", "pasarguard",
-                   "marzneshin", "upanel_mizban")
+                   "marzneshin", "upanel_mizban", "rickpanel")
 
 
 _ENC_HEAD = b"BOTSAZ-ENC1\n"

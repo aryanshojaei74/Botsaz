@@ -91,6 +91,8 @@ PANEL_LABELS = _PanelLabels({
     "eylan":          "🟠 پنل ایلان (EylanPanel)",
     # === PATCH_HEIMDALL_PANEL_V1 === فقط پلنِ حرفه‌ای
     "heimdall":       "🛡 پنل HEIMDALL",
+    # === PATCH_RICKPANEL_PANEL_V1 === فقط پلنِ حرفه‌ای
+    "rickpanel":      "🟥 پنل RickPanel",
 })
 PANEL_KEYS = list(PANEL_LABELS.keys())
 
@@ -100,7 +102,8 @@ PANEL_KEYS = list(PANEL_LABELS.keys())
 # (پلنِ حرفه‌ای). برایِ پنلِ بعدی که بخواهد فقط حرفه‌ای باشد، همین‌جا
 # یک ردیفِ دیگر اضافه کن.
 _PANEL_EXTRA_FEATURE_GATE = {"nodex": Feature.NODEX_PANEL, "degeris": Feature.DEGERIS_PANEL,
-                             "eylan": Feature.EYLAN_PANEL, "heimdall": Feature.HEIMDALL_PANEL}
+                             "eylan": Feature.EYLAN_PANEL, "heimdall": Feature.HEIMDALL_PANEL,
+                             "rickpanel": Feature.RICKPANEL_PANEL}
 
 
 def _panel_labels_for_plan(plan) -> dict:
@@ -1239,7 +1242,7 @@ async def vpn_setup(cb: CallbackQuery, bot: Bot, state: FSMContext):
             "خودش به‌صورت خودکار نادیده گرفته می‌شود. مثل:\n"
             "<code>https://panel.example.com:8000</code>"
         )
-    elif _bk(key) in ("marzban", "rebecca"):
+    elif _bk(key) in ("marzban", "rebecca", "rickpanel"):
         step1_body = (
             "۱/۵ — آدرس کامل پنل را با https و همراه با پورت بفرست "
             "(همان آدرسی که با آن وارد پنل می‌شوی، بدون مسیر /dashboard "
@@ -1389,7 +1392,7 @@ async def vpn_setup_user(msg: Message, bot: Bot, state: FSMContext):
 #   • هیدیفای → این فیلد proxy_path است، معنیِ واقعی دارد؛ می‌ماند.
 _SUB_BASE_AUTO = frozenset({
     "marzban", "rebecca", "pasargad", "pasarguard",
-    "upanel_mizban", "marzneshin", "shahan", "eylan",
+    "upanel_mizban", "marzneshin", "shahan", "eylan", "rickpanel",
 })
 
 
@@ -1401,9 +1404,9 @@ def _skips_sub_base(key: str) -> bool:
 async def _vpn_setup_step4_text(key: str) -> str:
     """PATCH_PANEL_API_KEY_AUTH_V1 — متنِ مرحلهٔ ۴/۵ (ساب‌بیس)، جدا شده تا
     هم مسیرِ یوزرنیم/پسورد هم مسیرِ API Key بتونن ازش استفاده کنن."""
-    if _bk(key) in ("marzban", "rebecca", "pasargad", "pasarguard", "upanel_mizban", "marzneshin"):
+    if _bk(key) in ("marzban", "rebecca", "pasargad", "pasarguard", "upanel_mizban", "marzneshin", "rickpanel"):
         _pword = {"marzban": "مرزبان", "rebecca": "ربکا", "pasargad": "پاسارگاد", "pasarguard": "PasarGuard",
-                  "upanel_mizban": "یوپنل (مرزبان)", "marzneshin": "مرزنشین"}
+                  "upanel_mizban": "یوپنل (مرزبان)", "marzneshin": "مرزنشین", "rickpanel": "RickPanel"}
         panel_word = _pword.get(key, key)
         return (
             "۴/۵ — آدرس پایهٔ ساب (Subscription) را بفرست. "
@@ -1539,6 +1542,11 @@ async def _vpn_setup_step5_prompt(msg: Message, key: str) -> None:
             "مثال: <code>openvpn,wg1,reality-main</code>\n\n"
             "برایِ پیش‌فرض (OpenVPN + همهٔ وایرگارد و سینگ‌باکس‌هایی که کلید اجازه دارد) «همه» بفرست:",
             reply_markup=cancel_kb(), parse_mode="HTML")
+    elif _bk(key) == "rickpanel":      # === PATCH_RICKPANEL_PANEL_V1 ===
+        await msg.answer(
+            "۵/۵ — در RickPanel هر کاربر خودکار همهٔ پروتکل‌ها و inboundها را می‌گیرد؛ این مرحله "
+            "استفاده نمی‌شود. فقط «-» بفرست تا تنظیمات ذخیره شود:",
+            reply_markup=cancel_kb())
     elif _bk(key) == "shahan":
         await msg.answer(
             "۵/۵ — پنل شاهان مفهومِ inbound/گروه ندارد؛ این مرحله استفاده "
@@ -1613,7 +1621,7 @@ async def vpn_setup_inbounds(msg: Message, bot: Bot, state: FSMContext):
     # شاهان/هیدیفای اصلاً مفهومِ inbound/گروه ندارند — هرچه ادمین اینجا بفرستد
     # نادیده گرفته می‌شود (بدونِ این میان‌بر، فرستادنِ «همه» چون پنل همیشه
     # لیستِ خالی برمی‌گرداند، ادمین را تو یه پیامِ خطا-و-دوباره‌بفرست گیر می‌انداخت).
-    if key in ("shahan", "hiddify") or (_bk(key) == "eylan" and fetch_all):
+    if key in ("shahan", "hiddify", "rickpanel") or (_bk(key) == "eylan" and fetch_all):
         fetch_all = False      # ایلان + «همه» = پیش‌فرضِ خودِ کلاینت (inbound خالی) — PATCH_EYLAN_PANEL_V1
         inbound = ""
     elif not fetch_all:
@@ -2165,6 +2173,15 @@ async def vpn_test(cb: CallbackQuery, bot: Bot):
     try:
         res = await client.test_connection()
         ids = ", ".join(str(i) for i in res["inbounds"])
+        if _bk(key) == "rickpanel":      # === PATCH_RICKPANEL_PANEL_V1 === inbound ندارد؛ قوانینِ سرویسِ ریسلر را نشان بده
+            import html as _h, json as _json
+            _svc = res.get("service")
+            _rules = (f"\n\n📋 قوانینِ سرویسِ این ادمین روی پنل:\n<code>{_h.escape(_json.dumps(_svc, ensure_ascii=False)[:700])}</code>"
+                      if _svc else "")
+            await cb.message.answer(
+                f"✅ اتصال به <b>{label}</b> موفق بود (ادمین: {_h.escape(str(res.get('admin') or ''))}).\n"
+                f"در این پنل هر کاربر خودکار همهٔ پروتکل‌ها و inboundها را می‌گیرد.{_rules}", parse_mode="HTML")
+            return
         await cb.message.answer(
             f"✅ اتصال به <b>{label}</b> موفق بود.\ninboundهای فعال: {ids}")
     except PanelError as e:
@@ -2451,7 +2468,7 @@ async def vpn_refresh_subs(cb: CallbackQuery, bot: Bot):
                     # ساب‌لینکِ همهٔ کاربرانِ این پنل با «sub_base تنظیم نشده»
                     # شکست بخورد (چون در ادامه از مسیرِ sub_id+sub_base استفاده
                     # می‌شد که برایِ این پنل بی‌معناست).
-                    if _bk(key) in ("marzban", "rebecca", "pasargad", "pasarguard", "marzneshin", "upanel_mizban"):
+                    if _bk(key) in ("marzban", "rebecca", "pasargad", "pasarguard", "marzneshin", "upanel_mizban", "rickpanel"):
                         # مرزبان/ربکا/پاسارگاد/PasarGuard/مرزنشین لینک ساب را خودشان
                         # برمی‌گردانند؛ از روی sub_id قابل بازسازی نیست — همیشه از پنل می‌خوانیم.
                         cur = await client.get_client(email)
@@ -2746,7 +2763,7 @@ async def vpn_custom_count_save(msg: Message, bot: Bot, state: FSMContext):
 # محدودیتِ تعدادِ کاربرِ هم‌زمان (IP) رویِ خودِ پنل. تا امروز فقط «پلن»
 # می‌توانست محدودیت داشته باشد، پس خریدِ «حجم/روزِ دلخواه» — که پلنی ندارد —
 # همیشه بدونِ محدودیت ساخته می‌شد.
-_IP_LIMIT_PANELS = {"pasargad", "pasarguard", "rebecca", "shahan", "sanai", "alireza", "degeris", "eylan", "heimdall"}
+_IP_LIMIT_PANELS = {"pasargad", "pasarguard", "rebecca", "shahan", "sanai", "alireza", "degeris", "eylan", "heimdall"}   # rickpanel: limit_ip پشتیبانی نمی‌شود
 
 
 @vpn_admin_router.callback_query(F.data.startswith("tvpn:panel_iplimit:"))
@@ -3306,7 +3323,7 @@ async def vpn_srvname_apply(cb: CallbackQuery, bot: Bot):
         return
 
     # پنل‌های مرزبان‌بنیان: تغییر نام روی اکانت موجود ممکن نیست
-    if _bk(panel_key) in ("marzban", "rebecca", "pasargad", "pasarguard", "marzneshin"):
+    if _bk(panel_key) in ("marzban", "rebecca", "pasargad", "pasarguard", "marzneshin", "rickpanel"):
         await cb.answer()
         await cb.message.answer(
             f"ℹ️ در <b>{label}</b> نام کاربری همان شناسهٔ یکتای اکانت است و روی "

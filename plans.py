@@ -152,6 +152,8 @@ class Feature(str, Enum):
     EYLAN_PANEL = "eylan_panel"
     # === PATCH_HEIMDALL_PANEL_V1 === پنلِ HEIMDALL فقط پلنِ حرفه‌ای.
     HEIMDALL_PANEL = "heimdall_panel"
+    # === PATCH_RICKPANEL_PANEL_V1 === پنلِ RickPanel فقط پلنِ حرفه‌ای.
+    RICKPANEL_PANEL = "rickpanel_panel"
     # === PATCH_PLAN_TABLE_VIEW_V1 === نمایشِ جدولیِ پلن‌ها (قیمت|زمان|حجم) — فقط پلنِ حرفه‌ای.
     PLAN_TABLE_VIEW = "plan_table_view"
     # === PATCH_VPN_PANEL_MARKET_V1 ===
@@ -284,6 +286,7 @@ FEATURE_LABELS = {
     Feature.DEGERIS_PANEL: "🟣 اتصال به پنل DEGERIS (ثنایی جدید)",   # PATCH_DEGERIS_PANEL_V1
     Feature.EYLAN_PANEL: "🟠 اتصال به پنل ایلان (EylanPanel)",   # PATCH_EYLAN_PANEL_V1
     Feature.HEIMDALL_PANEL: "🛡 اتصال به پنل HEIMDALL",   # PATCH_HEIMDALL_PANEL_V1
+    Feature.RICKPANEL_PANEL: "🟥 اتصال به پنل RickPanel",   # PATCH_RICKPANEL_PANEL_V1
     Feature.PLAN_TABLE_VIEW: "📊 نمایشِ جدولیِ پلن‌ها",   # PATCH_PLAN_TABLE_VIEW_V1
     # === PATCH_VPN_PANEL_MARKET_V1 ===
     Feature.VPN_PANEL_MARKET: "🏷 ثبت و فروشِ پنل",
@@ -438,6 +441,7 @@ _PRO_EXTRA = {
     Feature.DEGERIS_PANEL,   # PATCH_DEGERIS_PANEL_V1
     Feature.EYLAN_PANEL,     # PATCH_EYLAN_PANEL_V1
     Feature.HEIMDALL_PANEL,  # PATCH_HEIMDALL_PANEL_V1
+    Feature.RICKPANEL_PANEL,  # PATCH_RICKPANEL_PANEL_V1
     Feature.PLAN_TABLE_VIEW,   # PATCH_PLAN_TABLE_VIEW_V1
     # === PATCH_VPN_PANEL_MARKET_V1 === طبقِ خواستهٔ ادمین: فقط پلنِ حرفه‌ای.
     Feature.VPN_PANEL_MARKET,

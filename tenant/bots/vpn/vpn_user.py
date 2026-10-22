@@ -932,7 +932,7 @@ async def panel_default_limit_ip(bot_id: int, panel_key: str | None) -> int:
 # خودش را داشته باشد؛ اگر برایِ یک پنل چیزی تنظیم نشده باشد، دقیقاً مثلِ
 # قبل از تنظیمِ سراسری پیروی می‌کند — یعنی ربات‌هایِ موجود هیچ تغییرِ
 # رفتاری نمی‌بینند تا وقتی که خودِ ادمین دکمهٔ یک پنل را بزند.
-ONHOLD_PANELS = frozenset({"marzban", "rebecca", "pasargad", "pasarguard"})
+ONHOLD_PANELS = frozenset({"marzban", "rebecca", "pasargad", "pasarguard", "rickpanel"})
 
 
 def purchase_on_hold_key(panel_key: str) -> str:
@@ -7127,7 +7127,7 @@ async def vpn_rename_save(msg: Message, bot: Bot, state: FSMContext):
     if not panel or not panel.enabled:
         await msg.answer("❌ پنلِ این کانفیگ در دسترس نیست. با پشتیبانی تماس بگیر.")
         return
-    if panel.panel_key in ("marzban", "rebecca", "pasargad", "pasarguard", "marzneshin"):
+    if panel.panel_key in ("marzban", "rebecca", "pasargad", "pasarguard", "marzneshin", "rickpanel"):
         # در این پنل‌ها نام‌کاربری همان شناسهٔ یکتای اکانت است و قابل تغییر نیست؛
         # فقط برچسبِ نمایشیِ داخلِ ربات را ذخیره می‌کنیم.
         async with Session() as s:
