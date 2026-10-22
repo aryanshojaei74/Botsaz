@@ -16,7 +16,7 @@ from aiogram.enums import ButtonStyle, ChatType
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from config import Session
 from models import Bet, BetLedger, Bot as BotRow, BotUser, WalletTxn
@@ -143,15 +143,56 @@ def _cancelled_text(bet: Bet, expired: bool = False) -> str:
 
 
 
+BUILD_TIMEOUT_SECS = 120   # PATCH_BET_BUILD_WATCHDOG_V1: بازیِ رزروشده که تا این مدت «ساخته» نشد خودکار لغو و مسترد می‌شود
+_BUILD_FAIL_TEXT = ("🎲 <b>ساخت بازی ناموفق بود</b>\n\n"
+                    "❌ مشکلی پیش آمد و بازی ساخته نشد؛ مبلغ رزروشده به سازنده برگشت. دوباره امتحان کن.")
+_EXPIRED_TEXT = ("🎲 <b>بازی لغو شد</b>\n\n"
+                 "⏰ زمان بازی به پایان رسید و مبلغ رزروشده به سازنده برگشت.")
+
+
+async def _refund_pending(bet_id: int, now: datetime, unbuilt_only: bool = False) -> dict | None:
+    """یک بازیِ pending را اتمیک منقضی و مبلغِ رزروشده را به سازنده برمی‌گرداند. None = چیزی تغییر نکرد."""
+    async with Session() as s:
+        bet = await s.get(Bet, bet_id, with_for_update=True)
+        if not bet or bet.status != "pending":
+            return None
+        was_unbuilt = bool(bet.unbuilt)
+        timed_out = bool(bet.expires_at and bet.expires_at <= now)
+        stuck = was_unbuilt and bool(bet.created_at and bet.created_at <= now - timedelta(seconds=BUILD_TIMEOUT_SECS))
+        if unbuilt_only:
+            if not was_unbuilt:
+                return None
+        elif not (timed_out or stuck):
+            return None
+        creator = await s.get(BotUser, bet.creator_user_id, with_for_update=True)
+        bet.status = "expired"
+        bet.unbuilt = False
+        if creator:
+            creator.balance = Decimal(str(creator.balance)) + Decimal(str(bet.amount))
+            s.add(BetLedger(
+                bot_id=bet.bot_id, bet_id=bet.id, user_id=creator.id,
+                telegram_id=creator.telegram_id, amount=bet.amount, kind="refund"))
+            s.add(WalletTxn(
+                bot_id=bet.bot_id, user_id=creator.id, amount=bet.amount,
+                kind="bet_refund", note=(f"ساخت ناموفقِ بازی #{bet.id}" if was_unbuilt else f"انقضای بازی #{bet.id}")))
+        row = {"id": bet.id, "bot_id": bet.bot_id, "chat_id": bet.chat_id,
+               "message_id": bet.message_id, "amount": bet.amount, "unbuilt": was_unbuilt,
+               "creator_telegram_id": bet.creator_telegram_id}
+        await s.commit()
+        return row
+
+
 async def expire_pending_bets_once() -> int:
-    """بازی‌هایِ درانتظارِ گذشته از زمان را یک‌بار اتمیک منقضی و مسترد می‌کند."""
+    """بازی‌هایِ درانتظارِ گذشته از زمان — و بازی‌هایِ رزروشده‌ای که ساخته نشدند — را یک‌بار اتمیک منقضی و مسترد می‌کند."""
     now = datetime.utcnow()
     async with Session() as s:
         ids = (await s.scalars(
             select(Bet.id).where(
                 Bet.status == "pending",
-                Bet.expires_at.isnot(None),
-                Bet.expires_at <= now,
+                or_(
+                    and_(Bet.expires_at.isnot(None), Bet.expires_at <= now),
+                    and_(Bet.unbuilt.is_(True), Bet.created_at <= now - timedelta(seconds=BUILD_TIMEOUT_SECS)),
+                ),
             ).limit(200)
         )).all()
 
@@ -160,26 +201,9 @@ async def expire_pending_bets_once() -> int:
 
     expired_rows: list[dict] = []
     for bet_id in ids:
-        async with Session() as s:
-            bet = await s.get(Bet, bet_id, with_for_update=True)
-            if not bet or bet.status != "pending" or not bet.expires_at or bet.expires_at > now:
-                continue
-            creator = await s.get(BotUser, bet.creator_user_id, with_for_update=True)
-            bet.status = "expired"
-            if creator:
-                creator.balance = Decimal(str(creator.balance)) + Decimal(str(bet.amount))
-                s.add(BetLedger(
-                    bot_id=bet.bot_id, bet_id=bet.id, user_id=creator.id,
-                    telegram_id=creator.telegram_id, amount=bet.amount, kind="refund"))
-                s.add(WalletTxn(
-                    bot_id=bet.bot_id, user_id=creator.id, amount=bet.amount,
-                    kind="bet_refund", note=f"انقضای بازی #{bet.id}"))
-            expired_rows.append({
-                "id": bet.id, "bot_id": bet.bot_id, "chat_id": bet.chat_id,
-                "message_id": bet.message_id, "amount": bet.amount,
-                "creator_telegram_id": bet.creator_telegram_id,
-            })
-            await s.commit()
+        r = await _refund_pending(bet_id, now)
+        if r:
+            expired_rows.append(r)
 
     if not expired_rows:
         return 0
@@ -198,15 +222,16 @@ async def expire_pending_bets_once() -> int:
             if item["message_id"]:
                 await bot.edit_message_text(
                     chat_id=item["chat_id"], message_id=item["message_id"],
-                    text=("🎲 <b>بازی لغو شد</b>\n\n"
-                          "⏰ زمان بازی به پایان رسید و مبلغ رزروشده به سازنده برگشت."),
+                    text=(_BUILD_FAIL_TEXT if item["unbuilt"] else _EXPIRED_TEXT),
                     parse_mode="HTML", reply_markup=None)
             try:
                 from tenant_group_guard import tenant_group_log
                 await tenant_group_log(
                     bot, row, item["chat_id"], "bet_cancelled",
                     actor=item["creator_telegram_id"],
-                    details=f"بازی #{item['id']} به‌دلیل پایان زمان لغو شد؛ مبلغ {_rial(item['amount'])} مسترد شد")
+                    details=(f"بازی #{item['id']} ساخته نشد و لغو شد" if item["unbuilt"]
+                             else f"بازی #{item['id']} به‌دلیل پایان زمان لغو شد")
+                            + f"؛ مبلغ {_rial(item['amount'])} مسترد شد")
             except Exception:
                 logger.exception("ثبت لاگ انقضای بازی ناموفق بود؛ bet_id=%s", item["id"])
         except Exception:
@@ -303,6 +328,7 @@ async def create_bet(msg: Message, bot: Bot):
             target_username=target.username if target else None,
             amount=amount, fee_pct=fee_pct, fee_amount=fee_amount, payout_amount=payout,
             status="pending", created_at=now, expires_at=now + timedelta(seconds=ttl_seconds),
+            unbuilt=True,
         )
         s.add(bet)
         await s.flush()
@@ -310,19 +336,42 @@ async def create_bet(msg: Message, bot: Bot):
         s.add(WalletTxn(bot_id=row.id, user_id=locked.id, amount=-amount, kind="bet_reserve", note=f"رزرو بازی #{bet.id}"))
         await s.commit()
         bet_id = bet.id
-    sent = await msg.reply("⏳ در حال ساخت بازی...")
-    async with Session() as s:
-        b = await s.get(Bet, bet_id)
-        if b:
-            b.message_id = sent.message_id
-            await s.commit()
-    async with Session() as s:
-        b = await s.get(Bet, bet_id)
-        if b:
+    # === PATCH_BET_BUILD_WATCHDOG_V1 === مبلغ همین‌جا رزرو شده؛ اگر ساختِ پیام/دکمه‌ها به هر دلیل شکست خورد
+    # (خطایِ تلگرام، تایم‌اوت، …) همان لحظه لغو و مسترد می‌شود؛ اگر پروسه وسطِ کار افتاد، جاروبِ دوره‌ای بعد از
+    # BUILD_TIMEOUT_SECS همین کار را می‌کند.
+    sent = None
+    try:
+        sent = await msg.reply("⏳ در حال ساخت بازی...")
+        async with Session() as s:
+            b = await s.get(Bet, bet_id)
+            if b:
+                b.message_id = sent.message_id
+                await s.commit()
+        async with Session() as s:
+            b = await s.get(Bet, bet_id)
+            txt, kb = _pending_text(b), _bet_keyboard(b)
+        try:
+            await sent.edit_text(txt, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            await asyncio.sleep(1.5)       # یک‌بار دیگر (خطایِ گذرایِ شبکه/فلود)
+            await sent.edit_text(txt, reply_markup=kb, parse_mode="HTML")
+        async with Session() as s:
+            b = await s.get(Bet, bet_id)
+            if b:
+                b.unbuilt = False
+                await s.commit()
+    except Exception:
+        logger.exception("ساختِ بازیِ گروهی ناموفق بود؛ لغو و استرداد (bet_id=%s)", bet_id)
+        r = await _refund_pending(bet_id, datetime.utcnow(), unbuilt_only=True)
+        if r:
             try:
-                await sent.edit_text(_pending_text(b), reply_markup=_bet_keyboard(b), parse_mode="HTML")
+                if sent is not None:
+                    await sent.edit_text(_BUILD_FAIL_TEXT, reply_markup=None, parse_mode="HTML")
+                else:
+                    await msg.reply("❌ ساخت بازی ناموفق بود؛ مبلغ رزروشده برگشت. دوباره امتحان کن.")
             except Exception:
-                logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+                logger.exception("اطلاع‌رسانیِ شکستِ ساختِ بازی ممکن نشد (bet_id=%s)", bet_id)
+        return
 
     try:
         from tenant_group_guard import tenant_group_log

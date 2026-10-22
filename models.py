@@ -3223,6 +3223,9 @@ class Bet(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime)
     settled_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # === PATCH_BET_BUILD_WATCHDOG_V1 === True = مبلغ رزرو شده ولی پیامِ بازی هنوز «ساخته» نشده (گیرکردن روی «در حال ساخت بازی…»).
+    # NULL (ردیف‌هایِ قدیمی) / False = ساخته‌شده.
+    unbuilt: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
 
 class BetLedger(Base):
