@@ -17,8 +17,8 @@ RESP = {"status": "OK", "data": {"updates": [
 def test_parse_filters_bot_and_events():
     msgs, nxt = rb.parse_updates(RESP)
     assert nxt == "77"
-    assert [m["chat_id"] for m in msgs] == ["b0AAA", "b0CCC"]
-    assert msgs[0]["text"] == "سلام <b>" and msgs[1]["kind"] == "file"
+    assert [(m["chat_id"], m["kind"]) for m in msgs] == [("b0AAA", "text"), ("b0BBB", "start"), ("b0CCC", "file")]
+    assert msgs[0]["text"] == "سلام <b>"
 
 
 def test_parse_legacy_inline_shape():
@@ -34,9 +34,9 @@ def test_format_escapes_html_and_roundtrips_chat_id():
     assert rb.chat_id_from_text(txt.replace("<code>", "").replace("</code>", "")) == "b0AAA"
 
 
-def test_poll_once_forwards_and_saves_offset(monkeypatch):
+def _env(monkeypatch, resp_updates, chat=None):
     store = {rb.K_TOKEN: "tok1234567890", rb.K_ENABLED: "1"}
-    sent = []
+    calls, sent = [], []
 
     async def _get(k, d=""):
         return store.get(k, d)
@@ -45,19 +45,77 @@ def test_poll_once_forwards_and_saves_offset(monkeypatch):
         store[k] = v
 
     async def api(token, method, body=None, timeout=25):
-        assert method == "getUpdates" and "offset_id" not in body
-        return RESP
+        calls.append((method, body))
+        if method == "getUpdates":
+            return resp_updates
+        if method == "getChat":
+            return {"status": "OK", "data": {"chat": chat or {
+                "first_name": "علی", "last_name": "رضایی", "username": "ali_r", "user_id": "u1"}}}
+        return {"status": "OK"}
 
     class Bot:
-        async def send_message(self, chat, text, **kw):
-            sent.append((chat, text))
+        async def send_message(self, chat_id, text, **kw):
+            sent.append((chat_id, text))
 
+    rb._prof_cache.clear()
     monkeypatch.setattr(rb, "_get", _get)
     monkeypatch.setattr(rb, "_set", _set)
     monkeypatch.setattr(rb, "api_call", api)
     monkeypatch.setattr(rb, "PLATFORM_ADMIN_ID", 42)
-    assert asyncio.run(rb.poll_once(Bot())) == 2
+    return store, calls, sent, Bot()
+
+
+def test_poll_once_forwards_with_profile_and_saves_offset(monkeypatch):
+    store, calls, sent, bot = _env(monkeypatch, RESP)
+    assert asyncio.run(rb.poll_once(bot)) == 2
     assert store[rb.K_OFFSET] == "77" and all(c == 42 for c, _ in sent)
+    assert "علی رضایی" in sent[0][1] and "@ali_r" in sent[0][1] and "ثبت نشده" in sent[0][1]
+    # کاربر تأییدِ دریافت می‌گیرد
+    assert [c for c in calls if c[0] == "sendMessage" and "رسید" in c[1]["text"]]
+
+
+def test_start_sends_keypad_and_is_not_forwarded(monkeypatch):
+    upd = {"status": "OK", "data": {"updates": [{"type": "StartedBot", "chat_id": "b0S"}]}}
+    _, calls, sent, bot = _env(monkeypatch, upd)
+    assert asyncio.run(rb.poll_once(bot)) == 0 and not sent
+    sm = [c[1] for c in calls if c[0] == "sendMessage"][0]
+    types = [b["type"] for r in sm["chat_keypad"]["rows"] for b in r["buttons"]]
+    assert types == ["Simple", "AskMyPhoneNumber"] and sm["chat_id"] == "b0S"
+
+
+def test_contact_button_prompts_user_without_forward(monkeypatch):
+    upd = {"status": "OK", "data": {"updates": [{"type": "NewMessage", "chat_id": "b0S", "new_message": {
+        "message_id": "1", "text": rb.BTN_CONTACT, "sender_type": "User", "sender_id": "u",
+        "aux_data": {"button_id": "contact"}}}]}}
+    _, calls, sent, bot = _env(monkeypatch, upd)
+    assert asyncio.run(rb.poll_once(bot)) == 0 and not sent
+    assert any(c[0] == "sendMessage" and "بنویس" in c[1]["text"] for c in calls)
+
+
+def test_shared_phone_is_saved_and_shown_on_next_messages(monkeypatch):
+    upd = {"status": "OK", "data": {"updates": [
+        {"type": "NewMessage", "chat_id": "b0P", "new_message": {
+            "message_id": "1", "sender_type": "User", "sender_id": "u9",
+            "contact_message": {"phone_number": "989121234567", "first_name": "سارا", "last_name": ""}}},
+        {"type": "NewMessage", "chat_id": "b0P", "new_message": {
+            "message_id": "2", "text": "سلام", "sender_type": "User", "sender_id": "u9"}},
+    ]}}
+    store, _, sent, bot = _env(monkeypatch, upd)
+    assert asyncio.run(rb.poll_once(bot)) == 2
+    assert store["rubika_phone:b0P"] == "989121234567"
+    assert "989121234567" in sent[0][1] and "989121234567" in sent[1][1]
+
+
+def test_keypad_rejected_falls_back_to_plain(monkeypatch):
+    seen = []
+
+    async def api(token, method, body=None, timeout=25):
+        seen.append(body)
+        return {"status": "ERR", "error": "bad keypad"} if "chat_keypad" in (body or {}) else {"status": "OK"}
+
+    monkeypatch.setattr(rb, "api_call", api)
+    asyncio.run(rb._send_user("t", "c", "hi", keypad=True))
+    assert len(seen) == 2 and "chat_keypad" not in seen[1]
 
 
 def test_poll_once_idle_without_token(monkeypatch):

@@ -95,11 +95,22 @@ async def api_call(token: str, method: str, body: dict | None = None, timeout: f
         return {"status": "ERR", "error": f"{type(e).__name__}: {e}"}
 
 
+def _item(chat_id, nm: dict, kind: str) -> dict:
+    aux = nm.get("aux_data") if isinstance(nm.get("aux_data"), dict) else {}
+    cm = nm.get("contact_message") if isinstance(nm.get("contact_message"), dict) else {}
+    return {"chat_id": str(chat_id or ""), "sender_id": str(nm.get("sender_id") or ""),
+            "text": str(nm.get("text") or ""), "message_id": str(nm.get("message_id") or ""),
+            "kind": kind, "button_id": str(aux.get("button_id") or ""),
+            "phone": str(cm.get("phone_number") or ""),
+            "first_name": str(cm.get("first_name") or ""), "last_name": str(cm.get("last_name") or "")}
+
+
 def parse_updates(resp: dict) -> tuple[list[dict], str | None]:
     """پاسخِ getUpdates را به (فهرستِ پیام‌ها، next_offset_id) تبدیل می‌کند.
 
-    هر پیام: {"chat_id","sender_id","text","message_id","kind"}. فقط پیام‌هایِ
-    کاربر؛ پیام‌هایِ خودِ ربات و رویدادهایِ غیرپیام (استارت/توقف…) رد می‌شوند.
+    هر مورد: {"chat_id","sender_id","text","message_id","kind","button_id","phone",...}
+    kind: text | file | contact (کاربر شمارهٔ خودش را داد) | start (استارتِ ربات) | other.
+    پیام‌هایِ خودِ ربات و رویدادهایِ دیگر (توقف…) رد می‌شوند.
     ساختارِ مستندشده: data.updates[].{type, chat_id, new_message{...}} و
     next_offset_id؛ شکلِ قدیمیِ inline_message هم پشتیبانی می‌شود."""
     data = resp.get("data") if isinstance(resp.get("data"), dict) else resp
@@ -110,37 +121,49 @@ def parse_updates(resp: dict) -> tuple[list[dict], str | None]:
             continue
         if isinstance(u.get("inline_message"), dict):
             m = u["inline_message"]
-            out.append({"chat_id": str(m.get("chat_id") or ""), "sender_id": str(m.get("sender_id") or ""),
-                        "text": str(m.get("text") or ""), "message_id": str(m.get("message_id") or ""),
-                        "kind": "text"})
+            out.append(_item(m.get("chat_id"), m, "text"))
             continue
         typ = str(u.get("type") or "")
+        if typ == "StartedBot":
+            out.append(_item(u.get("chat_id"), {}, "start"))
+            continue
         nm = u.get("new_message") if isinstance(u.get("new_message"), dict) else None
         if typ not in ("NewMessage", "") or nm is None:
             continue
         if str(nm.get("sender_type") or "").lower() == "bot":
             continue
-        text = str(nm.get("text") or "")
-        kind = "text"
-        if not text:
+        if isinstance(nm.get("contact_message"), dict) and nm["contact_message"].get("phone_number"):
+            kind = "contact"
+        elif nm.get("text"):
+            kind = "text"
+        else:
             kind = "file" if (nm.get("file") or nm.get("file_inline")) else "other"
-        out.append({"chat_id": str(u.get("chat_id") or nm.get("chat_id") or ""),
-                    "sender_id": str(nm.get("sender_id") or ""), "text": text,
-                    "message_id": str(nm.get("message_id") or ""), "kind": kind})
+        out.append(_item(u.get("chat_id") or nm.get("chat_id"), nm, kind))
     return [x for x in out if x["chat_id"]], (str(nxt) if nxt not in (None, "") else None)
 
 
-def format_admin_text(m: dict) -> str:
-    body = _html.escape(m["text"]) if m["text"] else (
-        "📎 <i>فایل/رسانه (فقط متن پشتیبانی می‌شود؛ در خودِ روبیکا ببین)</i>" if m["kind"] == "file"
-        else "<i>پیامِ بدونِ متن</i>")
-    return (
-        "📩 <b>پیام تازه از روبیکا</b>\n"
-        f"👤 فرستنده: <code>{_html.escape(m['sender_id'] or '—')}</code>\n"
-        f"{_MARK} <code>{_html.escape(m['chat_id'])}</code>\n\n"
-        f"{body}\n\n"
-        "<i>برای جواب‌دادن روی همین پیام ریپلای کن.</i>"
-    )
+def format_admin_text(m: dict, prof: dict | None = None) -> str:
+    """پیامِ مدیر: مشخصاتِ فرستنده (نام/یوزرنیم/شماره) + متنِ پیام. prof از get_profile می‌آید."""
+    prof = prof or {}
+    if m["kind"] == "contact":
+        body = "📱 <i>شمارهٔ خودش را به اشتراک گذاشت.</i>"
+    elif m["text"]:
+        body = _html.escape(m["text"])
+    elif m["kind"] == "file":
+        body = "📎 <i>فایل/رسانه (فقط متن پشتیبانی می‌شود؛ در خودِ روبیکا ببین)</i>"
+    else:
+        body = "<i>پیامِ بدونِ متن</i>"
+    name = " ".join(x for x in (prof.get("first_name"), prof.get("last_name")) if x) or "—"
+    lines = ["📩 <b>پیام تازه از روبیکا</b>",
+             f"👤 نام: {_html.escape(name)}"]
+    if prof.get("username"):
+        lines.append(f"🔗 یوزرنیم: @{_html.escape(str(prof['username']).lstrip('@'))}")
+    lines.append(f"📱 شماره: <code>{_html.escape(prof['phone'])}</code>" if prof.get("phone")
+                 else "📱 شماره: <i>ثبت نشده (کاربر هنوز نفرستاده)</i>")
+    lines.append(f"🆔 شناسهٔ کاربر: <code>{_html.escape(prof.get('user_id') or m['sender_id'] or '—')}</code>")
+    lines.append(f"{_MARK} <code>{_html.escape(m['chat_id'])}</code>")
+    lines += ["", body, "", "<i>برای جواب‌دادن روی همین پیام ریپلای کن.</i>"]
+    return "\n".join(lines)
 
 
 def chat_id_from_text(text: str | None) -> str | None:
@@ -162,8 +185,85 @@ async def _warn_admin(bot, text: str) -> None:
         logger.exception("rubika: هشدار به مدیر ارسال نشد")
 
 
+BTN_CONTACT = "💬 پیام به ادمین"
+BTN_PHONE = "📱 ارسالِ شمارهٔ من"
+WELCOME = ("سلام 👋\nبرای ارتباط با ادمین دکمهٔ «" + BTN_CONTACT + "» را بزن و پیامت را بنویس.\n"
+           "اگر خواستی با دکمهٔ «" + BTN_PHONE + "» شماره‌ات را هم بفرست تا ادمین بشناسدت.")
+ASK_MSG = "✍️ پیامت را همین‌جا بنویس؛ مستقیم برای ادمین می‌رسد و جوابش را همین‌جا می‌گیری."
+GOT_PHONE = "✅ شمارهٔ تو ثبت شد و برای ادمین فرستاده شد."
+GOT_MSG = "✅ پیامت به ادمین رسید."
+
+_PROF_TTL = 3600.0
+_prof_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _keypad() -> dict:
+    return {"rows": [
+        {"buttons": [{"id": "contact", "type": "Simple", "button_text": BTN_CONTACT}]},
+        {"buttons": [{"id": "phone", "type": "AskMyPhoneNumber", "button_text": BTN_PHONE}]},
+    ], "resize_keyboard": True, "on_time_keyboard": False}
+
+
+async def _send_user(token: str, chat_id: str, text: str, keypad: bool = False) -> None:
+    """به کاربرِ روبیکا پیام می‌دهد؛ اگر پنل کیبورد را نپذیرفت، بدونِ کیبورد دوباره می‌فرستد."""
+    if keypad:
+        r = await api_call(token, "sendMessage", {"chat_id": chat_id, "text": text,
+                                                    "chat_keypad": _keypad(), "chat_keypad_type": "New"})
+        if r.get("status") == "OK":
+            return
+        logger.warning("rubika: ارسال با کیبورد رد شد، بدونِ کیبورد می‌فرستم: %s", r.get("error") or r.get("status"))
+    await api_call(token, "sendMessage", {"chat_id": chat_id, "text": text})
+
+
+async def get_profile(token: str, chat_id: str) -> dict:
+    """نام/یوزرنیم/شناسهٔ کاربر از getChat (کش یک‌ساعته) + شمارهٔ ثبت‌شده. در خطا فقط شماره."""
+    now = time.monotonic()
+    hit = _prof_cache.get(chat_id)
+    if hit and now - hit[0] < _PROF_TTL:
+        prof = dict(hit[1])
+    else:
+        prof = {}
+        r = await api_call(token, "getChat", {"chat_id": chat_id}, timeout=15)
+        d = r.get("data") if isinstance(r.get("data"), dict) else {}
+        c = d.get("chat") if isinstance(d.get("chat"), dict) else {}
+        if r.get("status") == "OK" and c:
+            prof = {"first_name": str(c.get("first_name") or ""), "last_name": str(c.get("last_name") or ""),
+                    "username": str(c.get("username") or ""), "user_id": str(c.get("user_id") or "")}
+            _prof_cache[chat_id] = (now, prof)
+    phone = (await _get(f"rubika_phone:{chat_id}")).strip()
+    if phone:
+        prof["phone"] = phone
+    return prof
+
+
+async def _handle(bot, token: str, m: dict) -> int:
+    """یک پیام را پردازش می‌کند؛ ۱ اگر به مدیر فرستاده شد."""
+    chat_id, txt = m["chat_id"], m["text"].strip()
+    if m["kind"] == "start" or txt.lower() in ("/start", "start", "شروع"):
+        await _send_user(token, chat_id, WELCOME, keypad=True)
+        return 0
+    if m["button_id"] == "contact" or txt == BTN_CONTACT:
+        await _send_user(token, chat_id, ASK_MSG, keypad=True)
+        return 0
+    if m["kind"] == "contact":
+        await _set(f"rubika_phone:{chat_id}", m["phone"])
+        prof = await get_profile(token, chat_id)
+        for k, v in (("first_name", m["first_name"]), ("last_name", m["last_name"])):
+            if v and not prof.get(k):
+                prof[k] = v
+        await bot.send_message(PLATFORM_ADMIN_ID, format_admin_text(m, prof), parse_mode="HTML")
+        await _send_user(token, chat_id, GOT_PHONE)
+        return 1
+    if txt == BTN_PHONE or m["kind"] == "other":
+        return 0
+    prof = await get_profile(token, chat_id)
+    await bot.send_message(PLATFORM_ADMIN_ID, format_admin_text(m, prof), parse_mode="HTML")
+    await _send_user(token, chat_id, GOT_MSG)
+    return 1
+
+
 async def poll_once(bot) -> int:
-    """یک دور: پیام‌هایِ تازه را بگیر و به مدیر بفرست. تعدادِ پیام‌هایِ فورواردشده را برمی‌گرداند
+    """یک دور: پیام‌هایِ تازه را بگیر و پردازش کن. تعدادِ پیام‌هایِ فورواردشده به مدیر را برمی‌گرداند
     (-1 یعنی خطا، 0 یعنی ربات خاموش/بدونِ توکن/بدونِ پیامِ تازه)."""
     token = (await _get(K_TOKEN)).strip()
     if not token or (await _get(K_ENABLED, "1")) != "1" or not PLATFORM_ADMIN_ID:
@@ -184,12 +284,11 @@ async def poll_once(bot) -> int:
     sent = 0
     for m in msgs:
         try:
-            await bot.send_message(PLATFORM_ADMIN_ID, format_admin_text(m), parse_mode="HTML")
-            sent += 1
+            sent += await _handle(bot, token, m)
         except Exception:
-            logger.exception("rubika: ارسال به مدیر ناموفق")
+            logger.exception("rubika: پردازشِ پیام ناموفق")
     if nxt and nxt != offset:
-        await _set(K_OFFSET, nxt)     # بعد از ارسال، تا پیامی گم نشود (در بدترین حالت یک‌بار تکراری می‌آید)
+        await _set(K_OFFSET, nxt)     # بعد از پردازش، تا پیامی گم نشود (در بدترین حالت یک‌بار تکراری می‌آید)
     return sent
 
 
