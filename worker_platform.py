@@ -66,6 +66,8 @@ from platform_group_report import report_sweep_loop
 from platform_rubika import rubika_poll_loop
 # === PATCH_PLATFORM_SPLUS_BRIDGE_V1 ===
 from platform_splus import splus_poll_loop
+# === PATCH_PLATFORM_TICKET_REMIND_V1 ===
+from platform_msg_tickets import ticket_reminder_loop
 
 
 async def _worker_startup():
@@ -105,6 +107,8 @@ async def _worker_startup():
         rubika_poll_loop(mp.platform_bot),
         # === PATCH_PLATFORM_SPLUS_BRIDGE_V1 === پیام‌هایِ رباتِ سروش → پی‌ویِ مدیر
         splus_poll_loop(mp.platform_bot),
+        # === PATCH_PLATFORM_TICKET_REMIND_V1 === یادآوریِ تیکت‌هایِ بی‌پاسخ
+        ticket_reminder_loop(mp.platform_bot),
     ):
         mp.spawn(_coro)
 

@@ -320,3 +320,64 @@ async def test_faq_question_cannot_shadow_menu_buttons(env):
     await state.set_state(T.TkSetFSM.faq_q)
     await T.tks_faq_q(SimpleNamespace(text=T.BTN_NEW, from_user=SimpleNamespace(id=42), answer=answer), state)
     assert "یکتا" in out[-1] and await state.get_state() == T.TkSetFSM.faq_q.state
+
+
+from datetime import datetime, timedelta
+
+DAY = datetime(2026, 10, 22, 8, 30)       # ۱۲:۰۰ به وقتِ تهران
+NIGHT = datetime(2026, 10, 21, 22, 30)    # ۲:۰۰ بامداد تهران
+
+
+async def _age_ticket(env, hours, tid=1, status=None):
+    async with env.maker() as s:
+        t = await s.get(models.PlatformTicket, tid)
+        t.updated_at = DAY - timedelta(hours=hours)
+        if status:
+            t.status = status
+        await s.commit()
+
+
+@pytest.mark.asyncio
+async def test_reminder_digest_for_stale_open_tickets(env):
+    await new_ticket(env)
+    await _age_ticket(env, 5)
+    n = len(env.bot.msgs)
+    assert await T.remind_once(env.bot, DAY) == 1
+    text = env.bot.msgs[n][1]
+    assert env.bot.msgs[n][0] == 42 and "BS-1" in text and "بی‌پاسخ" in text and "3 ساعت" in text
+    assert await T.remind_once(env.bot, DAY + timedelta(hours=1)) == 0     # در همان بازه تکرار نمی‌شود
+    assert await T.remind_once(env.bot, DAY + timedelta(hours=4)) == 1     # بعد از N ساعت دوباره
+
+
+@pytest.mark.asyncio
+async def test_reminder_skips_fresh_answered_closed_and_quiet_hours(env):
+    await new_ticket(env)
+    await _age_ticket(env, 1)                                   # تازه
+    assert await T.remind_once(env.bot, DAY) == 0
+    await _age_ticket(env, 9, status="answered")                # جواب داده‌شده
+    assert await T.remind_once(env.bot, DAY) == 0
+    await _age_ticket(env, 9, status="closed")                  # بسته
+    assert await T.remind_once(env.bot, DAY) == 0
+    await _age_ticket(env, 9, status="open")
+    assert await T.remind_once(env.bot, NIGHT) == 0             # ساعتِ خواب
+    assert await T.remind_once(env.bot, DAY) == 1
+
+
+@pytest.mark.asyncio
+async def test_reminder_can_be_turned_off_and_cycled(env):
+    await new_ticket(env)
+    await _age_ticket(env, 9)
+    await T._set(T.K_REMIND, "0")
+    assert await T.remind_once(env.bot, DAY) == 0
+    out = []
+
+    async def cb_answer(*a, **k):
+        pass
+
+    async def edit_text(text, **kw):
+        out.append(text)
+
+    cb = SimpleNamespace(data="mtks:remind", from_user=SimpleNamespace(id=42), answer=cb_answer,
+                         message=SimpleNamespace(edit_text=edit_text, answer=edit_text))
+    await T.tks_cb(cb, SimpleNamespace())
+    assert await T._remind_hours() == 1 and "هر 1 ساعت" in out[-1]

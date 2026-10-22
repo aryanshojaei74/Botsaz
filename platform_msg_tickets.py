@@ -18,10 +18,11 @@ Channel می‌دهد (send / ack / send_file / download) و رویدادِ کا
 """
 from __future__ import annotations
 
+import asyncio
 import html as _html
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from aiogram import F, Router
 from aiogram.enums import ButtonStyle
@@ -49,6 +50,9 @@ BTN_CLOSE = "🔒 بستنِ تیکت"
 BTN_CANCEL = "🔙 انصراف"
 BTN_FAQ = "❓ سوالات متداول"
 K_WELCOME, K_FAQ = "tkm_welcome", "tkm_faq"
+K_REMIND, K_REMIND_LAST = "tkm_remind_hours", "tkm_remind_last"
+REMIND_CHOICES = (0, 1, 3, 6, 12)      # ساعت؛ ۰ = خاموش
+QUIET_FROM, QUIET_TO = 0, 8            # ساعتِ تهران: یادآوری نمی‌فرستیم
 MAX_FAQ, FAQ_Q_MAX, FAQ_A_MAX = 10, 40, 900
 RATES = {"😍 عالی": 3, "🙂 خوب": 2, "😕 ضعیف": 1}
 CATS = [("pay", "💳 پرداخت و شارژ"), ("bot", "🤖 ساخت و مدیریتِ ربات"), ("order", "🛒 سفارش و فروش"),
@@ -555,6 +559,66 @@ async def tk_media_reply(msg: Message):
     await msg.reply("✅ فایل برایِ کاربر فرستاده شد." if ok else "❌ ارسالِ فایل ناموفق بود.")
 
 
+# ─────────────── یادآوریِ تیکت‌هایِ بی‌پاسخ ───────────────
+
+async def _remind_hours() -> int:
+    try:
+        v = int((await _get(K_REMIND, "3")) or 3)
+    except ValueError:
+        v = 3
+    return v if v in REMIND_CHOICES else 3
+
+
+def _tehran_hour(now: datetime) -> int:
+    return (now + timedelta(hours=3, minutes=30)).hour
+
+
+async def remind_once(bot, now: datetime | None = None) -> int:
+    """اگر تیکتِ «باز» (هنوز بدونِ پاسخِ مدیر) بیش از N ساعت مانده باشد، یک پیامِ خلاصه به مدیر می‌فرستد؛
+    حداکثر هر N ساعت یک‌بار و نه در ساعاتِ خواب (۰ تا ۸ تهران). تعدادِ تیکت‌هایِ گزارش‌شده را برمی‌گرداند."""
+    now = now or datetime.utcnow()
+    hours = await _remind_hours()
+    if not hours or not PLATFORM_ADMIN_ID or QUIET_FROM <= _tehran_hour(now) < QUIET_TO:
+        return 0
+    last = (await _get(K_REMIND_LAST)).strip()
+    try:
+        if last and now - datetime.fromisoformat(last) < timedelta(hours=hours):
+            return 0
+    except ValueError:
+        pass
+    async with Session() as s:
+        rows = (await s.scalars(select(PlatformTicket).where(
+            PlatformTicket.status == "open",
+            PlatformTicket.updated_at <= now - timedelta(hours=hours))
+            .order_by(PlatformTicket.updated_at.asc()).limit(10))).all()
+    if not rows:
+        return 0
+    lines = [f"⏰ <b>{len(rows)} تیکتِ بی‌پاسخ</b> (بیش از {hours} ساعت)"]
+    for t in rows:
+        lines.append(f"<code>BS-{t.id}</code> · {'روبیکا' if t.channel == 'rubika' else 'سروش'} · "
+                     f"{_html.escape(CAT_LABEL.get(t.category, t.category))} · {_html.escape(t.name or '—')} · "
+                     f"{_ago(t.updated_at)}")
+    lines.append("\nبرای دیدنِ کارتشان /tickets را بزن.")
+    try:
+        await bot.send_message(PLATFORM_ADMIN_ID, "\n".join(lines), parse_mode="HTML")
+    except Exception:
+        logger.exception("tickets: یادآوری ارسال نشد")
+        return 0
+    await _set(K_REMIND_LAST, now.isoformat())
+    return len(rows)
+
+
+async def ticket_reminder_loop(platform_bot) -> None:
+    while True:
+        try:
+            await remind_once(platform_bot)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("tickets: خطای حلقهٔ یادآوری")
+        await asyncio.sleep(600)
+
+
 # ─────────────── تنظیماتِ مدیر: /tkset (خوش‌آمد + سوالاتِ متداول) ───────────────
 
 class TkSetFSM(StatesGroup):
@@ -566,11 +630,14 @@ class TkSetFSM(StatesGroup):
 async def _set_panel() -> tuple[str, InlineKeyboardMarkup]:
     custom = (await _get(K_WELCOME)).strip()
     items = await _faq()
+    hrs = await _remind_hours()
     text = ("⚙️ <b>تنظیماتِ تیکتِ روبیکا/سروش</b>\n\n"
             f"👋 متنِ خوش‌آمد: {'<i>سفارشی</i>' if custom else '<i>پیش‌فرض</i>'}\n"
-            f"❓ سوالاتِ متداول: <b>{len(items)}</b> از {MAX_FAQ}\n\n"
+            f"❓ سوالاتِ متداول: <b>{len(items)}</b> از {MAX_FAQ}\n"
+            f"⏰ یادآوریِ تیکتِ بی‌پاسخ: <b>{('هر ' + str(hrs) + ' ساعت') if hrs else 'خاموش'}</b>\n\n"
             "سوالاتِ متداول به‌صورتِ دکمه در منویِ کاربر می‌آیند و جوابشان را بدونِ تیکت می‌گیرند.")
-    rows = [[InlineKeyboardButton(text="✏️ ویرایشِ متنِ خوش‌آمد", callback_data="mtks:welcome")]]
+    rows = [[InlineKeyboardButton(text="✏️ ویرایشِ متنِ خوش‌آمد", callback_data="mtks:welcome")],
+            [InlineKeyboardButton(text="⏰ تغییرِ زمانِ یادآوری", callback_data="mtks:remind")]]
     if custom:
         rows.append([InlineKeyboardButton(text="♻️ برگشت به متنِ پیش‌فرض", callback_data="mtks:wreset")])
     if len(items) < MAX_FAQ:
@@ -598,7 +665,10 @@ async def tks_cb(cb: CallbackQuery, state: FSMContext):
         await state.set_state(TkSetFSM.faq_q)
         await cb.message.answer(f"❓ متنِ سؤال را بفرست (حداکثر {FAQ_Q_MAX} حرف؛ همین روی دکمه می‌نشیند). لغو: /tkset")
         return await cb.answer()
-    if act == "wreset":
+    if act == "remind":
+        cur = await _remind_hours()
+        await _set(K_REMIND, str(REMIND_CHOICES[(REMIND_CHOICES.index(cur) + 1) % len(REMIND_CHOICES)]))
+    elif act == "wreset":
         await _set(K_WELCOME, "")
     elif act == "del":
         items = await _faq()
