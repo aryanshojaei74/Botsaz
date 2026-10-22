@@ -148,31 +148,6 @@ def parse_updates(resp: dict) -> tuple[list[dict], str | None]:
     return [x for x in out if x["chat_id"]], (str(nxt) if nxt not in (None, "") else None)
 
 
-def format_admin_text(m: dict, prof: dict | None = None) -> str:
-    """پیامِ مدیر: مشخصاتِ فرستنده (نام/یوزرنیم/شماره) + متنِ پیام. prof از get_profile می‌آید."""
-    prof = prof or {}
-    if m["kind"] == "contact":
-        body = "📱 <i>شمارهٔ خودش را به اشتراک گذاشت.</i>"
-    elif m["kind"] == "file":
-        body = ("📎 <i>فایل</i>" + (f" <code>{_html.escape(m['file_name'])}</code>" if m.get("file_name") else "")
-                + (("\n\n" + _html.escape(m["text"][:300])) if m["text"] else ""))
-    elif m["text"]:
-        body = _html.escape(m["text"])
-    else:
-        body = "<i>پیامِ بدونِ متن</i>"
-    name = " ".join(x for x in (prof.get("first_name"), prof.get("last_name")) if x) or "—"
-    lines = ["📩 <b>پیام تازه از روبیکا</b>",
-             f"👤 نام: {_html.escape(name)}"]
-    if prof.get("username"):
-        lines.append(f"🔗 یوزرنیم: @{_html.escape(str(prof['username']).lstrip('@'))}")
-    lines.append(f"📱 شماره: <code>{_html.escape(prof['phone'])}</code>" if prof.get("phone")
-                 else "📱 شماره: <i>ثبت نشده (کاربر هنوز نفرستاده)</i>")
-    lines.append(f"🆔 شناسهٔ کاربر: <code>{_html.escape(prof.get('user_id') or m['sender_id'] or '—')}</code>")
-    lines.append(f"{_MARK} <code>{_html.escape(m['chat_id'])}</code>")
-    lines += ["", body, "", "<i>برای جواب‌دادن روی همین پیام ریپلای کن.</i>"]
-    return "\n".join(lines)
-
-
 def chat_id_from_text(text: str | None) -> str | None:
     m = _CHAT_RE.search(text or "")
     return m.group(1) if m else None
@@ -192,30 +167,25 @@ async def _warn_admin(bot, text: str) -> None:
         logger.exception("rubika: هشدار به مدیر ارسال نشد")
 
 
-BTN_CONTACT = "💬 پیام به ادمین"
-BTN_PHONE = "📱 ارسالِ شمارهٔ من"
-WELCOME = ("سلام 👋\nبرای ارتباط با ادمین دکمهٔ «" + BTN_CONTACT + "» را بزن و پیامت را بنویس.\n"
-           "اگر خواستی با دکمهٔ «" + BTN_PHONE + "» شماره‌ات را هم بفرست تا ادمین بشناسدت.")
-ASK_MSG = "✍️ پیامت را همین‌جا بنویس؛ مستقیم برای ادمین می‌رسد و جوابش را همین‌جا می‌گیری."
-GOT_PHONE = "✅ شمارهٔ تو ثبت شد و برای ادمین فرستاده شد."
-GOT_MSG = "✅ پیامت به ادمین رسید."
-
 _PROF_TTL = 3600.0
 _prof_cache: dict[str, tuple[float, dict]] = {}
 
 
-def _keypad() -> dict:
-    return {"rows": [
-        {"buttons": [{"id": "contact", "type": "Simple", "button_text": BTN_CONTACT}]},
-        {"buttons": [{"id": "phone", "type": "AskMyPhoneNumber", "button_text": BTN_PHONE}]},
-    ], "resize_keyboard": True, "on_time_keyboard": False}
+def _build_keypad(menu: list[list[str]]) -> dict:
+    """منوی دکمه‌ای (ردیف‌هایی از برچسب) → chat_keypad روبیکا. دکمهٔ «ارسالِ شماره» از نوعِ AskMyPhoneNumber است."""
+    from platform_msg_tickets import BTN_PHONE
+    rows = []
+    for i, row in enumerate(menu):
+        rows.append({"buttons": [{"id": f"b{i}_{j}", "type": "AskMyPhoneNumber" if lab == BTN_PHONE else "Simple",
+                                  "button_text": lab} for j, lab in enumerate(row)]})
+    return {"rows": rows, "resize_keyboard": True, "on_time_keyboard": False}
 
 
-async def _send_user(token: str, chat_id: str, text: str, keypad: bool = False) -> None:
+async def _send_user(token: str, chat_id: str, text: str, keypad: dict | None = None) -> None:
     """به کاربرِ روبیکا پیام می‌دهد؛ اگر پنل کیبورد را نپذیرفت، بدونِ کیبورد دوباره می‌فرستد."""
     if keypad:
         r = await api_call(token, "sendMessage", {"chat_id": chat_id, "text": text,
-                                                    "chat_keypad": _keypad(), "chat_keypad_type": "New"})
+                                                    "chat_keypad": keypad, "chat_keypad_type": "New"})
         if r.get("status") == "OK":
             return
         logger.warning("rubika: ارسال با کیبورد رد شد، بدونِ کیبورد می‌فرستم: %s", r.get("error") or r.get("status"))
@@ -270,33 +240,6 @@ async def download_file(token: str, file_id: str) -> bytes | None:
         return None
 
 
-async def forward_file(bot, token: str, m: dict, prof: dict) -> bool:
-    """فایل را با کپشنِ مشخصاتِ فرستنده (شاملِ شناسهٔ چت برایِ ریپلای) به مدیر می‌فرستد."""
-    from aiogram.types import BufferedInputFile
-    cap = format_admin_text(m, prof)
-    data = await download_file(token, m["file_id"]) if m.get("file_id") else None
-    if not data:
-        await bot.send_message(PLATFORM_ADMIN_ID, cap + "\n\n⚠️ <i>فایل دانلود نشد (شاید خیلی بزرگ است)؛ در خودِ روبیکا ببین.</i>",
-                               parse_mode="HTML")
-        return True
-    name = m.get("file_name") or "file"
-    inp = BufferedInputFile(data, filename=name)
-    low = name.lower()
-    try:
-        if low.endswith(_IMG) and len(data) <= 10 * 1024 * 1024:
-            await bot.send_photo(PLATFORM_ADMIN_ID, inp, caption=cap, parse_mode="HTML")
-        elif low.endswith(_VID):
-            await bot.send_video(PLATFORM_ADMIN_ID, inp, caption=cap, parse_mode="HTML")
-        elif low.endswith(_AUD):
-            await bot.send_audio(PLATFORM_ADMIN_ID, inp, caption=cap, parse_mode="HTML")
-        else:
-            await bot.send_document(PLATFORM_ADMIN_ID, inp, caption=cap, parse_mode="HTML")
-    except Exception:
-        logger.exception("rubika: ارسالِ فایل به مدیر ناموفق")
-        await bot.send_message(PLATFORM_ADMIN_ID, cap + "\n\n⚠️ <i>فایل به تلگرام نرفت.</i>", parse_mode="HTML")
-    return True
-
-
 async def upload_file(token: str, data: bytes, name: str, ftype: str) -> str | None:
     """requestSendFile → آپلود → file_id (برایِ جوابِ مدیر با فایل)."""
     r = await api_call(token, "requestSendFile", {"type": ftype}, timeout=20)
@@ -338,33 +281,60 @@ async def get_profile(token: str, chat_id: str) -> dict:
     return prof
 
 
+def _ftype_of(name: str) -> str:
+    low = (name or "").lower()
+    if low.endswith(_IMG):
+        return "photo"
+    if low.endswith(_VID):
+        return "video"
+    if low.endswith(_AUD):
+        return "audio"
+    return "document"
+
+
+class RubikaChannel:
+    """آدابتورِ روبیکا برایِ سیستمِ تیکت (platform_msg_tickets.Channel)."""
+    key = "rubika"
+    label = "روبیکا"
+
+    def __init__(self, token: str):
+        self.token = token
+
+    async def send(self, chat_id: str, text: str, menu=None) -> None:
+        await _send_user(self.token, chat_id, text, _build_keypad(menu) if menu else None)
+
+    async def ack(self, chat_id: str, text: str) -> None:
+        await _ack(self.token, chat_id, text)
+
+    async def download(self, file_id: str):
+        return await download_file(self.token, file_id)
+
+    async def send_file(self, chat_id: str, data: bytes, name: str, ftype: str, caption: str = "") -> bool:
+        kind = {"photo": "Image", "video": "Video", "voice": "Voice", "audio": "Music"}.get(ftype, "File")
+        rid = await upload_file(self.token, data, name, kind)
+        if not rid:
+            return False
+        body = {"chat_id": chat_id, "file_id": rid}
+        if caption:
+            body["text"] = caption
+        return (await api_call(self.token, "sendFile", body)).get("status") == "OK"
+
+
+async def make_channel() -> "RubikaChannel | None":
+    token = (await _get(K_TOKEN)).strip()
+    return RubikaChannel(token) if token else None
+
+
 async def _handle(bot, token: str, m: dict) -> int:
-    """یک پیام را پردازش می‌کند؛ ۱ اگر به مدیر فرستاده شد."""
-    chat_id, txt = m["chat_id"], m["text"].strip()
-    if m["kind"] == "start" or txt.lower() in ("/start", "start", "شروع"):
-        await _send_user(token, chat_id, WELCOME, keypad=True)
-        return 0
-    if m["button_id"] == "contact" or txt == BTN_CONTACT:
-        await _send_user(token, chat_id, ASK_MSG, keypad=True)
-        return 0
-    if m["kind"] == "contact":
-        await _set(f"rubika_phone:{chat_id}", m["phone"])
-        prof = await get_profile(token, chat_id)
-        for k, v in (("first_name", m["first_name"]), ("last_name", m["last_name"])):
-            if v and not prof.get(k):
-                prof[k] = v
-        await bot.send_message(PLATFORM_ADMIN_ID, format_admin_text(m, prof), parse_mode="HTML")
-        await _ack(token, chat_id, GOT_PHONE)
-        return 1
-    if txt == BTN_PHONE or m["kind"] == "other":
-        return 0
-    prof = await get_profile(token, chat_id)
-    if m["kind"] == "file":
-        await forward_file(bot, token, m, prof)
-    else:
-        await bot.send_message(PLATFORM_ADMIN_ID, format_admin_text(m, prof), parse_mode="HTML")
-    await _ack(token, chat_id, GOT_MSG)
-    return 1
+    """رویدادِ روبیکا را به سیستمِ تیکت می‌سپارد؛ ۱ اگر چیزی به مدیر فرستاده شد."""
+    from platform_msg_tickets import handle_user
+    prof = {} if m["kind"] == "start" else await get_profile(token, m["chat_id"])
+    name = " ".join(x for x in (prof.get("first_name") or m.get("first_name"),
+                                prof.get("last_name") or m.get("last_name")) if x)
+    ev = {"chat_id": m["chat_id"], "user_id": prof.get("user_id") or m["sender_id"], "name": name,
+          "username": prof.get("username", ""), "text": m["text"], "kind": m["kind"], "phone": m["phone"],
+          "file_id": m["file_id"], "file_name": m["file_name"], "file_type": _ftype_of(m["file_name"])}
+    return await handle_user(bot, RubikaChannel(token), ev)
 
 
 async def poll_once(bot) -> int:

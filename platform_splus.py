@@ -53,15 +53,6 @@ POLL_LONG_SECS = 10
 TIMEOUT_WARN_AFTER = 6      # تایم‌اوتِ پشتِ‌سرهم تا قبلِ هشدار به مدیر
 _timeouts = 0
 
-BTN_CONTACT = "💬 پیام به ادمین"
-BTN_PHONE = "📱 ارسالِ شمارهٔ من"
-WELCOME = ("سلام 👋\nبرای ارتباط با ادمین دکمهٔ «" + BTN_CONTACT + "» را بزن و پیامت را بنویس.\n"
-           "اگر خواستی با دکمهٔ «" + BTN_PHONE + "» شماره‌ات را هم بفرست تا ادمین بشناسدت.")
-ASK_MSG = "✍️ پیامت را همین‌جا بنویس؛ مستقیم برای ادمین می‌رسد و جوابش را همین‌جا می‌گیری."
-GOT_PHONE = "✅ شمارهٔ تو ثبت شد و برای ادمین فرستاده شد."
-GOT_MSG = "✅ پیامت به ادمین رسید."
-
-
 class SplusFSM(StatesGroup):
     token = State()
 
@@ -145,28 +136,6 @@ def parse_updates(resp: dict) -> tuple[list[dict], int | None]:
     return out, last
 
 
-def format_admin_text(m: dict) -> str:
-    if m["kind"] == "contact":
-        body = "📱 <i>شمارهٔ خودش را به اشتراک گذاشت.</i>"
-    elif m["kind"] == "file":
-        body = ("📎 <i>فایل</i>" + (f" <code>{_html.escape(m['file_name'])}</code>" if m["file_name"] else "")
-                + (("\n\n" + _html.escape(m["text"][:300])) if m["text"] else ""))
-    elif m["text"]:
-        body = _html.escape(m["text"])
-    else:
-        body = "<i>پیامِ بدونِ متن</i>"
-    name = " ".join(x for x in (m["first_name"], m["last_name"]) if x) or "—"
-    lines = ["📩 <b>پیام تازه از سروش پلاس</b>", f"👤 نام: {_html.escape(name)}"]
-    if m["username"]:
-        lines.append(f"🔗 یوزرنیم: @{_html.escape(m['username'].lstrip('@'))}")
-    lines.append(f"📱 شماره: <code>{_html.escape(m['phone'])}</code>" if m.get("phone")
-                 else "📱 شماره: <i>ثبت نشده (کاربر هنوز نفرستاده)</i>")
-    lines.append(f"🆔 شناسهٔ کاربر: <code>{_html.escape(m['user_id'])}</code>")
-    lines.append(f"{_MARK} <code>{_html.escape(m['chat_id'])}</code>")
-    lines += ["", body, "", "<i>برای جواب‌دادن روی همین پیام ریپلای کن.</i>"]
-    return "\n".join(lines)
-
-
 def chat_id_from_text(text: str | None) -> str | None:
     m = _CHAT_RE.search(text or "")
     return m.group(1) if m else None
@@ -174,15 +143,18 @@ def chat_id_from_text(text: str | None) -> str | None:
 
 # ─────────────── ارسال به کاربر / فایل ───────────────
 
-def _keypad() -> dict:
-    return {"keyboard": [[{"text": BTN_CONTACT}], [{"text": BTN_PHONE, "request_contact": True}]],
+def _build_keypad(menu: list[list[str]]) -> dict:
+    """منوی دکمه‌ای (ردیف‌هایی از برچسب) → ReplyKeyboard سروش؛ دکمهٔ «ارسالِ شماره» request_contact دارد."""
+    from platform_msg_tickets import BTN_PHONE
+    return {"keyboard": [[({"text": lab, "request_contact": True} if lab == BTN_PHONE else {"text": lab})
+                          for lab in row] for row in menu],
             "resize_keyboard": True, "is_persistent": True}
 
 
-async def _send_user(token: str, chat_id: str, text: str, keypad: bool = False) -> dict:
+async def _send_user(token: str, chat_id: str, text: str, keypad: dict | None = None) -> dict:
     body = {"chat_id": chat_id, "text": text}
     if keypad:
-        body["reply_markup"] = _keypad()
+        body["reply_markup"] = keypad
         r = await api_call(token, "sendMessage", body)
         if r.get("ok"):
             return r
@@ -232,58 +204,50 @@ async def download_file(token: str, file_id: str) -> bytes | None:
     return None
 
 
-async def forward_file(bot, token: str, m: dict) -> None:
-    from aiogram.types import BufferedInputFile
-    cap = format_admin_text(m)
-    data = await download_file(token, m["file_id"])
-    if not data:
-        await bot.send_message(PLATFORM_ADMIN_ID, cap + "\n\n⚠️ <i>فایل دانلود نشد (شاید خیلی بزرگ است)؛ در خودِ سروش ببین.</i>",
-                               parse_mode="HTML")
-        return
-    inp = BufferedInputFile(data, filename=m["file_name"] or "file")
-    ft = m["file_type"]
-    try:
-        if ft == "photo" and len(data) <= 10 * 1024 * 1024:
-            await bot.send_photo(PLATFORM_ADMIN_ID, inp, caption=cap, parse_mode="HTML")
-        elif ft == "video":
-            await bot.send_video(PLATFORM_ADMIN_ID, inp, caption=cap, parse_mode="HTML")
-        elif ft == "voice":
-            await bot.send_voice(PLATFORM_ADMIN_ID, inp, caption=cap, parse_mode="HTML")
-        elif ft == "audio":
-            await bot.send_audio(PLATFORM_ADMIN_ID, inp, caption=cap, parse_mode="HTML")
-        else:
-            await bot.send_document(PLATFORM_ADMIN_ID, inp, caption=cap, parse_mode="HTML")
-    except Exception:
-        logger.exception("splus: ارسالِ فایل به مدیر ناموفق")
-        await bot.send_message(PLATFORM_ADMIN_ID, cap + "\n\n⚠️ <i>فایل به تلگرام نرفت.</i>", parse_mode="HTML")
-
-
 # ─────────────── پردازش و حلقه ───────────────
 
+class SplusChannel:
+    """آدابتورِ سروش پلاس برایِ سیستمِ تیکت (platform_msg_tickets.Channel)."""
+    key = "splus"
+    label = "سروش پلاس"
+
+    def __init__(self, token: str):
+        self.token = token
+
+    async def send(self, chat_id: str, text: str, menu=None) -> None:
+        await _send_user(self.token, chat_id, text, _build_keypad(menu) if menu else None)
+
+    async def ack(self, chat_id: str, text: str) -> None:
+        await _ack(self.token, chat_id, text)
+
+    async def download(self, file_id: str):
+        return await download_file(self.token, file_id)
+
+    async def send_file(self, chat_id: str, data: bytes, name: str, ftype: str, caption: str = "") -> bool:
+        method, field = {"photo": ("sendPhoto", "photo"), "video": ("sendVideo", "video"),
+                         "voice": ("sendVoice", "voice"), "audio": ("sendAudio", "audio")}.get(
+            ftype, ("sendDocument", "document"))
+        form = aiohttp.FormData()
+        form.add_field("chat_id", str(chat_id))
+        form.add_field(field, data, filename=name)
+        if caption:
+            form.add_field("caption", caption)
+        return bool((await api_call(self.token, method, timeout=120, form=form)).get("ok"))
+
+
+async def make_channel() -> "SplusChannel | None":
+    token = (await _get(K_TOKEN)).strip()
+    return SplusChannel(token) if token else None
+
+
 async def _handle(bot, token: str, m: dict) -> int:
-    """یک پیام را پردازش می‌کند؛ ۱ اگر به مدیر فرستاده شد."""
-    chat_id, txt = m["chat_id"], m["text"].strip()
-    if m["kind"] != "contact" and m["kind"] != "file":
-        if txt.split("@")[0].lower() in ("/start", "start", "شروع"):
-            await _send_user(token, chat_id, WELCOME, keypad=True)
-            return 0
-        if txt == BTN_CONTACT:
-            await _send_user(token, chat_id, ASK_MSG, keypad=True)
-            return 0
-        if txt == BTN_PHONE or m["kind"] == "other":
-            return 0
-    if m["kind"] == "contact":
-        await _set(f"splus_phone:{chat_id}", m["phone"])
-        await bot.send_message(PLATFORM_ADMIN_ID, format_admin_text(m), parse_mode="HTML")
-        await _ack(token, chat_id, GOT_PHONE)
-        return 1
-    m["phone"] = (await _get(f"splus_phone:{chat_id}")).strip()
-    if m["kind"] == "file":
-        await forward_file(bot, token, m)
-    else:
-        await bot.send_message(PLATFORM_ADMIN_ID, format_admin_text(m), parse_mode="HTML")
-    await _ack(token, chat_id, GOT_MSG)
-    return 1
+    """رویدادِ سروش را به سیستمِ تیکت می‌سپارد؛ ۱ اگر چیزی به مدیر فرستاده شد."""
+    from platform_msg_tickets import handle_user
+    ev = {"chat_id": m["chat_id"], "user_id": m["user_id"],
+          "name": " ".join(x for x in (m["first_name"], m["last_name"]) if x),
+          "username": m["username"], "text": m["text"], "kind": m["kind"], "phone": m["phone"],
+          "file_id": m["file_id"], "file_name": m["file_name"], "file_type": m["file_type"]}
+    return await handle_user(bot, SplusChannel(token), ev)
 
 
 async def _warn_admin(bot, text: str) -> None:

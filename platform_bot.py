@@ -247,6 +247,9 @@ router.include_router(platform_rubika_router)
 # === PATCH_PLATFORM_SPLUS_BRIDGE_V1 ===
 from platform_splus import platform_splus_router
 router.include_router(platform_splus_router)
+# === PATCH_PLATFORM_MSG_TICKETS_V1 ===
+from platform_msg_tickets import platform_tickets_router
+router.include_router(platform_tickets_router)
 
 # ---------------- ثابت‌ها ----------------
 FIELDS = {

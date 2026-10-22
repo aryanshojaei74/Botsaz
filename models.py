@@ -3129,6 +3129,40 @@ class PlatformPremiumEmoji(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+# === PATCH_PLATFORM_TICKETS_V1 ===
+class PlatformTicket(Base):
+    """تیکتِ پشتیبانی که کاربرِ روبیکا/سروش پلاس از طریقِ رباتِ پیام‌رسان ثبت کرده؛
+    مدیرِ بات‌ساز در پی‌ویِ تلگرام پاسخ می‌دهد. شمارهٔ پیگیری: BS-<id>."""
+    __tablename__ = "platform_tickets"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    channel: Mapped[str] = mapped_column(String(10), index=True)        # rubika / splus
+    chat_id: Mapped[str] = mapped_column(String(64), index=True)
+    user_id: Mapped[str | None] = mapped_column(String(64))
+    name: Mapped[str | None] = mapped_column(String(120))
+    username: Mapped[str | None] = mapped_column(String(64))
+    phone: Mapped[str | None] = mapped_column(String(32))
+    category: Mapped[str] = mapped_column(String(12), default="other")
+    status: Mapped[str] = mapped_column(String(10), default="open", index=True)   # open / answered / closed
+    rating: Mapped[int | None] = mapped_column(Integer)                  # ۱ ضعیف … ۳ عالی
+    subject: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class PlatformTicketMsg(Base):
+    """پیام‌هایِ یک تیکت (برایِ تاریخچه)؛ sender: user / admin."""
+    __tablename__ = "platform_ticket_msgs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticket_id: Mapped[int] = mapped_column(Integer, index=True)
+    sender: Mapped[str] = mapped_column(String(8))
+    kind: Mapped[str] = mapped_column(String(10), default="text")
+    text: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 # === PATCH_WEB_PANEL_V1 ===
 class AdminWebSession(Base):
     """سشنِ ورودِ مالک/ادمینِ یک ربات به «پنل تحت وب».
