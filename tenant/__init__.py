@@ -3712,7 +3712,7 @@ def _has_wallet_charge_btn(rows) -> bool:
 
 
 async def wallet_topup_rows(bot_id: int, colored: bool = False,
-                            in_purchase: bool = True, skip_card: bool = False,
+                            in_purchase: bool = True, skip_card: bool = False, force_card: bool = False,
                             skip_abangateway: bool = False,
                             skip_apay: bool = False) -> list[list[InlineKeyboardButton]]:
     """روش‌هایِ شارژِ کیف پول که واقعاً فعال‌اند.
@@ -3735,7 +3735,8 @@ async def wallet_topup_rows(bot_id: int, colored: bool = False,
     # می‌دید — دکمه‌ای که یا اصلاً کار نمی‌کرد یا برخلافِ انتخابِ ادمین بود.
     card_num = await get_setting(bot_id, "card_number", "")
     card_on = await get_setting(bot_id, "card_enabled", "1") == "1"
-    card_purchase_on = (not in_purchase) or \
+    # force_card: صفحهٔ «➕ شارژ حساب» (vsc:o) — خاموش‌کردنِ کارت‌به‌کارت در *فاکتور* نباید شارژ با کارت را ببندد
+    card_purchase_on = (not in_purchase) or force_card or \
         await get_setting(bot_id, "card_purchase_enabled", "1") == "1"
     _ab_repl = await _ab_replaces_card(bot_id)   # === PATCH_ABANGATEWAY_REPLACE_CARD_V1 ===
     if bool(card_num) and card_on and card_purchase_on and not skip_card and not _ab_repl:

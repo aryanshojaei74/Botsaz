@@ -81,15 +81,62 @@ async def test_private_message_blocked_with_kyc_button_and_rate_limited(env):
     m = msg(777, "🛍 خرید")
     assert await KL.message_gate(m, 5, None) is False
     kind, text, kw = m.sent[0]
-    assert "محدود شده" in text and kw["reply_markup"].inline_keyboard[0][0].callback_data == "kycu:menu"
+    assert "محدود شده" in text and kw["reply_markup"].inline_keyboard[0][0].callback_data == "kycu:l1"
     m2 = msg(777, "باز هم")
     assert await KL.message_gate(m2, 5, None) is False and not m2.sent       # ۲۰ثانیه یک‌بار پیام
 
 
 @pytest.mark.asyncio
-async def test_private_start_and_kyc_wizard_pass(env):
-    assert await KL.message_gate(msg(777, "/start"), 5, None) is True
-    assert await KL.message_gate(msg(777, "عکس مدرک"), 5, "KycUserFSM:wait_media") is True
+async def test_private_kyc_wizard_passes(env):
+    assert await KL.message_gate(msg(777, "عکس مدرک"), 5, "KycUserFSM:l2_file") is True
+
+
+@pytest.mark.asyncio
+async def test_start_shows_notice_with_level_button_not_main_menu(env):
+    # سطح ۰ ⇒ دکمهٔ احرازِ سطح ۱
+    m = msg(777, "/start")
+    assert await KL.message_gate(m, 5, None) is False
+    text, kw = m.sent[0][1], m.sent[0][2]
+    b = kw["reply_markup"].inline_keyboard[0][0]
+    assert "محدود شده" in text and b.callback_data == "kycu:l1" and "سطح ۱" in b.text
+    # /start پشتِ‌سرهم همیشه جواب می‌دهد (محدودیتِ ۲۰ثانیه برایش نیست)
+    m2 = msg(777, "/start")
+    assert await KL.message_gate(m2, 5, None) is False and m2.sent
+    # سطح ۱ ⇒ احرازِ سطح ۲
+    async with env() as s:
+        u = await s.get(models.BotUser, 1)
+        u.kyc_level = 1
+        await s.commit()
+    m3 = msg(777, "/start")
+    await KL.message_gate(m3, 5, None)
+    b3 = m3.sent[0][2]["reply_markup"].inline_keyboard[0][0]
+    assert b3.callback_data == "kycu:l2" and "سطح ۲" in b3.text
+    # درخواستِ در انتظار ⇒ دکمهٔ وضعیت
+    async with env() as s:
+        s.add(models.KycRequest(bot_id=5, user_id=1, level=2, status="pending"))
+        await s.commit()
+    m4 = msg(777, "/start")
+    await KL.message_gate(m4, 5, None)
+    assert m4.sent[0][2]["reply_markup"].inline_keyboard[0][0].callback_data == "kycu:menu"
+
+
+@pytest.mark.asyncio
+async def test_blocked_callback_also_sends_persistent_notice_and_cancel_passes(env):
+    out, sent = [], []
+
+    async def answer(text=None, show_alert=False):
+        out.append(text)
+
+    async def m_answer(t, **kw):
+        sent.append((t, kw))
+
+    ev = SimpleNamespace(from_user=SimpleNamespace(id=777), data="shop:buy:1", answer=answer,
+                         message=SimpleNamespace(chat=SimpleNamespace(type="private"), answer=m_answer))
+    assert await KL.callback_gate(ev, 5) is False
+    assert out and sent and sent[0][1]["reply_markup"].inline_keyboard[0][0].callback_data == "kycu:l1"
+    ev2 = SimpleNamespace(from_user=SimpleNamespace(id=777), data="fsm:cancel", answer=answer,
+                          message=SimpleNamespace(chat=SimpleNamespace(type="private"), answer=m_answer))
+    assert await KL.callback_gate(ev2, 5) is True
 
 
 @pytest.mark.asyncio

@@ -21,7 +21,7 @@ import time
 from sqlalchemy import select
 
 from config import Session
-from models import BotUser
+from models import BotUser, KycRequest
 
 from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
@@ -102,10 +102,45 @@ def private_allowed(text: str | None, fsm_state: str | None) -> bool:
     return bool(fsm_state) and fsm_state.startswith("KycUserFSM")
 
 
-def _kyc_kb():
+async def _kyc_kb(bot_id: int | None = None, tg_id: int | None = None):
+    """دکمهٔ احراز، مطابقِ سطحِ کاربر: سطح۰ ⇒ احرازِ سطح ۱، سطح۱ ⇒ احرازِ سطح ۲، درخواستِ در انتظار ⇒ وضعیت."""
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🛡 احرازِ هویت", callback_data="kycu:menu")]])
+    text, cb = "🛡 احرازِ هویت", "kycu:menu"
+    if bot_id is not None and tg_id is not None:
+        try:
+            async with Session() as s:
+                u = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == tg_id))
+                pend = None
+                if u is not None:
+                    pend = await s.scalar(select(KycRequest.id).where(
+                        KycRequest.bot_id == bot_id, KycRequest.user_id == u.id,
+                        KycRequest.status == "pending"))
+            lvl = int(getattr(u, "kyc_level", 0) or 0) if u is not None else 0
+            if pend is not None:
+                text, cb = "⏳ وضعیتِ درخواستِ احرازِ هویت", "kycu:menu"
+            elif lvl <= 0:
+                text, cb = "🛡 احرازِ هویتِ سطح ۱", "kycu:l1"
+            elif lvl == 1:
+                text, cb = "🛡 احرازِ هویتِ سطح ۲", "kycu:l2"
+        except Exception:
+            logger.exception("[KYC_LOCK] ساختِ دکمهٔ احراز ناموفق بود")
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=text, callback_data=cb)]])
+
+
+async def _send_notice(event, bot_id: int, tg_id: int, reply: bool = False) -> None:
+    try:
+        kb = await _kyc_kb(bot_id, tg_id)
+        if reply:
+            await event.reply(GROUP_NOTICE.format(name=event.from_user.full_name or "کاربر"))
+        else:
+            await event.answer(PRIVATE_NOTICE, reply_markup=kb)
+    except Exception:
+        logger.debug("[KYC_LOCK] پیامِ محدودیت ارسال نشد")
+
+
+def is_start(text: str | None) -> bool:
+    t = (text or "").strip().lower()
+    return t == "/start" or t.startswith("/start ")
 
 
 async def message_gate(event, bot_id: int, fsm_state: str | None) -> bool:
@@ -115,13 +150,14 @@ async def message_gate(event, bot_id: int, fsm_state: str | None) -> bool:
         return True
     chat_type = getattr(event.chat, "type", "private")
     if chat_type == "private":
+        # /start: به‌جایِ منویِ اصلی (که همهٔ دکمه‌هایش پاپ‌آپِ «محدود» می‌دهد) پیامِ محدودیت + دکمهٔ احراز
+        if is_start(event.text):
+            await _send_notice(event, bot_id, u.id)
+            return False
         if private_allowed(event.text, fsm_state):
             return True
         if _should_notice(bot_id, u.id):
-            try:
-                await event.answer(PRIVATE_NOTICE, reply_markup=_kyc_kb())
-            except Exception:
-                logger.debug("[KYC_LOCK] پیامِ محدودیت ارسال نشد")
+            await _send_notice(event, bot_id, u.id)
         return False
     if group_interaction(event.text, bool(getattr(event, "dice", None))):
         if _should_notice(bot_id, u.id):
@@ -140,12 +176,15 @@ async def callback_gate(event, bot_id: int) -> bool:
         return True
     data = event.data or ""
     chat_type = getattr(getattr(getattr(event, "message", None), "chat", None), "type", "private")
-    if chat_type == "private" and (data.startswith("kycu:") or data == "noop"):
+    if chat_type == "private" and (data.startswith("kycu:") or data in ("noop", "fsm:cancel")):
         return True
     try:
         await event.answer(CB_NOTICE, show_alert=True)
     except Exception:
         logger.debug("[KYC_LOCK] پاسخِ کال‌بکِ محدودیت ممکن نشد")
+    # علاوه بر پاپ‌آپ، پیامِ ماندگار با دکمهٔ احراز هم بده تا کاربر راهِ بعدی را ببیند
+    if chat_type == "private" and event.message is not None and _should_notice(bot_id, u.id):
+        await _send_notice(event.message, bot_id, u.id)
     return False
 
 
@@ -161,6 +200,6 @@ async def notify_blocked(bot_id: int, user_id: int) -> None:
             return
         invalidate(bot_id, u.telegram_id)
         async with _temp_bot(row.token) as tb:
-            await tb.send_message(u.telegram_id, PRIVATE_NOTICE, reply_markup=_kyc_kb())
+            await tb.send_message(u.telegram_id, PRIVATE_NOTICE, reply_markup=await _kyc_kb(bot_id, u.telegram_id))
     except Exception:
         logger.exception("[KYC_LOCK] اطلاع‌رسانیِ محدودیت به کاربر ناموفق بود (bot=%s user=%s)", bot_id, user_id)

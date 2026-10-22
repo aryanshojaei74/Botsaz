@@ -237,8 +237,51 @@ async def top_buyers(bot_id: int, limit: int = TOP_N) -> list[tuple[BotUser, flo
                         totals[u.id] = totals.get(u.id, 0) + float(total or 0)
                         users[u.id] = u
 
+        if bot_row and bot_row.field == "virtual_service":
+            await _add_virtual_service_totals(s, bot_id, since, totals, users)
+
     ranked = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)[:limit]
     return [(users[uid], total) for uid, total in ranked]
+
+
+async def _add_virtual_service_totals(s, bot_id: int, since, totals: dict, users: dict) -> None:
+    """رباتِ «خدمات مجازی» Order نمی‌سازد؛ خریدهایش در SmmOrder / GiftOrder (استارز، گیفت، تون) / WalletTxn(شمارهٔ مجازی)
+    است. قبلاً هیچ‌کدام در «نفراتِ برتر» حساب نمی‌شد (کارت‌به‌کارت و کیف‌پول هر دو). حالا هر روشِ پرداخت — چون
+    هر دو همان ردیفِ سفارش را می‌سازند — یک بار شمرده می‌شود."""
+    from models import GiftOrder, SmmOrder
+
+    def _add(u, amount):
+        if amount and amount > 0:
+            totals[u.id] = totals.get(u.id, 0) + float(amount)
+            users[u.id] = u
+
+    smm = (await s.execute(
+        select(BotUser, func.sum(SmmOrder.price_toman - func.coalesce(SmmOrder.refunded_toman, 0)))
+        .join(SmmOrder, (SmmOrder.user_telegram_id == BotUser.telegram_id) & (SmmOrder.bot_id == BotUser.bot_id))
+        .where(BotUser.bot_id == bot_id, SmmOrder.created_at >= since,
+               SmmOrder.status.in_(("sent", "completed", "partial")))
+        .group_by(BotUser.id))).all()
+    for u, total in smm:
+        _add(u, float(total or 0))
+
+    gift = (await s.execute(
+        select(BotUser, func.sum(GiftOrder.price_toman * func.coalesce(GiftOrder.quantity, 1)
+                                 - func.coalesce(GiftOrder.discount_amount, 0)))
+        .join(GiftOrder, GiftOrder.buyer_user_id == BotUser.id)
+        .where(BotUser.bot_id == bot_id, GiftOrder.created_at >= since, GiftOrder.status == "sent")
+        .group_by(BotUser.id))).all()
+    for u, total in gift:
+        _add(u, float(total or 0))
+
+    vnum = (await s.execute(
+        select(BotUser, func.sum(-WalletTxn.amount))
+        .join(WalletTxn, WalletTxn.user_id == BotUser.id)
+        .where(BotUser.bot_id == bot_id, WalletTxn.kind == "smm_order", WalletTxn.amount < 0,
+               WalletTxn.created_at >= since)
+        .group_by(BotUser.id))).all()
+    for u, total in vnum:
+        _add(u, float(total or 0))
+
 
 async def top_referrers(bot_id: int, limit: int = TOP_N) -> list[tuple[BotUser, float]]:
     """لیست (کاربر، تعداد دعوتِ موفق) در ۳۰ روز اخیر، مرتب نزولی.

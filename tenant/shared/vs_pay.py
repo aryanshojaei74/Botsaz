@@ -232,7 +232,7 @@ async def _fixed_amount(bot_id: int, gw: str, need: int) -> int | None:
 
 async def chooser_rows(bot_id: int, need: int, colored: bool) -> list[list[InlineKeyboardButton]]:
     from tenant import wallet_topup_rows
-    rows = await wallet_topup_rows(bot_id, colored=colored, in_purchase=True)
+    rows = await wallet_topup_rows(bot_id, colored=colored, in_purchase=True, force_card=True)
     out: list[list[InlineKeyboardButton]] = []
     for r in rows:
         new_r = []
