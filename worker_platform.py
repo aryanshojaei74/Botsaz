@@ -68,6 +68,8 @@ from platform_rubika import rubika_poll_loop
 from platform_splus import splus_poll_loop
 # === PATCH_PLATFORM_TICKET_REMIND_V1 ===
 from platform_msg_tickets import ticket_reminder_loop
+# === PATCH_OFFSITE_BACKUP_V1 ===
+from platform_offsite_backup import offsite_backup_loop
 
 
 async def _worker_startup():
@@ -109,6 +111,8 @@ async def _worker_startup():
         splus_poll_loop(mp.platform_bot),
         # === PATCH_PLATFORM_TICKET_REMIND_V1 === یادآوریِ تیکت‌هایِ بی‌پاسخ
         ticket_reminder_loop(mp.platform_bot),
+        # === PATCH_OFFSITE_BACKUP_V1 === بک‌آپِ رمزگذاری‌شده به تلگرامِ مدیر
+        offsite_backup_loop(mp.platform_bot),
     ):
         mp.spawn(_coro)
 

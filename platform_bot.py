@@ -253,6 +253,9 @@ router.include_router(platform_tickets_router)
 # === PATCH_PLATFORM_ADD_DAYS_V1 ===
 from platform_add_days import platform_add_days_router
 router.include_router(platform_add_days_router)
+# === PATCH_OFFSITE_BACKUP_V1 ===
+from platform_offsite_backup import platform_offsite_router
+router.include_router(platform_offsite_router)
 
 # ---------------- ثابت‌ها ----------------
 FIELDS = {
