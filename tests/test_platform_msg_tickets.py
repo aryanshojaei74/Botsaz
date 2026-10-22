@@ -233,3 +233,90 @@ async def test_my_tickets_lists_status(env):
     await new_ticket(env)
     await say(env, T.BTN_MY)
     assert "BS-1" in env.ch.sent[-1][1] and "باز" in env.ch.sent[-1][1]
+
+
+async def _add_faq(env, q="چطور شارژ کنم؟", a="از منوی کیف پول شارژ بزن."):
+    await T._save_faq((await T._faq()) + [{"q": q, "a": a}])
+
+
+@pytest.mark.asyncio
+async def test_faq_button_appears_only_when_faq_exists(env):
+    await say(env, kind="start")
+    assert [T.BTN_FAQ] not in env.ch.sent[-1][2]
+    await _add_faq(env)
+    await say(env, kind="start")
+    assert [T.BTN_FAQ] in env.ch.sent[-1][2]
+
+
+@pytest.mark.asyncio
+async def test_faq_flow_answers_without_ticket(env):
+    await _add_faq(env)
+    await say(env, T.BTN_FAQ)
+    assert ["چطور شارژ کنم؟"] in env.ch.sent[-1][2]
+    assert await say(env, "چطور شارژ کنم؟") == 0
+    assert "کیف پول" in env.ch.sent[-1][1] and T.BTN_NEW in env.ch.sent[-1][1]
+    async with env.maker() as s:
+        assert not (await s.scalars(select(models.PlatformTicket))).all()
+
+
+@pytest.mark.asyncio
+async def test_faq_state_falls_through_to_normal_flow(env):
+    await _add_faq(env)
+    await say(env, T.BTN_FAQ)
+    await say(env, T.BTN_NEW)                       # از وسطِ FAQ مستقیم تیکت می‌سازد
+    assert "موضوعِ تیکت" in env.ch.sent[-1][1]
+
+
+@pytest.mark.asyncio
+async def test_custom_welcome_text(env):
+    await T._set(T.K_WELCOME, "خوش اومدی به فروشگاه ما")
+    await say(env, kind="start")
+    assert env.ch.sent[-1][1] == "خوش اومدی به فروشگاه ما"
+
+
+@pytest.mark.asyncio
+async def test_settings_panel_add_and_delete_faq(env):
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.memory import MemoryStorage
+    from aiogram.fsm.storage.base import StorageKey
+    out = []
+
+    async def answer(text, **kw):
+        out.append(text)
+
+    state = FSMContext(MemoryStorage(), StorageKey(bot_id=1, chat_id=42, user_id=42))
+    adm = SimpleNamespace(id=42)
+    await T.tks_cmd(SimpleNamespace(from_user=adm, answer=answer), state)
+    assert "تنظیماتِ تیکت" in out[-1]
+    await state.set_state(T.TkSetFSM.faq_q)
+    await T.tks_faq_q(SimpleNamespace(text="ساعت کاری؟", from_user=adm, answer=answer), state)
+    assert await state.get_state() == T.TkSetFSM.faq_a.state
+    await T.tks_faq_a(SimpleNamespace(text="۹ تا ۱۸", from_user=adm, answer=answer), state)
+    assert [x["q"] for x in await T._faq()] == ["ساعت کاری؟"]
+
+    async def cb_answer(*a, **k):
+        pass
+
+    async def edit_text(text, **kw):
+        out.append(text)
+
+    cb = SimpleNamespace(data="mtks:del:0", from_user=adm, answer=cb_answer,
+                         message=SimpleNamespace(edit_text=edit_text, answer=answer))
+    await T.tks_cb(cb, state)
+    assert await T._faq() == []
+
+
+@pytest.mark.asyncio
+async def test_faq_question_cannot_shadow_menu_buttons(env):
+    from aiogram.fsm.context import FSMContext
+    from aiogram.fsm.storage.memory import MemoryStorage
+    from aiogram.fsm.storage.base import StorageKey
+    out = []
+
+    async def answer(text, **kw):
+        out.append(text)
+
+    state = FSMContext(MemoryStorage(), StorageKey(bot_id=1, chat_id=42, user_id=42))
+    await state.set_state(T.TkSetFSM.faq_q)
+    await T.tks_faq_q(SimpleNamespace(text=T.BTN_NEW, from_user=SimpleNamespace(id=42), answer=answer), state)
+    assert "یکتا" in out[-1] and await state.get_state() == T.TkSetFSM.faq_q.state

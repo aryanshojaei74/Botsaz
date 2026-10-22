@@ -19,12 +19,15 @@ Channel می‌دهد (send / ack / send_file / download) و رویدادِ کا
 from __future__ import annotations
 
 import html as _html
+import json
 import re
 from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.enums import ButtonStyle
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import func, select
 
@@ -44,6 +47,9 @@ BTN_ABOUT = "ℹ️ راهنما"
 BTN_PHONE = "📱 ارسالِ شمارهٔ من"
 BTN_CLOSE = "🔒 بستنِ تیکت"
 BTN_CANCEL = "🔙 انصراف"
+BTN_FAQ = "❓ سوالات متداول"
+K_WELCOME, K_FAQ = "tkm_welcome", "tkm_faq"
+MAX_FAQ, FAQ_Q_MAX, FAQ_A_MAX = 10, 40, 900
 RATES = {"😍 عالی": 3, "🙂 خوب": 2, "😕 ضعیف": 1}
 CATS = [("pay", "💳 پرداخت و شارژ"), ("bot", "🤖 ساخت و مدیریتِ ربات"), ("order", "🛒 سفارش و فروش"),
         ("bug", "🐞 مشکلِ فنی"), ("idea", "💡 پیشنهاد و انتقاد"), ("other", "📝 سایر موارد")]
@@ -159,10 +165,34 @@ def _ago(dt: datetime | None) -> str:
     return f"{mins // (60 * 24)} روز پیش"
 
 
+# ─────────────── متنِ خوش‌آمد و سوالاتِ متداول (قابلِ ویرایش با /tkset) ───────────────
+
+async def _welcome_text() -> str:
+    return (await _get(K_WELCOME)).strip() or WELCOME
+
+
+async def _faq() -> list[dict]:
+    try:
+        raw = json.loads(await _get(K_FAQ) or "[]")
+    except Exception:
+        return []
+    return [x for x in raw if isinstance(x, dict) and x.get("q") and x.get("a")][:MAX_FAQ]
+
+
+async def _save_faq(items: list[dict]) -> None:
+    await _set(K_FAQ, json.dumps(items, ensure_ascii=False))
+
+
+def _faq_menu(items: list[dict]) -> list[list[str]]:
+    return [[x["q"]] for x in items] + [[BTN_NEW, BTN_CANCEL]]
+
+
 # ─────────────── منوها ───────────────
 
 async def _menu(ch: Channel, chat: str) -> list[list[str]]:
     rows = [[BTN_NEW], [BTN_MY, BTN_ABOUT]]
+    if await _faq():
+        rows.insert(1, [BTN_FAQ])
     if await _active_ticket(ch, chat):
         rows.insert(1, [BTN_CLOSE])
     if not await _saved_phone(ch, chat):
@@ -244,7 +274,7 @@ async def handle_user(bot, ch: Channel, ev: dict) -> int:
         return await _on_contact(bot, ch, ev)
     if kind == "start" or low in ("/start", "start", "شروع", "/menu", "منو"):
         await _set_state(ch, chat, "")
-        await ch.send(chat, WELCOME, await _menu(ch, chat))
+        await ch.send(chat, await _welcome_text(), await _menu(ch, chat))
         return 0
     if state.startswith("rate:"):
         if txt in RATES:
@@ -255,6 +285,22 @@ async def handle_user(bot, ch: Channel, ev: dict) -> int:
         await _set_state(ch, chat, "")
         await ch.send(chat, "انصراف داده شد.", await _menu(ch, chat))
         return 0
+    if txt == BTN_FAQ:
+        items = await _faq()
+        if not items:
+            await ch.send(chat, "فعلاً سؤالِ متداولی ثبت نشده.", await _menu(ch, chat))
+            return 0
+        await _set_state(ch, chat, "faq")
+        await ch.send(chat, "❓ سؤالت کدومه؟ یکی رو انتخاب کن 👇", _faq_menu(items))
+        return 0
+    if state == "faq":
+        hit = next((x for x in await _faq() if x["q"] == txt), None)
+        if hit:
+            await ch.send(chat, f"❓ {hit['q']}\n\n{hit['a']}\n\nهنوز مشکلت حل نشد؟ «{BTN_NEW}» رو بزن و تیکت بساز.",
+                          _faq_menu(await _faq()))
+            return 0
+        await _set_state(ch, chat, "")
+        state = ""
     if txt == BTN_NEW:
         if await _count_active(ch, chat) >= MAX_OPEN:
             await ch.send(chat, f"⚠️ الان {MAX_OPEN} تیکتِ باز داری. اول یکی رو ببند یا منتظر پاسخ بمون.",
@@ -507,3 +553,100 @@ async def tk_media_reply(msg: Message):
         if t.status != "closed":
             await _touch(t.id, status="answered")
     await msg.reply("✅ فایل برایِ کاربر فرستاده شد." if ok else "❌ ارسالِ فایل ناموفق بود.")
+
+
+# ─────────────── تنظیماتِ مدیر: /tkset (خوش‌آمد + سوالاتِ متداول) ───────────────
+
+class TkSetFSM(StatesGroup):
+    welcome = State()
+    faq_q = State()
+    faq_a = State()
+
+
+async def _set_panel() -> tuple[str, InlineKeyboardMarkup]:
+    custom = (await _get(K_WELCOME)).strip()
+    items = await _faq()
+    text = ("⚙️ <b>تنظیماتِ تیکتِ روبیکا/سروش</b>\n\n"
+            f"👋 متنِ خوش‌آمد: {'<i>سفارشی</i>' if custom else '<i>پیش‌فرض</i>'}\n"
+            f"❓ سوالاتِ متداول: <b>{len(items)}</b> از {MAX_FAQ}\n\n"
+            "سوالاتِ متداول به‌صورتِ دکمه در منویِ کاربر می‌آیند و جوابشان را بدونِ تیکت می‌گیرند.")
+    rows = [[InlineKeyboardButton(text="✏️ ویرایشِ متنِ خوش‌آمد", callback_data="mtks:welcome")]]
+    if custom:
+        rows.append([InlineKeyboardButton(text="♻️ برگشت به متنِ پیش‌فرض", callback_data="mtks:wreset")])
+    if len(items) < MAX_FAQ:
+        rows.append([InlineKeyboardButton(text="➕ افزودنِ سؤالِ متداول", callback_data="mtks:add", style=ButtonStyle.SUCCESS)])
+    for i, x in enumerate(items):
+        rows.append([InlineKeyboardButton(text=f"🗑 {x['q']}", callback_data=f"mtks:del:{i}")])
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@platform_tickets_router.message(Command("tkset"), F.func(lambda m: _is_admin(getattr(m.from_user, "id", None))))
+async def tks_cmd(msg: Message, state: FSMContext):
+    await state.clear()
+    text, kb = await _set_panel()
+    await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@platform_tickets_router.callback_query(F.data.startswith("mtks:"), F.func(lambda c: _is_admin(c.from_user.id)))
+async def tks_cb(cb: CallbackQuery, state: FSMContext):
+    act = cb.data.split(":", 2)[1]
+    if act == "welcome":
+        await state.set_state(TkSetFSM.welcome)
+        await cb.message.answer("متنِ جدیدِ خوش‌آمد را بفرست (حداکثر ۷۰۰ حرف). لغو: /tkset")
+        return await cb.answer()
+    if act == "add":
+        await state.set_state(TkSetFSM.faq_q)
+        await cb.message.answer(f"❓ متنِ سؤال را بفرست (حداکثر {FAQ_Q_MAX} حرف؛ همین روی دکمه می‌نشیند). لغو: /tkset")
+        return await cb.answer()
+    if act == "wreset":
+        await _set(K_WELCOME, "")
+    elif act == "del":
+        items = await _faq()
+        i = int(cb.data.rsplit(":", 1)[1])
+        if 0 <= i < len(items):
+            items.pop(i)
+            await _save_faq(items)
+    text, kb = await _set_panel()
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
+
+
+@platform_tickets_router.message(TkSetFSM.welcome, F.text, F.func(lambda m: _is_admin(m.from_user.id)))
+async def tks_welcome_in(msg: Message, state: FSMContext):
+    if msg.text.startswith("/"):
+        return
+    await _set(K_WELCOME, msg.text.strip()[:700])
+    await state.clear()
+    text, kb = await _set_panel()
+    await msg.answer("✅ متنِ خوش‌آمد ذخیره شد.\n\n" + text, reply_markup=kb, parse_mode="HTML")
+
+
+@platform_tickets_router.message(TkSetFSM.faq_q, F.text, F.func(lambda m: _is_admin(m.from_user.id)))
+async def tks_faq_q(msg: Message, state: FSMContext):
+    if msg.text.startswith("/"):
+        return
+    q = msg.text.strip()
+    if len(q) > FAQ_Q_MAX or q in (BTN_NEW, BTN_MY, BTN_ABOUT, BTN_FAQ, BTN_CLOSE, BTN_CANCEL, BTN_PHONE) \
+            or any(x["q"] == q for x in await _faq()):
+        await msg.answer(f"❌ سؤال باید یکتا و حداکثر {FAQ_Q_MAX} حرف باشد. دوباره بفرست.")
+        return
+    await state.update_data(q=q)
+    await state.set_state(TkSetFSM.faq_a)
+    await msg.answer("✍️ حالا پاسخِ این سؤال را بفرست.")
+
+
+@platform_tickets_router.message(TkSetFSM.faq_a, F.text, F.func(lambda m: _is_admin(m.from_user.id)))
+async def tks_faq_a(msg: Message, state: FSMContext):
+    if msg.text.startswith("/"):
+        return
+    q = (await state.get_data()).get("q")
+    items = await _faq()
+    if q and len(items) < MAX_FAQ:
+        items.append({"q": q, "a": msg.text.strip()[:FAQ_A_MAX]})
+        await _save_faq(items)
+    await state.clear()
+    text, kb = await _set_panel()
+    await msg.answer("✅ سؤال اضافه شد.\n\n" + text, reply_markup=kb, parse_mode="HTML")
