@@ -11392,6 +11392,10 @@ async def _apply_order_status(bot_id: int, order_pk: int, data: dict) -> None:
     این منطق قبلاً مستقیم توی smm_status_poll_once بود؛ حالا یک تابعِ
     مشترکه چون هم مسیرِ تک‌تک‌استعلام‌گیری هم مسیرِ گروهی باید دقیقاً
     همین رفتار رو داشته باشن، بدونِ کپی‌شدنِ منطق تو دو جا."""
+    # === PATCH_SMM_STATUS_ERROR_ROW_V1 === مستنداتِ استعلامِ گروهی: ردیفِ بدشناسه {"error": "Incorrect order ID"}
+    # است؛ بدونِ این گارد، panel_status خالی و remaining صفر/None روی سفارشِ سالم نوشته می‌شد.
+    if data.get("error") and not data.get("status"):
+        return
     st = str(data.get("status", "") or "").lower()
     remains = data.get("remains")
     try:

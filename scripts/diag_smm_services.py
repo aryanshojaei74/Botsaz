@@ -60,6 +60,18 @@ async def main(needle: str, probe: bool = False) -> int:
             for k in extra[:6]:
                 ex = next((str(it[k]) for it in items if it.get(k)), "")
                 print(f"   نمونهٔ {k}: {ex[:120]!r}")
+        # === PATCH_SMM_DOC_TYPES_V1 === مستنداتِ WhaleSMM: type = Default | Package | SEO | Custom Comments |
+        # Mentions Hashtag | Comment Likes | Subscriptions. ربات فقط «Default» (لینک + تعداد) را درست ثبت می‌کند.
+        types: dict[str, int] = {}
+        for it in items:
+            t = str(it.get("type") or "—")
+            types[t] = types.get(t, 0) + 1
+        print("\nنوعِ سرویس‌ها (type):")
+        for t, n in sorted(types.items(), key=lambda kv: -kv[1]):
+            note = "" if t.lower() in ("default", "—") else "   ← ربات فقط لینک+تعداد می‌فرستد؛ این نوع پارامترِ اضافه می‌خواهد"
+            print(f"  {t:<22} {n:>6}{note}")
+        print(f"ریفیل دارد: {sum(1 for it in items if it.get('refill') is True)} | "
+              f"لغو دارد: {sum(1 for it in items if it.get('cancel') is True)}")
         print("\nسه سرویسِ نمونه (نام):")
         for it in items[:3]:
             print("  •", str(it.get("name"))[:100])

@@ -986,3 +986,18 @@ def test_cancel_parser_prefers_the_row_of_this_order():
     d = [{"order": 5, "cancel": {"error": "Incorrect order ID"}}, {"order": 7, "cancel": {"status": "Completed"}}]
     assert smm._parse_cancel_response(d, 7) == (True, "Completed")
     assert smm._parse_cancel_response(d, 5)[0] is False
+
+
+@pytest.mark.asyncio
+async def test_status_error_row_does_not_overwrite_the_order(db):
+    """مستندات: در استعلامِ گروهی ردیفِ بدشناسه {"error": "Incorrect order ID"} است؛ سفارش نباید خراب شود."""
+    maker, bot_id, sent = db
+    oid = await _order(maker, bot_id)
+    async with maker() as s:
+        o = await s.get(models.SmmOrder, oid)
+        o.panel_status, o.remaining = "in progress", 40
+        await s.commit()
+    await smm._apply_order_status(bot_id, oid, {"error": "Incorrect order ID"})
+    async with maker() as s:
+        o = await s.get(models.SmmOrder, oid)
+    assert o.panel_status == "in progress" and o.remaining == 40
