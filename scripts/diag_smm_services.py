@@ -7,7 +7,7 @@ scripts/diag_smm_services.py — «چرا توضیحاتِ سرویس‌هایِ
   • اگر هیچ فیلدِ توضیحاتی نبود، یعنی خودِ پنل توضیح نمی‌فرستد (کاری از ربات برنمی‌آید).
 کلیدِ API هرگز چاپ نمی‌شود. فقط می‌خواند.
 
-    cd /opt/botsaz && venv/bin/python scripts/diag_smm_services.py whalesmm
+    cd /opt/botsaz && venv/bin/python scripts/diag_smm_services.py whalesmm [--probe]
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 STD = {"service", "name", "type", "category", "rate", "min", "max", "dripfeed", "refill", "cancel", "id"}
 
 
-async def main(needle: str) -> int:
+async def main(needle: str, probe: bool = False) -> int:
     from sqlalchemy import select
     from config import Session
     from models import SmmPanel
@@ -63,8 +63,40 @@ async def main(needle: str) -> int:
         print("\nسه سرویسِ نمونه (نام):")
         for it in items[:3]:
             print("  •", str(it.get("name"))[:100])
+        if probe:
+            await _probe(p, items[0])
     return 0
 
 
+async def _probe(p, first: dict) -> None:
+    """=== PATCH_DIAG_SMM_DESC_PROBE_V1 === بعضی پنل‌ها توضیحات را فقط با اکشن/پارامترِ دیگری می‌دهند.
+    چند حالتِ رایج را امتحان می‌کنیم و فقط شکلِ پاسخ (نامِ فیلدها / ۱۲۰ کاراکترِ اول) را چاپ می‌کنیم."""
+    from tenant.bots.virtual_service import smm_api
+    sid = first.get("service") or first.get("id")
+    tries = [
+        ("services + details=1", {"action": "services", "details": 1}),
+        ("services + full=1", {"action": "services", "full": 1}),
+        ("services + description=1", {"action": "services", "description": 1}),
+        ("service (id)", {"action": "service", "service": sid, "id": sid}),
+        ("service_details", {"action": "service_details", "service": sid}),
+        ("service_info", {"action": "service_info", "service": sid}),
+        ("descriptions", {"action": "descriptions"}),
+        ("categories", {"action": "categories"}),
+    ]
+    print("\n── probe: امتحانِ اکشن‌هایِ دیگر برایِ توضیحات ──")
+    for label, extra in tries:
+        data = {"key": p.api_key, **extra}
+        resp = await smm_api._post_ex(p.api_url, data, 40)
+        d = resp.data
+        if isinstance(d, list) and d and isinstance(d[0], dict):
+            shape = "list[dict] keys=" + ",".join(sorted(d[0].keys()))[:160]
+        elif isinstance(d, dict):
+            shape = "dict keys=" + ",".join(sorted(d.keys()))[:160]
+        else:
+            shape = (resp.text or "")[:120].replace("\n", " ")
+        print(f"  {label:<26} HTTP={resp.status}  {shape}")
+
+
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "")))
+    _args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    sys.exit(asyncio.run(main(_args[0] if _args else "", probe="--probe" in sys.argv)))

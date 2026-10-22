@@ -66,6 +66,7 @@ _DEFAULT_PROVIDER = "anthropic"
 
 class SmmAiFSM(StatesGroup):
     api_key = State()
+    model = State()   # PATCH_SMM_AI_MODEL_OPTION_V1
     question = State()
     group_name = State()  # === PATCH_SMM_AI_GROUP_V1 ===
     group_question = State()  # مکالمهٔ دومرحله‌ایِ نام‌محور در گروه
@@ -97,8 +98,27 @@ _SYSTEM_PROMPT = """تو دستیار فارسیِ همین ربات تلگرا�
 اطلاعات کاربران دیگر و داده‌های محرمانه را هرگز افشا نکن."""
 
 
-async def _ask_anthropic(api_key: str, user_content: str, system_prompt: str = _SYSTEM_PROMPT) -> str | None:
-    _, model, _ = _PROVIDERS["anthropic"]
+# === PATCH_SMM_AI_MODEL_OPTION_V1 ===
+# مدل‌هایِ reasoning (gpt-oss، qwen3) قبل از جوابِ نهایی توکنِ «فکر» مصرف می‌کنند؛ با max_tokens=400 و
+# بدونِ reasoning_effort، بخشِ بزرگی از سقف صرفِ فکرکردن می‌شد و جواب خالی/نیمه‌کاره برمی‌گشت
+# (گزارشِ ادمین: «مدلی که groq استفاده می‌کنه خیلی چرته و محدودیت داره»). برایِ این مدل‌ها تلاشِ
+# فکرکردن کم و سقفِ خروجی بیشتر می‌شود.
+def _openai_compat_tuning(model: str) -> dict:
+    m = (model or "").lower()
+    if "gpt-oss" in m:
+        return {"max_tokens": 1500, "reasoning_effort": "low"}
+    if "qwen" in m:
+        return {"max_tokens": 1500, "reasoning_effort": "none"}
+    return {"max_tokens": 400}
+
+
+def _strip_think(text: str) -> str:
+    import re as _re
+    return _re.sub(r"(?is)<think>.*?</think>", "", text or "").strip()
+
+
+async def _ask_anthropic(api_key: str, user_content: str, system_prompt: str = _SYSTEM_PROMPT, model: str | None = None) -> str | None:
+    model = model or _PROVIDERS["anthropic"][1]
     payload = {
         "model": model,
         "max_tokens": 400,
@@ -122,11 +142,11 @@ async def _ask_anthropic(api_key: str, user_content: str, system_prompt: str = _
             return text.strip() or None
 
 
-async def _ask_openai(api_key: str, user_content: str, system_prompt: str = _SYSTEM_PROMPT) -> str | None:
-    _, model, _ = _PROVIDERS["openai"]
+async def _ask_openai(api_key: str, user_content: str, system_prompt: str = _SYSTEM_PROMPT, model: str | None = None) -> str | None:
+    model = model or _PROVIDERS["openai"][1]
     payload = {
         "model": model,
-        "max_tokens": 400,
+        **_openai_compat_tuning(model),
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
@@ -143,11 +163,11 @@ async def _ask_openai(api_key: str, user_content: str, system_prompt: str = _SYS
             choices = data.get("choices") or []
             if not choices:
                 return None
-            text = (choices[0].get("message") or {}).get("content", "")
+            text = _strip_think((choices[0].get("message") or {}).get("content", ""))
             return text.strip() or None
 
 
-async def _ask_gemini(api_key: str, user_content: str, system_prompt: str = _SYSTEM_PROMPT) -> str | None:
+async def _ask_gemini(api_key: str, user_content: str, system_prompt: str = _SYSTEM_PROMPT, model: str | None = None) -> str | None:
     """PATCH_GEMINI_AUTH_KEY_HEADER_V1 — گوگل از اواسطِ ۲۰۲۶ داره کلیدهایِ
     «AQ.» (Auth key) رو به‌جایِ فرمتِ قدیمیِ «AIza» (Standard key) صادر
     می‌کنه؛ از سپتامبرِ ۲۰۲۶ کلیدهایِ Standard رو کلاً رد می‌کنه. کلیدهایِ
@@ -156,7 +176,7 @@ async def _ask_gemini(api_key: str, user_content: str, system_prompt: str = _SYS
     فعلیِ گوگل، باید از هدرِ x-goog-api-key استفاده بشه، هم برایِ کلیدهایِ
     جدید هم قدیمی. برایِ همینه که «amir» با هر کلیدی که از AI Studio
     می‌گرفت (که الان همه‌شون AQ. هستن) با «این کلید کار نکرد» مواجه می‌شد."""
-    _, model, _ = _PROVIDERS["gemini"]
+    model = model or _PROVIDERS["gemini"][1]
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     payload = {
         "system_instruction": {"parts": [{"text": system_prompt}]},
@@ -179,13 +199,13 @@ async def _ask_gemini(api_key: str, user_content: str, system_prompt: str = _SYS
             return text.strip() or None
 
 
-async def _ask_groq(api_key: str, user_content: str, system_prompt: str = _SYSTEM_PROMPT) -> str | None:
+async def _ask_groq(api_key: str, user_content: str, system_prompt: str = _SYSTEM_PROMPT, model: str | None = None) -> str | None:
     """Groq از همون قالبِ OpenAI Chat Completions پیروی می‌کنه، فقط
     آدرس/مدلش فرق داره — برایِ همین تقریباً عینِ _ask_openai است."""
-    _, model, _ = _PROVIDERS["groq"]
+    model = model or _PROVIDERS["groq"][1]
     payload = {
         "model": model,
-        "max_tokens": 400,
+        **_openai_compat_tuning(model),
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
@@ -204,7 +224,7 @@ async def _ask_groq(api_key: str, user_content: str, system_prompt: str = _SYSTE
             if not choices:
                 logger.info(f"[SMM_AI] Groq پاسخ داد ولی choices خالی بود: {data!r}")
                 return None
-            text = (choices[0].get("message") or {}).get("content", "")
+            text = _strip_think((choices[0].get("message") or {}).get("content", ""))
             return text.strip() or None
 
 
@@ -242,9 +262,21 @@ def md_to_html(text: str) -> str:
     return t.replace("**", "")
 
 
+async def _get_model(bot_id: int | None, provider: str) -> str | None:
+    """مدلِ انتخابیِ ادمین برایِ این ربات (smm_ai_model)؛ خالی ⇒ مدلِ پیش‌فرضِ ارائه‌دهنده."""
+    if not bot_id:
+        return None
+    try:
+        return (await _get_setting(bot_id, "smm_ai_model", "")).strip() or None
+    except Exception:
+        return None
+
+
 async def ask_ai(provider: str, api_key: str, question: str, context: str = "",
-                system_prompt: str | None = None) -> str | None:
-    """سؤال را با context اختصاصی همان ربات به ارائه‌دهنده می‌فرستد."""
+                system_prompt: str | None = None, bot_id: int | None = None,
+                model: str | None = None) -> str | None:
+    """سؤال را با context اختصاصی همان ربات به ارائه‌دهنده می‌فرستد.
+    bot_id (اختیاری): مدلِ انتخابیِ ادمین (smm_ai_model) را اعمال می‌کند."""
     # PATCH_AI_KEY_STRIP_V1 — کلیدِ کپی‌شده با «\n» در هدر خطایِ ValueError می‌داد
     api_key = "".join((api_key or "").split())
     if not aiohttp or not api_key:
@@ -257,7 +289,8 @@ async def ask_ai(provider: str, api_key: str, question: str, context: str = "",
         user_content = f"{context}\n\nسؤالِ مشتری: {question.strip()}"
     system_prompt = system_prompt or _SYSTEM_PROMPT
     try:
-        return _clean_ai_answer(await fn(api_key, user_content, system_prompt))
+        model = model or await _get_model(bot_id, provider)
+        return _clean_ai_answer(await fn(api_key, user_content, system_prompt, model))
     except Exception:
         logger.exception(f"[SMM_AI] خطایِ غیرمنتظره در فراخوانیِ {provider}")
         return None
@@ -387,13 +420,16 @@ async def smm_ai_settings_content(bot_id: int, origin: str = "smm") -> tuple[str
     enabled = (await _get_setting(bot_id, "smm_ai_enabled", "0")) == "1"
     has_key = bool((await _get_setting(bot_id, "smm_ai_api_key", "")).strip())
     provider = await _get_provider(bot_id)
-    provider_label, _, _ = _PROVIDERS[provider]
+    provider_label, _def_model, _ = _PROVIDERS[provider]
+    _model_set = (await _get_setting(bot_id, "smm_ai_model", "")).strip()
+    _model_cur = _model_set or _def_model
     text = (
         "🤖 <b>دستیارِ هوشِ مصنوعی</b>\n\n"
         "به سؤال‌هایِ مشتری دربارهٔ نحوهٔ کار با ربات، ثبت/پیگیریِ سفارش، "
         "وضعیتِ سفارش و... خودکار جواب می‌ده.\n\n"
         f"وضعیت: {'✅ فعال' if enabled else '❌ غیرفعال'}\n"
         f"ارائه‌دهنده: <b>{provider_label}</b>\n"
+        f"مدل: <code>{html.escape(_model_cur)}</code>{'' if _model_set else ' (پیش‌فرض)'}\n"
         f"کلیدِ API: {'✅ تنظیم شده' if has_key else '⚠️ تنظیم نشده'}\n\n"
         "⚠️ هزینهٔ استفاده از این کلید مستقیم رویِ حسابِ خودتونه؛ پلتفرم "
         "هزینه‌ای بابتش نمی‌گیره یا پرداخت نمی‌کنه.\n\n"
@@ -403,6 +439,7 @@ async def smm_ai_settings_content(bot_id: int, origin: str = "smm") -> tuple[str
     rows = [
         [InlineKeyboardButton(text="🔀 تغییرِ ارائه‌دهنده", callback_data=f"smmai:setprovider:{origin}")],
         [InlineKeyboardButton(text="🔑 تنظیمِ کلیدِ API", callback_data=f"smmai:setkey:{origin}")],
+        [InlineKeyboardButton(text="🧠 تغییرِ مدل", callback_data=f"smmai:setmodel:{origin}")],
         [InlineKeyboardButton(text=("🔴 غیرفعال کن" if enabled else "🟢 فعال کن"),
                               callback_data=f"smmai:toggle:{origin}")],
         [InlineKeyboardButton(text="📚 راهنمای فعال‌سازی در گروه", callback_data=f"smmai:grouphelp:{origin}")],
@@ -575,6 +612,69 @@ async def smmai_toggle(cb: CallbackQuery, bot: Bot):
         await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
+# === PATCH_SMM_AI_MODEL_OPTION_V1 === ادمین مدلِ ارائه‌دهنده را خودش تعیین کند (مثلاً openai/gpt-oss-120b روی Groq)
+@smm_ai_router.callback_query(F.data.startswith("smmai:setmodel:"))
+async def smmai_setmodel_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant.bots.virtual_service.smm import _owner
+    row = await _owner(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    origin = _smmai_origin_from_cb(cb.data)
+    await state.update_data(smmai_model_origin=origin)
+    provider = await _get_provider(row.id)
+    label, default_model, _ = _PROVIDERS[provider]
+    cur = (await _get_setting(row.id, "smm_ai_model", "")).strip() or default_model
+    await state.set_state(SmmAiFSM.model)
+    await cb.message.answer(
+        f"🧠 مدلِ «{label}» را بفرست.\n\n"
+        f"مدلِ فعلی: <code>{html.escape(cur)}</code>\n"
+        f"پیش‌فرض: <code>{html.escape(default_model)}</code>\n\n"
+        "مثال برایِ Groq: <code>openai/gpt-oss-120b</code> یا <code>llama-3.3-70b-versatile</code>\n"
+        "برایِ برگشت به پیش‌فرض بنویس: <code>پیش‌فرض</code>\n\n"
+        "قبل از ذخیره، مدل با کلیدِ فعلی تست می‌شود.\n❌ برایِ لغو /cancel را بفرست.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="❌ لغو", callback_data=f"smmai:menu:{origin}", style=ButtonStyle.DANGER)]]))
+    await cb.answer()
+
+
+@smm_ai_router.message(SmmAiFSM.model, F.text)
+async def smmai_setmodel_in(msg: Message, bot: Bot, state: FSMContext):
+    from tenant.bots.virtual_service.smm import _owner
+    row = await _owner(msg, bot)
+    if not row:
+        await state.clear()
+        return
+    origin = (await state.get_data()).get("smmai_model_origin", "smm")
+    val = msg.text.strip()
+    if val in ("لغو", "/cancel"):
+        await state.clear()
+        text, kb = await smm_ai_settings_content(row.id, origin)
+        await msg.answer("لغو شد.\n\n" + text, reply_markup=kb, parse_mode="HTML")
+        return
+    if val in ("پیش‌فرض", "پیشفرض", "default", "Default"):
+        await _set_setting(row.id, "smm_ai_model", "")
+        note = "✅ مدل به پیش‌فرض برگشت."
+    else:
+        import re as _re
+        if not _re.fullmatch(r"[A-Za-z0-9_.:/\-]{2,100}", val):
+            await msg.answer("❌ نامِ مدل معتبر نیست (فقط حروفِ انگلیسی، عدد و . _ - / :). دوباره بفرست یا /cancel بزن.")
+            return
+        key = (await _get_setting(row.id, "smm_ai_api_key", "")).strip()
+        if key:
+            await msg.answer("⏳ در حالِ تستِ مدل...")
+            if not await ask_ai(await _get_provider(row.id), key, "سلام", model=val):
+                await msg.answer("❌ این مدل با کلیدِ فعلی جواب نداد (نام اشتباه است یا به آن دسترسی نداری). "
+                                 "نامِ دقیق را از سایتِ ارائه‌دهنده کپی کن و دوباره بفرست، یا /cancel بزن.")
+                return
+        await _set_setting(row.id, "smm_ai_model", val)
+        note = f"✅ مدل روی <code>{html.escape(val)}</code> تنظیم شد."
+    await state.clear()
+    text, kb = await smm_ai_settings_content(row.id, origin)
+    await msg.answer(note + "\n\n" + text, reply_markup=kb, parse_mode="HTML")
+
+
 @smm_ai_router.callback_query(F.data.startswith("smmai:setkey:"))
 async def smmai_setkey_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from tenant.bots.virtual_service.smm import _owner
@@ -614,7 +714,7 @@ async def smmai_setkey_in(msg: Message, bot: Bot, state: FSMContext):
         return
     provider = await _get_provider(row.id)
     await msg.answer("⏳ در حالِ بررسیِ کلید...")
-    reply = await ask_ai(provider, key, "سلام")
+    reply = await ask_ai(provider, key, "سلام", bot_id=row.id)
     if not reply:
         await msg.answer("❌ این کلید کار نکرد. دوباره بررسی کن و بفرست، یا /cancel بزن.")
         return
@@ -662,7 +762,7 @@ async def smmai_ask_answer(msg: Message, bot: Bot, state: FSMContext):
     context = (await _live_bot_context(row.id, row, msg.from_user.id)
                + "\n\n" + await _recent_orders_context(row.id, msg.from_user.id))
     answer = await ask_ai(provider, api_key, msg.text, context,
-                          _bot_system_prompt(row))
+                          _bot_system_prompt(row), bot_id=row.id)
     if not answer:
         await msg.answer("❌ الان نتونستم جواب بدم. بعداً دوباره امتحان کن یا با پشتیبانی تماس بگیر.")
         return
@@ -788,7 +888,7 @@ async def _smm_ai_answer_in_group(msg: Message, question: str, row) -> None:
     context = (await _live_bot_context(row.id, row, msg.from_user.id)
                + "\n\n" + await _recent_orders_context(row.id, msg.from_user.id))
     answer = await ask_ai(provider, api_key, question, context,
-                          _bot_system_prompt(row))
+                          _bot_system_prompt(row), bot_id=row.id)
     if not answer:
         logger.info(f"[SMM_AI_GROUP] bot_id={row.id} — ask_ai چیزی برنگردوند (احتمالاً کلید/ارائه‌دهنده مشکل داره)")
         # === PATCH_AI_GROUP_FRIENDLY_ERR_V1 === در گروه پیامِ مخصوصِ ادمین (کلید/ارائه‌دهنده) نشان داده نمی‌شود

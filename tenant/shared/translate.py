@@ -119,7 +119,7 @@ async def translate_text(bot_id: int, text: str, target_lang: str = "en") -> str
         # از ask_ai به‌عنوانِ یه «سؤال» با سیستم‌پرامپتِ ترجمه استفاده می‌کنیم —
         # چون ask_ai قبلاً سیستم‌پرامپتِ خودشو داره (پشتیبانیِ مشتری)، اینجا
         # به‌جاش خودِ محتوا رو با دستورالعملِ ترجمه می‌فرستیم.
-        out = await ask_ai(provider, api_key, f"{_TRANSLATE_SYSTEM_PROMPT}\n\nText:\n{text}")
+        out = await ask_ai(provider, api_key, f"{_TRANSLATE_SYSTEM_PROMPT}\n\nText:\n{text}", bot_id=bot_id)
     except Exception:
         return text
     if not out:
