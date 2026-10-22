@@ -64,6 +64,8 @@ from platform_wager import wager_sweep_loop
 from platform_group_report import report_sweep_loop
 # === PATCH_PLATFORM_RUBIKA_BRIDGE_V1 ===
 from platform_rubika import rubika_poll_loop
+# === PATCH_PLATFORM_SPLUS_BRIDGE_V1 ===
+from platform_splus import splus_poll_loop
 
 
 async def _worker_startup():
@@ -101,6 +103,8 @@ async def _worker_startup():
         report_sweep_loop(platform_bot=mp.platform_bot),
         # === PATCH_PLATFORM_RUBIKA_BRIDGE_V1 === پیام‌هایِ رباتِ روبیکا → پی‌ویِ مدیر
         rubika_poll_loop(mp.platform_bot),
+        # === PATCH_PLATFORM_SPLUS_BRIDGE_V1 === پیام‌هایِ رباتِ سروش → پی‌ویِ مدیر
+        splus_poll_loop(mp.platform_bot),
     ):
         mp.spawn(_coro)
 
