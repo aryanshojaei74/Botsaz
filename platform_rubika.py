@@ -98,9 +98,13 @@ async def api_call(token: str, method: str, body: dict | None = None, timeout: f
 def _item(chat_id, nm: dict, kind: str) -> dict:
     aux = nm.get("aux_data") if isinstance(nm.get("aux_data"), dict) else {}
     cm = nm.get("contact_message") if isinstance(nm.get("contact_message"), dict) else {}
+    fl = nm.get("file") if isinstance(nm.get("file"), dict) else (
+        nm.get("file_inline") if isinstance(nm.get("file_inline"), dict) else {})
     return {"chat_id": str(chat_id or ""), "sender_id": str(nm.get("sender_id") or ""),
             "text": str(nm.get("text") or ""), "message_id": str(nm.get("message_id") or ""),
             "kind": kind, "button_id": str(aux.get("button_id") or ""),
+            "file_id": str(fl.get("file_id") or ""), "file_name": str(fl.get("file_name") or ""),
+            "file_size": int(fl.get("size") or fl.get("file_size") or 0) if str(fl.get("size") or fl.get("file_size") or 0).isdigit() else 0,
             "phone": str(cm.get("phone_number") or ""),
             "first_name": str(cm.get("first_name") or ""), "last_name": str(cm.get("last_name") or "")}
 
@@ -134,10 +138,12 @@ def parse_updates(resp: dict) -> tuple[list[dict], str | None]:
             continue
         if isinstance(nm.get("contact_message"), dict) and nm["contact_message"].get("phone_number"):
             kind = "contact"
+        elif nm.get("file") or nm.get("file_inline"):
+            kind = "file"          # متنِ همراهش (اگر باشد) کپشن است
         elif nm.get("text"):
             kind = "text"
         else:
-            kind = "file" if (nm.get("file") or nm.get("file_inline")) else "other"
+            kind = "other"
         out.append(_item(u.get("chat_id") or nm.get("chat_id"), nm, kind))
     return [x for x in out if x["chat_id"]], (str(nxt) if nxt not in (None, "") else None)
 
@@ -147,10 +153,11 @@ def format_admin_text(m: dict, prof: dict | None = None) -> str:
     prof = prof or {}
     if m["kind"] == "contact":
         body = "📱 <i>شمارهٔ خودش را به اشتراک گذاشت.</i>"
+    elif m["kind"] == "file":
+        body = ("📎 <i>فایل</i>" + (f" <code>{_html.escape(m['file_name'])}</code>" if m.get("file_name") else "")
+                + (("\n\n" + _html.escape(m["text"][:300])) if m["text"] else ""))
     elif m["text"]:
         body = _html.escape(m["text"])
-    elif m["kind"] == "file":
-        body = "📎 <i>فایل/رسانه (فقط متن پشتیبانی می‌شود؛ در خودِ روبیکا ببین)</i>"
     else:
         body = "<i>پیامِ بدونِ متن</i>"
     name = " ".join(x for x in (prof.get("first_name"), prof.get("last_name")) if x) or "—"
@@ -215,6 +222,101 @@ async def _send_user(token: str, chat_id: str, text: str, keypad: bool = False) 
     await api_call(token, "sendMessage", {"chat_id": chat_id, "text": text})
 
 
+_bg_tasks: set = set()
+ACK_DELETE_SECS = 3.0
+MAX_FILE_BYTES = 45 * 1024 * 1024
+_IMG = (".jpg", ".jpeg", ".png", ".webp")
+_VID = (".mp4", ".mov", ".mkv", ".webm")
+_AUD = (".mp3", ".m4a", ".aac", ".ogg", ".wav", ".opus")
+
+
+async def _delete_later(token: str, chat_id: str, message_id: str, secs: float = ACK_DELETE_SECS) -> None:
+    await asyncio.sleep(secs)
+    await api_call(token, "deleteMessage", {"chat_id": chat_id, "message_id": message_id}, timeout=15)
+
+
+async def _ack(token: str, chat_id: str, text: str) -> None:
+    """پیامِ تأیید به کاربر؛ بعد از چند ثانیه پاک می‌شود تا چتِ روبیکا شلوغ نشود."""
+    r = await api_call(token, "sendMessage", {"chat_id": chat_id, "text": text})
+    d = r.get("data") if isinstance(r.get("data"), dict) else {}
+    mid = d.get("message_id")
+    if r.get("status") == "OK" and mid:
+        t = asyncio.create_task(_delete_later(token, chat_id, str(mid)))
+        _bg_tasks.add(t)
+        t.add_done_callback(_bg_tasks.discard)
+
+
+async def download_file(token: str, file_id: str) -> bytes | None:
+    """فایلِ روبیکا را با getFile → download_url می‌گیرد؛ بزرگ‌تر از سقفِ تلگرام یا خطا ⇒ None."""
+    r = await api_call(token, "getFile", {"file_id": file_id}, timeout=20)
+    d = r.get("data") if isinstance(r.get("data"), dict) else {}
+    url = d.get("download_url") or d.get("url")
+    if r.get("status") != "OK" or not url:
+        logger.warning("rubika: getFile ناموفق: %s", r.get("error") or r.get("status"))
+        return None
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as http:
+            async with http.get(url) as resp:
+                if resp.status != 200 or int(resp.headers.get("Content-Length") or 0) > MAX_FILE_BYTES:
+                    return None
+                buf = bytearray()
+                async for chunk in resp.content.iter_chunked(256 * 1024):
+                    buf.extend(chunk)
+                    if len(buf) > MAX_FILE_BYTES:
+                        return None
+                return bytes(buf)
+    except Exception:
+        logger.exception("rubika: دانلودِ فایل ناموفق")
+        return None
+
+
+async def forward_file(bot, token: str, m: dict, prof: dict) -> bool:
+    """فایل را با کپشنِ مشخصاتِ فرستنده (شاملِ شناسهٔ چت برایِ ریپلای) به مدیر می‌فرستد."""
+    from aiogram.types import BufferedInputFile
+    cap = format_admin_text(m, prof)
+    data = await download_file(token, m["file_id"]) if m.get("file_id") else None
+    if not data:
+        await bot.send_message(PLATFORM_ADMIN_ID, cap + "\n\n⚠️ <i>فایل دانلود نشد (شاید خیلی بزرگ است)؛ در خودِ روبیکا ببین.</i>",
+                               parse_mode="HTML")
+        return True
+    name = m.get("file_name") or "file"
+    inp = BufferedInputFile(data, filename=name)
+    low = name.lower()
+    try:
+        if low.endswith(_IMG) and len(data) <= 10 * 1024 * 1024:
+            await bot.send_photo(PLATFORM_ADMIN_ID, inp, caption=cap, parse_mode="HTML")
+        elif low.endswith(_VID):
+            await bot.send_video(PLATFORM_ADMIN_ID, inp, caption=cap, parse_mode="HTML")
+        elif low.endswith(_AUD):
+            await bot.send_audio(PLATFORM_ADMIN_ID, inp, caption=cap, parse_mode="HTML")
+        else:
+            await bot.send_document(PLATFORM_ADMIN_ID, inp, caption=cap, parse_mode="HTML")
+    except Exception:
+        logger.exception("rubika: ارسالِ فایل به مدیر ناموفق")
+        await bot.send_message(PLATFORM_ADMIN_ID, cap + "\n\n⚠️ <i>فایل به تلگرام نرفت.</i>", parse_mode="HTML")
+    return True
+
+
+async def upload_file(token: str, data: bytes, name: str, ftype: str) -> str | None:
+    """requestSendFile → آپلود → file_id (برایِ جوابِ مدیر با فایل)."""
+    r = await api_call(token, "requestSendFile", {"type": ftype}, timeout=20)
+    d = r.get("data") if isinstance(r.get("data"), dict) else {}
+    url = d.get("upload_url")
+    if r.get("status") != "OK" or not url:
+        return None
+    try:
+        form = aiohttp.FormData()
+        form.add_field("file", data, filename=name)
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as http:
+            async with http.post(url, data=form) as resp:
+                j = await resp.json(content_type=None)
+        dd = j.get("data") if isinstance(j, dict) and isinstance(j.get("data"), dict) else (j if isinstance(j, dict) else {})
+        return str(dd.get("file_id") or "") or None
+    except Exception:
+        logger.exception("rubika: آپلودِ فایل ناموفق")
+        return None
+
+
 async def get_profile(token: str, chat_id: str) -> dict:
     """نام/یوزرنیم/شناسهٔ کاربر از getChat (کش یک‌ساعته) + شمارهٔ ثبت‌شده. در خطا فقط شماره."""
     now = time.monotonic()
@@ -252,13 +354,16 @@ async def _handle(bot, token: str, m: dict) -> int:
             if v and not prof.get(k):
                 prof[k] = v
         await bot.send_message(PLATFORM_ADMIN_ID, format_admin_text(m, prof), parse_mode="HTML")
-        await _send_user(token, chat_id, GOT_PHONE)
+        await _ack(token, chat_id, GOT_PHONE)
         return 1
     if txt == BTN_PHONE or m["kind"] == "other":
         return 0
     prof = await get_profile(token, chat_id)
-    await bot.send_message(PLATFORM_ADMIN_ID, format_admin_text(m, prof), parse_mode="HTML")
-    await _send_user(token, chat_id, GOT_MSG)
+    if m["kind"] == "file":
+        await forward_file(bot, token, m, prof)
+    else:
+        await bot.send_message(PLATFORM_ADMIN_ID, format_admin_text(m, prof), parse_mode="HTML")
+    await _ack(token, chat_id, GOT_MSG)
     return 1
 
 
@@ -389,6 +494,47 @@ def _is_rubika_reply(m: Message) -> bool:
     r = m.reply_to_message
     return bool(_is_admin(getattr(m.from_user, "id", None)) and r and (r.text or r.caption)
                 and chat_id_from_text(r.text or r.caption) and m.text and not m.text.startswith("/"))
+
+
+def _is_rubika_media_reply(m: Message) -> bool:
+    r = m.reply_to_message
+    return bool(_is_admin(getattr(m.from_user, "id", None)) and r and (r.text or r.caption)
+                and chat_id_from_text(r.text or r.caption) and (m.photo or m.document or m.video or m.voice or m.audio))
+
+
+@platform_rubika_router.message(F.func(_is_rubika_media_reply))
+async def rbk_media_reply(msg: Message):
+    """جوابِ مدیر با عکس/فایل/ویدیو/ویس ⇒ برایِ کاربرِ روبیکا (با کپشنِ مدیر)."""
+    chat_id = chat_id_from_text(msg.reply_to_message.text or msg.reply_to_message.caption)
+    token = (await _get(K_TOKEN)).strip()
+    if not token:
+        return await msg.reply("❌ توکنِ روبیکا ثبت نیست (/rubika).")
+    if msg.photo:
+        fid, name, ftype = msg.photo[-1].file_id, "photo.jpg", "Image"
+    elif msg.video:
+        fid, name, ftype = msg.video.file_id, msg.video.file_name or "video.mp4", "Video"
+    elif msg.voice:
+        fid, name, ftype = msg.voice.file_id, "voice.ogg", "Voice"
+    elif msg.audio:
+        fid, name, ftype = msg.audio.file_id, msg.audio.file_name or "audio.mp3", "Music"
+    else:
+        fid, name, ftype = msg.document.file_id, msg.document.file_name or "file", "File"
+    try:
+        buf = await msg.bot.download(fid)
+        data = buf.read() if buf else b""
+    except Exception:
+        data = b""
+    if not data:
+        return await msg.reply("❌ فایل از تلگرام دریافت نشد (شاید بزرگ‌تر از ۲۰ مگابایت است).")
+    rid = await upload_file(token, data, name, ftype)
+    if not rid:
+        return await msg.reply("❌ آپلود در روبیکا ناموفق بود.")
+    body = {"chat_id": chat_id, "file_id": rid}
+    if msg.caption:
+        body["text"] = msg.caption
+    r = await api_call(token, "sendFile", body)
+    await msg.reply("✅ فایل در روبیکا ارسال شد." if r.get("status") == "OK"
+                    else "❌ ارسال نشد: " + _html.escape(str(r.get("error") or r.get("status"))[:150]))
 
 
 @platform_rubika_router.message(F.func(_is_rubika_reply))

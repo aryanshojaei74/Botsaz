@@ -146,3 +146,71 @@ def test_poll_once_error_returns_minus_one(monkeypatch):
     monkeypatch.setattr(rb, "PLATFORM_ADMIN_ID", 42)
     monkeypatch.setattr(rb, "_last_warn", float("-inf"))
     assert asyncio.run(rb.poll_once(Bot())) == -1 and warned
+
+
+def test_ack_is_deleted_after_delay(monkeypatch):
+    calls = []
+
+    async def api(token, method, body=None, timeout=25):
+        calls.append((method, body))
+        return {"status": "OK", "data": {"message_id": "m55"}} if method == "sendMessage" else {"status": "OK"}
+
+    async def fast_delete(token, chat_id, message_id, secs=0):
+        await real(token, chat_id, message_id, 0)
+
+    real = rb._delete_later
+    monkeypatch.setattr(rb, "api_call", api)
+    monkeypatch.setattr(rb, "_delete_later", fast_delete)
+
+    async def run():
+        await rb._ack("t", "c1", "ok")
+        await asyncio.sleep(0.05)
+
+    asyncio.run(run())
+    assert ("deleteMessage", {"chat_id": "c1", "message_id": "m55"}) in calls
+    assert rb.ACK_DELETE_SECS == 3.0
+
+
+def test_parse_file_keeps_caption_and_info():
+    msgs, _ = rb.parse_updates({"data": {"updates": [{"type": "NewMessage", "chat_id": "b0F", "new_message": {
+        "message_id": "5", "text": "این رسید", "sender_type": "User", "sender_id": "u",
+        "file": {"file_id": "F1", "file_name": "r.jpg", "size": "2048"}}}]}})
+    m = msgs[0]
+    assert m["kind"] == "file" and m["file_id"] == "F1" and m["file_name"] == "r.jpg"
+    assert m["file_size"] == 2048 and m["text"] == "این رسید"
+    txt = rb.format_admin_text(m, {})
+    assert "r.jpg" in txt and "این رسید" in txt and "b0F" in txt
+
+
+def test_file_forwarded_as_photo_with_reply_marker(monkeypatch):
+    upd = {"status": "OK", "data": {"updates": [{"type": "NewMessage", "chat_id": "b0F", "new_message": {
+        "message_id": "5", "sender_type": "User", "sender_id": "u",
+        "file": {"file_id": "F1", "file_name": "r.jpg"}}}]}}
+    store, calls, sent, bot = _env(monkeypatch, upd)
+    photos = []
+
+    async def send_photo(chat, inp, caption=None, **kw):
+        photos.append((chat, caption))
+
+    async def dl(token, fid):
+        return b"\xff\xd8data"
+
+    bot.send_photo = send_photo
+    monkeypatch.setattr(rb, "download_file", dl)
+    assert asyncio.run(rb.poll_once(bot)) == 1
+    assert photos and photos[0][0] == 42 and rb.chat_id_from_text(photos[0][1].replace("<code>", "")) == "b0F"
+    assert not sent
+
+
+def test_file_download_failure_falls_back_to_text(monkeypatch):
+    upd = {"status": "OK", "data": {"updates": [{"type": "NewMessage", "chat_id": "b0F", "new_message": {
+        "message_id": "5", "sender_type": "User", "sender_id": "u",
+        "file": {"file_id": "F1", "file_name": "big.zip"}}}]}}
+    _, _, sent, bot = _env(monkeypatch, upd)
+
+    async def dl(token, fid):
+        return None
+
+    monkeypatch.setattr(rb, "download_file", dl)
+    assert asyncio.run(rb.poll_once(bot)) == 1
+    assert "دانلود نشد" in sent[0][1] and "b0F" in sent[0][1]
