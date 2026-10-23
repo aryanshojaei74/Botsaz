@@ -133,3 +133,35 @@ async def test_non_owner_cannot_set_link(env):
     await tenant.thb_set_link_url_save(NS(text="@evil_chan", from_user=NS(id=555), answer=answer), NS(), st)
     async with mk() as s:
         assert (await s.get(models.MainButton, 5)).action is None
+
+
+@pytest.mark.asyncio
+async def test_keyboard_menu_press_sends_message_with_direct_link_button(monkeypatch):
+    sent = []
+
+    async def answer(text, **k):
+        sent.append((text, k.get("reply_markup")))
+
+    async def back_row(bot_id):
+        return None
+
+    async def back_kb(bot_id):
+        return None
+
+    async def attach(bot_id, kb, *a, **k):
+        return kb
+    monkeypatch.setattr(tenant, "inline_back_row", back_row)
+    monkeypatch.setattr(tenant, "inline_back_kb", back_kb)
+    monkeypatch.setattr(tenant, "_attach_support", attach)
+    msg = NS(answer=answer, from_user=NS(id=5))
+    btn = NS(id=7, label="📢 کانال ما", action="channel_link", message="به کانال ما بپیوند",
+             config=json.dumps({"link_url": "https://t.me/my_chan"}), support_btn=False, support_contact=None)
+    await tenant._run_button_action("channel_link", btn, msg, None, None, NS(plan="pro"), None, 1)
+    text, kb = sent[-1]
+    assert "به کانال ما بپیوند" in text
+    assert kb.inline_keyboard[0][0].url == "https://t.me/my_chan" and "کانال ما" in kb.inline_keyboard[0][0].text
+
+    sent.clear()
+    broken = NS(id=8, label="x", action="channel_link", message=None, config=None, support_btn=False, support_contact=None)
+    await tenant._run_button_action("channel_link", broken, msg, None, None, NS(plan="pro"), None, 1)
+    assert "تنظیم نشده" in sent[-1][0]
