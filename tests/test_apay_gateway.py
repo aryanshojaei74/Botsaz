@@ -690,3 +690,77 @@ async def test_tenant_direct_order_entry_is_blocked_when_open_invoice_exists(db,
     cb = _ns(data="w:apay:11", from_user=_ns(id=777), message=_fake_msg(sent), answer=_noop_answer)
     await AA.apu_start_for_order(cb, _ns(), _ns(clear=_noop_answer))
     assert len(sent) == 1 and "فاکتور باز" in sent[0][0]
+
+
+# ═══ PATCH_APAY_PAID_AMOUNT_GUARD_V1 / PATCH_APAY_OFF_MEANS_OFF_V1 ═══
+
+def test_paid_amount_mismatch_unit():
+    f = AP.paid_amount_mismatch
+    base = {"amount": 500_000, "pay_amount": 500_370}
+    assert f(base, expected_pay_rial=500_370, expected_rial=500_000) == ""                 # فیلدی از واریز نیست ⇒ رفتارِ قبلی
+    assert f({**base, "paid_amount": 500_370}, expected_pay_rial=500_370, expected_rial=500_000) == ""
+    assert f({**base, "received_amount": 500_000}, expected_pay_rial=500_370, expected_rial=500_000) == ""
+    assert "paid_amount" in f({**base, "paid_amount": 800_000}, expected_pay_rial=500_370, expected_rial=500_000)
+    assert f({**base, "pay_amount": 500_999}, expected_pay_rial=500_370, expected_rial=500_000) == ""      # فقط فیلدِ واریز سنجیده می‌شود
+    assert f({**base, "paid_amount": 0}, expected_pay_rial=500_370, expected_rial=500_000) == ""
+    assert f({**base, "paid_amount": "x"}, expected_pay_rial=500_370, expected_rial=500_000) == ""
+
+
+@pytest.mark.asyncio
+async def test_settle_refuses_when_deposited_amount_differs_from_invoice(db, monkeypatch):
+    maker, notified = db
+
+    async def _v(token, pid):
+        c, r = _verify_resp()
+        r["payment"]["paid_amount"] = 700_000        # مشتری مبلغِ دیگری واریز کرده
+        return c, r
+    monkeypatch.setattr(AP, "verify_payment", _v)
+    ok, msg, _a = await AP.settle_charge(5, "bsabc")
+    assert not ok and "یکی نیست" in msg
+    assert await _balance(maker) == (0, "waiting", 0) and notified == []
+
+
+@pytest.mark.asyncio
+async def test_settle_accepts_when_deposited_amount_matches(db, monkeypatch):
+    maker, _n = db
+
+    async def _v(token, pid):
+        c, r = _verify_resp()
+        r["payment"]["paid_amount"] = 500_370
+        return c, r
+    monkeypatch.setattr(AP, "verify_payment", _v)
+    ok, _m, amt = await AP.settle_charge(5, "bsabc")
+    assert ok and amt == 50_000
+
+
+@pytest.mark.asyncio
+async def test_disabled_gateway_never_auto_settles(db, monkeypatch):
+    maker, notified = db
+    calls = []
+
+    async def _v(token, pid):
+        calls.append(pid)
+        return _verify_resp()
+    monkeypatch.setattr(AP, "verify_payment", _v)
+    await tenant.set_setting(5, "apay_enabled", "0")
+    assert await AP.poll_pending() == 0
+    assert calls == [] and await _balance(maker) == (0, "waiting", 0)
+    body = json.dumps({"payment": {"id": "pay_1", "order_id": "bsabc"}}).encode()
+    assert await AP.handle_webhook(5, body, "", "") == 200
+    assert calls == [] and await _balance(maker) == (0, "waiting", 0)
+    await tenant.set_setting(5, "apay_enabled", "1")                       # روشن ⇒ مثلِ قبل
+    assert await AP.poll_pending() == 1
+    assert await _balance(maker) == (50_000, "paid", 1)
+
+
+@pytest.mark.asyncio
+async def test_disabled_gateway_old_waiting_invoice_still_expires(db, monkeypatch):
+    maker, _n = db
+    from datetime import datetime, timedelta
+    async with maker() as s:
+        ch = await s.scalar(select(models.ApayCharge))
+        ch.created_at = datetime.utcnow() - timedelta(minutes=40)
+        await s.commit()
+    await tenant.set_setting(5, "apay_enabled", "0")
+    await AP.poll_pending()
+    assert (await _balance(maker))[1] == "expired"

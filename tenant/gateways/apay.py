@@ -355,6 +355,29 @@ async def webhook_url(bot_id: int) -> str:
 
 
 # ─────────────── تسویه ───────────────
+# === PATCH_APAY_PAID_AMOUNT_GUARD_V1 ===
+# نامِ فیلدِ «مبلغِ واقعاً واریزشده» در پاسخِ APay در مستنداتِ ما نیست؛ چند نامِ محتمل را می‌خوانیم. اگر هیچ‌کدام
+# نبود، رفتارِ قبلی عیناً حفظ می‌شود (تنها تطبیقِ order_id و amount).
+_PAID_AMOUNT_KEYS = ("paid_amount", "paid_rial", "paid_amount_rial", "received_amount", "received_rial",
+                     "deposit_amount", "deposited_amount", "sms_amount", "bank_amount")
+
+
+def paid_amount_mismatch(pay: dict, *, expected_pay_rial: int, expected_rial: int) -> str:
+    """"" اگر مشکلی نیست؛ وگرنه شرحِ کوتاه. مبلغِ واریزی باید یا مبلغِ دقیقِ فاکتور (با رقمِ یکتا) باشد یا مبلغِ پایه."""
+    ok = {int(v) for v in (expected_pay_rial, expected_rial) if v}
+    for k in _PAID_AMOUNT_KEYS:
+        v = pay.get(k)
+        if v in (None, "", 0, "0"):
+            continue
+        try:
+            n = int(float(v))
+        except (TypeError, ValueError):
+            continue
+        if ok and n not in ok:
+            return f"{k}={n:,} ریال، فاکتور={int(expected_pay_rial or expected_rial):,} ریال"
+    return ""
+
+
 async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
     """استعلام از APay و در صورتِ تأیید، شارژِ اتمیکِ کیف پول. خروجی: (شارژ شد؟، پیام، مبلغ)."""
     token = await _get(bot_id, "apay_token", "")
@@ -371,6 +394,7 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
             return False, "این فاکتور شناسهٔ پرداخت ندارد.", 0
         payment_id, credit = ch.payment_id, int(ch.amount_toman or 0)
         expected = credit + int(getattr(ch, "fee_toman", 0) or 0)   # PATCH_APAY_FEE_PAYER_V1
+        pay_rial_stored = int(getattr(ch, "pay_amount_rial", 0) or 0)   # PATCH_APAY_PAID_AMOUNT_GUARD_V1
         inv_chat, inv_msg = ch.chat_id, ch.msg_id
         ask_chat, ask_msg = ch.admin_ask_chat, ch.admin_ask_msg      # PATCH_APAY_ASK_CLEANUP_V1
 
@@ -386,6 +410,15 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
     if str(pay.get("order_id")) != order_id or int(pay.get("amount") or 0) != expected * 10:
         logger.error("apay: عدمِ تطابقِ پرداخت (bot=%s order=%s): %s", bot_id, order_id, pay)
         return False, "اطلاعاتِ پرداخت با فاکتور نمی‌خواند؛ با پشتیبانی تماس بگیر.", 0
+    # === PATCH_APAY_PAID_AMOUNT_GUARD_V1 ===
+    # گزارشِ مالک: «مشتری کارت‌به‌کارتِ عادی با مبلغِ رند زد (نه مبلغِ دقیقِ فاکتورِ آپی) و آپی شارژش کرد».
+    # اگر پاسخِ verify مبلغِ *واقعاً واریزشده* را هم بدهد، باید با مبلغِ دقیقِ فاکتور (با رقمِ یکتا) بخواند؛ وگرنه
+    # شارژِ خودکار نمی‌کنیم و ادمین باید دستی تأیید کند (پیامِ «واریز شد؟» که از قبل می‌رود).
+    mism = paid_amount_mismatch(pay, expected_pay_rial=pay_rial_stored, expected_rial=expected * 10)
+    if mism:
+        logger.error("apay: مبلغِ واریزشده با فاکتور نمی‌خواند (bot=%s order=%s): %s | %s", bot_id, order_id, mism, pay)
+        return False, ("مبلغِ واریزشده با مبلغِ فاکتور یکی نیست (" + mism + ")؛ برایِ جلوگیری از شارژِ اشتباه "
+                       "خودکار شارژ نشد — ادمین باید دستی بررسی کند."), 0
 
     async with Session() as s:
         ch = await s.scalar(select(ApayCharge).where(
@@ -567,6 +600,10 @@ async def handle_webhook(bot_id: int, raw: bytes, ts: str, sig: str) -> int:
     payment_id = str(pay.get("id") or "")
     if not order_id:
         return 200
+    # === PATCH_APAY_OFF_MEANS_OFF_V1 === مالک درگاه را خاموش کرده ⇒ شارژِ خودکار هم نباید انجام شود
+    if await _get(bot_id, "apay_enabled", "0") != "1":
+        logger.info("apay: وب‌هوک برایِ رباتِ خاموش (bot=%s) نادیده گرفته شد", bot_id)
+        return 200
     async with Session() as s:
         ch = await s.scalar(select(ApayCharge).where(
             ApayCharge.bot_id == bot_id, ApayCharge.order_id == order_id))
@@ -746,12 +783,16 @@ async def poll_pending() -> int:
                  if r.status == "waiting" or (r.created_at and
                                               r.created_at > now - timedelta(minutes=POLL_FOR_MINUTES))]
     n = 0
+    _enabled: dict[int, bool] = {}
     for bid, oid, created in items:
         try:
-            ok, _m, _a = await settle_charge(bid, oid)
-            if ok:
-                n += 1
-                continue
+            if bid not in _enabled:       # PATCH_APAY_OFF_MEANS_OFF_V1
+                _enabled[bid] = (await _get(bid, "apay_enabled", "0")) == "1"
+            if _enabled[bid]:
+                ok, _m, _a = await settle_charge(bid, oid)
+                if ok:
+                    n += 1
+                    continue
         except Exception:
             logger.exception("apay: poll خطا (bot=%s order=%s)", bid, oid)
             continue
