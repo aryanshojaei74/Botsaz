@@ -18,6 +18,7 @@ logger = _get_logger(__name__)
 _TAGS = {
     "zarinpal": "زرین‌پال",
     "card":     "کارت‌به‌کارت",
+    "apay":     "آپی (کارت‌به‌کارتِ آنی)",   # PATCH_APAY_LOG_CHANNEL_V1
     "crypto":   "ارز دیجیتال",
     "ton":      "تون",
     "stars":    "استارز تلگرام",
@@ -37,7 +38,7 @@ _DEDUCT_TAGS = {"admin_deduct"}
 
 # درگاه‌هایِ واقعیِ پرداخت — بقیه افزایشِ بدونِ درگاه‌اند (پاداش، تنظیمِ
 # دستی، شارژِ گروهی) و هشتگِ «#پرداخت از» برایشان بی‌معناست.
-_GATEWAYS = {"zarinpal", "card", "crypto", "ton", "stars", "admin"}
+_GATEWAYS = {"zarinpal", "card", "crypto", "ton", "stars", "admin", "apay"}
 
 
 def _fa(n) -> str:

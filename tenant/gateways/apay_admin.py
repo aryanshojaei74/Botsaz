@@ -37,6 +37,7 @@ class ApFSM(StatesGroup):
     max_amount = State()
     display_name = State()   # === PATCH_APAY_DISPLAY_NAME_V1 ===
     fee_amount = State()     # === PATCH_APAY_FEE_PAYER_V1 ===
+    log_channel = State()    # === PATCH_APAY_LOG_CHANNEL_V1 ===
 
 
 APAY_BOT = "APayGateBot"
@@ -126,6 +127,8 @@ async def _menu_content(bot_id: int):
             text=f"🛒 نمایش موقعِ پرداختِ محصول: {'✅' if show_purchase else '❌'}",
             callback_data="ap:show_purchase",
             style=(ButtonStyle.SUCCESS if show_purchase else ButtonStyle.DANGER))],
+        [InlineKeyboardButton(text="📢 لاگِ پرداخت‌هایِ آپی در کانال",
+                              callback_data="ap:log", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="🧪 تستِ اتصال و موجودی",
                               callback_data="ap:test", style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="🤖 رباتِ آپی", url=f"https://t.me/{APAY_BOT}"),
@@ -771,6 +774,9 @@ async def _apu_create_charge_locked(msg: Message, bot: Bot, row, amount: int, tg
                 await s.commit()
     except Exception:
         logger.exception("apay: ذخیرهٔ شناسهٔ پیامِ فاکتور ناموفق بود")
+    from tenant.gateways.apay_log import log_event as _alog         # PATCH_APAY_LOG_CHANNEL_V1
+    await _alog(row.id, "created", user_tg=tg_id, amount_toman=int(amount), pay_rial=pay_rial,
+                fee_toman=fee, order_id=oid)
     AP.watch_tenant_charge(row.id, oid, str(res.get("id") or ""))
 
 
@@ -825,7 +831,12 @@ async def apu_cancel(cb: CallbackQuery, bot: Bot):
             return await cb.answer("این فاکتور قبلاً پرداخت شده و قابلِ لغو نیست.", show_alert=True)
         ch.status = "cancelled"
         ask_chat, ask_msg, inv_chat, inv_msg = ch.admin_ask_chat, ch.admin_ask_msg, ch.chat_id, ch.msg_id
+        _cinfo = (int(ch.amount_toman or 0), int(ch.pay_amount_rial or 0), int(ch.fee_toman or 0))
         await s.commit()
+    from tenant.gateways.apay_log import log_event as _alog         # PATCH_APAY_LOG_CHANNEL_V1
+    await _alog(row.id, "cancelled", user_tg=cb.from_user.id, amount_toman=_cinfo[0], pay_rial=_cinfo[1],
+                fee_toman=_cinfo[2], order_id=oid,
+                note=("لغو توسطِ کاربر (در آپی هم لغو شد)" if remote == "cancelled" else "لغو توسطِ کاربر"))
     await cb.answer("فاکتور لغو شد.")
     try:
         await cb.message.edit_reply_markup(reply_markup=None)
@@ -875,3 +886,145 @@ async def ap_admin_answer(cb: CallbackQuery, bot: Bot):
                         .values(admin_ask_chat=None, admin_ask_msg=None))
         await s.commit()
     await cb.answer(msg if not ok else ("شارژ شد ✅" if act == "ok" else "ثبت شد"), show_alert=not ok)
+
+
+# ═════════════════ لاگِ پرداخت‌هایِ آپی در کانال ═════════════════
+# === PATCH_APAY_LOG_CHANNEL_V1 ===
+async def _log_content(bot_id: int):
+    from tenant.gateways import apay_log as AL
+    ch = ((await AP._get(bot_id, "apay_log_channel", "")) or "").strip()
+    txt = ("📢 <b>لاگِ پرداخت‌هایِ آپی</b>\n\n"
+           "هر پرداختِ آپی با مشخصاتِ کاربر (نام، آیدی، یوزرنیم)، مبلغ و ساعت در کانالی که انتخاب کنی "
+           "پست می‌شود. هر وضعیت را جدا روشن/خاموش کن:\n"
+           "⏳ در حال انجام = فاکتور ساخته شد و منتظرِ واریز است\n"
+           "✅ انجام‌شده = واریز تأیید و کیف پول شارژ شد\n"
+           "❌ لغوشده = کاربر فاکتور را لغو کرد\n"
+           "⌛️ منقضی‌شده = مهلتِ فاکتور بدونِ واریز تمام شد\n\n")
+    if ch:
+        txt += f"وضعیت: ✅ متصل به <code>{ch}</code>"
+    else:
+        txt += ("وضعیت: ❌ کانال تنظیم نشده\n"
+                "تا وقتی کانالی وصل نکنی، فقط «انجام‌شده» (اگر کانالِ لاگِ تراکنش‌ها هم نداری) به پیویِ تو می‌آید.")
+    rows = [[InlineKeyboardButton(text="🔗 اتصال / تغییرِ کانال", callback_data="ap:log:set",
+                                  style=ButtonStyle.PRIMARY)]]
+    if ch:
+        rows.append([InlineKeyboardButton(text="🧪 ارسالِ پیامِ تست", callback_data="ap:log:test",
+                                          style=ButtonStyle.SUCCESS),
+                     InlineKeyboardButton(text="🗑 حذفِ اتصال", callback_data="ap:log:clear",
+                                          style=ButtonStyle.DANGER)])
+    for key, (label, _tag, emoji, _d) in AL.EVENTS.items():
+        on = await AL.event_enabled(bot_id, key)
+        rows.append([InlineKeyboardButton(
+            text=f"{emoji} {label}: {'✅ روشن' if on else '❌ خاموش'}", callback_data=f"ap:log:ev:{key}",
+            style=(ButtonStyle.SUCCESS if on else ButtonStyle.DANGER))])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="ap:menu", style=ButtonStyle.DANGER)])
+    return txt, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _show_log(target, bot_id: int):
+    txt, kb = await _log_content(bot_id)
+    m = getattr(target, "message", None) or target
+    try:
+        await m.edit_text(txt, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await m.answer(txt, reply_markup=kb, parse_mode="HTML")
+
+
+@apay_router.callback_query(F.data == "ap:log")
+async def ap_log_menu(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    await _show_log(cb, row.id)
+    await cb.answer()
+
+
+@apay_router.callback_query(F.data.startswith("ap:log:ev:"))
+async def ap_log_toggle(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok
+    from tenant.gateways import apay_log as AL
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    ev = cb.data.rsplit(":", 1)[-1]
+    if ev not in AL.EVENTS:
+        return await cb.answer()
+    cur = await AL.event_enabled(row.id, ev)
+    await AP._set(row.id, f"apay_log_ev_{ev}", "0" if cur else "1")
+    await cb.answer("خاموش شد." if cur else "روشن شد.")
+    await _show_log(cb, row.id)
+
+
+@apay_router.callback_query(F.data == "ap:log:set")
+async def ap_log_set(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok, smart_cancel_kb
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await state.set_state(ApFSM.log_channel)
+    await cb.message.answer(
+        "یک پیام از کانالِ موردنظر را فوروارد کن، یا آیدیِ عددیِ کانال (مثلاً <code>-1001234567890</code>) "
+        "را بفرست.\n\n⚠️ ربات باید در آن کانال ادمین باشد.",
+        reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
+    await cb.answer()
+
+
+@apay_router.message(ApFSM.log_channel)
+async def ap_log_save(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok
+    row = await _owner_ok(msg, bot)
+    if not row:
+        return
+    chat_id = None
+    fwd = getattr(msg, "forward_from_chat", None)
+    if fwd is not None and getattr(fwd, "type", "") == "channel":
+        chat_id = fwd.id
+    else:
+        t = (msg.text or "").strip()
+        if t.lstrip("-").isdigit():
+            chat_id = int(t)
+    if chat_id is None:
+        return await msg.answer("یک پیام از کانال فوروارد کن یا آیدیِ عددیِ کانال را بفرست.")
+    try:
+        await bot.send_message(chat_id, "✅ کانالِ لاگِ پرداخت‌هایِ آپی وصل شد.")
+    except Exception as e:
+        import html as _h
+        return await msg.answer("❌ ارسال به این کانال ممکن نشد. مطمئن شو ربات در کانال <b>ادمین</b> است.\n\n"
+                                f"<code>{_h.escape(str(e))}</code>", parse_mode="HTML")
+    await AP._set(row.id, "apay_log_channel", str(chat_id))
+    await state.clear()
+    await msg.answer("✅ ذخیره شد.")
+    await _show_log(msg, row.id)
+
+
+@apay_router.callback_query(F.data == "ap:log:clear")
+async def ap_log_clear(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await AP._set(row.id, "apay_log_channel", "")
+    await cb.answer("اتصال حذف شد.")
+    await _show_log(cb, row.id)
+
+
+@apay_router.callback_query(F.data == "ap:log:test")
+async def ap_log_test(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok
+    from tenant.gateways import apay_log as AL
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    ch = ((await AP._get(row.id, "apay_log_channel", "")) or "").strip()
+    if not ch:
+        return await cb.answer("کانالی تنظیم نشده.", show_alert=True)
+    text = AL.build_text("paid", user=BotUser(full_name="کاربرِ نمونه", username="example"),
+                         user_tg=cb.from_user.id, amount_toman=150_000, pay_rial=1_500_960,
+                         order_id="TEST-ORDER", balance=200_000, note="پیامِ تست")
+    try:
+        await bot.send_message(int(ch) if ch.lstrip("-").isdigit() else ch, text, parse_mode="HTML")
+    except Exception as e:
+        return await cb.answer(f"ارسال نشد: {str(e)[:150]}", show_alert=True)
+    await cb.answer("پیامِ تست ارسال شد.", show_alert=True)

@@ -483,6 +483,9 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
             await _tx_log_tenant(bot_id, uid, credit, bal, "apay")
         except Exception:
             logger.exception("apay: tx_log ناموفق بود")
+        from tenant.gateways.apay_log import log_event as _alog     # PATCH_APAY_LOG_CHANNEL_V1
+        await _alog(bot_id, "paid", user_tg=uid, amount_toman=credit, pay_rial=pay_rial_stored,
+                    fee_toman=expected - credit, order_id=order_id, balance=bal, late=bool(pay.get("late")))
     return True, "پرداخت تأیید و کیف پول شارژ شد.", credit
 
 
@@ -781,6 +784,7 @@ async def manual_settle(bot_id: int, charge_id: int, admin_uid: int) -> tuple[bo
         s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=credit, kind="apay_charge",
                         note=f"شارژِ آپی با تأییدِ دستیِ ادمین ({admin_uid})؛ {ch.order_id}"))
         uid, bal, kyc_uid, inv_chat, inv_msg = u.telegram_id, float(u.balance), u.id, ch.chat_id, ch.msg_id
+        ch_order = ch.order_id
         await s.commit()
     try:
         from tenant.shared.kyc import after_charge as _ac
@@ -796,6 +800,9 @@ async def manual_settle(bot_id: int, charge_id: int, admin_uid: int) -> tuple[bo
         await _tx_log_tenant(bot_id, uid, credit, bal, "apay")
     except Exception:
         logger.exception("apay: tx_log ناموفق بود")
+    from tenant.gateways.apay_log import log_event as _alog         # PATCH_APAY_LOG_CHANNEL_V1
+    await _alog(bot_id, "paid", user_tg=uid, amount_toman=credit, order_id=ch_order,
+                balance=bal, note=f"تأییدِ دستیِ ادمین ({admin_uid})")
     return True, f"✅ {credit:,} تومان به کیف پولِ کاربر اضافه شد."
 
 
@@ -830,12 +837,19 @@ async def poll_pending() -> int:
                 ch = await s.scalar(select(ApayCharge).where(
                     ApayCharge.bot_id == bid, ApayCharge.order_id == oid,
                     ApayCharge.status == "waiting").with_for_update())
+                exp_info = None
                 if ch:
                     ch.status = "expired"
                     ask_chat, ask_msg = ch.admin_ask_chat, ch.admin_ask_msg
+                    exp_info = (ch.user_telegram_id, int(ch.amount_toman or 0), int(ch.pay_amount_rial or 0),
+                                int(ch.fee_toman or 0))
                     await s.commit()
                 else:
                     ask_chat = ask_msg = None
+            if exp_info:                                          # PATCH_APAY_LOG_CHANNEL_V1
+                from tenant.gateways.apay_log import log_event as _alog
+                await _alog(bid, "expired", user_tg=exp_info[0], amount_toman=exp_info[1],
+                            pay_rial=exp_info[2], fee_toman=exp_info[3], order_id=oid)
             # === PATCH_APAY_ASK_CLEANUP_V2 === منقضی و پرداخت‌نشده ⇒ پرسش بی‌پاسخ مالک پاک شود
             await _drop_admin_ask(bid, ask_chat, ask_msg)
     return n

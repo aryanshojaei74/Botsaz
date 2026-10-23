@@ -921,3 +921,119 @@ async def test_menu_warns_when_plain_card_to_card_is_also_on(db):
     await tenant.set_setting(5, "card_enabled", "0")
     txt2, _kb = await AA._menu_content(5)
     assert "کارت‌به‌کارتِ عادی هم فعال است" not in txt2
+
+
+# ═══ PATCH_APAY_LOG_CHANNEL_V1 — لاگِ اختصاصیِ پرداخت‌هایِ آپی در کانال ═══
+@pytest.fixture
+def sent_msgs(monkeypatch):
+    import aiogram
+    sent = []
+
+    class FakeBot:
+        def __init__(self, token=None, **k):
+            self.session = _ns(close=_noop_answer)
+
+        async def send_message(self, chat, text, **k):
+            sent.append((chat, text))
+    monkeypatch.setattr(aiogram, "Bot", FakeBot)
+    from tenant.gateways import apay_log as AL
+    monkeypatch.setattr(AL, "Session", tenant.Session if hasattr(tenant, "Session") else AL.Session)
+    return sent
+
+
+@pytest.mark.asyncio
+async def test_log_goes_to_channel_with_user_info_and_respects_event_toggles(db, sent_msgs):
+    from tenant.gateways import apay_log as AL
+    await tenant.set_setting(5, "apay_log_channel", "-100123")
+    ok = await AL.log_event(5, "paid", user_tg=777, amount_toman=50_000, pay_rial=500_370, order_id="bsabc",
+                            balance=60_000, late=True)
+    assert ok and sent_msgs[-1][0] == -100123
+    t = sent_msgs[-1][1]
+    assert "#آپی_پرداخت_شد" in t and "777" in t and "50٬000" in t and "50٬037" in t and "دیرهنگام" in t and "bsabc" in t
+    assert "A" in t                                           # نامِ کاربرِ ثبت‌شده در ربات
+    assert not await AL.log_event(5, "expired", user_tg=777, amount_toman=1)       # پیش‌فرض خاموش
+    await tenant.set_setting(5, "apay_log_ev_expired", "1")
+    assert await AL.log_event(5, "expired", user_tg=777, amount_toman=1)
+    await tenant.set_setting(5, "apay_log_ev_created", "0")
+    assert not await AL.log_event(5, "created", user_tg=777, amount_toman=1)
+
+
+@pytest.mark.asyncio
+async def test_log_without_channel_only_paid_and_only_to_owner(db, sent_msgs):
+    from tenant.gateways import apay_log as AL
+    assert not await AL.log_event(5, "created", user_tg=777, amount_toman=1)
+    assert not await AL.log_event(5, "cancelled", user_tg=777, amount_toman=1)
+    assert await AL.log_event(5, "paid", user_tg=777, amount_toman=1)
+    assert sent_msgs[-1][0] == 1                              # owner_id
+    n = len(sent_msgs)
+    await tenant.set_setting(5, "tx_log_channel", "-100999")  # کانالِ کلیِ تراکنش‌ها هست ⇒ تکراری نمی‌رود
+    assert not await AL.log_event(5, "paid", user_tg=777, amount_toman=1) and len(sent_msgs) == n
+
+
+@pytest.mark.asyncio
+async def test_settle_and_cancel_and_expire_emit_log_events(db, monkeypatch, sent_msgs):
+    maker, _n = db
+    await tenant.set_setting(5, "apay_log_channel", "-100123")
+    await tenant.set_setting(5, "apay_log_ev_expired", "1")
+
+    async def _v(token, pid):
+        return _verify_resp()
+    monkeypatch.setattr(AP, "verify_payment", _v)
+    ok, _m, _a = await AP.settle_charge(5, "bsabc")
+    assert ok and any("#آپی_پرداخت_شد" in t for _c, t in sent_msgs)
+
+    async with maker() as s:
+        s.add(models.ApayCharge(bot_id=5, user_telegram_id=777, order_id="bsexp", payment_id="pay_x",
+                                amount_toman=10_000, pay_amount_rial=100_100, status="waiting",
+                                created_at=__import__("datetime").datetime.utcnow() - __import__("datetime").timedelta(hours=1)))
+        await s.commit()
+
+    async def _nv(token, pid):
+        return 200, {"verified": False, "payment": {"status": "expired"}}
+    monkeypatch.setattr(AP, "verify_payment", _nv)
+    await AP.poll_pending()
+    assert any("#آپی_منقضی" in t for _c, t in sent_msgs)
+
+
+def test_tx_log_labels_apay_as_a_gateway():
+    from tenant.shared import tx_channel as TC
+    assert "apay" in TC._GATEWAYS and "آپی" in TC._TAGS["apay"]
+
+
+@pytest.mark.asyncio
+async def test_log_menu_shows_toggles_and_channel_state(db):
+    from tenant.gateways import apay_admin as AA
+    txt, kb = await AA._log_content(5)
+    cbs = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert {"ap:log:set", "ap:log:ev:created", "ap:log:ev:paid", "ap:log:ev:cancelled", "ap:log:ev:expired"} <= set(cbs)
+    assert "ap:log:test" not in cbs and "کانال تنظیم نشده" in txt
+    await tenant.set_setting(5, "apay_log_channel", "-100123")
+    _t, kb2 = await AA._log_content(5)
+    assert "ap:log:test" in [b.callback_data for r in kb2.inline_keyboard for b in r]
+    _m, kbm = await AA._menu_content(5)
+    assert "ap:log" in [b.callback_data for r in kbm.inline_keyboard for b in r]
+
+
+@pytest.mark.asyncio
+async def test_user_cancel_posts_cancelled_event_to_log_channel(db, monkeypatch, sent_msgs):
+    maker, _n = db
+    AA = _patch_admin(monkeypatch, maker)
+    row = await _row(maker)
+    await tenant.set_setting(5, "apay_log_channel", "-100123")
+
+    async def gbr(bot):
+        return row
+
+    async def ibk(bot_id):
+        return None
+
+    async def gone(token, pid):
+        return 200, {"status": "cancelled"}
+    monkeypatch.setattr(tenant, "get_bot_row", gbr)
+    monkeypatch.setattr(tenant, "inline_back_kb", ibk)
+    monkeypatch.setattr(AP, "cancel_payment", gone)
+    monkeypatch.setattr(AP, "_drop_admin_ask", _noop_answer)
+    cb = _ns(data="apu:cancel:bsabc", from_user=_ns(id=777), answer=_noop_answer,
+             message=_ns(message_id=9, answer=_noop_answer, edit_reply_markup=_noop_answer))
+    await AA.apu_cancel(cb, _ns())
+    assert any("#آپی_لغو" in t and "در آپی هم لغو شد" in t for _c, t in sent_msgs)
