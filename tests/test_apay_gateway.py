@@ -908,3 +908,16 @@ async def test_unreachable_apay_keeps_old_local_cancel_behaviour(db, monkeypatch
             message=NS(message_id=9, answer=say, edit_reply_markup=noop))
     await AA.apu_cancel(cb, NS())
     assert (await _balance(maker))[1] == "cancelled" and "نگران نباش" in said[0]
+
+
+@pytest.mark.asyncio
+async def test_menu_warns_when_plain_card_to_card_is_also_on(db):
+    from tenant.gateways import apay_admin as AA
+    maker, _n = db
+    await tenant.set_setting(5, "card_number", "6037991234567890")
+    await tenant.set_setting(5, "card_enabled", "1")
+    txt, _kb = await AA._menu_content(5)
+    assert "کارت‌به‌کارتِ عادی هم فعال است" in txt
+    await tenant.set_setting(5, "card_enabled", "0")
+    txt2, _kb = await AA._menu_content(5)
+    assert "کارت‌به‌کارتِ عادی هم فعال است" not in txt2
