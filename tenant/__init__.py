@@ -5065,6 +5065,8 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
                 await state.update_data(pending_gate_code=gate_code)
             if smm_svc_id:  # === PATCH_SMM_DEEPLINK_RESUME_V1 === (برایِ همهٔ کاربران، نه فقط تازه‌ها)
                 await state.update_data(pending_svc_id=smm_svc_id)
+            if gw_payload:  # === PATCH_GIVEAWAY_FJ_RESUME_V1 === بعد از «عضو شدم» به همان قرعه‌کشی برگرد
+                await state.update_data(pending_gw=gw_payload)
             await force_join_msg(bot, msg, nj)
             return
     # === PATCH_PHONE_VERIFY_V1 ===
@@ -5600,6 +5602,21 @@ async def _resume_pending_svc_after_gate(target, bot: Bot, state: FSMContext) ->
         logger.exception("ادامهٔ لینکِ محصول بعد از عضویتِ اجباری ناموفق بود")
 
 
+async def _resume_giveaway_after_gate(cb, bot, row, state, data: dict) -> None:
+    """PATCH_GIVEAWAY_FJ_RESUME_V1 — بعد از تأییدِ عضویتِ اجباری، کارتِ قرعه‌کشی (یا فهرستِ قرعه‌کشی‌هایِ رباتِ
+    قرعه‌کشی) را نشان بده؛ قبلاً کاربر فقط خوش‌آمد می‌دید و لینکِ قرعه‌کشی گم می‌شد. هرگز fj:check را خراب نمی‌کند."""
+    try:
+        gw = (data or {}).get("pending_gw")
+        if gw:
+            await state.update_data(pending_gw=None)
+        if not gw and row.field != "giveaway":
+            return
+        fake = cb.message.model_copy(update={"from_user": cb.from_user}).as_(bot)
+        await _giveaway_start_hook(fake, bot, row, gw, state)
+    except Exception:
+        logger.exception("ادامهٔ قرعه‌کشی بعد از عضویتِ اجباری ناموفق بود")
+
+
 @tenant_router.callback_query(F.data == "fj:check")
 async def fj_check(cb: CallbackQuery, bot: Bot, state: FSMContext):
     row = await get_bot_row(bot)
@@ -5665,11 +5682,13 @@ async def fj_check(cb: CallbackQuery, bot: Bot, state: FSMContext):
             if ikb:
                 await send_home_menu(cb.message, row.id, ikb, attach=_welcome_msg)
         await _resume_pending_svc_after_gate(cb.message, bot, state)   # === PATCH_SMM_DEEPLINK_RESUME_V1 ===
+        await _resume_giveaway_after_gate(cb, bot, row, state, data)
         return
     kb = await main_kb_or_remove(row.id, row.owner_id, cb.from_user.id)
     await _send_welcome_media(cb.message, txt, welcome_media_id, welcome_media_type,
                               reply_markup=kb or ReplyKeyboardRemove())
     await _resume_pending_svc_after_gate(cb.message, bot, state)   # === PATCH_SMM_DEEPLINK_RESUME_V1 ===
+    await _resume_giveaway_after_gate(cb, bot, row, state, data)
 
 
 # ─────────────────────── لغو کلی ───────────────────────

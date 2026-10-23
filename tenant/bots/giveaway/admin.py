@@ -7,6 +7,7 @@ tenant/bots/giveaway/admin.py — پنلِ مدیریتِ رباتِ قرعه‌
 from __future__ import annotations
 
 import asyncio
+import html as _html
 import csv
 import io
 from datetime import datetime, timedelta
@@ -71,12 +72,22 @@ def _n(v) -> str:
 
 # ═══════════════════════ منوی اصلی ═══════════════════════
 
-async def menu_content(row) -> tuple[str, object]:
+async def menu_content(row, bot: Bot | None = None) -> tuple[str, object]:
     act = await E.active_giveaways(row.id)
     chats = await A.saved_chats(row.id)
     text = ("🎰 <b>مدیریتِ قرعه‌کشی</b>\n\n"
             f"🟢 قرعه‌کشی‌هایِ فعال: <b>{fa(len(act))}</b>\n"
             f"📣 مقصدهایِ اعلان (گروه/کانال): <b>{fa(len(chats))}</b>")
+    if bot is not None:        # PATCH_GIVEAWAY_FJ_HEALTH_V1
+        try:
+            bad = await A.forcejoin_problems(bot, row.id)
+        except Exception:      # noqa: BLE001
+            logger.exception("giveaway: بررسیِ سلامتِ عضویتِ اجباری ناموفق بود")
+            bad = []
+        if bad:
+            text += ("\n\n⚠️ <b>عضویتِ اجباری کار نمی‌کند</b> (کاربرها بدونِ عضویت رد می‌شوند):\n"
+                     + "\n".join(f"• {_html.escape(b)}" for b in bad[:6])
+                     + "\nربات را در آن کانال/گروه <b>ادمین</b> کن، بعد دوباره همین منو را باز کن.")
     return text, kb(
         [btn("➕ ساختِ قرعه‌کشیِ جدید", "gw:a:new", style=ButtonStyle.SUCCESS)],
         [btn(f"📋 قرعه‌کشی‌هایِ فعال ({fa(len(act))})", "gw:a:act", style=ButtonStyle.PRIMARY),
@@ -88,7 +99,7 @@ async def menu_content(row) -> tuple[str, object]:
 
 
 async def show_menu(event, bot: Bot, row) -> None:
-    text, markup = await menu_content(row)
+    text, markup = await menu_content(row, bot)
     await edit_or_send(event, text, markup)
 
 

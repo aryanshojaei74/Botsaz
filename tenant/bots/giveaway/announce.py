@@ -252,3 +252,39 @@ async def redeliver_pending(bot: Bot, row, gid: int) -> tuple[int, int]:
         ok += 1 if r else 0
         bad += 0 if r else 1
     return ok, bad
+
+
+# ───────────────────────── سلامتِ عضویتِ اجباری ─────────────────────────
+_FJ_HEALTH: dict[int, tuple[float, list[str]]] = {}
+
+
+async def forcejoin_problems(bot: Bot, bot_id: int) -> list[str]:
+    """کانال‌هایِ عضویتِ اجباریِ فعال که ربات نمی‌تواند عضویتشان را بررسی کند (ادمین نیست/کانال پاک شده).
+    در این حالت عضویتِ اجباری بی‌صدا غیرفعال می‌ماند تا کاربر قفل نشود — پس مالک باید بداند. ۶۰ثانیه کش."""
+    import time as _t
+    hit = _FJ_HEALTH.get(bot_id)
+    if hit and _t.monotonic() - hit[0] < 60:
+        return hit[1]
+    from models import ForceJoin
+    async with Session() as s:
+        fjs = list((await s.scalars(select(ForceJoin).where(ForceJoin.bot_id == bot_id,
+                                                           ForceJoin.is_active == True))).all())  # noqa: E712
+    out: list[str] = []
+    if fjs:
+        try:
+            me = await bot.me()
+        except Exception as e:      # noqa: BLE001
+            logger.debug("giveaway: bot.me() ناموفق: %s", e)
+            return []
+        for fj in fjs:
+            title = str(fj.title or fj.chat_id)
+            try:
+                m = await asyncio.wait_for(bot.get_chat_member(fj.chat_id, me.id), timeout=5.0)
+                if m.status not in ("administrator", "creator"):
+                    out.append(f"{title} — ربات ادمین نیست")
+            except Exception:      # noqa: BLE001
+                out.append(f"{title} — ربات به این کانال/گروه دسترسی ندارد")
+    _FJ_HEALTH[bot_id] = (_t.monotonic(), out)
+    if len(_FJ_HEALTH) > 500:
+        _FJ_HEALTH.clear()
+    return out

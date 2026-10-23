@@ -585,3 +585,60 @@ async def test_private_shortcuts(env):
     mc = tmsg("/cancel", OWNER)
     await ADM.cmd_cancel(mc, FakeBot(), st)
     assert await st.get_state() is None and mc.out
+
+
+# ═══ PATCH_GIVEAWAY_FJ_HEALTH_V1 / PATCH_GIVEAWAY_FJ_RESUME_V1 ═══
+async def test_forcejoin_problems_flags_unadmin_and_unreachable_channels(env):
+    async with env.mk() as s:
+        s.add(models.ForceJoin(bot_id=BOT, chat_id="-1001", title="الف", is_active=True))
+        s.add(models.ForceJoin(bot_id=BOT, chat_id="-1002", title="ب", is_active=True))
+        s.add(models.ForceJoin(bot_id=BOT, chat_id="-1003", title="پ", is_active=True))
+        s.add(models.ForceJoin(bot_id=BOT, chat_id="-1004", title="غیرفعال", is_active=False))
+        await s.commit()
+
+    class B(FakeBot):
+        async def me(self):
+            return SimpleNamespace(id=999)
+
+        async def get_chat_member(self, chat_id, uid):
+            if chat_id == "-1003":
+                raise RuntimeError("chat not found")
+            return SimpleNamespace(status="administrator" if chat_id == "-1001" else "member")
+    A._FJ_HEALTH.clear()
+    bad = await A.forcejoin_problems(B(), BOT)
+    assert len(bad) == 2 and any("ب" in b and "ادمین نیست" in b for b in bad) and any("پ" in b for b in bad)
+    assert not any("الف" in b or "غیرفعال" in b for b in bad)
+    text, _kb = await ADM.menu_content(ROW, B())
+    assert "عضویتِ اجباری کار نمی‌کند" in text
+    A._FJ_HEALTH.clear()
+    text2, _ = await ADM.menu_content(ROW)               # بدونِ ربات هشدار نمی‌دهد (سازگار با فراخوان‌هایِ قدیمی)
+    assert "کار نمی‌کند" not in text2
+
+
+async def test_giveaway_resumes_after_forcejoin_check(env, monkeypatch):
+    shown = []
+
+    async def hook(msg, bot, row, gw, state):
+        shown.append((msg.from_user.id, gw))
+    monkeypatch.setattr(tenant, "_giveaway_start_hook", hook)
+
+    class Msg:
+        def __init__(self):
+            self.from_user = SimpleNamespace(id=999)
+
+        def model_copy(self, update):
+            m = Msg(); m.from_user = update["from_user"]; return m
+
+        def as_(self, bot):
+            return self
+    c = SimpleNamespace(message=Msg(), from_user=SimpleNamespace(id=11))
+    st = fsm()
+    await tenant._resume_giveaway_after_gate(c, FakeBot(), ROW, st, {"pending_gw": "gw_7_3"})
+    assert shown == [(11, "gw_7_3")]                           # از طرفِ خودِ کاربر، نه ربات
+    shown.clear()
+    await tenant._resume_giveaway_after_gate(c, FakeBot(), ROW, st, {})        # رباتِ قرعه‌کشی بدونِ payload
+    assert shown == [(11, None)]
+    shown.clear()
+    other = SimpleNamespace(id=BOT, field="vpn")
+    await tenant._resume_giveaway_after_gate(c, FakeBot(), other, st, {})      # رباتِ دیگر بدونِ payload ⇒ هیچ
+    assert shown == []
