@@ -78,12 +78,13 @@ async def test_service_page_keyboard_is_paired_and_keeps_every_callback(env, mon
     rows = mk.inline_keyboard
     datas = [b.callback_data for r in rows for b in r if b.callback_data]
     # همهٔ دکمه‌هایِ قبلی هنوز هستند
-    for want in ("vget:sub:1", "vget:single:1", "vwgcfg:1", "vsvcqr:1", "vreset:1", "vrename:1", "vsvcoff:1",
+    for want in ("vget:sub:1", "vget:single:1", "vwgcfg:1", "vsvcqr:1", "vreset:1", "vsvcoff:1",
                  "vdel:1", "vrf:1", "vhelp:menu", "vsvcback", "vsvc:home"):
         assert want in datas, want
+    assert "vrename:1" not in datas                     # PATCH_SVC_PAGE_TIDY_V1: «تغییر نام» از صفحهٔ سرویس برداشته شد
     assert max(len(r) for r in rows) <= 2
     # قبلاً ۱۳ ردیف بود؛ حالا بسیار کمتر
     assert len(rows) <= 8
     single_rows = [r for r in rows if len(r) == 1]
-    assert len(single_rows) <= 2                           # فقط دو دکمهٔ طولانیِ تمدید تمام‌عرض‌اند
-    assert {r[0].callback_data for r in single_rows} <= {"vren:1", "vadd:1"}
+    assert len(single_rows) <= 3                           # دو دکمهٔ طولانیِ تمدید + (اگر تعدادِ دکمه‌هایِ کوتاه فرد شد) آخرین دکمه
+    assert {r[0].callback_data for r in single_rows} <= {"vren:1", "vadd:1", "vhelp:menu"}

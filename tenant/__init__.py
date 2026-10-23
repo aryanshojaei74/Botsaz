@@ -2625,7 +2625,7 @@ async def submenu_kb(bot_id: int, parent_id: int, support_row: bool = False,
             rows.append([KeyboardButton(text=BTN_SUPPORT_ROW)])
         if show_up_row:
             rows.append([KeyboardButton(text=BTN_BACK_LEVEL)])
-        rows.append([KeyboardButton(text=BTN_BACK_MENU)])
+        rows.append(await _back_kb_row(bot_id))
         return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
     colored = bot_row is not None and has_feature(bot_row.plan, Feature.COLORED_BUTTONS)
     rows_map: dict[int, list[KeyboardButton]] = {}
@@ -2637,8 +2637,16 @@ async def submenu_kb(bot_id: int, parent_id: int, support_row: bool = False,
         kb_rows.append([KeyboardButton(text=BTN_SUPPORT_ROW)])
     if show_up_row:
         kb_rows.append([KeyboardButton(text=BTN_BACK_LEVEL)])
-    kb_rows.append([KeyboardButton(text=BTN_BACK_MENU)])
+    kb_rows.append(await _back_kb_row(bot_id))
     return ReplyKeyboardMarkup(keyboard=kb_rows, resize_keyboard=True)
+
+
+async def _back_kb_row(bot_id: int) -> list:
+    """ردیفِ پایینِ کیبوردِ زیرمنو: «بازگشت به منو» (+ «بازگشت به خانه» وقتی «بازگشت فقط در کیبورد» روشن است)."""
+    row = [KeyboardButton(text=BTN_BACK_MENU)]
+    if await nav_kb_only(bot_id):
+        row.append(KeyboardButton(text=BTN_HOME_FLOW))
+    return row
 
 
 def _inline_back_btn() -> InlineKeyboardButton:
@@ -2726,12 +2734,55 @@ async def _send_kb_bubble(msg_obj, bot_id: int, kb):
     return sent
 
 
+# === PATCH_NAV_KB_ONLY_V1 ===
+# درخواستِ ایلیا: «بازگشت به خانه / منوی اصلی / بازگشت به منو» از منوی شیشه‌ای حذف شود و فقط «بازگشت به منو» و
+# «بازگشت به خانه» در کیبوردِ پایینِ چت باشد (در همهٔ بخش‌ها). گزینهٔ اختیاریِ مالک (پیش‌فرض خاموش) و فقط در منوی کیبوردی.
+BTN_HOME_FLOW = "🏠 بازگشت به خانه"
+
+
+async def nav_kb_only(bot_id: int) -> bool:
+    try:
+        return (await get_setting(bot_id, "menu_mode", "reply") != "inline"
+                and await get_setting(bot_id, "nav_kb_only", "0") == "1")
+    except Exception:
+        logger.debug("nav_kb_only: خواندنِ تنظیم ممکن نشد")
+        return False
+
+
+_NAV_INLINE_BACK_TEXTS = frozenset({
+    "بازگشت", "بازگشتبهمنو", "بازگشتبهخانه", "بازگشتبهمنویاصلی", "بازگشتبهمنویقبل", "منویاصلی",
+    "خانه", "برگشتبهمنو", "برگشتبهمنویقبل", "برگشتبهخانه", "بازگشتبهصفحهیاصلی", "بازگشتبهصفحهاصلی",
+})
+_NAV_INLINE_BACK_CBS = frozenset({"mbtn:home", "nav:back", "vsvc:home", "vsvcback"})
+
+
+def _nav_norm_label(t: str) -> str:
+    return "".join(ch for ch in (t or "") if ch.isalpha()).replace("ٔ", "").replace("ي", "ی")
+
+
+def _is_inline_nav_button(b) -> bool:
+    cb = str(getattr(b, "callback_data", "") or "")
+    return cb in _NAV_INLINE_BACK_CBS or _nav_norm_label(getattr(b, "text", "")) in _NAV_INLINE_BACK_TEXTS
+
+
+def strip_inline_nav(mk):
+    """دکمه‌هایِ بازگشت/خانهٔ شیشه‌ای را برمی‌دارد؛ ردیف‌هایِ خالی‌شده حذف می‌شوند. اگر چیزی نماند None."""
+    if not isinstance(mk, InlineKeyboardMarkup):
+        return mk
+    rows = [[b for b in r if not _is_inline_nav_button(b)] for r in mk.inline_keyboard]
+    rows = [r for r in rows if r]
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
 async def flow_back_kb(msg: Message, bot_id: int):
-    """جایگزین کیبورد منو در صفحه‌های مرحله‌ای خرید: فقط «⬅️ بازگشت به منو» (همیشه دیده می‌شود)."""
+    """جایگزین کیبورد منو در صفحه‌های مرحله‌ای خرید: فقط «⬅️ بازگشت به منو» (همیشه دیده می‌شود).
+    اگر مالک «بازگشت فقط در کیبورد» را روشن کرده باشد، «🏠 بازگشت به خانه» هم کنارش می‌آید."""
     uid = msg.from_user.id
     _flow_kb_mark(bot_id, uid, _last_menu_for(bot_id))
-    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=BTN_BACK_MENU)]], resize_keyboard=True,
-                             is_persistent=True)
+    _row = [KeyboardButton(text=BTN_BACK_MENU)]
+    if await nav_kb_only(bot_id):
+        _row.append(KeyboardButton(text=BTN_HOME_FLOW))
+    kb = ReplyKeyboardMarkup(keyboard=[_row], resize_keyboard=True, is_persistent=True)
     return await _send_kb_bubble(msg, bot_id, kb)
 
 
@@ -3066,6 +3117,17 @@ def _nav_install(bot) -> None:
                 logger.debug("home_kb: جایگزینیِ ReplyKeyboardRemove ممکن نشد (بی‌اهمیت)")
         if _order_notice:
             return await orig(bot_, method, timeout=timeout)       # PATCH_ORDER_MSG_NO_NAV_FOOTER_V1
+        # === PATCH_NAV_KB_ONLY_V1 === بازگشت/خانه فقط در کیبوردِ پایین؛ از منوهایِ شیشه‌ایِ مشتری برداشته می‌شود
+        if (name in ("SendMessage", "EditMessageText", "EditMessageReplyMarkup", "SendPhoto", "EditMessageCaption")
+                and isinstance(mk, InlineKeyboardMarkup) and isinstance(getattr(method, "chat_id", None), int)
+                and method.chat_id > 0 and not getattr(method, "inline_message_id", None)):
+            try:
+                _rown = await get_bot_row(bot_)
+                if _rown and await nav_kb_only(_rown.id) and not await _nav_is_staff(bot_, method.chat_id):
+                    _stripped = strip_inline_nav(mk)
+                    return await orig(bot_, method.model_copy(update={"reply_markup": _stripped}), timeout=timeout)
+            except Exception:
+                logger.exception("nav_kb_only: حذفِ دکمه‌هایِ بازگشت ناموفق بود")
         uid = _CUR_UID.get()
         if (name not in ("SendMessage", "EditMessageText") or not isinstance(mk, InlineKeyboardMarkup)
                 or not uid or getattr(method, "chat_id", None) != uid
@@ -4753,6 +4815,32 @@ async def flow_back_pressed(msg: Message, bot: Bot, state: FSMContext):
     if btn:
         await _render_reply_submenu(msg, row.id, btn, state)
         return
+    _set_last_menu(row.id, uid, None)
+    kb = await main_kb_or_remove(row.id, row.owner_id, uid)
+    await send_home_menu(msg, row.id, kb or ReplyKeyboardRemove())
+
+
+async def _is_flow_home_press(msg: Message, bot: Bot) -> bool:
+    """PATCH_NAV_KB_ONLY_V1 — «🏠 بازگشت به خانه» از کیبوردِ دکمه‌ایِ صفحه‌هایِ خرید."""
+    if msg.text != BTN_HOME_FLOW or msg.chat.type != "private" or not msg.from_user:
+        return False
+    row = await get_bot_row(bot)
+    return bool(row) and await nav_kb_only(row.id)
+
+
+@tenant_router.message(_is_flow_home_press)
+async def flow_home_pressed(msg: Message, bot: Bot, state: FSMContext):
+    row = await get_bot_row(bot)
+    if not row:
+        return
+    uid = msg.from_user.id
+    if row.status == "paused" and not await is_owner_or_admin(row.id, uid, row.owner_id):
+        raise SkipHandler
+    u = await get_or_create_user(row.id, uid, msg.from_user.full_name, msg.from_user.username or "")
+    if u.is_banned and not _is_platform_admin(uid):
+        return
+    _flow_kb_clear(row.id, uid)
+    await state.clear()
     _set_last_menu(row.id, uid, None)
     kb = await main_kb_or_remove(row.id, row.owner_id, uid)
     await send_home_menu(msg, row.id, kb or ReplyKeyboardRemove())
@@ -12094,6 +12182,9 @@ async def _sec_settings_kb(bot_id: int, plan: str, menu_mode_v: str, bot_paused:
     if plan != "partner":
         menu_lbl = "🎛 نوع منو: " + ("💠 شیشه‌ای" if menu_mode_v == "inline" else "⌨️ کیبورد")
         opts.append((menu_lbl, "set:menu_mode"))
+        if menu_mode_v != "inline":     # PATCH_NAV_KB_ONLY_V1
+            _nko = await get_setting(bot_id, "nav_kb_only", "0") == "1"
+            opts.append(("↩️ دکمه‌هایِ بازگشت: " + ("⌨️ فقط در کیبورد" if _nko else "💠 زیرِ پیام‌ها هم"), "set:nav_kb_only"))
     pause_lbl = "🤖 ربات: " + ("🔴 خاموش — بزن روشن شود" if bot_paused else "🟢 روشن — بزن خاموش شود")
     opts.append((pause_lbl, "set:bot_toggle"))
     opts.append(("🛡 آنتی‌اسپم", "set:antispam"))
@@ -30249,6 +30340,25 @@ async def set_bot_toggle(cb: CallbackQuery, bot: Bot):
                 logger.exception("خطای نادیده‌گرفته‌شده در بی‌اعتبارسازی وضعیت ربات")
     await cb.answer("وضعیت ربات تغییر کرد", show_alert=True)
     await tadm_sec_settings(cb, bot)
+
+
+@tenant_router.callback_query(F.data == "set:nav_kb_only")
+async def set_nav_kb_only(cb: CallbackQuery, bot: Bot):
+    """PATCH_NAV_KB_ONLY_V1 — «بازگشت به منو/خانه» فقط در کیبوردِ پایینِ چت (از منوی شیشه‌ای برداشته می‌شود)."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    if await get_setting(row.id, "menu_mode", "reply") == "inline":
+        return await cb.answer("این گزینه فقط در «⌨️ منوی کیبوردی» کار می‌کند.", show_alert=True)
+    new = "0" if await get_setting(row.id, "nav_kb_only", "0") == "1" else "1"
+    await set_setting(row.id, "nav_kb_only", new)
+    await cb.answer("✅ از این‌به‌بعد «بازگشت به منو» و «بازگشت به خانه» فقط در کیبوردِ پایینِ چت است." if new == "1"
+                    else "دکمه‌هایِ بازگشت دوباره زیرِ پیام‌ها هم نمایش داده می‌شود.", show_alert=True)
+    try:
+        await cb.message.edit_reply_markup(
+            reply_markup=await _sec_settings_kb(row.id, row.plan, "reply", row.status == "paused"))
+    except Exception:
+        logger.debug("nav_kb_only: بازسازیِ منویِ تنظیمات ممکن نشد")
 
 
 @tenant_router.callback_query(F.data == "set:menu_mode")

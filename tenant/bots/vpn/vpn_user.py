@@ -347,6 +347,8 @@ _VC_DEF = {
     "renew_price_gb": "1000", "renew_price_day": "500",
     "renew_min_gb": "10", "renew_max_gb": "100", "renew_step_gb": "10",
     "renew_min_days": "7", "renew_max_days": "90", "renew_step_days": "7",
+    # === PATCH_WG_BTN_PANEL_FLAG_V1 === «🛡 ارسال کانفیگ تکی وایرگارد» در صفحهٔ سرویس؛ مالک برایِ پنل‌هایِ غیرِ وایرگارد خاموشش می‌کند
+    "wg_cfg_btn": "1",
 }
 
 # کلیدهایی که به ازای هر پنل جداگانه ذخیره می‌شوند
@@ -360,6 +362,7 @@ _VC_PANEL_KEYS_U = [
     "renew_min_days", "renew_max_days", "renew_step_days",
     # === PATCH_RESELLER_GB_PRICING_V1 === تعرفهٔ گیگیِ مخصوصِ نماینده
     "rs_price_gb", "rs_price_day",
+    "wg_cfg_btn",    # PATCH_WG_BTN_PANEL_FLAG_V1
 ]
 
 
@@ -1362,8 +1365,6 @@ async def _send_config_delivery(bot: Bot, tg_id: int, aid: int):
     _wg_row = [InlineKeyboardButton(text="🛡 دریافت کانفیگ‌هایِ وایرگارد",
                                     callback_data=f"vwgcfg:{aid}")]
 
-    if web_url:
-        kb_rows.append([InlineKeyboardButton(text="🌐 نمایش اطلاعات کانفیگ در وب", web_app=WebAppInfo(url=web_url))])
     try:
         from tenant import inline_back_row, _cfg_guide_row
         _gr = await _cfg_guide_row(acc_bot_id, a.panel_key or "sanai")
@@ -6139,20 +6140,19 @@ async def vpn_service(cb: CallbackQuery, bot: Bot):
                                   callback_data=f"vadd:{aid}",
                                   style=await _ibs(_bid, "ibtn:add_volume"))],
         ]
-    _small = [InlineKeyboardButton(text="🛡 ارسال کانفیگ تکی وایرگارد",
-                                   callback_data=f"vwgcfg:{aid}",
-                                   style=await _ibs(_bid, "ibtn:wg_cfg"))]
+    # === PATCH_SVC_PAGE_TIDY_V1 === (ایلیا) وایرگارد فقط اگر مالک برایِ این پنل روشن گذاشته؛ «نمایش اطلاعاتِ کانفیگ در وب»
+    # (همان چیزی که لینکِ ساب نشان می‌دهد) و «تغییر نام» از صفحهٔ سرویس برداشته شد (هندلرها سرِ جایشان‌اند).
+    _small = []
+    if (await _vc(_bid, "wg_cfg_btn", panel.panel_key if panel else "")) == "1":
+        _small.append(InlineKeyboardButton(text="🛡 ارسال کانفیگ تکی وایرگارد",
+                                           callback_data=f"vwgcfg:{aid}",
+                                           style=await _ibs(_bid, "ibtn:wg_cfg")))
     if sub_link:
         _small.append(InlineKeyboardButton(text="📱 نمایش QR", callback_data=f"vsvcqr:{aid}"))
-    if web_url:
-        _small.append(InlineKeyboardButton(text="🌐 نمایش اطلاعات کانفیگ در وب", web_app=WebAppInfo(url=web_url)))
     _small += [
         InlineKeyboardButton(text="🔄 تغییر لینک اتصال",
                              callback_data=f"vreset:{aid}",
                              style=await _ibs(_bid, "ibtn:reset_link")),
-        InlineKeyboardButton(text="✏️ تغییر نام کانفیگ",
-                             callback_data=f"vrename:{aid}",
-                             style=await _ibs(_bid, "ibtn:rename_cfg")),
         InlineKeyboardButton(
             text=("✅ فعال‌سازی سرویس" if acc_status == "disabled" else "⛔️ غیرفعال کردن سرویس"),
             callback_data=(f"vsvcon:{aid}" if acc_status == "disabled" else f"vsvcoff:{aid}"),

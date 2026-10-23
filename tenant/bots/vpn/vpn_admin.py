@@ -188,6 +188,7 @@ _VC_DEFAULTS = {
     "notify_days_threshold": "5",
     # === PATCH_TRAFFIC_DELETE_HOURS_BTN_V1 ===
     "traffic_delete_hours": "5",
+    "wg_cfg_btn": "1",     # PATCH_WG_BTN_PANEL_FLAG_V1
 }
 
 # کلیدهای vc که به ازای هر پنل جداگانه ذخیره می‌شوند
@@ -204,6 +205,7 @@ _VC_PANEL_KEYS = [
     "rs_price_gb", "rs_price_day",
     # === PATCH_TRAFFIC_DELETE_HOURS_BTN_V1 ===
     "traffic_delete_hours",
+    "wg_cfg_btn",          # PATCH_WG_BTN_PANEL_FLAG_V1
 ]
 
 
@@ -864,6 +866,13 @@ async def panel_manage_kb(panel: VpnPanel | None, key: str, bot_id: int = 0,
             text="♻️ تنظیمات تمدید / افزایش حجم",
             callback_data=f"tvpn:renew:{key}",
             style=await _ibs(bot_id, "ibtn:vpn_renew_cfg"))])
+        # === PATCH_WG_BTN_PANEL_FLAG_V1 === (ایلیا) این پنل وایرگارد دارد؟ اگر نه، دکمهٔ «کانفیگ تکی وایرگارد» در صفحهٔ سرویسِ مشتری نمی‌آید
+        _wg_on = (await _vc_get(bot_id, "wg_cfg_btn", key)) == "1"
+        rows.append([InlineKeyboardButton(
+            text=("🛡 وایرگارد: ✅ دکمهٔ کانفیگ تکی نمایش داده شود" if _wg_on
+                  else "🛡 وایرگارد: ❌ این پنل وایرگارد ندارد (دکمه مخفی)"),
+            callback_data=f"tvpn:wgbtn:{key}",
+            style=await _ibs(bot_id, "ibtn:vpn_toggle"))])
         rows.append([InlineKeyboardButton(
             text="🔔 تنظیمات اطلاع از اتمام حجم",
             callback_data=f"tvpn:notify:{key}",
@@ -3615,6 +3624,23 @@ def _renew_text(cfg: dict, label: str = "") -> str:
         "💡 این تنظیمات فقط برای همین پنل اعمال می‌شوند؛ هر پنل قیمت/بازهٔ مستقل خودش را دارد.\n"
         "برای تغییر هر مورد، روی دکمه‌اش بزن."
     )
+
+
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:wgbtn:"))
+async def vpn_wg_btn_toggle(cb: CallbackQuery, bot: Bot):
+    """PATCH_WG_BTN_PANEL_FLAG_V1 — نمایش/مخفی‌کردنِ دکمهٔ «کانفیگ تکی وایرگارد» برایِ همین پنل."""
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    key = cb.data.split(":")[2]
+    cur = await _vc_get(row.id, "wg_cfg_btn", key)
+    await _vc_set(row.id, "wg_cfg_btn", "0" if cur == "1" else "1", key)
+    await cb.answer("دکمهٔ وایرگارد مخفی شد." if cur == "1" else "دکمهٔ وایرگارد نمایش داده می‌شود.")
+    try:
+        _txt, _kb = await _vpn_panel_menu_content(row, key)
+        await cb.message.edit_reply_markup(reply_markup=_kb)
+    except Exception:
+        logger.debug("vpn: بازسازیِ منویِ پنل بعد از تغییرِ وایرگارد ممکن نشد")
 
 
 @vpn_admin_router.callback_query(F.data.startswith("tvpn:renew:"))
