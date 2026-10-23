@@ -30,6 +30,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import select
 
+from bridge_alerts import OutageGate, short_reason     # PATCH_BRIDGE_ALERT_QUIET_V1
 from config import PLATFORM_ADMIN_ID, Session
 from models import PlatformSetting
 
@@ -337,6 +338,9 @@ async def _handle(bot, token: str, m: dict) -> int:
     return await handle_user(bot, RubikaChannel(token), ev)
 
 
+_gate = OutageGate()
+
+
 async def poll_once(bot) -> int:
     """یک دور: پیام‌هایِ تازه را بگیر و پردازش کن. تعدادِ پیام‌هایِ فورواردشده به مدیر را برمی‌گرداند
     (-1 یعنی خطا، 0 یعنی ربات خاموش/بدونِ توکن/بدونِ پیامِ تازه)."""
@@ -350,11 +354,13 @@ async def poll_once(bot) -> int:
     resp = await api_call(token, "getUpdates", body)
     if resp.get("status") != "OK" and "data" not in resp:
         err = str(resp.get("error") or resp.get("status") or resp)[:200]
-        logger.warning("rubika: getUpdates ناموفق: %s", err)
-        await _warn_admin(bot, "⚠️ <b>اتصال به روبیکا برقرار نیست</b>\n"
-                               f"علت: <code>{_html.escape(err)}</code>\n"
-                               "توکن را با /rubika بررسی کن. این هشدار حداکثر ساعتی یک‌بار می‌آید.")
+        logger.warning("rubika: getUpdates ناموفق: %s", short_reason(err))
+        if _gate.failed():        # فقط قطعیِ پیوسته (≥ ۴۵ دقیقه)، و حداکثر هر ۱۲ ساعت یک‌بار
+            await _warn_admin(bot, "⚠️ <b>اتصال به روبیکا بیش از ۴۵ دقیقه است برقرار نیست</b>\n"
+                                   f"علت: <code>{_html.escape(short_reason(err))}</code>\n"
+                                   "توکن را با /rubika بررسی کن.")
         return -1
+    _gate.ok()
     msgs, nxt = parse_updates(resp)
     sent = 0
     for m in msgs:

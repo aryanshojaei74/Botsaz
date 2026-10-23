@@ -36,6 +36,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 import platform_sadmin_actions as A
+from bridge_alerts import OutageGate, short_reason     # PATCH_BRIDGE_ALERT_QUIET_V1
 from config import PLATFORM_ADMIN_ID
 from platform_rubika import _get, _set          # ذخیرهٔ کلید/مقدارِ پلتفرم (مشترک)
 
@@ -726,6 +727,7 @@ class Console:
 # ─────────────── حلقهٔ polling ───────────────
 
 _last_warn = float("-inf")
+_gate = OutageGate()      # PATCH_BRIDGE_ALERT_QUIET_V1
 
 
 async def sadmin_loop(platform_bot) -> None:
@@ -751,13 +753,14 @@ async def sadmin_loop(platform_bot) -> None:
             resp = await api_call(token, "getUpdates", body, timeout=POLL_LONG_SECS + 20)
             if not resp.get("ok"):
                 timeouts += 1 if resp.get("error") == "تایم‌اوت" else 99
-                if timeouts >= 6 and time.monotonic() - _last_warn > 3600 and PLATFORM_ADMIN_ID:
-                    _last_warn = time.monotonic()
-                    await platform_bot.send_message(PLATFORM_ADMIN_ID, "⚠️ اتصال به رباتِ پنلِ سروش برقرار نیست: "
-                                                    + str(resp.get("error"))[:150])
+                # PATCH_BRIDGE_ALERT_QUIET_V1: فقط قطعیِ پیوسته (≥ ۴۵ دقیقه) و حداکثر هر ۱۲ ساعت یک‌بار
+                if _gate.failed() and PLATFORM_ADMIN_ID:
+                    await platform_bot.send_message(PLATFORM_ADMIN_ID, "⚠️ اتصال به رباتِ پنلِ سروش بیش از ۴۵ دقیقه است برقرار نیست: "
+                                                    + short_reason(str(resp.get("error"))))
                 await asyncio.sleep(5 if resp.get("error") == "تایم‌اوت" else 15)
                 continue
             timeouts = 0
+            _gate.ok()
             msgs, last = parse_updates(resp)
             for m in msgs:
                 try:

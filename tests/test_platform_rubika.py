@@ -102,7 +102,14 @@ def test_poll_once_error_returns_minus_one(monkeypatch):
     monkeypatch.setattr(rb, "api_call", api)
     monkeypatch.setattr(rb, "PLATFORM_ADMIN_ID", 42)
     monkeypatch.setattr(rb, "_last_warn", float("-inf"))
+    from bridge_alerts import OutageGate
+    monkeypatch.setattr(rb, "_gate", OutageGate(outage=0))      # PATCH_BRIDGE_ALERT_QUIET_V1: بدونِ انتظارِ ۴۵ دقیقه
     assert asyncio.run(rb.poll_once(Bot())) == -1 and warned
+    # با گیتِ پیش‌فرض، خطای گذرا هشدار نمی‌دهد
+    warned.clear()
+    monkeypatch.setattr(rb, "_gate", OutageGate())
+    monkeypatch.setattr(rb, "_last_warn", float("-inf"))
+    assert asyncio.run(rb.poll_once(Bot())) == -1 and not warned
 
 
 def test_ack_is_deleted_after_delay(monkeypatch):

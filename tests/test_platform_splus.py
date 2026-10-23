@@ -70,8 +70,15 @@ def _env(monkeypatch, resp):
 def test_error_warns_once_and_returns_minus_one(monkeypatch):
     store, _, sent, bot = _env(monkeypatch, {"ok": False, "error": "401 Unauthorized"})
     monkeypatch.setattr(sp, "_last_warn", float("-inf"))
+    from bridge_alerts import OutageGate
+    monkeypatch.setattr(sp, "_gate", OutageGate(outage=0))      # PATCH_BRIDGE_ALERT_QUIET_V1
     assert asyncio.run(sp.poll_once(bot)) == -1 and asyncio.run(sp.poll_once(bot)) == -1
     assert len(sent) == 1
+    # با گیتِ پیش‌فرض (۴۵ دقیقه) خطای گذرا ساکت است
+    sent.clear()
+    monkeypatch.setattr(sp, "_gate", OutageGate())
+    monkeypatch.setattr(sp, "_last_warn", float("-inf"))
+    assert asyncio.run(sp.poll_once(bot)) == -1 and not sent
 
 
 def test_idle_without_token(monkeypatch):
@@ -87,6 +94,8 @@ def test_timeouts_are_quiet_until_repeated(monkeypatch):
     store, calls, sent, bot = _env(monkeypatch, {"ok": False, "error": "تایم‌اوت"})
     monkeypatch.setattr(sp, "_last_warn", float("-inf"))
     monkeypatch.setattr(sp, "_timeouts", 0)
+    from bridge_alerts import OutageGate
+    monkeypatch.setattr(sp, "_gate", OutageGate(outage=0))      # PATCH_BRIDGE_ALERT_QUIET_V1
     rs = [asyncio.run(sp.poll_once(bot)) for _ in range(sp.TIMEOUT_WARN_AFTER)]
     assert rs[:-1] == [0] * (sp.TIMEOUT_WARN_AFTER - 1) and rs[-1] == -1 and len(sent) == 1
     up = [c[1] for c in calls if c[0] == "getUpdates"][0]

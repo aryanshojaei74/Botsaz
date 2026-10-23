@@ -29,6 +29,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from bridge_alerts import OutageGate, short_reason     # PATCH_BRIDGE_ALERT_QUIET_V1
 from config import PLATFORM_ADMIN_ID
 from platform_rubika import _get, _set          # ذخیرهٔ کلید/مقدارِ پلتفرم (مشترک)
 
@@ -263,6 +264,9 @@ async def _warn_admin(bot, text: str) -> None:
         logger.exception("splus: هشدار به مدیر ارسال نشد")
 
 
+_gate = OutageGate()
+
+
 async def poll_once(bot) -> int:
     """یک دور polling. تعدادِ پیام‌هایِ فورواردشده؛ -1 خطا؛ 0 خاموش/بدونِ توکن/بدونِ پیام."""
     token = (await _get(K_TOKEN)).strip()
@@ -285,11 +289,13 @@ async def poll_once(bot) -> int:
         _timeouts = 0
     if not resp.get("ok"):
         err = str(resp.get("error") or resp)[:200]
-        logger.warning("splus: getUpdates ناموفق: %s", err)
-        await _warn_admin(bot, "⚠️ <b>اتصال به سروش پلاس برقرار نیست</b>\n"
-                               f"علت: <code>{_html.escape(err)}</code>\n"
-                               "توکن را با /splus بررسی کن. این هشدار حداکثر ساعتی یک‌بار می‌آید.")
+        logger.warning("splus: getUpdates ناموفق: %s", short_reason(err))
+        if _gate.failed():        # فقط قطعیِ پیوسته (≥ ۴۵ دقیقه)، و حداکثر هر ۱۲ ساعت یک‌بار
+            await _warn_admin(bot, "⚠️ <b>اتصال به سروش پلاس بیش از ۴۵ دقیقه است برقرار نیست</b>\n"
+                                   f"علت: <code>{_html.escape(short_reason(err))}</code>\n"
+                                   "توکن را با /splus بررسی کن.")
         return -1
+    _gate.ok()
     msgs, last = parse_updates(resp)
     sent = 0
     for m in msgs:
