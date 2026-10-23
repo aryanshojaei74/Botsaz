@@ -30307,6 +30307,26 @@ def _trial_duration_label(days_str: str, hours_str: str = "0") -> str:
     return f"{d} روز" if d else "—"
 
 
+# === PATCH_TRIAL_DELETE_HOURS_UI_V1 ===
+# گزارشِ مالکِ ربات (تیکت #878): «تستِ رایگان هم مثلِ بقیهٔ سرویس‌ها بعد از مدتِ دلخواه خودکار از پنل پاک شود».
+# حذفِ خودکار از قبل بود (trial_cleanup: بعد از پایانِ تست + trial_delete_hours، پیش‌فرض ۵ ساعت) ولی مالک
+# راهی برایِ تغییرِ مهلت نداشت. این بخش همان کلیدِ trial_delete_hours را قابلِ تنظیم می‌کند (۱ ساعت تا ۷ روز).
+TRIAL_DEL_MIN_H, TRIAL_DEL_MAX_H = 1, 168
+
+
+def _trial_del_label(hours_str: str) -> str:
+    try:
+        v = float(hours_str or 5)
+    except (ValueError, TypeError):
+        v = 5.0
+    v = min(max(v, 0.17), float(TRIAL_DEL_MAX_H))
+    if v >= 24 and v % 24 == 0:
+        return f"{int(v // 24)} روز بعد از پایانِ تست"
+    if float(v).is_integer():
+        return f"{int(v)} ساعت بعد از پایانِ تست"
+    return f"{v:g} ساعت بعد از پایانِ تست"
+
+
 # === PATCH_TRIAL_UNUSED_REMINDER_V1 ===
 def _trial_unused_label(hours_str: str) -> str:
     """برچسبِ نمایشیِ «یادآوریِ عدمِ استفاده». صفر یا نامعتبر یعنی خاموش."""
@@ -30390,6 +30410,7 @@ async def set_trial_menu(cb: CallbackQuery, bot: Bot):
     gb_label = _trial_gb_label(gb)
     duration_label = _trial_duration_label(days, hours)
     unused_label = _trial_unused_label(unused_h)
+    del_label = _trial_del_label(await get_setting(row.id, "trial_delete_hours", "5"))   # PATCH_TRIAL_DELETE_HOURS_UI_V1
     # === PATCH_TRIAL_GLOBAL_DIFF_V1 === دکمه‌هایِ تستی که مقدارِ اختصاصی دارند و این صفحه را نادیده می‌گیرند
     _ovr = await _trial_overriding_buttons(row.id)
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -30410,6 +30431,10 @@ async def set_trial_menu(cb: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(
             text=f"⏰ یادآوریِ عدمِ استفاده: {unused_label}",
             callback_data="set:trial_unused", style=ButtonStyle.PRIMARY)],
+        # === PATCH_TRIAL_DELETE_HOURS_UI_V1 ===
+        [InlineKeyboardButton(
+            text=f"🗑 حذفِ خودکارِ تست از پنل: {del_label}",
+            callback_data="set:trial_del", style=ButtonStyle.PRIMARY)],
         # === PATCH_TRIAL_ON_HOLD_V1 ===
         [InlineKeyboardButton(
             text=f"⏳ شروعِ زمانِ تست: {onhold_lbl}",
@@ -30425,6 +30450,7 @@ async def set_trial_menu(cb: CallbackQuery, bot: Bot):
         f"حجم: <b>{gb_label}</b>\n"
         f"مدت: <b>{duration_label}</b>\n"
         f"یادآوریِ عدمِ استفاده: <b>{unused_label}</b>\n"
+        f"حذفِ خودکارِ تست از پنل: <b>{del_label}</b>\n"
         f"شروعِ زمانِ تست: <b>{onhold_lbl}</b>\n\n"
         "⚠️ هر کاربر فقط یک‌بار می‌تواند از تست رایگان استفاده کند.\n\n"
         + ("⚠️ این دکمه‌ها مقدارِ اختصاصی دارند و حجم/مدتِ بالا را <b>نادیده می‌گیرند</b>:\n"
@@ -30781,7 +30807,7 @@ async def set_trial_unused_menu(cb: CallbackQuery, bot: Bot):
         "اگه کاربری تستِ رایگان گرفت ولی وصل نشد و هیچ مصرفی ثبت نکرد، "
         "بعد از مدتِ انتخابی یک پیام یادآوری براش می‌ره که «تا فلان ساعت "
         "دیگه فرصت داری». اگه باز هم استفاده نکنه، همون‌قدر بعد (طبق "
-        "«مهلتِ حذفِ تستِ منقضی» در همین بخش) تست خودکار حذف می‌شه و "
+        "«🗑 حذفِ خودکارِ تست از پنل» در تنظیماتِ تست رایگان) تست خودکار حذف می‌شه و "
         "بهش خبر داده می‌شه.\n\n"
         "⚠️ این قابلیت فقط برایِ تست‌هایی کار می‌کنه که رویِ «پنل خودکار» "
         "ساخته شدن، نه انبارِ دستی."
@@ -30847,6 +30873,94 @@ async def set_trial_unused_custom_save(msg: Message, bot: Bot, state: FSMContext
     ])
     label = _trial_unused_label(str(total_hours))
     await msg.answer(f"✅ یادآوریِ عدمِ استفاده: <b>{label}</b> ذخیره شد.", reply_markup=kb_back)
+
+
+# === PATCH_TRIAL_DELETE_HOURS_UI_V1 ===
+class _TrialDelFSM(StatesGroup):
+    custom = State()
+
+
+@tenant_router.callback_query(F.data == "set:trial_del")
+async def set_trial_del_menu(cb: CallbackQuery, bot: Bot):
+    """مهلتِ حذفِ خودکارِ اکانتِ تست از پنل، بعد از پایانِ زمانِ تست."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cur = await get_setting(row.id, "trial_delete_hours", "5")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="۱ ساعت", callback_data="set:trial_del_v:1", style=ButtonStyle.PRIMARY),
+         InlineKeyboardButton(text="۵ ساعت (پیش‌فرض)", callback_data="set:trial_del_v:5", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="۱۲ ساعت", callback_data="set:trial_del_v:12", style=ButtonStyle.PRIMARY),
+         InlineKeyboardButton(text="۲۴ ساعت", callback_data="set:trial_del_v:24", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="۳ روز", callback_data="set:trial_del_v:72", style=ButtonStyle.PRIMARY),
+         InlineKeyboardButton(text="۷ روز", callback_data="set:trial_del_v:168", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="✏️ مدتِ دلخواه", callback_data="set:trial_del_custom", style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="⬅️ بازگشت به تنظیمات تست رایگان", callback_data="set:trial", style=ButtonStyle.DANGER)],
+    ])
+    text = (
+        "🗑 <b>حذفِ خودکارِ تست از پنل</b>\n\n"
+        f"مهلتِ فعلی: <b>{_trial_del_label(cur)}</b>\n\n"
+        "وقتی زمانِ تستِ کاربر تمام شد، بعد از این مهلت اکانتِ تست خودکار از پنل پاک می‌شود، از «کانفیگ‌هایِ من» "
+        "کاربر هم برداشته می‌شود و بهش خبر می‌دهیم. قبل از حذف هم یک اخطار می‌رود.\n"
+        f"بازهٔ مجاز: {TRIAL_DEL_MIN_H} ساعت تا ۷ روز.\n\n"
+        "⚠️ فقط برایِ تست‌هایی که رویِ «پنل خودکار» ساخته شده‌اند کار می‌کند، نه انبارِ دستی."
+    )
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb)
+    await cb.answer()
+
+
+@tenant_router.callback_query(F.data.startswith("set:trial_del_v:"))
+async def set_trial_del_preset(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    try:
+        v = float(cb.data.rsplit(":", 1)[1])
+    except ValueError:
+        v = 5.0
+    v = min(max(v, TRIAL_DEL_MIN_H), TRIAL_DEL_MAX_H)
+    await set_setting(row.id, "trial_delete_hours", f"{v:g}")
+    await set_trial_del_menu(cb, bot)
+
+
+@tenant_router.callback_query(F.data == "set:trial_del_custom")
+async def set_trial_del_custom_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await state.set_state(_TrialDelFSM.custom)
+    await cb.message.answer(
+        "✏️ <b>مدتِ دلخواهِ حذفِ تست</b> (بعد از پایانِ زمانِ تست) را بفرست:\n"
+        "• <code>6h</code> یا <code>6 ساعت</code>\n"
+        "• <code>2d</code> یا <code>2 روز</code>\n"
+        "• <code>1d 12h</code> = ۱ روز و ۱۲ ساعت\n\n"
+        f"حداقل {TRIAL_DEL_MIN_H} ساعت و حداکثر ۷ روز.",
+        reply_markup=await smart_cancel_kb(bot))
+    await cb.answer()
+
+
+@tenant_router.message(_TrialDelFSM.custom)
+async def set_trial_del_custom_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner_ok_msg(msg, bot)
+    if not row:
+        await state.clear(); return
+    parsed = _parse_trial_duration_input(msg.text or "")
+    if not parsed:
+        await msg.answer("❌ فرمت نامعتبر. مثال درست:\n<code>6h</code> یا <code>2d</code> یا <code>1d 12h</code>")
+        return
+    total = parsed[0] * 24 + parsed[1]
+    if total < TRIAL_DEL_MIN_H or total > TRIAL_DEL_MAX_H:
+        await msg.answer(f"❌ مدت باید بین {TRIAL_DEL_MIN_H} ساعت تا ۷ روز باشد.")
+        return
+    await set_setting(row.id, "trial_delete_hours", str(total))
+    await state.clear()
+    kb_back = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ بازگشت به تنظیمات تست رایگان", callback_data="set:trial", style=ButtonStyle.DANGER)]
+    ])
+    await msg.answer(f"✅ حذفِ خودکارِ تست: <b>{_trial_del_label(str(total))}</b> ذخیره شد.", reply_markup=kb_back)
 
 
 # تنظیمات ادمین کارت‌به‌کارت → منتقل شد به tenant/card_admin.py
