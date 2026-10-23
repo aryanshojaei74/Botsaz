@@ -7314,6 +7314,15 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         await msg.answer(_cap,
                          reply_markup=await _admin_panel_kb(row))
         return
+    # === PATCH_NAV_KB_ONLY_TEXT_V1 === در منویِ کیبوردی دکمهٔ تنظیمات فقط متن می‌فرستد (callback نیست)؛ بدونِ این هندلر
+    # «↩️ دکمه‌هایِ بازگشت» هیچ واکنشی نداشت (گزارشِ ایلیا).
+    if (msg.text or "").startswith("↩️ دکمه‌هایِ بازگشت:") and await is_owner_or_admin(bot_id, msg.from_user.id, row.owner_id):
+        new = "0" if await get_setting(row.id, "nav_kb_only", "0") == "1" else "1"
+        await set_setting(row.id, "nav_kb_only", new)
+        await msg.answer("✅ از این‌به‌بعد «بازگشت به منو» و «بازگشت به خانه» فقط در کیبوردِ پایینِ چت است." if new == "1"
+                         else "دکمه‌هایِ بازگشت دوباره زیرِ پیام‌ها هم نمایش داده می‌شود.",
+                         reply_markup=await _sec_settings_kb(row.id, row.plan, "reply", row.status == "paused"))
+        return
     if msg.text == "🎛 نوع منو: ⌨️ کیبورد" and await is_owner_or_admin(bot_id, msg.from_user.id, row.owner_id):
         await set_setting(row.id, "menu_mode", "inline")
         await reset_kb_cleared(row.id)   # PATCH_NO_DOT_MSG_V1

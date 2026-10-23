@@ -124,3 +124,13 @@ def test_admin_has_volume_toggle_handler_and_setting_key():
     assert hasattr(VA, "vpn_plan_volume_toggle")
     src = inspect.getsource(VA.vpn_plans)
     assert "tvpn:planvol:" in src and "plan_vol_" in src
+
+
+def test_keyboard_mode_settings_button_has_a_text_handler():
+    """در منویِ کیبوردی دکمهٔ تنظیمات فقط متن می‌فرستد؛ برچسب و پیشوندِ هندلرِ متنی باید دقیقاً یکی باشد
+    (باگِ گزارش‌شدهٔ ایلیا: دکمه هیچ واکنشی نداشت)."""
+    import inspect
+    src = inspect.getsource(tenant)
+    label_prefix = "↩️ دکمه‌هایِ بازگشت: "
+    assert f'opts.append(("{label_prefix}"' in src
+    assert f'startswith("{label_prefix.strip()}")' in src
