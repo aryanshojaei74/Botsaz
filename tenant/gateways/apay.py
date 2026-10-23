@@ -870,3 +870,80 @@ async def apay_poll_loop():
         except Exception:
             logger.exception("[APAY] پرسش از ادمین خطا داد")
         await asyncio.sleep(60)
+
+
+# ─────────────── ساختِ فاکتور بدونِ پیامِ چت (برایِ مینی‌اپ) ───────────────
+# === PATCH_APAY_MINIAPP_V1 === (ایلیا) شارژ با آپی داخلِ خودِ مینی‌اپ
+async def create_charge_core(row, tg_id: int, amount: int) -> tuple[dict | None, str]:
+    """(داده، پیامِ خطا). فاکتورِ شارژِ کیف پول می‌سازد و پایش را شروع می‌کند؛ هیچ پیامی به چت نمی‌فرستد.
+    داده: order_id, pay_url, pay_rial, card, holder, fee, credit, expires_in. اگر کاربر فاکتورِ باز دارد، خطا + کدِ آن."""
+    if not await is_available(row.id):
+        return None, "درگاهِ آپی فعال نیست."
+    token = await _get(row.id, "apay_token", "")
+    min_amount = await get_min_amount(row.id)
+    max_amount = min(await get_max_amount(row.id) or API_MAX_TOMAN, API_MAX_TOMAN)
+    amount = int(amount or 0)
+    if amount < min_amount:
+        return None, f"حداقلِ مبلغ {min_amount:,} تومان است."
+    if amount > max_amount:
+        return None, f"حداکثرِ مبلغ {max_amount:,} تومان است."
+    opened = await open_invoice(row.id, tg_id)
+    if opened:
+        return None, f"open:{opened.order_id}"
+    oid = new_order_id()
+    payer, famt = await get_fee_cfg(row.id)
+    fee = fee_for_buyer(payer, famt)
+    if amount + fee > API_MAX_TOMAN:
+        return None, f"حداکثرِ مبلغ با کارمزد {API_MAX_TOMAN:,} تومان است."
+    ret = f"https://t.me/{row.username}" if row.username else ""
+    code, res = await create_payment(token, amount_toman=amount + fee, order_id=oid, description="شارژ کیف پول",
+                                     callback_url=await webhook_url(row.id), return_url=ret)
+    if code == 400 and isinstance(res, dict) and (res.get("error") or {}).get("code") == "invalid_url":
+        code, res = await create_payment(token, amount_toman=amount + fee, order_id=oid, return_url=ret)
+    if code not in (200, 201) or not isinstance(res, dict) or not res.get("pay_url"):
+        logger.warning("apay(miniapp): ساختِ پرداخت ناموفق (bot=%s): %s %s", row.id, code, str(res)[:300])
+        return None, err_text(code, res)
+    pay_rial = int(res.get("payable_rial") or res.get("pay_amount") or 0)
+    async with Session() as s:
+        s.add(ApayCharge(bot_id=row.id, user_telegram_id=tg_id, order_id=oid, payment_id=str(res.get("id") or ""),
+                         amount_toman=amount, fee_toman=fee, pay_amount_rial=pay_rial or None,
+                         pay_url=str(res["pay_url"])[:300], status="waiting"))
+        await s.commit()
+    card, holder = await card_for(token, res)
+    from tenant.gateways.apay_log import log_event as _alog
+    await _alog(row.id, "created", user_tg=tg_id, amount_toman=amount, pay_rial=pay_rial, fee_toman=fee,
+                order_id=oid, note="از مینی‌اپ")
+    watch_tenant_charge(row.id, oid, str(res.get("id") or ""))
+    return {"order_id": oid, "pay_url": str(res["pay_url"]), "pay_rial": pay_rial, "card": card, "holder": holder,
+            "fee": fee, "credit": amount, "expires_in": OPEN_INVOICE_MIN * 60}, ""
+
+
+_MINI_LAST_CHECK: dict[tuple[int, str], float] = {}
+
+
+async def mini_status(bot_id: int, tg_id: int, order_id: str) -> dict | None:
+    """وضعیتِ فاکتورِ این کاربر برایِ مینی‌اپ؛ برایِ فاکتورِ منتظر حداکثر هر ۸ ثانیه یک‌بار از آپی استعلام می‌کند."""
+    import time as _t
+    async with Session() as s:
+        ch = await s.scalar(select(ApayCharge).where(ApayCharge.bot_id == bot_id, ApayCharge.order_id == order_id))
+    if not ch or int(ch.user_telegram_id) != int(tg_id):
+        return None
+    if ch.status == "waiting" and await _get(bot_id, "apay_enabled", "0") == "1":
+        now = _t.monotonic()
+        if now - _MINI_LAST_CHECK.get((bot_id, order_id), 0.0) >= 8:
+            _MINI_LAST_CHECK[(bot_id, order_id)] = now
+            if len(_MINI_LAST_CHECK) > 2000:
+                _MINI_LAST_CHECK.clear()
+            try:
+                await settle_charge(bot_id, order_id)
+            except Exception:
+                logger.exception("apay(miniapp): استعلامِ فاکتور ناموفق بود")
+            async with Session() as s:
+                ch = await s.scalar(select(ApayCharge).where(
+                    ApayCharge.bot_id == bot_id, ApayCharge.order_id == order_id))
+    bal = None
+    if ch.status == "paid":
+        async with Session() as s:
+            u = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == tg_id))
+            bal = float(u.balance or 0) if u else None
+    return {"status": ch.status, "credit": int(ch.amount_toman or 0), "balance": bal}

@@ -94,3 +94,14 @@ async def test_send_layer_strips_nav_for_customers_not_staff(monkeypatch):
     staff["v"] = True                                           # مالک/ادمین: دست‌نخورده
     await bot.session.make_request(bot, SendMessage(chat_id=500, text="x", reply_markup=mk))
     assert len([b for r in sent[-1].reply_markup.inline_keyboard for b in r]) >= 3
+
+
+def test_plan_table_uses_owner_title_for_user_count_label():
+    import inspect
+    src = inspect.getsource(VU)
+    assert src.count("PATCH_PLAN_TABLE_TITLE_LABEL_V1") == 2
+    row = VU._plan_table_row(type("P", (), dict(id=1, volume_gb=400, days=30, price=85000, limit_ip=1,
+                                                   title="یک کاربر"))())
+    assert "یک کاربر" in row[2].text and "تک‌کاربره" not in row[2].text
+    row2 = VU._plan_table_row(type("P", (), dict(id=2, volume_gb=400, days=30, price=1, limit_ip=2, title="پلن ۴۰۰"))())
+    assert "2 کاربره" in row2[2].text

@@ -1866,6 +1866,9 @@ async def show_vpn_plans(bot: Bot, msg: Message, bot_id: int, state=None, panel_
                     _n_users = 0
                 if _n_users > 0 and _tbl_users:
                     _ul = "تک‌کاربره" if _n_users == 1 else f"{_n_users} کاربره"
+                    # === PATCH_PLAN_TABLE_TITLE_LABEL_V1 === (ایلیا) اگر مالک اسمِ پلن را عوض کرده («یک کاربر»)، همان در جدول بیاید
+                    if "کاربر" in title and len(title) <= 18:
+                        _ul = title
                     # === PATCH_PLAN_TABLE_VIEW_V4 === نامحدود: «♾ تک‌کاربره» (نه فقط «تک‌کاربره» که
                     # معلوم نبود حجم چقدر است)؛ هنوز کوتاه و جا می‌شود.
                     _vtxt = f"♾ {_ul}" if not _v else f"{_ul} · {_vtxt}"
@@ -2015,6 +2018,9 @@ def _plan_table_row(p, show_users: bool = True) -> list:
         n = 0
     if n > 0 and show_users:
         ul = "تک‌کاربره" if n == 1 else f"{n} کاربره"
+        _t = (getattr(p, "title", "") or "").strip()      # PATCH_PLAN_TABLE_TITLE_LABEL_V1
+        if "کاربر" in _t and len(_t) <= 18:
+            ul = _t
         vtxt = f"♾ {ul}" if not v else f"{ul} · {vtxt}"
     dtxt = "♾ بی‌انقضا" if not p.days else f"{p.days} روز"
     cbd = f"vbuy:{p.id}"

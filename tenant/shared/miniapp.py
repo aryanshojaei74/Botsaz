@@ -913,7 +913,8 @@ async def api_wallet_topup_init(bot_id: int, x_init_data: str | None = Header(de
     row, u = await _authed_context(bot_id, x_init_data, x_kb_token)
     from tenant import get_setting
     card_enabled = await get_setting(row.id, "card_enabled", "1") == "1"
-    if not card_enabled:
+    apay = await _apay_info(row.id)          # PATCH_APAY_MINIAPP_V1
+    if not card_enabled and not apay:
         support_contact = await get_setting(row.id, "card_support_contact", "")
         return JSONResponse({
             "ok": True, "enabled": False,
@@ -923,11 +924,79 @@ async def api_wallet_topup_init(bot_id: int, x_init_data: str | None = Header(de
     card_holder = await get_setting(row.id, "card_holder", "")
     return JSONResponse({
         "ok": True, "enabled": True,
+        "card_enabled": card_enabled,
+        "apay": apay,
         "card_number": card_number,
         "card_holder": card_holder,
         **(await _card2_info(row.id)),   # PATCH_CARD_BOTH_V1
         "presets": [50000, 100000, 200000, 500000],
     })
+
+
+# === PATCH_APAY_MINIAPP_V1 === (ایلیا) شارژ با آپی داخلِ مینی‌اپ: فاکتور، پایشِ خودکار، لغو
+async def _apay_info(bot_id: int):
+    from tenant.gateways import apay as AP
+    if not await AP.is_available(bot_id) or await AP._get(bot_id, "apay_show_wallet", "1") != "1":
+        return None
+    from tenant.gateways.apay_admin import get_display_name
+    return {"name": await get_display_name(bot_id), "min": await AP.get_min_amount(bot_id),
+            "max": min(await AP.get_max_amount(bot_id) or AP.API_MAX_TOMAN, AP.API_MAX_TOMAN)}
+
+
+@miniapp_router.post("/api/miniapp/{bot_id}/wallet/topup/apay")
+async def api_wallet_topup_apay(bot_id: int, amount: int = Form(...), x_init_data: str | None = Header(default=None),
+                                x_kb_token: str | None = Header(default=None)):
+    row, u = await _authed_context(bot_id, x_init_data, x_kb_token)
+    from tenant.gateways import apay as AP
+    if await AP._get(row.id, "apay_show_wallet", "1") != "1":
+        raise HTTPException(status_code=409, detail="apay_disabled")
+    data, err = await AP.create_charge_core(row, u.telegram_id, int(amount))
+    if data is None:
+        if err.startswith("open:"):
+            return JSONResponse({"ok": False, "error": "یک فاکتورِ باز داری؛ اول همان را پرداخت یا لغو کن.",
+                                 "open_order": err[5:]}, status_code=409)
+        return JSONResponse({"ok": False, "error": err}, status_code=400)
+    return JSONResponse({"ok": True, **data})
+
+
+@miniapp_router.get("/api/miniapp/{bot_id}/wallet/topup/apay/{order_id}")
+async def api_wallet_topup_apay_status(bot_id: int, order_id: str, x_init_data: str | None = Header(default=None),
+                                       x_kb_token: str | None = Header(default=None)):
+    row, u = await _authed_context(bot_id, x_init_data, x_kb_token)
+    from tenant.gateways import apay as AP
+    st = await AP.mini_status(row.id, u.telegram_id, order_id)
+    if st is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    return JSONResponse({"ok": True, **st})
+
+
+@miniapp_router.post("/api/miniapp/{bot_id}/wallet/topup/apay/{order_id}/cancel")
+async def api_wallet_topup_apay_cancel(bot_id: int, order_id: str, x_init_data: str | None = Header(default=None),
+                                       x_kb_token: str | None = Header(default=None)):
+    row, u = await _authed_context(bot_id, x_init_data, x_kb_token)
+    from tenant.gateways import apay as AP
+    st = await AP.mini_status(row.id, u.telegram_id, order_id)
+    if st is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    if st["status"] == "paid":
+        return JSONResponse({"ok": True, "status": "paid"})
+    remote = await AP.cancel_remote(row.id, order_id)
+    if remote == "paid":
+        return JSONResponse({"ok": True, "status": "paid"})
+    from models import ApayCharge as _AC
+    async with Session() as s:
+        ch = await s.scalar(select(_AC).where(_AC.bot_id == row.id, _AC.order_id == order_id))
+        if ch and ch.status == "waiting":
+            ch.status = "cancelled"
+            info = (int(ch.amount_toman or 0), int(ch.pay_amount_rial or 0), int(ch.fee_toman or 0))
+            await s.commit()
+        else:
+            info = None
+    if info:
+        from tenant.gateways.apay_log import log_event as _alog
+        await _alog(row.id, "cancelled", user_tg=u.telegram_id, amount_toman=info[0], pay_rial=info[1],
+                    fee_toman=info[2], order_id=order_id, note="لغو از مینی‌اپ")
+    return JSONResponse({"ok": True, "status": "cancelled"})
 
 
 async def _card2_info(bot_id: int) -> dict:
@@ -2579,8 +2648,114 @@ _PAGE_HTML = r"""<!doctype html>
         var v = parseInt(document.getElementById('topup-custom').value, 10);
         if (!v || v < 1000) { alert('مبلغ معتبر وارد کن.'); return; }
         chosenAmount = v;
-        stepReceipt(info);
+        stepMethod(info);
       };
+    }
+
+    /* === PATCH_APAY_MINIAPP_V1 === انتخابِ روش: آپی (خودکار) یا کارت‌به‌کارت با رسید */
+    function stepMethod(info){
+      var hasCard = info.card_enabled !== false, ap = info.apay;
+      if (!ap) { stepReceipt(info); return; }
+      if (ap.min && chosenAmount < ap.min) { if (!hasCard) { alert('حداقل مبلغ ' + ap.min.toLocaleString('en-US') + ' تومان است.'); stepAmount(info); return; } }
+      if (!hasCard) { stepApay(info); return; }
+      box.innerHTML =
+        '<div class="stat-box" style="margin-bottom:14px"><b>'+chosenAmount.toLocaleString('en-US')+' تومان</b><span>مبلغ انتخابی</span></div>' +
+        '<div class="section-title" style="margin-top:0"><span>روش پرداخت</span></div>' +
+        '<button class="buy-btn jelly" id="topup-m-apay" style="margin-top:10px">⚡ '+esc(ap.name || 'آپی')+' — شارژ خودکار</button>' +
+        '<button class="back-btn jelly" id="topup-m-card" style="margin-top:10px;width:100%">💳 کارت‌به‌کارت با ارسال رسید</button>' +
+        '<button class="back-btn jelly" id="topup-m-back" style="margin-top:10px;width:100%">بازگشت</button>';
+      document.getElementById('topup-m-apay').onclick = function(){ stepApay(info); };
+      document.getElementById('topup-m-card').onclick = function(){ stepReceipt(info); };
+      document.getElementById('topup-m-back').onclick = function(){ stepAmount(info); };
+    }
+
+    var apayTimer = null;
+    function stopApayTimer(){ if (apayTimer) { clearInterval(apayTimer); apayTimer = null; } }
+    function apayDone(html){
+      stopApayTimer();
+      box.innerHTML = html + '<button class="buy-btn jelly" id="topup-done" style="margin-top:6px">باشه</button>';
+      document.getElementById('topup-done').onclick = function(){ overlay.remove(); if (state.tab==='wallet') render(); };
+    }
+    function stepApay(info){
+      var ap = info.apay || {};
+      box.innerHTML = '<div class="skeleton" style="padding:26px 0">در حال ساخت فاکتور…</div>';
+      var fd = new FormData(); fd.append('amount', chosenAmount);
+      fetch('/api/miniapp/' + BOT_ID + '/wallet/topup/apay', { method:'POST', headers: authHeaders(), body: fd })
+        .then(function(r){ return r.json().catch(function(){ return null; }).then(function(b){ return {ok:r.ok, body:b}; }); })
+        .then(function(res){
+          if (!res.ok || !res.body || !res.body.ok) {
+            var msg = (res.body && res.body.error) || 'ساخت فاکتور ناموفق بود.';
+            var openOrder = res.body && res.body.open_order;
+            box.innerHTML = '<div class="empty-note" style="padding:20px 0;line-height:1.9">'+esc(msg)+'</div>' +
+              (openOrder ? '<button class="back-btn jelly" id="topup-ap-cancel-open" style="width:100%;margin-top:8px">لغوِ فاکتورِ باز</button>' : '') +
+              '<button class="back-btn jelly" id="topup-ap-back" style="width:100%;margin-top:8px">بازگشت</button>';
+            document.getElementById('topup-ap-back').onclick = function(){ stepAmount(info); };
+            var co = document.getElementById('topup-ap-cancel-open');
+            if (co) co.onclick = function(){
+              co.disabled = true;
+              fetch('/api/miniapp/' + BOT_ID + '/wallet/topup/apay/' + openOrder + '/cancel', { method:'POST', headers: authHeaders() })
+                .then(function(){ stepApay(info); });
+            };
+            return;
+          }
+          var d = res.body, left = d.expires_in || 900, toman = Math.round((d.pay_rial || 0) / 10);
+          box.innerHTML =
+            '<div class="stat-box" style="margin-bottom:12px"><b id="topup-ap-amt">'+toman.toLocaleString('en-US')+' تومان</b><span>مبلغِ دقیقِ واریز</span></div>' +
+            '<div class="card" style="padding:16px">' +
+              '<div class="card-number-box" id="topup-ap-card">'+esc(d.card || '—')+'</div>' +
+              (d.holder ? '<div class="card-holder-name">به نام: '+esc(d.holder)+'</div>' : '') +
+              '<button class="back-btn jelly" id="topup-ap-copy" style="margin-top:12px;width:100%">کپی شمارهٔ کارت</button>' +
+              '<button class="back-btn jelly" id="topup-ap-copyamt" style="margin-top:8px;width:100%">کپی مبلغ</button>' +
+            '</div>' +
+            '<div class="empty-note" style="text-align:right;margin-top:10px;line-height:1.9">' +
+              '⚠️ <b style="color:var(--ink)">دقیقاً همین مبلغ</b> را کارت‌به‌کارت کن (ارقامِ آخر مهم است)؛ بعد از واریز، کیف پولت خودکار شارژ می‌شود' +
+              (d.fee ? ' (کارمزد '+d.fee.toLocaleString('en-US')+' تومان با تو، اعتبار '+d.credit.toLocaleString('en-US')+' تومان).' : '.') +
+            '</div>' +
+            '<div style="text-align:center;margin-top:10px;font-size:13px;color:var(--sub)">⏳ <span id="topup-ap-left"></span> · در انتظارِ واریز…</div>' +
+            '<div class="btn-row" style="margin-top:14px">' +
+              '<button class="back-btn jelly" id="topup-ap-cancel" style="flex:1">لغو</button>' +
+              '<button class="buy-btn jelly" id="topup-ap-open" style="flex:2">صفحهٔ پرداخت</button>' +
+            '</div>';
+          function fmt(n){ var m = Math.floor(n/60), s = n%60; return (m<10?'0':'')+m+':'+(s<10?'0':'')+s; }
+          var leftEl = document.getElementById('topup-ap-left'); leftEl.textContent = fmt(left);
+          document.getElementById('topup-ap-copy').onclick = function(){ if (d.card && navigator.clipboard) navigator.clipboard.writeText(d.card); };
+          document.getElementById('topup-ap-copyamt').onclick = function(){ if (navigator.clipboard) navigator.clipboard.writeText(String(toman)); };
+          document.getElementById('topup-ap-open').onclick = function(){
+            if (tg && tg.openLink) tg.openLink(d.pay_url); else window.open(d.pay_url, '_blank');
+          };
+          document.getElementById('topup-ap-cancel').onclick = function(){
+            stopApayTimer();
+            fetch('/api/miniapp/' + BOT_ID + '/wallet/topup/apay/' + d.order_id + '/cancel', { method:'POST', headers: authHeaders() })
+              .then(function(r){ return r.json(); })
+              .then(function(b){
+                if (b && b.status === 'paid') apayDone('<div class="empty" style="padding:30px 10px"><div class="icon">'+ICON.shield+'</div><div style="font-weight:800;color:var(--ink)">پرداختت تأیید شده بود ✅</div></div>');
+                else overlay.remove();
+              }).catch(function(){ overlay.remove(); });
+          };
+          var tick = 0;
+          apayTimer = setInterval(function(){
+            if (!document.body.contains(overlay)) { stopApayTimer(); return; }
+            left -= 1; tick += 1;
+            if (leftEl) leftEl.textContent = fmt(Math.max(left, 0));
+            if (tick % 4 !== 0 && left > 0) return;
+            fetch('/api/miniapp/' + BOT_ID + '/wallet/topup/apay/' + d.order_id, { headers: authHeaders() })
+              .then(function(r){ return r.json(); })
+              .then(function(b){
+                if (!b || !b.ok) return;
+                if (b.status === 'paid') {
+                  apayDone('<div class="empty" style="padding:30px 10px"><div class="icon">'+ICON.shield+'</div>' +
+                    '<div style="font-weight:800;color:var(--ink)">پرداخت تأیید شد ✅</div>' +
+                    '<div style="font-size:12px;margin-top:6px">'+(b.credit||0).toLocaleString('en-US')+' تومان به کیف پولت اضافه شد.</div></div>');
+                } else if (b.status === 'cancelled' || b.status === 'expired' || left < -600) {
+                  apayDone('<div class="empty-note" style="padding:24px 0;text-align:center">این فاکتور بسته شد. اگر واریز کرده‌ای نگران نباش؛ در صورتِ تأییدِ بانک کیف پولت شارژ می‌شود یا به پشتیبانی پیام بده.</div>');
+                }
+              }).catch(function(){});
+          }, 1000);
+        }).catch(function(){
+          box.innerHTML = '<div class="empty-note" style="padding:20px 0">خطا در ارتباط. دوباره امتحان کن.</div>' +
+            '<button class="back-btn jelly" id="topup-ap-back" style="width:100%;margin-top:8px">بازگشت</button>';
+          document.getElementById('topup-ap-back').onclick = function(){ stepAmount(info); };
+        });
     }
 
     function stepReceipt(info){

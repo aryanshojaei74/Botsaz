@@ -1037,3 +1037,63 @@ async def test_user_cancel_posts_cancelled_event_to_log_channel(db, monkeypatch,
              message=_ns(message_id=9, answer=_noop_answer, edit_reply_markup=_noop_answer))
     await AA.apu_cancel(cb, _ns())
     assert any("#آپی_لغو" in t and "در آپی هم لغو شد" in t for _c, t in sent_msgs)
+
+
+# ═══ PATCH_APAY_MINIAPP_V1 — شارژ با آپی داخلِ مینی‌اپ ═══
+@pytest.mark.asyncio
+async def test_miniapp_create_charge_core_open_invoice_amounts_and_status(db, monkeypatch):
+    maker, _n = db
+    row = await _row(maker)
+    # فاکتورِ بازِ قبلی (bsabc) ⇒ فاکتورِ دوم ساخته نمی‌شود، کدِ فاکتورِ باز برمی‌گردد
+    data, err = await AP.create_charge_core(row, 777, 50_000)
+    assert data is None and err == "open:bsabc"
+    async with maker() as s:
+        (await s.scalar(select(models.ApayCharge))).status = "cancelled"
+        await s.commit()
+
+    async def _cp(token, **k):
+        _cp.k = k
+        return 200, {"id": "pay_m1", "pay_url": "https://apaygate.shop/pay/pay_m1", "payable_rial": 500_370}
+
+    async def _cf(token, res):
+        return "6037991234567890", "علی"
+    monkeypatch.setattr(AP, "create_payment", _cp)
+    monkeypatch.setattr(AP, "card_for", _cf)
+    monkeypatch.setattr(AP, "watch_tenant_charge", lambda *a, **k: None)
+
+    async def _wh(bot_id):
+        return ""
+    monkeypatch.setattr(AP, "webhook_url", _wh)
+    bad, e1 = await AP.create_charge_core(row, 777, 10)                      # کمتر از حداقل
+    assert bad is None and "حداقل" in e1
+    data, err = await AP.create_charge_core(row, 777, 50_000)
+    assert err == "" and data["pay_rial"] == 500_370 and data["card"].startswith("6037") and data["credit"] == 50_000
+    assert _cp.k["amount_toman"] == 50_000 + data["fee"]
+    st = await AP.mini_status(5, 777, data["order_id"])
+    assert st["status"] == "waiting"
+    assert await AP.mini_status(5, 999, data["order_id"]) is None             # کاربرِ دیگر نمی‌بیندش
+
+
+@pytest.mark.asyncio
+async def test_miniapp_status_settles_when_apay_says_paid(db, monkeypatch):
+    maker, _n = db
+
+    async def _v(token, pid):
+        return _verify_resp()
+    monkeypatch.setattr(AP, "verify_payment", _v)
+    AP._MINI_LAST_CHECK.clear()
+    st = await AP.mini_status(5, 777, "bsabc")
+    assert st["status"] == "paid" and st["credit"] == 50_000 and st["balance"] == 50_000
+
+
+@pytest.mark.asyncio
+async def test_miniapp_topup_init_offers_apay_even_if_card_is_off(db):
+    from tenant.shared import miniapp as MA
+    await tenant.set_setting(5, "card_enabled", "0")
+    info = await MA._apay_info(5)
+    assert info and info["min"] > 0 and info["max"] > 0 and info["name"]
+    await tenant.set_setting(5, "apay_show_wallet", "0")
+    assert await MA._apay_info(5) is None
+    await tenant.set_setting(5, "apay_show_wallet", "1")
+    await tenant.set_setting(5, "apay_enabled", "0")
+    assert await MA._apay_info(5) is None
