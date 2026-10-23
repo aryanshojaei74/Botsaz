@@ -153,3 +153,41 @@ async def test_normal_ttl_expiry_still_works(env):
         await s.commit()
     assert await GB.expire_pending_bets_once() == 1
     assert await bal(env) == 7_000 and "زمان بازی به پایان" in env.bot.edits[0]["text"]
+
+
+# ═══ PATCH_BET_CB_ANSWER_FIRST_V1 — دکمه‌هایِ قبول/لغو همیشه جواب می‌دهند، حتی اگر ادیتِ پیام کند/ناموفق باشد ═══
+import asyncio as _aio
+
+
+@pytest.mark.asyncio
+async def test_join_and_cancel_answer_before_slow_edit_and_survive_errors(monkeypatch):
+    import tenant.shared.group_betting as GB
+    order = []
+
+    class Msg:
+        async def edit_text(self, *a, **k):
+            order.append("edit_start")
+            await _aio.sleep(0.05)
+            raise RuntimeError("flood: retry after 30")
+
+    class CB:
+        data = "bet:join:1"
+        from_user = type("U", (), {"id": 5, "full_name": "x", "username": "x"})()
+        message = Msg()
+
+        async def answer(self, text=None, show_alert=False, **k):
+            order.append(("answer", text))
+
+    monkeypatch.setattr(GB, "_EDIT_RETRY_DELAYS", (0.0,))
+    await GB._safe_answer(CB(), "بازی تسویه شد.")
+    GB._edit_in_background(CB.message, "t", None, "x")
+    await _aio.sleep(0.2)
+    assert order[0] == ("answer", "بازی تسویه شد.") and "edit_start" in order
+
+    # استثنا در بدنهٔ هندلر ⇒ کاربر پاپ‌آپِ خطا می‌بیند، نه سکوت
+    async def boom(cb, bot):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(GB, "_join_bet_impl", boom)
+    order.clear()
+    await GB.join_bet(CB(), None)
+    assert order and order[-1][0] == "answer" and "خطای موقت" in order[-1][1]

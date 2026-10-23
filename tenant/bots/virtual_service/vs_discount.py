@@ -73,6 +73,17 @@ def keys_label(raw: str | None) -> str:
 
 # ═══════════════════════ سمتِ کاربر ═══════════════════════
 
+async def active_code_count(bot_id: int) -> int:
+    """PATCH_VSD_NO_CODE_HINT_V1 — تعدادِ کدهایِ is_active (برایِ هشدارِ «تیک روشن است ولی کدی نیست»)."""
+    try:
+        async with Session() as s:
+            return int(await s.scalar(select(func.count()).select_from(DiscountCode).where(
+                DiscountCode.bot_id == bot_id, DiscountCode.is_active == True)) or 0)  # noqa: E712
+    except Exception:
+        logger.exception("active_code_count ناموفق بود")
+        return -1
+
+
 async def vsd_enabled(bot_id: int) -> bool:
     """قابلیتِ کد تخفیف روشن است و دست‌کم یک کدِ فعال وجود دارد؟ (وگرنه هیچ تغییری در ظاهرِ ربات)"""
     try:

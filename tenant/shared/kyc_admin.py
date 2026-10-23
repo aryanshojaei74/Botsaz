@@ -37,6 +37,7 @@ class KycFSM(StatesGroup):
     user_lookup = State()
     user_card = State()
     reject_reason = State()   # PATCH_KYC_REJECT_REASON_V1
+    review_chat = State()     # PATCH_KYC_REVIEW_GROUP_V1
 
 
 async def _content(bot_id: int):
@@ -59,6 +60,9 @@ async def _content(bot_id: int):
            f"📆 بازهٔ «روزانه»: <b>{'از نیمه‌شبِ تهران (۰۰:۰۰ صفر می‌شود)' if win == 'calendar' else '۲۴ ساعتِ گذشته (غلتان)'}</b>\n"
            f"🔄 تغییرِ کارت: <b>{cc_max} بار در {cc_days} روز</b>" + (" (ممنوع)" if cc_max <= 0 else ""))
 
+    from tenant.shared import kyc_review as KR      # PATCH_KYC_REVIEW_GROUP_V1
+    rv = await KR.review_chat(bot_id)
+    txt += ("\n👮 گروهِ بررسی: " + (f"<code>{rv}</code>" if rv else "تنظیم نشده (درخواست‌ها برایِ ادمین‌ها در پیوی می‌آید)"))
     rows = [
         [InlineKeyboardButton(
             text=("⛔️ غیرفعال‌کردن" if on else "✅ فعال‌کردن"),
@@ -81,6 +85,9 @@ async def _content(bot_id: int):
                               callback_data="kyc:l2text", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="📋 درخواست‌های در انتظار",
                               callback_data="kyc:pend:0", style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text=("👮 گروهِ بررسی: تغییر" if rv else "👮 تعیینِ گروهِ بررسیِ احراز"),
+                              callback_data="kyc:rvset", style=ButtonStyle.PRIMARY)]
+         + ([InlineKeyboardButton(text="🗑 حذفِ گروه", callback_data="kyc:rvclr", style=ButtonStyle.DANGER)] if rv else []),
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:finance",
                               style=ButtonStyle.DANGER)],
     ]
@@ -734,6 +741,7 @@ async def kyc_approve(cb: CallbackQuery, bot: Bot):
             u.kyc_card = r.card
         tg_id = u.telegram_id
         lvl = int(u.kyc_level)
+        _approved_level = int(r.level or lvl)        # PATCH_KYC_REVIEW_GROUP_V1
         await s.commit()
 
     cap = await K.cap_for(row.id, lvl)
@@ -745,6 +753,9 @@ async def kyc_approve(cb: CallbackQuery, bot: Bot):
     await _tell_user(bot, tg_id, msg)
 
     await cb.answer("تأیید شد.", show_alert=True)
+    if cb.message.chat.type != "private":        # PATCH_KYC_REVIEW_GROUP_V1
+        await _finish_in_group(bot, rid, True, "", (cb.message.chat.id, cb.message.message_id), cb.from_user.full_name or "")
+        return
     await _show(cb, row.id)
 
 
@@ -790,18 +801,22 @@ async def kyc_reject(cb: CallbackQuery, bot: Bot, state: FSMContext):
         if not r or r.bot_id != row.id or r.status != "pending":
             return await cb.answer("این درخواست دیگر در انتظار نیست.",
                                    show_alert=True)
+    in_group = cb.message.chat.type != "private"           # PATCH_KYC_REVIEW_GROUP_V1
     await state.set_state(KycFSM.reject_reason)
-    await state.update_data(kyc_reject_rid=rid)
+    await state.update_data(kyc_reject_rid=rid,
+                            kyc_review_ref=([cb.message.chat.id, cb.message.message_id] if in_group else None))
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🚫 رد بدونِ دلیل", callback_data=f"kyc:nr:{rid}",
                               style=ButtonStyle.DANGER)],
         [InlineKeyboardButton(text="↩️ انصراف", callback_data="kyc:nc", style=ButtonStyle.PRIMARY)],
     ])
-    await cb.message.answer(
+    _send_prompt = cb.message.reply if in_group else cb.message.answer
+    await _send_prompt(
         "✍️ <b>دلیلِ ردِ این درخواست را بنویس.</b>\n\n"
         "همین متن برایِ کاربر فرستاده می‌شود (حداکثر ۲۰۰ حرف)؛ مثلاً: «عکسِ کارت ناخوانا بود» یا "
         "«نامِ روی کارت با حسابِ شما نمی‌خواند».\n"
-        "اگر نمی‌خواهی دلیل بنویسی «رد بدونِ دلیل» را بزن.",
+        "اگر نمی‌خواهی دلیل بنویسی «رد بدونِ دلیل» را بزن."
+        + ("\n\n↩️ در گروه: روی همین پیام <b>ریپلای</b> کن و دلیل را بنویس." if in_group else ""),
         reply_markup=kb, parse_mode="HTML")
     await cb.answer()
 
@@ -812,10 +827,19 @@ async def kyc_reject_noreason(cb: CallbackQuery, bot: Bot, state: FSMContext):
     row = await _owner_ok(cb, bot)
     if not row:
         return
+    data = await state.get_data()
     await state.clear()
     rid = int(cb.data.rsplit(":", 1)[1])
     res = await _do_reject(bot, row, rid, "")
     await cb.answer("رد شد." if res == "ok" else "این درخواست دیگر در انتظار نیست.", show_alert=True)
+    if cb.message.chat.type != "private":        # PATCH_KYC_REVIEW_GROUP_V1
+        if res == "ok":
+            await _finish_in_group(bot, rid, False, "", data.get("kyc_review_ref"), cb.from_user.full_name or "")
+        try:
+            await cb.message.delete()
+        except Exception:
+            logger.debug("kyc: پاک‌کردنِ پیامِ دلیل ممکن نشد")
+        return
     await _show(cb, row.id)
 
 
@@ -846,6 +870,80 @@ async def kyc_reject_reason_in(msg: Message, bot: Bot, state: FSMContext):
         return await msg.answer("منصرف شدی؛ درخواست هنوز در انتظار است.")
     rid = int(data.get("kyc_reject_rid") or 0)
     res = await _do_reject(bot, row, rid, reason[:_REASON_MAX])
+    ref = data.get("kyc_review_ref")                 # PATCH_KYC_REVIEW_GROUP_V1
+    if msg.chat.type != "private":
+        if res == "ok":
+            await _finish_in_group(bot, rid, False, reason[:_REASON_MAX], ref, msg.from_user.full_name or "")
+        await msg.reply("✅ رد شد؛ دلیل برایِ کاربر فرستاده شد." if res == "ok" else "این درخواست دیگر در انتظار نیست.")
+        return
     await msg.answer("✅ رد شد و دلیل برایِ کاربر فرستاده شد." if res == "ok"
                      else "این درخواست دیگر در انتظار نیست.")
     await _show(msg, row.id)
+
+
+# ═══ === PATCH_KYC_REVIEW_GROUP_V1 === گروهِ بررسیِ احراز ═══
+@kyc_admin_router.callback_query(F.data == "kyc:rvset")
+async def kyc_rv_set(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok, smart_cancel_kb
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await state.set_state(KycFSM.review_chat)
+    await cb.message.answer(
+        "👮 <b>گروهِ بررسیِ احراز</b>\n\nربات را در گروه (یا کانال) <b>ادمین</b> کن، بعد یک پیام از همان گروه را همین‌جا "
+        "فوروارد کن یا آیدیِ عددیِ آن را (مثلاً <code>-1001234567890</code>) بفرست.\n\n"
+        "از این به بعد هر درخواستِ احراز با مدرک و دکمهٔ «✅ تأیید / ❌ رد» همان‌جا می‌آید؛ بعد از تأیید یا ردِ هر "
+        "درخواست، همان پیام ادیت می‌شود. برایِ رد، ربات دلیل را می‌پرسد (در گروه روی پیامِ ربات ریپلای کن).",
+        reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
+    await cb.answer()
+
+
+@kyc_admin_router.message(KycFSM.review_chat)
+async def kyc_rv_save(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok, set_setting
+    row = await _owner_ok(msg, bot)
+    if not row:
+        return
+    chat_id = None
+    fwd = getattr(msg, "forward_from_chat", None)
+    if fwd is not None:
+        chat_id = fwd.id
+    else:
+        t = (msg.text or "").strip()
+        if t.lstrip("-").isdigit():
+            chat_id = int(t)
+    if chat_id is None:
+        return await msg.answer("یک پیام از گروه فوروارد کن یا آیدیِ عددیِ گروه را بفرست.")
+    try:
+        await bot.send_message(chat_id, "✅ گروهِ بررسیِ احرازِ هویت وصل شد. درخواست‌ها از این به بعد اینجا می‌آید.")
+    except Exception as e:
+        import html as _h
+        return await msg.answer("❌ ارسال به این گروه ممکن نشد. مطمئن شو ربات در آن <b>ادمین</b> است.\n\n"
+                                f"<code>{_h.escape(str(e))}</code>", parse_mode="HTML")
+    await set_setting(row.id, "kyc_review_chat", str(chat_id))
+    await state.clear()
+    await msg.answer("✅ ذخیره شد.")
+    await _show(msg, row.id)
+
+
+@kyc_admin_router.callback_query(F.data == "kyc:rvclr")
+async def kyc_rv_clear(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok, set_setting
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await set_setting(row.id, "kyc_review_chat", "")
+    await cb.answer("گروهِ بررسی حذف شد.")
+    await _show(cb, row.id)
+
+
+async def _finish_in_group(bot: Bot, rid: int, approved: bool, reason: str, ref, by: str) -> None:
+    """بعد از تأیید/ردِ یک درخواست در گروه: همان پیامِ درخواست را با نتیجه و مشخصاتِ کاربر ادیت می‌کند."""
+    from tenant.shared import kyc_review as KR
+    async with _S() as s:
+        r = await s.get(_KR, rid)
+        u = await s.get(_BU, r.user_id) if r else None
+    if not r or not u or not ref:
+        return
+    txt = KR.result_text(u, int(r.level or 1), getattr(r, "kind", None) == "card_change", approved, reason, by)
+    await KR.edit_review_message(bot, ref[0], ref[1], txt)

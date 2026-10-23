@@ -26,8 +26,9 @@ from tenant.shared.group_wallet import _group_feature_allowed
 logger = _get_logger(__name__)
 betting_router = Router()
 
-_BET_RE = re.compile(r"^(?:بازی|شرطبندی|شرط\s*بندی)\s+([۰-۹0-9,،]+)$", re.IGNORECASE)
-_INCOMPLETE_BET_RE = re.compile(r"^(?:بازی|شرطبندی|شرط\s*بندی)$", re.IGNORECASE)
+# === PATCH_COIN_FLIP_COMMAND_V1 === (فدایی) دستور «شیر یا خط ۱۰۰۰»؛ واژهٔ «شرطبندی» حذف شد («بازی ۱۰۰۰» هم می‌ماند)
+_BET_RE = re.compile(r"^(?:بازی|شیر\s*یا\s*خط)\s+([۰-۹0-9,،]+)$", re.IGNORECASE)
+_INCOMPLETE_BET_RE = re.compile(r"^(?:بازی|شیر\s*یا\s*خط)$", re.IGNORECASE)
 _DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
 
 
@@ -382,12 +383,56 @@ async def create_bet(msg: Message, bot: Bot):
         logger.exception("ثبت لاگ ایجاد بازی ناموفق بود")
 
 
+# === PATCH_BET_CB_ANSWER_FIRST_V1 ===
+# گزارشِ فدایی: «دکمه‌هایِ قبول/لغو بازی بعضی وقت‌ها هیچ واکنشی ندارد (برایِ همه، ۱۰۰ بار در روز)». در گروهِ شلوغ
+# تلگرام «ادیتِ پیام» را با فلود/۴۲۹ و تأخیرِ طولانی برمی‌گرداند و هندلر قبل از answer() منتظرِ همان ادیت بود؛
+# تا برسد، callback منقضی می‌شد (هیچ پاپ‌آپی نمی‌آمد) هرچند پول جابه‌جا شده بود. حالا اول جواب می‌دهیم، و ادیتِ
+# پیام در پس‌زمینه با چند بار تلاشِ مجدد انجام می‌شود.
+_EDIT_RETRY_DELAYS = (0.0, 2.0, 6.0, 15.0)
+_BG_TASKS: set = set()
+
+
+async def _edit_with_retry(message, text: str, markup, what: str) -> bool:
+    for i, delay in enumerate(_EDIT_RETRY_DELAYS):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            await message.edit_text(text, reply_markup=markup, parse_mode="HTML")
+            return True
+        except Exception as e:   # noqa: BLE001
+            if "not modified" in str(e).lower():
+                return True
+            logger.warning("bet: ادیتِ پیامِ %s ناموفق بود (تلاش %s): %s", what, i + 1, e)
+    return False
+
+
+def _edit_in_background(message, text: str, markup, what: str) -> None:
+    t = asyncio.ensure_future(_edit_with_retry(message, text, markup, what))
+    _BG_TASKS.add(t)
+    t.add_done_callback(_BG_TASKS.discard)
+
+
+async def _safe_answer(cb: CallbackQuery, text: str | None = None, show_alert: bool = False) -> None:
+    try:
+        await cb.answer(text, show_alert=show_alert) if text else await cb.answer()
+    except Exception as e:   # noqa: BLE001
+        logger.info("bet: پاسخ به callback ممکن نشد (احتمالاً منقضی): %s", e)
+
+
 @betting_router.callback_query(F.data.startswith("bet:join:"))
 async def join_bet(cb: CallbackQuery, bot: Bot):
+    try:
+        await _join_bet_impl(cb, bot)
+    except Exception:
+        logger.exception("bet:join ناموفق بود (data=%s user=%s)", cb.data, getattr(cb.from_user, "id", None))
+        await _safe_answer(cb, "⚠️ خطای موقت؛ چند لحظه بعد دوباره امتحان کن.", True)
+
+
+async def _join_bet_impl(cb: CallbackQuery, bot: Bot):
     bet_id = int(cb.data.rsplit(":", 1)[1])
     row = await _bot_for_message(bot)
     if not _group_feature_allowed(row):
-        await cb.answer()
+        await _safe_answer(cb, "این قابلیت برایِ این ربات فعال نیست.", True)
         return
     from tenant import get_or_create_user
     joiner = await get_or_create_user(row.id, cb.from_user.id, cb.from_user.full_name or "", cb.from_user.username or "")
@@ -414,11 +459,8 @@ async def join_bet(cb: CallbackQuery, bot: Bot):
                 s.add(BetLedger(bot_id=bet.bot_id, bet_id=bet.id, user_id=creator.id, telegram_id=creator.telegram_id, amount=bet.amount, kind="refund"))
                 s.add(WalletTxn(bot_id=bet.bot_id, user_id=creator.id, amount=bet.amount, kind="bet_refund", note=f"انقضای بازی #{bet.id}"))
             await s.commit()
-            try:
-                await cb.message.edit_text(_cancelled_text(bet, True), reply_markup=None, parse_mode="HTML")
-            except Exception:
-                logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
-            await cb.answer("بازی منقضی شده است.", show_alert=True)
+            await _safe_answer(cb, "بازی منقضی شده است.", True)
+            _edit_in_background(cb.message, _cancelled_text(bet, True), None, f"انقضای بازی #{bet.id}")
             return
         opponent = await s.get(BotUser, joiner.id, with_for_update=True)
         if not opponent or _money(opponent.balance) < _money(bet.amount):
@@ -462,10 +504,8 @@ async def join_bet(cb: CallbackQuery, bot: Bot):
         await s.commit()
         text = _settled_text(bet)
         result_kb = _settled_keyboard(bet.payout_amount, winner_balance_after, loser_balance_after)
-    try:
-        await cb.message.edit_text(text, reply_markup=result_kb, parse_mode="HTML")
-    except Exception:
-        logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+    await _safe_answer(cb, "بازی تسویه شد.")                    # PATCH_BET_CB_ANSWER_FIRST_V1
+    _edit_in_background(cb.message, text, result_kb, f"تسویهٔ بازی #{bet.id}")
     try:
         from tenant_group_guard import tenant_group_log
         await tenant_group_log(bot, row, bet.chat_id, "bet_settled", actor=cb.from_user.id,
@@ -473,11 +513,18 @@ async def join_bet(cb: CallbackQuery, bot: Bot):
                                details=f"بازی #{bet.id}؛ برنده {bet.winner_telegram_id}؛ جایزه {_rial(bet.payout_amount)}")
     except Exception:
         logger.exception("ثبت لاگ تسویه بازی ناموفق بود")
-    await cb.answer("بازی تسویه شد.")
 
 
 @betting_router.callback_query(F.data.startswith("bet:cancel:"))
 async def cancel_bet(cb: CallbackQuery, bot: Bot):
+    try:
+        await _cancel_bet_impl(cb, bot)
+    except Exception:
+        logger.exception("bet:cancel ناموفق بود (data=%s user=%s)", cb.data, getattr(cb.from_user, "id", None))
+        await _safe_answer(cb, "⚠️ خطای موقت؛ چند لحظه بعد دوباره امتحان کن.", True)
+
+
+async def _cancel_bet_impl(cb: CallbackQuery, bot: Bot):
     bet_id = int(cb.data.rsplit(":", 1)[1])
     row = await _bot_for_message(bot)
     if not row:
@@ -502,17 +549,14 @@ async def cancel_bet(cb: CallbackQuery, bot: Bot):
             s.add(WalletTxn(bot_id=bet.bot_id, user_id=creator.id, amount=bet.amount, kind="bet_refund", note=f"لغو بازی #{bet.id}"))
         await s.commit()
         text = _cancelled_text(bet)
-    try:
-        await cb.message.edit_text(text, reply_markup=None, parse_mode="HTML")
-    except Exception:
-        logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+    await _safe_answer(cb, "بازی لغو شد.")                       # PATCH_BET_CB_ANSWER_FIRST_V1
+    _edit_in_background(cb.message, text, None, f"لغوِ بازی #{bet.id}")
     try:
         from tenant_group_guard import tenant_group_log
         await tenant_group_log(bot, row, bet.chat_id, "bet_cancelled", actor=cb.from_user.id,
                                details=f"بازی #{bet.id} لغو و مبلغ {_rial(bet.amount)} مسترد شد")
     except Exception:
         logger.exception("ثبت لاگ لغو بازی ناموفق بود")
-    await cb.answer("بازی لغو شد.")
 
 
 class BetSettingsFSM(StatesGroup):

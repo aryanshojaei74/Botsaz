@@ -42,7 +42,7 @@ GROUP_NOTICE = ("⛔️ {name}، حسابِ شما محدود شده است؛ ا
 
 _TRANSFER_PREFIX = "انتقال"
 _BALANCE_WORD = "موجودی"
-_BET_RE = re.compile(r"^(?:بازی|شرطبندی|شرط\s*بندی)(?:\s+[۰-۹0-9,،]+)?$", re.IGNORECASE)
+_BET_RE = re.compile(r"^(?:بازی|شیر\s*یا\s*خط)(?:\s+[۰-۹0-9,،]+)?$", re.IGNORECASE)   # PATCH_COIN_FLIP_COMMAND_V1
 
 
 def invalidate(bot_id: int, tg_id: int) -> None:

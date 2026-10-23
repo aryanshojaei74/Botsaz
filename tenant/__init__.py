@@ -7074,8 +7074,17 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         cur = await get_setting(row.id, "discount_purchase_enabled", "1")
         new = "0" if cur == "1" else "1"
         await set_setting(row.id, "discount_purchase_enabled", new)
-        await msg.answer("🏷 استفاده از کد تخفیف در خرید " + ("فعال شد ✅" if new == "1" else "غیرفعال شد ❌"),
-                         reply_markup=await _sec_finance_kb(row.id, row.plan))
+        # === PATCH_VSD_NO_CODE_HINT_V1 === (فدایی: «تیکِ کد تخفیف روشن است ولی دکمه در فاکتور نیست») دکمه فقط وقتی
+        # می‌آید که دست‌کم یک کدِ فعال داشته باشی (کدِ منقضی/تمام‌شده/غیرفعال حساب نمی‌شود)؛ این را همین‌جا می‌گوییم.
+        _hint = ""
+        if new == "1":
+            from tenant.bots.virtual_service.vs_discount import active_code_count
+            if await active_code_count(row.id) == 0:
+                _hint = ("\n\n⚠️ <b>هیچ کدِ تخفیفِ فعالی نداری</b>؛ تا یک کدِ فعال نسازی، دکمهٔ «🏷 کد تخفیف» "
+                         "زیرِ فاکتور نمی‌آید (کدِ غیرفعال‌شده یا تمام‌شده هم حساب نمی‌شود). "
+                         "از «کدهایِ تخفیف» یک کد بساز یا فعالش کن.")
+        await msg.answer("🏷 استفاده از کد تخفیف در خرید " + ("فعال شد ✅" if new == "1" else "غیرفعال شد ❌") + _hint,
+                         reply_markup=await _sec_finance_kb(row.id, row.plan), parse_mode="HTML")
         return
     if await is_owner_or_admin(bot_id, msg.from_user.id, row.owner_id) and \
             msg.text and msg.text.startswith("🔔 اطلاع خودکار خرید:"):

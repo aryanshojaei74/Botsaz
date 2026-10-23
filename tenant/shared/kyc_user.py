@@ -235,15 +235,19 @@ async def kycu_card_photo(msg: Message, bot: Bot, state: FSMContext):
             return await msg.answer(f"⚠️ {why}")
 
     async with Session() as s:
-        s.add(KycRequest(bot_id=row.id, user_id=u.id, level=1, card=card,
+        req = KycRequest(bot_id=row.id, user_id=u.id, level=1, card=card,
                          file_id=msg.photo[-1].file_id, file_type="photo",
-                         kind=("card_change" if is_change else None)))
+                         kind=("card_change" if is_change else None))
+        s.add(req)
+        await s.flush()
+        rid1 = req.id
         await s.commit()
+    req = await _load_req(rid1)
 
     await msg.answer("✅ درخواستِ تغییرِ کارت ثبت شد.\n" if is_change
                      else "✅ درخواستِ احرازِ سطح ۱ ثبت شد.\n")
     await msg.answer("بعد از بررسیِ ادمین نتیجه را اطلاع می‌دهیم.")
-    await _notify_admins_new(bot, row, u, 1)
+    await _notify_admins_new(bot, row, u, 1, req)
 
 
 @kyc_user_router.message(KycUserFSM.card_photo)
@@ -297,17 +301,33 @@ async def kycu_l2_file(msg: Message, bot: Bot, state: FSMContext):
         return await msg.answer("کاربر پیدا نشد.")
 
     async with Session() as s:
-        s.add(KycRequest(bot_id=row.id, user_id=u.id, level=2,
-                         file_id=fid, file_type=ftype))
+        req = KycRequest(bot_id=row.id, user_id=u.id, level=2, file_id=fid, file_type=ftype)
+        s.add(req)
+        await s.flush()
+        rid2 = req.id
         await s.commit()
+    req = await _load_req(rid2)
 
     await msg.answer("✅ مدارکِ سطح ۲ دریافت شد.\n"
                      "بعد از بررسیِ ادمین نتیجه را اطلاع می‌دهیم.")
-    await _notify_admins_new(bot, row, u, 2)
+    await _notify_admins_new(bot, row, u, 2, req)
 
 
 # ───────────────────────── اطلاع به ادمین ─────────────────────────
-async def _notify_admins_new(bot: Bot, row, u, level: int) -> None:
+async def _load_req(rid: int):
+    async with Session() as s:
+        return await s.get(KycRequest, rid)
+
+
+async def _notify_admins_new(bot: Bot, row, u, level: int, req=None) -> None:
+    # === PATCH_KYC_REVIEW_GROUP_V1 === اگر مالک گروهِ بررسی تعیین کرده، درخواست (با مدرک و دکمه‌هایِ تأیید/رد) همان‌جا می‌رود
+    try:
+        if req is not None:
+            from tenant.shared.kyc_review import send_to_review_group
+            if await send_to_review_group(bot, row, u, req):
+                return
+    except Exception:
+        logger.exception("kyc: ارسال به گروهِ بررسی ناموفق بود")
     try:
         from tenant import _notify_admins
         uname = f"@{u.username}" if u.username else "—"

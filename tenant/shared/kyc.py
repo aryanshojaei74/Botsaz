@@ -76,6 +76,40 @@ _NOT_DEPOSIT_KINDS = ("refund", "smm_refund", "bet_refund", "admin", "referral",
                       "welcome_bonus", "prize", "revert")
 
 
+# === PATCH_KYC_DEPOSIT_WHITELIST_V1 === (فدایی) «بازی، انتقال موجودی، پاداش دعوت و … جزو شارژ حساب نیست؛ فقط افزایشِ
+# موجودی از روش‌هایِ شارژ». لیستِ سیاهِ قبلی (_NOT_DEPOSIT_KINDS) هر نوعِ جدیدِ تراکنشِ مثبت را شارژ حساب می‌کرد
+# (جایزهٔ بازی، دریافتِ انتقال، جایزهٔ قرعه‌کشی، بازگشتِ وجهِ سفارش با kind="charge"، …) و کاربر «الکی» محدود می‌شد.
+# حالا فقط درگاه‌هایِ واقعیِ پرداخت شمرده می‌شوند؛ kind="charge" فقط وقتی یادداشتش «شارژ…»/«AUTO:…» باشد
+# (تأییدِ رسیدِ کارت‌به‌کارت، شارژِ استارز، شارژِ خودکار) — نه «بازگشتِ وجه…»/«جایزه…».
+DEPOSIT_GATEWAY_KINDS = ("zarinpal_charge", "zibal_charge", "apay_charge", "swap_charge", "crypto_charge",
+                         "tonpays_charge", "uniquepay_charge", "hesabpay_charge", "abangateway_charge",
+                         "abangw_manual", "ton_direct", "tron_direct")
+
+
+def deposit_txn_filter():
+    """شرطِ SQLAlchemy برایِ «تراکنشِ مثبتی که واقعاً شارژِ حساب از روشِ پرداخت است»."""
+    from sqlalchemy import and_, or_
+    return and_(
+        WalletTxn.amount > 0,
+        or_(WalletTxn.kind.in_(DEPOSIT_GATEWAY_KINDS),
+            and_(WalletTxn.kind == "charge",
+                 or_(WalletTxn.note.like("شارژ%"), WalletTxn.note.like("AUTO:%")))))
+
+
+def is_deposit_txn(kind, note, amount) -> bool:
+    """همان deposit_txn_filter ولی رویِ یک ردیفِ در حافظه (برایِ هوک‌هایِ SQLAlchemy)."""
+    try:
+        if float(amount or 0) <= 0:
+            return False
+    except (TypeError, ValueError):
+        return False
+    k = (kind or "")
+    if k in DEPOSIT_GATEWAY_KINDS:
+        return True
+    n = (note or "")
+    return k == "charge" and (n.startswith("شارژ") or n.startswith("AUTO:"))
+
+
 async def window_start(bot_id: int) -> datetime:
     """ابتدای بازهٔ «روزانه». rolling (پیش‌فرض) = ۲۴ ساعتِ گذشته؛
     calendar = از نیمه‌شبِ تهران (صفرشدنِ سقف سرِ ساعتِ ۰۰:۰۰)."""
@@ -125,8 +159,7 @@ async def charged_today(bot_id: int, user_id: int) -> int:
             select(func.coalesce(func.sum(WalletTxn.amount), 0)).where(
                 WalletTxn.bot_id == bot_id,
                 WalletTxn.user_id == user_id,
-                WalletTxn.amount > 0,
-                WalletTxn.kind.notin_(_NOT_DEPOSIT_KINDS),
+                deposit_txn_filter(),
                 WalletTxn.created_at >= since))
         direct = await direct_card_today(s, bot_id, user_id, since)
     try:

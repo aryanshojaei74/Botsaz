@@ -314,7 +314,8 @@ def _non_deposit_kinds() -> frozenset[str]:
 def _after_flush(session, flush_context):
     try:
         for t in [o for o in session.new if isinstance(o, WalletTxn)]:
-            if float(t.amount or 0) <= 0 or (t.kind or "") in _non_deposit_kinds():
+            from tenant.shared.kyc import is_deposit_txn      # PATCH_KYC_DEPOSIT_WHITELIST_V1: فقط شارژِ واقعی
+            if not is_deposit_txn(t.kind, t.note, t.amount):
                 continue
             tg = session.execute(select(BotUser.telegram_id).where(BotUser.id == t.user_id)).scalar()
             if tg is None:

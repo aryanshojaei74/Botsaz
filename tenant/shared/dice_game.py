@@ -271,10 +271,9 @@ async def gate_check(bot_id: int, telegram_id: int) -> tuple[bool, str]:
         if not u:
             ok = False
         elif gate == "topup":
+            from tenant.shared.kyc import deposit_txn_filter      # PATCH_KYC_DEPOSIT_WHITELIST_V1
             n = await s.scalar(select(func.count(WalletTxn.id)).where(
-                WalletTxn.bot_id == bot_id, WalletTxn.user_id == u.id,
-                WalletTxn.amount > 0, WalletTxn.kind.notin_(_NON_DEPOSIT_KINDS),
-                WalletTxn.note.notlike("جایزه%")))
+                WalletTxn.bot_id == bot_id, WalletTxn.user_id == u.id, deposit_txn_filter()))
             ok = bool(n)
         else:
             n = await s.scalar(select(func.count(WalletTxn.id)).where(
