@@ -348,8 +348,11 @@ async def _backup_menu_content(bot_id: int | None = None) -> tuple[str, InlineKe
         "همین فایل رو ایمپورت کن تا همه‌چی دقیقاً به همون حالتِ قبل برگرده.\n\n"
         "⚠️ فایلِ خروجی شاملِ کلیدهایِ API پنل‌هاته — نگهش دار ولی با کسی به اشتراک نذار.")
     _auto_lbl = "⛔️ خاموش"
+    _dest_lbl = "پیویِ خودم"
     if bot_id:
         from tenant import get_setting as _gs
+        from tenant.shared.backup_full import DEST_KEY, DEST_TITLE_KEY, dest_label
+        _dest_lbl = dest_label(await _gs(bot_id, DEST_KEY, ""), await _gs(bot_id, DEST_TITLE_KEY, ""))
         _auto_lbl = {"7": "🗓 هفتگی", "1": "📆 روزانه"}.get(str(await _gs(bot_id, "auto_full_backup_days", "0")), "⛔️ خاموش")
     text += ("\n\n🗄 <b>بک‌آپِ کامل</b> علاوه بر این‌ها، کاربران، موجودیِ کیف‌پول‌ها، تراکنش‌ها، سفارش‌ها و تیکت‌ها را هم "
              "نگه می‌دارد؛ اگر سرور از بین رفت، فایل را به رباتِ جدید بده تا همه‌چیز برگردد.")
@@ -360,8 +363,11 @@ async def _backup_menu_content(bot_id: int | None = None) -> tuple[str, InlineKe
         [InlineKeyboardButton(text="🗄 بک‌آپِ کامل (با کاربران و کیف‌پول)", callback_data="tadm:bkfull:export",
                               style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="📥 بازگردانیِ کامل", callback_data="tadm:bkfull:import", style=ButtonStyle.DANGER)],
-        [InlineKeyboardButton(text=f"⏰ بک‌آپِ خودکار در پیوی تو: {_auto_lbl}", callback_data="tadm:bkfull:auto",
+        [InlineKeyboardButton(text=f"⏰ بک‌آپِ خودکار: {_auto_lbl}", callback_data="tadm:bkfull:auto",
                               style=ButtonStyle.PRIMARY)],
+        # === PATCH_BACKUP_DEST_V1 === ارسال به گروه/کانال/پیویِ شخصِ دیگر
+        [InlineKeyboardButton(text=f"📍 مقصدِ بک‌آپ: {_dest_lbl}", callback_data="tadm:bkfull:dest",
+                              style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:settings", style=ButtonStyle.DANGER)],
     ])
     return text, kb

@@ -44,6 +44,15 @@ MAX_SEND = 45 * 1024 * 1024
 
 class FullBackupFSM(StatesGroup):
     waiting_file = State()
+    waiting_dest = State()      # PATCH_BACKUP_DEST_V1
+
+
+# === PATCH_BACKUP_DEST_V1 ===
+# درخواستِ مالک: «بتوانم بک‌آپ را به گروه/کانال/پیویِ یک نفرِ دیگر هم بفرستم». مقصد (chat id) در Setting ذخیره
+# می‌شود؛ بک‌آپِ خودکار هم به همان‌جا می‌رود (خالی = پیویِ مالک). فایل شاملِ دادهٔ حساس است، پس فقط مالک
+# مقصد را تنظیم می‌کند و موقعِ تنظیم هشدار داده می‌شود.
+DEST_KEY = "auto_full_backup_chat"
+DEST_TITLE_KEY = "auto_full_backup_chat_title"
 
 
 # ───────────────────────── هستهٔ بک‌آپ/بازیابی ─────────────────────────
@@ -396,6 +405,175 @@ async def full_auto_weekly(cb: CallbackQuery, bot: Bot):
     await cb.answer("✅ بک‌آپِ خودکارِ هفتگی روشن شد؛ فایل در همین چت می‌آید.", show_alert=True)
 
 
+def _parse_dest(raw) -> int | None:
+    try:
+        v = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return v or None
+
+
+def dest_label(raw_id, title: str = "") -> str:
+    d = _parse_dest(raw_id)
+    if not d:
+        return "پیویِ خودم"
+    return (title or "").strip()[:30] or str(d)
+
+
+async def _dest_menu(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    from tenant import get_setting
+    raw = await get_setting(bot_id, DEST_KEY, "")
+    title = await get_setting(bot_id, DEST_TITLE_KEY, "")
+    cur = dest_label(raw, title)
+    text = (
+        "📍 <b>مقصدِ بک‌آپ</b>\n\n"
+        f"مقصدِ فعلی: <b>{cur}</b>\n\n"
+        "بک‌آپِ خودکار و دکمهٔ «ارسال همین الان» به همین مقصد می‌روند. می‌تواند پیویِ خودت، پیویِ یک نفرِ دیگر، "
+        "یک گروه یا یک کانال باشد.\n\n"
+        "• گروه/کانال: رباتِ خودت باید آن‌جا <b>ادمین</b> باشد (کانال: با اجازهٔ ارسالِ پیام).\n"
+        "• پیویِ شخصِ دیگر: او باید یک بار رباتِ تو را استارت کرده باشد.\n\n"
+        "⚠️ فایل شاملِ اطلاعاتِ مشتری‌ها، موجودیِ کیف‌پول‌ها و کلیدهایِ API پنل‌هاست؛ فقط به جایی بفرست که کاملاً مطمئنی.")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ تعیینِ مقصد (گروه / کانال / کاربر)", callback_data="tadm:bkfull:destset",
+                              style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="📨 ارسالِ بک‌آپ همین الان به مقصد", callback_data="tadm:bkfull:destsend",
+                              style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="↩️ برگرداندن به پیویِ خودم", callback_data="tadm:bkfull:destclear",
+                              style=ButtonStyle.DANGER)],
+        [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:backup:menu", style=ButtonStyle.DANGER)],
+    ])
+    return text, kb
+
+
+@backup_full_router.callback_query(F.data == "tadm:bkfull:dest")
+async def full_dest_menu(cb: CallbackQuery, bot: Bot):
+    row = await _owner_row(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    text, kb = await _dest_menu(row.id)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
+
+
+@backup_full_router.callback_query(F.data == "tadm:bkfull:destset")
+async def full_dest_set_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import smart_cancel_kb
+    row = await _owner_row(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    await state.set_state(FullBackupFSM.waiting_dest)
+    await cb.message.answer(
+        "📍 مقصد را به یکی از این روش‌ها بفرست:\n\n"
+        "• یک پیام را از <b>همان گروه/کانال</b> (یا از همان شخص) برایِ من فوروارد کن\n"
+        "• یا یوزرنیمِ عمومی‌اش: <code>@mychannel</code>\n"
+        "• یا آیدیِ عددی: <code>-1001234567890</code> یا <code>123456789</code>\n\n"
+        "قبلش مطمئن شو رباتت در گروه/کانال ادمین است.",
+        reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
+    await cb.answer()
+
+
+def _dest_from_message(msg: Message):
+    """(مقصدِ قابلِ‌استفاده برایِ get_chat) از فوروارد، یوزرنیم یا آیدیِ عددی؛ None اگر شناخته نشد."""
+    origin = getattr(msg, "forward_origin", None)
+    if origin is not None:
+        chat = getattr(origin, "chat", None) or getattr(origin, "sender_chat", None)
+        if chat is not None:
+            return chat.id
+        user = getattr(origin, "sender_user", None)
+        if user is not None:
+            return user.id
+    legacy = getattr(msg, "forward_from_chat", None) or getattr(msg, "forward_from", None)
+    if legacy is not None:
+        return legacy.id
+    t = (msg.text or "").strip()
+    if t.startswith("@") and len(t) > 2 and " " not in t:
+        return t
+    if t.lstrip("-").isdigit():
+        return int(t)
+    return None
+
+
+@backup_full_router.message(FullBackupFSM.waiting_dest)
+async def full_dest_set_save(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import set_setting as _eset
+    row = await _owner_row(msg, bot)
+    if not row:
+        await state.clear()
+        return
+    target = _dest_from_message(msg)
+    if target is None:
+        await msg.answer("❌ شناخته نشد. یک پیام از مقصد فوروارد کن، یا یوزرنیمِ عمومی (<code>@name</code>) یا آیدیِ عددی بفرست.",
+                         parse_mode="HTML")
+        return
+    try:
+        chat = await bot.get_chat(target)
+        sent = await bot.send_message(chat.id, "✅ مقصدِ بک‌آپِ رباتِ شما اینجا تنظیم شد؛ بک‌آپ‌ها به همین‌جا می‌آیند.")
+        del sent
+    except Exception as e:  # noqa: BLE001
+        logger.info("backup dest check failed: %s", e)
+        await msg.answer(
+            "❌ ارسال به این مقصد ممکن نشد.\n"
+            "• گروه/کانال: رباتِ خودت را ادمین کن و اجازهٔ ارسالِ پیام بده.\n"
+            "• شخص: او باید یک بار رباتِ تو را استارت کند.\n"
+            "بعد دوباره مقصد را بفرست.")
+        return
+    title = (getattr(chat, "title", None) or getattr(chat, "full_name", None) or getattr(chat, "username", None) or "")
+    await _eset(row.id, DEST_KEY, str(chat.id))
+    await _eset(row.id, DEST_TITLE_KEY, str(title)[:60])
+    await state.clear()
+    text, kb = await _dest_menu(row.id)
+    await msg.answer("✅ مقصد ذخیره شد.\n\n" + text, reply_markup=kb, parse_mode="HTML")
+
+
+@backup_full_router.callback_query(F.data == "tadm:bkfull:destclear")
+async def full_dest_clear(cb: CallbackQuery, bot: Bot):
+    from tenant import set_setting as _eset
+    row = await _owner_row(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    await _eset(row.id, DEST_KEY, "")
+    await _eset(row.id, DEST_TITLE_KEY, "")
+    await cb.answer("بک‌آپ‌ها به پیویِ خودت می‌آیند.")
+    await full_dest_menu(cb, bot)
+
+
+@backup_full_router.callback_query(F.data == "tadm:bkfull:destsend")
+async def full_dest_send_now(cb: CallbackQuery, bot: Bot):
+    from tenant import get_setting as _eget
+    row = await _owner_row(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    dest = _parse_dest(await _eget(row.id, DEST_KEY, ""))
+    if not dest:
+        await cb.answer("اول مقصد را تعیین کن (✏️ تعیینِ مقصد).", show_alert=True)
+        return
+    await cb.answer("⏳ در حالِ ساختنِ بک‌آپ...")
+    data = await build_full_backup(row.id)
+    raw = dump_bytes(data)
+    if len(raw) > MAX_SEND:
+        await cb.message.answer("❌ حجمِ بک‌آپ از سقفِ ارسالِ تلگرام بیشتر شد؛ با پشتیبانی تماس بگیر.")
+        return
+    fname = f"full_{row.username or row.id}_{_dt.datetime.utcnow().strftime('%Y%m%d_%H%M')}.botsazfull"
+    try:
+        await bot.send_document(
+            dest, BufferedInputFile(raw, filename=fname),
+            caption="🗄 <b>بک‌آپِ کاملِ ربات</b>\n\n" + summarize(data) +
+                    "\n\n🔐 شاملِ اطلاعاتِ مشتری‌ها و کلیدهایِ پنل‌هاست.", parse_mode="HTML")
+    except Exception as e:  # noqa: BLE001
+        logger.info("backup dest send failed: %s", e)
+        await cb.message.answer("❌ ارسال به مقصد ممکن نشد (رباتت در آن‌جا ادمین نیست، یا آن شخص رباتت را استارت نکرده). "
+                                "مقصد را بررسی کن.")
+        return
+    await cb.message.answer("✅ بک‌آپ به مقصد فرستاده شد.")
+
+
 async def full_backup_auto_once() -> int:
     """برایِ رباتی که بک‌آپِ خودکار را روشن کرده، در فاصلهٔ تنظیم‌شده فایل را به پیوی مالک می‌فرستد."""
     from models import Bot as BotRow
@@ -425,11 +603,20 @@ async def full_backup_auto_once() -> int:
                 continue
             tb = Bot(token=b.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
             try:
-                await tb.send_document(
-                    b.owner_id,
-                    BufferedInputFile(raw, filename=f"full_{b.username or b.id}_{_dt.datetime.utcnow():%Y%m%d}.botsazfull"),
-                    caption="🗄 <b>بک‌آپِ خودکارِ کاملِ ربات</b>\n\n" + summarize(data) +
-                            "\n\n🔐 با کسی به اشتراک نذار. بازگردانی: پنل ← تنظیمات ← 💾 بک‌آپِ کامل.")
+                doc = BufferedInputFile(raw, filename=f"full_{b.username or b.id}_{_dt.datetime.utcnow():%Y%m%d}.botsazfull")
+                caption = ("🗄 <b>بک‌آپِ خودکارِ کاملِ ربات</b>\n\n" + summarize(data) +
+                           "\n\n🔐 با کسی به اشتراک نذار. بازگردانی: پنل ← تنظیمات ← 💾 بک‌آپِ کامل.")
+                dest = _parse_dest(await _eget(b.id, DEST_KEY, ""))
+                try:
+                    await tb.send_document(dest or b.owner_id, doc, caption=caption)
+                except Exception as e:      # PATCH_BACKUP_DEST_V1: مقصدِ سفارشی خراب بود ⇒ به پیویِ مالک + اطلاع
+                    if not dest:
+                        raise
+                    logger.warning("auto full backup: مقصد %s در دسترس نیست (bot=%s): %s", dest, b.id, e)
+                    await tb.send_document(b.owner_id, doc, caption=caption)
+                    await tb.send_message(b.owner_id, "⚠️ ارسال به مقصدِ تعیین‌شده برایِ بک‌آپ ممکن نبود (ربات باید در گروه/کانال "
+                                          "ادمین باشد، یا آن شخص رباتت را استارت کرده باشد)؛ این بار به پیویِ خودت آمد. "
+                                          "مقصد را از پنل ← تنظیمات ← 💾 بک‌آپِ کامل ← 📍 مقصد درست کن.")
                 sent += 1
             finally:
                 await tb.session.close()
