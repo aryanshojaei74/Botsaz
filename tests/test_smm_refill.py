@@ -1001,3 +1001,14 @@ async def test_status_error_row_does_not_overwrite_the_order(db):
     async with maker() as s:
         o = await s.get(models.SmmOrder, oid)
     assert o.panel_status == "in progress" and o.remaining == 40
+
+
+# ═══ نمونه‌هایِ دقیقِ مستندِ جدیدِ WhaleSMM (whalesmm.com/fa/api، 2026-10-24) ═══
+def test_whalesmm_doc_examples_cancel_and_refill_status():
+    from tenant.bots.virtual_service import smm as S, smm_api as A
+    doc_cancel = [{"order": 9, "cancel": {"error": "Incorrect order ID"}}, {"order": 2, "cancel": 1}]
+    assert S._parse_cancel_response(doc_cancel, 2) == (True, "requested")
+    assert S._parse_cancel_response(doc_cancel, 9) == (False, "Incorrect order ID")
+    assert A._refill_status_value("Completed") == {"status": "Completed"}
+    assert A._refill_status_value({"error": "Refill not found"}) == {"error": "Refill not found"}
+    assert A._valid_refill_id("1") == "1" and A._valid_refill_id({"error": "Incorrect order ID"}) is None
