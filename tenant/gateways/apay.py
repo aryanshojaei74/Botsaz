@@ -153,6 +153,35 @@ async def verify_payment(token: str, payment_id: str) -> tuple[int, dict]:
     return await _api(token, "POST", f"/api/v1/payments/{payment_id}/verify")
 
 
+async def cancel_payment(token: str, payment_id: str) -> tuple[int, dict]:
+    """=== PATCH_APAY_REMOTE_CANCEL_V1 === POST /payments/:id/cancel — فاکتورِ پرداخت‌نشده را سمتِ آپی هم لغو می‌کند
+    (مستندات: «cancel an unpaid invoice»؛ پرداخت‌شده ⇒ 409 invoice_not_payable)."""
+    return await _api(token, "POST", f"/api/v1/payments/{payment_id}/cancel")
+
+
+async def cancel_remote(bot_id: int, order_id: str) -> str:
+    """لغوِ فاکتور در خودِ آپی. خروجی:
+      "cancelled" — لغو شد؛ از این به بعد واریزِ هم‌مبلغ به این فاکتور تطبیق نمی‌خورد (جلوگیریِ شارژِ دوباره)؛
+      "paid"      — آپی می‌گوید قبلاً پرداخت شده بود ⇒ همین‌جا تسویه (کیف پول شارژ) انجام شد؛
+      "error"     — لغو ممکن نشد (شبکه/…)؛ رفتارِ قبلی (لغوِ محلی + پایش) ادامه دارد."""
+    token = await _get(bot_id, "apay_token", "")
+    async with Session() as s:
+        ch = await s.scalar(select(ApayCharge).where(
+            ApayCharge.bot_id == bot_id, ApayCharge.order_id == order_id))
+        pid = ch.payment_id if ch else None
+    if not token or not pid:
+        return "error"
+    code, res = await cancel_payment(token, pid)
+    err = ((res or {}).get("error") or {}) if isinstance(res, dict) else {}
+    if code in (200, 201, 204) and not err:
+        return "cancelled"
+    if code == 409 and err.get("code") == "invoice_not_payable":
+        ok, _m, _a = await settle_charge(bot_id, order_id)
+        return "paid" if ok else "error"
+    logger.warning("apay: لغوِ سمتِ آپی ناموفق (bot=%s order=%s): %s %s", bot_id, order_id, code, str(res)[:200])
+    return "error"
+
+
 async def wallet(token: str) -> tuple[int, dict]:
     return await _api(token, "GET", "/api/v1/wallet")
 

@@ -730,7 +730,8 @@ async def _apu_create_charge_locked(msg: Message, bot: Bot, row, amount: int, tg
         logger.warning("apay: ساختِ پرداخت ناموفق (bot=%s): %s %s", row.id, code, str(res)[:300])
         return await msg.answer("❌ ساختِ فاکتور ناموفق بود.\n" + AP.err_text(code, res))
 
-    pay_rial = int(res.get("pay_amount") or 0)
+    # === PATCH_APAY_DOC_PAYABLE_V1 === مستندات: «دقیقاً payable_rial را به مشتری نشان دهید» (اگر نبود، pay_amount)
+    pay_rial = int(res.get("payable_rial") or res.get("pay_amount") or 0)
     async with Session() as s:
         s.add(ApayCharge(
             bot_id=row.id, user_telegram_id=tg_id, order_id=oid,
@@ -787,8 +788,8 @@ async def apu_check(cb: CallbackQuery, bot: Bot):
 
 @apay_router.callback_query(F.data.startswith("apu:cancel:"))
 async def apu_cancel(cb: CallbackQuery, bot: Bot):
-    """لغو فقط سمتِ ماست؛ اگر کاربر بعداً همان فاکتور را پرداخت کند، وب‌هوکِ آپی
-    همچنان کیف پولش را شارژ می‌کند (پول نمی‌سوزد)."""
+    """لغو (PATCH_APAY_REMOTE_CANCEL_V1): سمتِ آپی هم لغو می‌شود تا واریزِ بعدی به این فاکتور تطبیق نخورد؛ اگر لغوِ
+    سمتِ آپی ممکن نبود (شبکه)، رفتارِ قبلی: لغوِ محلی و ادامهٔ پایش تا ۳۰ دقیقه."""
     from tenant import get_bot_row
     row = await get_bot_row(bot)
     if not row:
@@ -800,6 +801,16 @@ async def apu_cancel(cb: CallbackQuery, bot: Bot):
         if not ch or ch.user_telegram_id != cb.from_user.id:
             return await cb.answer("این فاکتور پیدا نشد.", show_alert=True)
         if ch.status == "paid":
+            return await cb.answer("این فاکتور قبلاً پرداخت شده و قابلِ لغو نیست.", show_alert=True)
+    # === PATCH_APAY_REMOTE_CANCEL_V1 === اول سمتِ آپی هم لغو کن تا واریزِ بعدی (مثلاً کارت‌به‌کارتِ عادیِ هم‌مبلغ)
+    # به این فاکتور تطبیق نخورد و کیف پول بی‌دلیل شارژ نشود. اگر آپی بگوید پرداخت شده بود، همان‌جا تسویه می‌شود.
+    remote = await AP.cancel_remote(row.id, oid)
+    if remote == "paid":
+        return await cb.answer("✅ پرداختت قبلاً تأیید شده بود و کیف پولت شارژ شد.", show_alert=True)
+    async with Session() as s:
+        ch = await s.scalar(select(ApayCharge).where(
+            ApayCharge.bot_id == row.id, ApayCharge.order_id == oid))
+        if not ch or ch.status == "paid":
             return await cb.answer("این فاکتور قبلاً پرداخت شده و قابلِ لغو نیست.", show_alert=True)
         ch.status = "cancelled"
         ask_chat, ask_msg, inv_chat, inv_msg = ch.admin_ask_chat, ch.admin_ask_msg, ch.chat_id, ch.msg_id
@@ -818,8 +829,10 @@ async def apu_cancel(cb: CallbackQuery, bot: Bot):
             logger.debug("apay: دکمه‌های پیام اصلی فاکتور برداشته نشد")
     from tenant import inline_back_kb
     await cb.message.answer(
-        "❌ فاکتور لغو شد.\n\nاگر قبل از لغو واریز کرده بودی نگران نباش؛ "
-        "به‌محضِ تأییدِ بانک کیف پولت خودکار شارژ می‌شود.",
+        ("❌ فاکتور لغو شد.\n\nاگر قبل از لغو واریز کرده بودی، رسیدت را برایِ پشتیبانی بفرست تا دستی شارژ شود."
+         if remote == "cancelled" else
+         "❌ فاکتور لغو شد.\n\nاگر قبل از لغو واریز کرده بودی نگران نباش؛ "
+         "به‌محضِ تأییدِ بانک کیف پولت خودکار شارژ می‌شود."),
         reply_markup=await inline_back_kb(row.id))
 
 

@@ -764,3 +764,147 @@ async def test_disabled_gateway_old_waiting_invoice_still_expires(db, monkeypatc
     await tenant.set_setting(5, "apay_enabled", "0")
     await AP.poll_pending()
     assert (await _balance(maker))[1] == "expired"
+
+
+# ═══ PATCH_APAY_REMOTE_CANCEL_V1 — لغو سمتِ خودِ آپی (مستندات: POST /payments/:id/cancel) ═══
+
+@pytest.fixture(autouse=True)
+def _default_remote_cancel_is_unreachable(monkeypatch):
+    async def _down(token, pid):
+        return 0, {"error": {"code": "network"}}
+    monkeypatch.setattr(AP, "cancel_payment", _down)
+
+
+@pytest.mark.asyncio
+async def test_cancel_remote_outcomes(db, monkeypatch):
+    maker, notified = db
+    seen = []
+
+    async def ok(token, pid):
+        seen.append((token, pid))
+        return 200, {"id": pid, "status": "cancelled"}
+    monkeypatch.setattr(AP, "cancel_payment", ok)
+    assert await AP.cancel_remote(5, "bsabc") == "cancelled" and seen == [("apay_testtoken", "pay_1")]
+    assert await AP.cancel_remote(5, "nope") == "error"
+
+    async def paid(token, pid):
+        return 409, {"error": {"code": "invoice_not_payable"}}
+    monkeypatch.setattr(AP, "cancel_payment", paid)
+
+    async def _v(token, pid):
+        return _verify_resp()
+    monkeypatch.setattr(AP, "verify_payment", _v)
+    assert await AP.cancel_remote(5, "bsabc") == "paid"                 # آپی: قبلاً پرداخت شده ⇒ تسویه
+    assert await _balance(maker) == (50_000, "paid", 1)
+
+
+@pytest.mark.asyncio
+async def test_cancel_remote_other_failures_fall_back_to_error(db, monkeypatch):
+    maker, _n = db
+
+    async def boom(token, pid):
+        return 429, {"error": {"code": "rate_limited"}}
+    monkeypatch.setattr(AP, "cancel_payment", boom)
+    assert await AP.cancel_remote(5, "bsabc") == "error"
+    async with maker() as s:
+        ch = await s.scalar(select(models.ApayCharge))
+        ch.payment_id = None
+        await s.commit()
+    assert await AP.cancel_remote(5, "bsabc") == "error"
+
+
+@pytest.mark.asyncio
+async def test_user_cancel_cancels_at_apay_and_changes_the_message(db, monkeypatch):
+    maker, _n = db
+    from types import SimpleNamespace as NS
+    AA = _patch_admin(monkeypatch, maker)
+    called = []
+
+    async def ok(token, pid):
+        called.append(pid)
+        return 200, {"status": "cancelled"}
+    monkeypatch.setattr(AP, "cancel_payment", ok)
+
+    row = await _row(maker)
+
+    async def gbr(bot):
+        return row
+
+    async def ibk(bot_id):
+        return None
+
+    async def noop(*a, **k):
+        return None
+    monkeypatch.setattr(tenant, "get_bot_row", gbr)
+    monkeypatch.setattr(tenant, "inline_back_kb", ibk)
+    monkeypatch.setattr(AP, "_drop_admin_ask", noop)
+    said = []
+
+    async def say(t, **k):
+        said.append(t)
+    cb = NS(data="apu:cancel:bsabc", from_user=NS(id=777), answer=noop,
+            message=NS(message_id=9, answer=say, edit_reply_markup=noop))
+    await AA.apu_cancel(cb, NS())
+    assert called == ["pay_1"] and (await _balance(maker))[1] == "cancelled"
+    assert said and "رسیدت را برایِ پشتیبانی" in said[0]
+
+
+@pytest.mark.asyncio
+async def test_user_cancel_after_apay_already_paid_credits_instead(db, monkeypatch):
+    maker, notified = db
+    from types import SimpleNamespace as NS
+    AA = _patch_admin(monkeypatch, maker)
+
+    async def paid(token, pid):
+        return 409, {"error": {"code": "invoice_not_payable"}}
+
+    async def _v(token, pid):
+        return _verify_resp()
+    monkeypatch.setattr(AP, "cancel_payment", paid)
+    monkeypatch.setattr(AP, "verify_payment", _v)
+
+    row = await _row(maker)
+
+    async def gbr(bot):
+        return row
+
+    async def noop(*a, **k):
+        return None
+    monkeypatch.setattr(tenant, "get_bot_row", gbr)
+    alerts = []
+
+    async def ans(t="", show_alert=False):
+        alerts.append(t)
+    cb = NS(data="apu:cancel:bsabc", from_user=NS(id=777), answer=ans,
+            message=NS(message_id=9, answer=noop, edit_reply_markup=noop))
+    await AA.apu_cancel(cb, NS())
+    assert await _balance(maker) == (50_000, "paid", 1) and any("شارژ شد" in a for a in alerts)
+
+
+@pytest.mark.asyncio
+async def test_unreachable_apay_keeps_old_local_cancel_behaviour(db, monkeypatch):
+    maker, _n = db
+    from types import SimpleNamespace as NS
+    AA = _patch_admin(monkeypatch, maker)
+
+    row = await _row(maker)
+
+    async def gbr(bot):
+        return row
+
+    async def ibk(bot_id):
+        return None
+
+    async def noop(*a, **k):
+        return None
+    monkeypatch.setattr(tenant, "get_bot_row", gbr)
+    monkeypatch.setattr(tenant, "inline_back_kb", ibk)
+    monkeypatch.setattr(AP, "_drop_admin_ask", noop)
+    said = []
+
+    async def say(t, **k):
+        said.append(t)
+    cb = NS(data="apu:cancel:bsabc", from_user=NS(id=777), answer=noop,
+            message=NS(message_id=9, answer=say, edit_reply_markup=noop))
+    await AA.apu_cancel(cb, NS())
+    assert (await _balance(maker))[1] == "cancelled" and "نگران نباش" in said[0]
