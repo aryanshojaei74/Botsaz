@@ -274,6 +274,7 @@ FIELDS = {
     "panel_yar": "🗂 پنل‌یار (مدیریتِ پنل‌هایِ VPN)",  # === PATCH_PANEL_YAR_V1 ===
     "funstat": "🔎 Fun Stat (جست‌وجویِ آیدی/یوزرنیم)",  # === PATCH_FUNSTAT_BOT_V1 ===
     "escrow_bot": "🤝 ربات واسطه‌گری (معامله با واسطه)",  # === PATCH_ESCROW_BOT_KIND_V1 ===
+    "giveaway": "🎰 ربات قرعه‌کشی (جذب ممبر و جایزه)",  # === PATCH_GIVEAWAY_BOT_V1 ===
 }
 
 # زمینه‌های فعال (قابل انتخاب توسط کاربر). بقیه «به‌زودی».
@@ -306,7 +307,7 @@ FIELDS["partner"] = "🤝 ربات همکار"
 # زمینه ساخته شده‌اند دست‌نخورده کار می‌کنند (FIELDS ملاکِ نمایشِ نامه، نه
 # ACTIVE_FIELDS) و مالکشان می‌تواند از «🔄 تغییر نوع ربات» به یکی از سه
 # زمینهٔ فعال سوییچ کند.
-ACTIVE_FIELDS = {"vpn_sales", "virtual_service", "ad_bot", "funstat", "escrow_bot"}  # PATCH_FUNSTAT_BOT_V1 / PATCH_ESCROW_BOT_KIND_V1
+ACTIVE_FIELDS = {"vpn_sales", "virtual_service", "ad_bot", "funstat", "escrow_bot", "giveaway"}  # PATCH_FUNSTAT_BOT_V1 / PATCH_ESCROW_BOT_KIND_V1
 
 # قیمت پلن‌ها به تومان (بعداً از تنظیمات قابل ویرایش می‌شود)
 PLAN_PRICE = {Plan.GROWTH.value: 5_000_000, Plan.PRO.value: 15_000_000}
@@ -651,7 +652,20 @@ ESCROW_BOT_TEMPLATE_PITCH = (
     "💡 نیازمندِ پلنِ رشد/حرفه‌ای و اتصالِ یک اکانتِ تلگرامیِ واسط است."
 )
 
+# === PATCH_GIVEAWAY_BOT_V1 ===
+GIVEAWAY_TEMPLATE_PITCH = (
+    "🎰 <b>ربات قرعه‌کشی</b> — جذبِ ممبر با جایزه، حرفه‌ای و ضدِ فیک\n\n"
+    "• 🏆 چند برنده با جایزهٔ جدا (متن، عکس، ویدیو، فایل، کانفیگ یا شارژ خودکارِ کیف‌پول)\n"
+    "• 📢 عضویتِ اجباریِ کانال + حذفِ خودکارِ کسانی که قبل از قرعه از کانال لفت دادند\n"
+    "• 🧮 سؤالِ ریاضیِ ضدِ فیک و ☎️ تأییدِ شمارهٔ ایرانی (اختیاری)\n"
+    "• 👥 لینکِ دعوتِ اختصاصی: هر دعوتِ موفق = شانسِ بیشتر\n"
+    "• 📣 اعلان و نتیجه در گروه/کانال، دستورهایِ داخلِ گروه، پایانِ خودکار با زمان‌سنج\n"
+    "• 🪪 اعلانِ عمومیِ برندگان با شناسهٔ ناشناس + خروجیِ CSV\n\n"
+    "💡 همهٔ صفحه‌ها با ادیتِ درجا و دکمهٔ بازگشت."
+)
+
 FIELD_PITCH = {
+    "giveaway": GIVEAWAY_TEMPLATE_PITCH,  # PATCH_GIVEAWAY_BOT_V1
     "escrow_bot": ESCROW_BOT_TEMPLATE_PITCH,  # PATCH_ESCROW_BOT_KIND_V1
     "funstat": FUNSTAT_TEMPLATE_PITCH,  # PATCH_FUNSTAT_BOT_V1
     "vpn_sales": VPN_TEMPLATE_PITCH,
@@ -3898,6 +3912,19 @@ def _action_kb_base(field: str = "vpn_sales") -> InlineKeyboardMarkup:
         b.button(text="🧩 بعداً تنظیم می‌کنم", callback_data="act:skip")
         b.adjust(1)
         return b.as_markup()
+    # === PATCH_GIVEAWAY_BOT_V1 ===
+    if field == "giveaway":
+        b.button(text="🎰 قرعه‌کشی‌هایِ فعال (شرکت در قرعه‌کشی)", callback_data="act:giveaway", style=ButtonStyle.SUCCESS)
+        b.button(text="🏆 نتایجِ قرعه‌کشی‌ها", callback_data="act:giveaway_results", style=ButtonStyle.PRIMARY)
+        b.button(text="👤 مشخصات کاربری", callback_data="act:profile")
+        b.button(text="🎫 ثبت تیکت", callback_data="act:ticket")
+        b.button(text="👥 زیرمجموعه‌گیری", callback_data="act:referral")
+        b.button(text="💰 کیف پول (جایزهٔ شارژی)", callback_data="act:wallet")
+        b.button(text="🗂 زیرمنو (دکمه‌های بیشتر)", callback_data="act:submenu")
+        b.button(text="📝 نمایش متن/پیام آزاد", callback_data="act:skip")
+        b.button(text="🧩 بعداً تنظیم می‌کنم", callback_data="act:skip")
+        b.adjust(1)
+        return b.as_markup()
     # === PATCH_FUNSTAT_BOT_V1 ===
     if field == "funstat":
         b.button(text="🔎 جست‌وجویِ Fun Stat (آیدی ↔ یوزرنیم)", callback_data="act:funstat_search",
@@ -3987,6 +4014,8 @@ ACTION_TITLE = {
     "show_shop": "نمایش فروشگاه", "slideshow": "اسلایدشو چندرسانه‌ای",
     "top_customers": "نفرات برتر",
     "funstat_search": "🔎 جست‌وجویِ Fun Stat",  # PATCH_FUNSTAT_BOT_V1
+    "giveaway": "🎰 قرعه‌کشی‌هایِ فعال",  # PATCH_GIVEAWAY_BOT_V1
+    "giveaway_results": "🏆 نتایجِ قرعه‌کشی‌ها",  # PATCH_GIVEAWAY_BOT_V1
     "escrow": "🤝 معامله با واسطه (واسطه‌گری)",  # PATCH_ESCROW_BOT_KIND_V1
     "web_app": "🌐 مینی‌اپ (باز کردن لینک به‌صورت وب‌اپ)",
     # خدمات مجازی تلگرام
@@ -5432,6 +5461,12 @@ async def show_pitch(cb: CallbackQuery, state: FSMContext):
         free_note = (
             "\n\n💡 <b>پلن پایه (رایگان):</b> ربات ساخته می‌شود؛ کیف پول، تیکت و پنل مدیریت فعال است.\n"
             "🔒 <b>واسطه‌گریِ خودکار</b> (ساختِ گروهِ معامله با اکانتِ واسط) در پلن رشد/حرفه‌ای باز می‌شود."
+        )
+    elif field == "giveaway":
+        # === PATCH_GIVEAWAY_BOT_V1 ===
+        free_note = (
+            "\n\n💡 <b>همهٔ پلن‌ها:</b> ساخت و برگزاریِ قرعه‌کشی با سؤالِ ریاضیِ ضدِ فیک، عضویتِ اجباری، "
+            "لینکِ دعوت، اعلان به گروه/کانال و تحویلِ خودکارِ جایزه — از همین حالا فعال است."
         )
     elif field == "funstat":
         # === PATCH_FUNSTAT_BOT_V1 ===

@@ -257,6 +257,8 @@ _include(vs_pay_router)  # === PATCH_VS_PAY_V1 ===
 _include(wdr_router)  # === PATCH_WRONG_DELETE_REFUND_V1 === تأییدِ ادمین برایِ عودتِ حذفِ اشتباهِ سرویس
 _include(community_router, "community_mgmt")  # === PATCH_COMMUNITY_MGMT_V1 ===
 _include(funstat_bot_router, "funstat")  # === PATCH_FUNSTAT_BOT_V1 ===
+from tenant.bots.giveaway import giveaway_router  # === PATCH_GIVEAWAY_BOT_V1 ===
+_include(giveaway_router, "giveaway")
 tenant_router.include_router(slideshow_router)
 tenant_router.include_router(miniapp_admin_router)  # === PATCH_MINIAPP_V1 ===
 from tenant.shared.miniapp_wheel import wheel_admin_router  # PATCH_MINIAPP_WHEEL_V1
@@ -4875,6 +4877,7 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
     # === PATCH_MINIAPP_VSERVICES_V1 ===
     vsvc_action = None
     pubot_target_id = None  # === PATCH_PARTNER_REACTIVATION_LINK_V1 ===
+    gw_payload = None       # === PATCH_GIVEAWAY_BOT_V1 ===
     if command.args:
         param = command.args.strip()
         if param.startswith("mbuy_"):
@@ -4911,6 +4914,8 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
             ref_code = param[4:]
         elif param.startswith("gate_"):
             gate_code = param[5:]
+        elif param.startswith("gw_"):
+            gw_payload = param      # === PATCH_GIVEAWAY_BOT_V1 === t.me/<bot>?start=gw_<id>[_<inviter>]
         elif param.startswith("prod_"):
             try:
                 prod_id = int(param[5:])
@@ -5179,6 +5184,7 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
                 await pu_bot_detail(_FakeCb(msg, f"pu:bot:{pubot_target_id}"), bot)
             except Exception:
                 logger.exception("بازکردنِ صفحهٔ ربات همکار از دیپ‌لینک ناموفق بود")
+        await _giveaway_start_hook(msg, bot, row, gw_payload, state)   # === PATCH_GIVEAWAY_BOT_V1 ===
         return
     kb = await main_kb_or_remove(row.id, row.owner_id, msg.from_user.id)
     if msg.from_user.id == row.owner_id:
@@ -5253,6 +5259,7 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
             await pu_bot_detail(_FakeCb(msg, f"pu:bot:{pubot_target_id}"), bot)
         except Exception:
             logger.exception("بازکردنِ صفحهٔ ربات همکار از دیپ‌لینک ناموفق بود")
+    await _giveaway_start_hook(msg, bot, row, gw_payload, state)   # === PATCH_GIVEAWAY_BOT_V1 ===
 
 
 # === PATCH_FIX_MISSING_PACK_BUY_HEADER_V1 ===
@@ -6288,6 +6295,12 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
     elif action == "track_order":
         # === PATCH_ORDER_TRACKING_V1 ===
         await track_order_ask(msg, state, bot_id)
+    elif action in ("giveaway", "giveaway_results"):
+        # === PATCH_GIVEAWAY_BOT_V1 ===
+        from tenant.bots.giveaway.user import show_list as _gw_list, show_results_list as _gw_res
+        _row_gw = await get_bot_row(bot)
+        if _row_gw:
+            await (_gw_list if action == "giveaway" else _gw_res)(msg, bot, _row_gw, msg.from_user.id)
     elif action == "funstat_search":
         # === PATCH_FUNSTAT_BOT_V1 ===
         from tenant.bots.funstat.handlers import show_search as _fsb_show
@@ -6514,7 +6527,7 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
     # نوبت به هندلرهایِ واقعیِ community.py برسد.
     if msg.chat.type != "private":
         row_chk = await get_bot_row(bot)
-        if row_chk and row_chk.field == "community_mgmt":
+        if row_chk and row_chk.field in ("community_mgmt", "giveaway"):   # PATCH_GIVEAWAY_BOT_V1: دستورهایِ قرعه‌کشیِ گروه
             raise SkipHandler
         # === PATCH_SMM_AI_GROUP_SKIP_V2 ===
         # پیام گروه نباید توسط هندلر عمومی کیبورد خصوصی مصرف شود؛ در غیر این
@@ -14466,6 +14479,11 @@ def _thb_back_row(mb) -> list:
 # (برچسبِ نمایشی, پیامِ تأییدِ کوتاه بعد از فعال‌سازی, بخش‌های مرتبط — None یعنی همه‌جا)
 _SIMPLE_ACTIONS: dict[str, tuple[str, str, frozenset | None]] = {
     # === PATCH_FUNSTAT_BOT_V1 ===
+    # === PATCH_GIVEAWAY_BOT_V1 ===
+    "giveaway":         ("🎰 قرعه‌کشی‌هایِ فعال", "این دکمه حالا قرعه‌کشی‌هایِ فعال را با دکمهٔ شرکت نشان می‌دهد.",
+                         frozenset({"giveaway"})),
+    "giveaway_results": ("🏆 نتایجِ قرعه‌کشی‌ها", "این دکمه حالا نتایجِ قرعه‌کشی‌هایِ پایان‌یافته را نشان می‌دهد.",
+                         frozenset({"giveaway"})),
     "funstat_search": ("🔎 جست‌وجویِ Fun Stat",
                        "این دکمه حالا از کاربر @یوزرنیم یا آیدیِ عددی می‌گیرد و اطلاعاتِ عمومیِ حساب را نشان می‌دهد.",
                        frozenset({"funstat"})),
@@ -34126,3 +34144,17 @@ tenant_router.callback_query.outer_middleware._middlewares.insert(0, _addonly_mw
 tenant_router.message.outer_middleware._middlewares.insert(0, _addonly_mw)
 tenant_router.callback_query.middleware(_staff_section_mw)
 tenant_router.message.middleware(_staff_section_mw)
+
+
+# === PATCH_GIVEAWAY_BOT_V1 ===
+async def _giveaway_start_hook(msg, bot, row, gw_payload, state) -> None:
+    """بعد از منویِ /start: دیپ‌لینکِ gw_… ⇒ کارتِ همان قرعه‌کشی؛ در رباتِ field=giveaway بدونِ payload هم
+    (اگر تنظیمِ gw_start_direct روشن باشد) قرعه‌کشی(های) فعال را نشان می‌دهد. هرگز /start را خراب نمی‌کند."""
+    try:
+        if not gw_payload:
+            if row.field != "giveaway" or (await get_setting(row.id, "gw_start_direct", "1")) != "1":
+                return
+        from tenant.bots.giveaway.user import on_start as _gw_on_start
+        await _gw_on_start(msg, bot, row, gw_payload, state)
+    except Exception:
+        logger.exception("giveaway start hook failed")

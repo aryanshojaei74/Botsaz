@@ -37,6 +37,7 @@ from tenant.shared.trial_cleanup import trial_cleanup_loop as _trial_cleanup_loo
 from tenant.shared.broadcast_runner import broadcast_loop as _broadcast_loop  # PATCH_BROADCAST_DURABLE_V1
 from tenant.shared.stock_alarm import stock_alarm_loop as _stock_alarm_loop  # PATCH_STOCK_ALARM_V1
 from tenant.bots.virtual_service.smm import vnum_recover_loop as _vnum_recover_loop  # PATCH_VNUM_RECOVER_V1
+from tenant.bots.giveaway.loop import giveaway_loop as _giveaway_loop  # PATCH_GIVEAWAY_BOT_V1
 
 # === PATCH_TRAFFIC_OUT_CLEANUP_V1 ===
 # همان چرخه، این‌بار برایِ سرویس‌هایِ پولی‌ای که حجمشان تمام شده.
@@ -148,6 +149,7 @@ async def _worker_startup():
         _nft_sources_loop(),
         # === PATCH_BROADCAST_DURABLE_V1 === ادامهٔ ارسال‌هایِ همگانیِ قطع‌شده بعد از ری‌استارت
         _broadcast_loop(),
+        _giveaway_loop(),   # PATCH_GIVEAWAY_BOT_V1: پایانِ خودکارِ قرعه‌کشی‌ها + شمارندهٔ اعلان‌ها
     ):
         mt.spawn(_coro)
 

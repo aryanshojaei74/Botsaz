@@ -3881,3 +3881,96 @@ class PlatformUserDiscount(Base):
     # درصدِ جداگانه برایِ هر پلن، مثل «growth:13,pro:20»؛ اگر پر باشد بر percent/plans می‌چربد
     plan_percents: Mapped[str | None] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+# === PATCH_GIVEAWAY_BOT_V1 === نوعِ ربات «🎰 قرعه‌کشی»
+class Giveaway(Base):
+    """یک قرعه‌کشی. status: draft | active | ended | cancelled."""
+    __tablename__ = "giveaways"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    title: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str | None] = mapped_column(Text)
+    winners_count: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(12), default="active", index=True)
+    require_phone: Mapped[bool] = mapped_column(Boolean, default=False)       # شمارهٔ ایرانیِ اجباری (+98)
+    captcha: Mapped[bool] = mapped_column(Boolean, default=True)              # سؤالِ ریاضی (ضدِ فیک)
+    ref_bonus: Mapped[int] = mapped_column(Integer, default=1)                # شانسِ اضافه برایِ هر دعوتِ موفق (۰ = خاموش)
+    ref_max: Mapped[int] = mapped_column(Integer, default=0)                  # سقفِ شانسِ اضافه (۰ = نامحدود)
+    hide_winners: Mapped[bool] = mapped_column(Boolean, default=True)         # اعلانِ عمومی با شناسهٔ ناشناس
+    notify_all: Mapped[bool] = mapped_column(Boolean, default=True)           # اطلاعیهٔ شروع/نتیجه برایِ همهٔ کاربران
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)    # پایانِ خودکار (UTC)
+    created_by: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime)
+    seed_note: Mapped[str | None] = mapped_column(String(80))                 # برایِ بازبینی: چند نفر/چند شانس موقعِ قرعه
+
+
+class GiveawayPrize(Base):
+    """جایزهٔ رتبهٔ rank. kind: text|photo|video|document|animation|audio|voice|wallet|title (فقط عنوان، تحویلِ دستی)."""
+    __tablename__ = "giveaway_prizes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    giveaway_id: Mapped[int] = mapped_column(ForeignKey("giveaways.id"), index=True)
+    rank: Mapped[int] = mapped_column(Integer, default=1)
+    title: Mapped[str] = mapped_column(String(200))
+    kind: Mapped[str] = mapped_column(String(12), default="title")
+    file_id: Mapped[str | None] = mapped_column(String(300))
+    text: Mapped[str | None] = mapped_column(Text)
+    amount: Mapped[int] = mapped_column(Integer, default=0)                   # kind=wallet: تومان
+
+
+class GiveawayEntry(Base):
+    __tablename__ = "giveaway_entries"
+    __table_args__ = (UniqueConstraint("giveaway_id", "user_tg", name="uq_gw_entry_user"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    giveaway_id: Mapped[int] = mapped_column(ForeignKey("giveaways.id"), index=True)
+    user_tg: Mapped[int] = mapped_column(BigInteger, index=True)
+    name: Mapped[str | None] = mapped_column(String(120))
+    username: Mapped[str | None] = mapped_column(String(64))
+    phone: Mapped[str | None] = mapped_column(String(20), index=True)
+    invited_by: Mapped[int | None] = mapped_column(BigInteger, index=True)    # تلگرام‌آیدیِ دعوت‌کننده
+    bonus: Mapped[int] = mapped_column(Integer, default=0)                    # شانسِ اضافه (از دعوت‌ها)
+    code: Mapped[str] = mapped_column(String(12), index=True)                 # شناسهٔ ناشناسِ اعلانِ عمومی
+    left: Mapped[bool] = mapped_column(Boolean, default=False)                # در کانالِ اجباری لفت داده (موقعِ قرعه)
+    joined_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class GiveawayWinner(Base):
+    __tablename__ = "giveaway_winners"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    giveaway_id: Mapped[int] = mapped_column(ForeignKey("giveaways.id"), index=True)
+    entry_id: Mapped[int] = mapped_column(ForeignKey("giveaway_entries.id"), index=True)
+    prize_id: Mapped[int | None] = mapped_column(ForeignKey("giveaway_prizes.id"))
+    rank: Mapped[int] = mapped_column(Integer, default=1)
+    delivered: Mapped[bool] = mapped_column(Boolean, default=False)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime)
+    note: Mapped[str | None] = mapped_column(String(200))
+
+
+class GiveawayChat(Base):
+    """مقصدِ اعلانِ قرعه‌کشی (گروه/کانال) + شناسهٔ پیامِ آخرین اعلان برایِ ادیتِ درجا."""
+    __tablename__ = "giveaway_chats"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    title: Mapped[str | None] = mapped_column(String(120))
+    kind: Mapped[str | None] = mapped_column(String(12))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class GiveawayPost(Base):
+    """پیامِ اعلانِ یک قرعه‌کشی در یک مقصد (برایِ ادیتِ شمارندهٔ شرکت‌کنندگان و نتیجه)."""
+    __tablename__ = "giveaway_posts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    giveaway_id: Mapped[int] = mapped_column(ForeignKey("giveaways.id"), index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    message_id: Mapped[int] = mapped_column(BigInteger)
+
+
+# ترتیب: فرزندها اول (FK) ⇒ Winner/Post/Prize/Entry بعد Giveaway
+TENANT_OWNED_MODELS += [GiveawayWinner, GiveawayPost, GiveawayPrize, GiveawayEntry, Giveaway, GiveawayChat]

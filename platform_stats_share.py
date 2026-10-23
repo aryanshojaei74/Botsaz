@@ -33,6 +33,7 @@ _FIELD_FA = {
     "vpn_sales": "فروش VPN",
     "funstat": "Fun Stat",
     "escrow_bot": "واسطه‌گری",   # PATCH_ESCROW_BOT_KIND_V1
+    "giveaway": "قرعه‌کشی",   # PATCH_GIVEAWAY_BOT_V1
     "virtual_service": "خدمات مجازی",
     "digital_shop": "فروشگاه دیجیتال",
     "booking": "نوبت‌دهی",
