@@ -2394,6 +2394,29 @@ def _webapp_url(b) -> str | None:
     return url
 
 
+# === PATCH_BUTTON_CHANNEL_LINK_V1 === (پشتیبانِ بات‌ساز) عملکردِ «لینک مستقیم به کانال/گروه/سایت»
+def normalize_link_url(raw: str) -> str | None:
+    """«@name» / «t.me/name» / «https://…» را به یک لینکِ https معتبر تبدیل می‌کند؛ نامعتبر ⇒ None."""
+    t = (raw or "").strip()
+    if t.startswith("@") and len(t) > 1 and re.fullmatch(r"@[A-Za-z0-9_]{4,64}", t):
+        t = "https://t.me/" + t[1:]
+    elif re.match(r"^(?:t\.me|telegram\.me)/", t, re.I):
+        t = "https://" + t
+    elif t.lower().startswith("http://"):
+        t = "https://" + t[len("http://"):]
+    return t if _is_valid_webapp_url(t) else None
+
+
+def _link_url(b) -> str | None:
+    if getattr(b, "action", None) != "channel_link" or not getattr(b, "config", None):
+        return None
+    try:
+        url = ((json.loads(b.config) or {}).get("link_url") or "").strip()
+    except Exception:
+        return None
+    return url if _is_valid_webapp_url(url) else None
+
+
 # === PATCH_REPLY_KEYBOARD_RESPECT_LAYOUT_V2 ===
 # نسخهٔ V1 هنوز یک ویتویِ عرض داشت و همان شکایت را کامل حل نمی‌کرد: ادمین
 # با «🔀 چیدمانِ سریع» سه دکمه را کنارِ هم می‌گذاشت، ابزار قبولش می‌کرد و در
@@ -2455,6 +2478,10 @@ def _ibtn_for(b, style):
         # دکمهٔ مینی‌اپ: به‌جای callback مستقیماً وب‌اپ باز می‌شود
         kw.pop("callback_data", None)
         kw["web_app"] = WebAppInfo(url=_wa)
+    _lu = _link_url(b)           # PATCH_BUTTON_CHANNEL_LINK_V1: در منویِ شیشه‌ای مستقیم به کانال/لینک می‌رود
+    if _lu:
+        kw.pop("callback_data", None)
+        kw["url"] = _lu
     if style:
         kw["style"] = style
     if getattr(b, "icon_emoji_id", None):
@@ -4591,6 +4618,7 @@ class HomeBtnFSM(StatesGroup):
     move_row = State()     # جابه‌جایی دکمه: انتخاب ردیف مقصد
     move_pos = State()     # جابه‌جایی دکمه: انتخاب موقعیت
     set_webapp_url = State()  # دریافت لینک مینی‌اپ (Web App) برای دکمه
+    set_link_url = State()    # PATCH_BUTTON_CHANNEL_LINK_V1 — لینکِ مستقیمِ کانال/گروه/سایت
     set_command = State()     # دریافت کامند سفارشی دکمه (مثلاً /wallet)
     exdisc_code = State()     # دریافت متنِ کد تخفیف اختصاصیِ دکمه
     exdisc_percent = State()  # دریافت درصدِ کد تخفیف اختصاصیِ دکمه
@@ -5946,7 +5974,7 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
         "buy_bundle",   # === PATCH_BUNDLE_BUTTON_V1 ===
         "buy_panel_market",   # === PATCH_PANEL_SHOP_ACTION_V1 ===
         "buy_metered",   # === PATCH_METERED_BTN_ACTION_V1 ===
-        "submenu", "web_app",
+        "submenu", "web_app", "channel_link",
         "wallet",
     }
     # اگر دکمه «اکشن» دارد، متنِ دکمه به‌صورت پیام جدا ارسال نمی‌شود؛ بلکه به‌عنوان
@@ -6443,6 +6471,20 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
     elif action == "vnum_shop_auto":  # === PATCH_VNUM_SHOP_SPLIT_V1 ===
         from tenant.bots.virtual_service.smm import show_vnum_shop_to_user
         await show_vnum_shop_to_user(bot, msg, bot_id, only="auto")
+    elif action == "channel_link":          # === PATCH_BUTTON_CHANNEL_LINK_V1 ===
+        # در منویِ کیبوردی دکمه فقط متن می‌فرستد؛ پس یک پیام با دکمهٔ لینکِ مستقیم می‌دهیم (یک لمسِ اضافه).
+        _lu = _link_url(btn)
+        if _lu:
+            rows = [[InlineKeyboardButton(text=f"🔗 {btn.label}", url=_lu, style=ButtonStyle.SUCCESS)]]
+            br = await inline_back_row(bot_id)
+            if br:
+                rows.append(br)
+            kb = InlineKeyboardMarkup(inline_keyboard=rows)
+            kb = await _attach_support(bot_id, kb, support_enabled, contact=support_contact, mb=btn)
+            await msg.answer((action_header or "برای رفتن روی دکمهٔ زیر بزن 👇"), reply_markup=kb)
+        else:
+            await msg.answer("ℹ️ لینکِ این دکمه هنوز تنظیم نشده است.",
+                             reply_markup=await inline_back_kb(bot_id))
     elif action == "web_app":
         _wa = _webapp_url(btn)
         if _wa:
@@ -14795,6 +14837,7 @@ def _thb_action_label(mb) -> str:
         "buy_bundle": "🧩 خرید ترکیبی (چند دسته/پنل)",  # === PATCH_BUNDLE_BUTTON_V1 ===
         "referral_gate": "دسترسیِ شرطی (گیت زیرمجموعه)",
         "web_app": "🌐 ورود به لینک دلخواه (وب‌اپ)",
+        "channel_link": "🔗 لینکِ مستقیم (کانال/گروه/سایت)",   # PATCH_BUTTON_CHANNEL_LINK_V1
         "buy_product": "🛍 اتصال مستقیم به یک محصول",
         # === PATCH_SMM_DIRECT_PRODUCT_BUTTON_V1 ===
         "smm_direct_product": "🎯 اتصال مستقیم به یک سرویسِ خدماتِ مجازی",
@@ -15122,6 +15165,11 @@ def _thb_kb_action(mb, bot_field: str = "", plan: str = "") -> InlineKeyboardMar
         rows.append([InlineKeyboardButton(text="↩️ حذف «نفرات برتر»", callback_data=f"thb:unsettopcust:{mb.id}", style=ButtonStyle.DANGER)])
     elif mb.action == "ticket":
         rows.append([InlineKeyboardButton(text="↩️ حذف «تیکت پشتیبانی»", callback_data=f"thb:unsetticket:{mb.id}", style=ButtonStyle.DANGER)])
+    elif mb.action == "channel_link":       # PATCH_BUTTON_CHANNEL_LINK_V1
+        rows.append([InlineKeyboardButton(text="🔗 تغییرِ لینک",
+                                          callback_data=f"thb:setlink:{mb.id}", style=ButtonStyle.PRIMARY)])
+        rows.append([InlineKeyboardButton(text="↩️ حذفِ «لینکِ مستقیم»",
+                                          callback_data=f"thb:unsetlink:{mb.id}", style=ButtonStyle.DANGER)])
     elif mb.action == "web_app":
         rows.append([InlineKeyboardButton(text="🔗 تغییر لینکِ دلخواه",
                                           callback_data=f"thb:setwebapp:{mb.id}", style=ButtonStyle.PRIMARY)])
@@ -15299,6 +15347,8 @@ def _thb_kb_action_pick(mb, bot_field: str = "", plan: str = "", category: str =
                                           callback_data=f"thb:settopcust:{mb.id}", style=ButtonStyle.PRIMARY)])
         rows.append([InlineKeyboardButton(text="🎫 تبدیل به «تیکت پشتیبانی»",
                                           callback_data=f"thb:setticket:{mb.id}", style=ButtonStyle.PRIMARY)])
+        rows.append([InlineKeyboardButton(text="📢 تبدیل به «لینکِ مستقیم» (کانال/گروه/سایت)",
+                                          callback_data=f"thb:setlink:{mb.id}", style=ButtonStyle.PRIMARY)])   # PATCH_BUTTON_CHANNEL_LINK_V1
         rows.append([InlineKeyboardButton(text="🌐 تبدیل به «ورود به لینک دلخواه» (وب‌اپ)",
                                           callback_data=f"thb:setwebapp:{mb.id}", style=ButtonStyle.PRIMARY)])
         for _akey, (_alabel, _confirm, _fields) in _SIMPLE_ACTIONS.items():
@@ -15415,6 +15465,8 @@ def _thb_text(mb, is_disabled: bool) -> str:
     if mb.action == "web_app":
         _wa = _webapp_url(mb)
         lines.append(f"🌐 لینک مینی‌اپ: {_wa or '⚠️ تنظیم نشده'}")
+    if mb.action == "channel_link":          # PATCH_BUTTON_CHANNEL_LINK_V1
+        lines.append(f"🔗 لینکِ مقصد: {_link_url(mb) or '⚠️ تنظیم نشده'}")
     # === PATCH_DICE_GAME_DIRECT_BTN_V1 ===
     if mb.action == "dice_game" and mb.config:
         try:
@@ -18985,6 +19037,105 @@ async def thb_set_webapp_url_save(msg: Message, bot: Bot, state: FSMContext):
         f"🌐 لینک: {url}\n\n"
         "کاربر با زدن این دکمه، صفحه به‌صورت وب‌اپ داخل تلگرام باز می‌شود.", parse_mode="HTML")
     await msg.answer(_thb_text(mb, is_disabled), reply_markup=_thb_kb(mb, is_disabled))
+
+
+@tenant_router.callback_query(F.data.startswith("thb:setlink:"))
+async def thb_set_link(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """PATCH_BUTTON_CHANNEL_LINK_V1 — تبدیلِ دکمه به «لینکِ مستقیم» (کانال/گروه/ربات/سایت) یا تغییرِ لینکش."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    mb_id = int(cb.data.split(":")[2])
+    async with Session() as s:
+        mb = await s.get(MainButton, mb_id)
+    if not mb or mb.bot_id != row.id or mb.action not in (None, "channel_link"):
+        await cb.answer("یافت نشد", show_alert=True)
+        return
+    await state.set_state(HomeBtnFSM.set_link_url)
+    await state.update_data(link_mb_id=mb_id)
+    cur = _link_url(mb)
+    await cb.message.answer(
+        "🔗 <b>لینکِ مستقیم</b>\n\n"
+        + (f"لینک فعلی: {cur}\n\n" if cur else "")
+        + "لینکِ کانال/گروه/ربات یا هر سایتی را بفرست؛ کاربر با زدنِ این دکمه مستقیم همان‌جا می‌رود.\n"
+        "قالب‌هایِ قابل‌قبول: <code>@mychannel</code> یا <code>t.me/mychannel</code> یا <code>https://t.me/+AbCdEf…</code> (لینکِ دعوت) "
+        "یا هر <code>https://…</code>.\n\n"
+        "ℹ️ در منویِ شیشه‌ای دکمه مستقیم باز می‌شود؛ در منویِ کیبوردی (دکمهٔ پایینِ چت) با یک پیامِ کوتاه و دکمهٔ لینک.",
+        reply_markup=cancel_kb(), parse_mode="HTML")
+    await cb.answer()
+
+
+@tenant_router.message(HomeBtnFSM.set_link_url, F.text)
+async def thb_set_link_url_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await get_bot_row(bot)
+    if not row or not await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id):
+        await state.clear()
+        return
+    data = await state.get_data()
+    mb_id = data.get("link_mb_id")
+    raw = (msg.text or "").strip()
+    if raw in ("❌ لغو", "❌ لغو / بازگشت"):
+        await state.clear()
+        kb = await main_kb_or_remove(row.id, row.owner_id, msg.from_user.id)
+        await msg.answer("لغو شد.", reply_markup=kb or ReplyKeyboardRemove())
+        return
+    url = normalize_link_url(raw)
+    if not url:
+        await msg.answer("❌ لینک نامعتبر است. مثل <code>@mychannel</code> یا <code>https://t.me/mychannel</code> بفرست "
+                         "(بدونِ فاصله و حروفِ فارسی در آدرس) یا «لغو» را بزن:", parse_mode="HTML")
+        return
+    async with Session() as s:
+        mb = await s.get(MainButton, mb_id) if mb_id else None
+        if not mb or mb.bot_id != row.id:
+            await state.clear()
+            kb = await main_kb_or_remove(row.id, row.owner_id, msg.from_user.id)
+            await msg.answer("دکمه یافت نشد.", reply_markup=kb or ReplyKeyboardRemove())
+            return
+        cfg = {}
+        if mb.config:
+            try:
+                cfg = json.loads(mb.config) or {}
+            except Exception:
+                cfg = {}
+        cfg["link_url"] = url
+        mb.config = json.dumps(cfg, ensure_ascii=False)
+        mb.action = "channel_link"
+        _lbl = mb.label
+        await s.commit()
+    await state.clear()
+    is_disabled = mb_id in await _disabled_btn_ids(row.id)
+    await msg.answer(f"✅ دکمهٔ «{_lbl}» حالا به این لینک می‌رود:\n{url}\n\n"
+                     "کاربرانِ منویِ شیشه‌ای با زدنِ دکمه مستقیم وارد می‌شوند؛ در منویِ کیبوردی یک پیام با دکمهٔ لینک می‌بینند.")
+    await msg.answer(_thb_text(mb, is_disabled), reply_markup=_thb_kb(mb, is_disabled))
+
+
+@tenant_router.callback_query(F.data.startswith("thb:unsetlink:"))
+async def thb_unset_link(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    mb_id = int(cb.data.split(":")[2])
+    async with Session() as s:
+        mb = await s.get(MainButton, mb_id)
+        if mb and mb.bot_id == row.id and mb.action == "channel_link":
+            mb.action = None
+            cfg = {}
+            if mb.config:
+                try:
+                    cfg = json.loads(mb.config) or {}
+                except Exception:
+                    cfg = {}
+            cfg.pop("link_url", None)
+            mb.config = json.dumps(cfg, ensure_ascii=False) if cfg else None
+            await s.commit()
+    async with Session() as s:
+        mb = await s.get(MainButton, mb_id)
+    is_dis = mb_id in await _disabled_btn_ids(row.id)
+    try:
+        await cb.message.edit_text(_thb_text(mb, is_dis), reply_markup=_thb_kb(mb, is_dis))
+    except Exception:
+        await cb.message.answer(_thb_text(mb, is_dis), reply_markup=_thb_kb(mb, is_dis))
+    await cb.answer("حذف شد")
 
 
 @tenant_router.callback_query(F.data.startswith("thb:unsetwebapp:"))
