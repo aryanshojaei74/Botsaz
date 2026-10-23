@@ -72,6 +72,19 @@ async def main(needle: str, probe: bool = False) -> int:
             print(f"  {t:<22} {n:>6}{note}")
         print(f"ریفیل دارد: {sum(1 for it in items if it.get('refill') is True)} | "
               f"لغو دارد: {sum(1 for it in items if it.get('cancel') is True)}")
+        # سرویس‌هایی که *این ربات* واقعاً فعال کرده و نوعشان Default نیست (اینها هنگامِ سفارش از پنل خطا می‌گیرند)
+        odd = {str(it.get("service") or it.get("id")): str(it.get("type")) for it in items
+               if str(it.get("type") or "default").lower() != "default"}
+        if odd:
+            from models import SmmService
+            async with Session() as s2:
+                mine = (await s2.scalars(select(SmmService).where(
+                    SmmService.bot_id == p.bot_id, SmmService.is_active == True,   # noqa: E712
+                    SmmService.service_id.in_(list(odd))))).all()
+            mine = [m for m in mine if m.panel_pk in (None, p.id)]
+            print(f"\nسرویس‌هایِ فعالِ این رباتِ غیر-Default: {len(mine)}")
+            for m in mine[:40]:
+                print(f"  • #{m.service_id} [{odd.get(str(m.service_id))}] {str(m.name)[:70]}")
         print("\nسه سرویسِ نمونه (نام):")
         for it in items[:3]:
             print("  •", str(it.get("name"))[:100])
