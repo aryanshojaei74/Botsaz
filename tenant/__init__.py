@@ -248,7 +248,12 @@ tenant_router.include_router(group_wallet_router)  # === PATCH_GROUP_WALLET_V1 =
 tenant_router.include_router(betting_router)  # === PATCH_GROUP_BETTING_V1 ===
 from tenant.shared.wager_games import wager_games_router  # === PATCH_WAGER_TENANT_V1 ===
 tenant_router.include_router(wager_games_router)  # === PATCH_WAGER_TENANT_V1 ===
-_include(smm_ai_router, "virtual_service")  # === PATCH_SMM_AI_ASSISTANT_V1 ===
+# === PATCH_SMM_AI_ALL_KINDS_V1 ===
+# «تنظیماتِ گروه» (group_wallet) و «سرویس‌ها و محصولات» در همهٔ انواعِ ربات هست و دکمه‌هایِ
+# «راه‌اندازی و تنظیمات هوش مصنوعی» (smmai:*) به این روتر می‌رسند. قبلاً فقط در پروسهٔ
+# virtual_service ثبت می‌شد؛ در سرویس‌هایِ vpn/digital_shop/community_mgmt/booking دکمه‌ها
+# بی‌صدا مرده بودند (callback هیچ‌هندلری نداشت) — پس همیشه ثبت می‌شود.
+tenant_router.include_router(smm_ai_router)  # === PATCH_SMM_AI_ASSISTANT_V1 ===
 tenant_router.include_router(backup_router)  # === PATCH_BOT_BACKUP_V1 ===
 tenant_router.include_router(backup_full_router)  # === PATCH_BACKUP_FULL_V1 ===
 _include(svc_cleanup_router, "vpn")  # === PATCH_SVC_CLEANUP_V1 === فقط پروسه‌هایِ VPN
