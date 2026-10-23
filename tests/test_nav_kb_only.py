@@ -105,3 +105,22 @@ def test_plan_table_uses_owner_title_for_user_count_label():
     assert "یک کاربر" in row[2].text and "تک‌کاربره" not in row[2].text
     row2 = VU._plan_table_row(type("P", (), dict(id=2, volume_gb=400, days=30, price=1, limit_ip=2, title="پلن ۴۰۰"))())
     assert "2 کاربره" in row2[2].text
+
+
+def test_plan_table_row_can_hide_volume_and_show_only_users():
+    P = lambda **k: type("P", (), dict(id=1, volume_gb=400, days=30, price=85000, limit_ip=1, title="یک کاربر", **k))()
+    full = VU._plan_table_row(P())
+    only = VU._plan_table_row(P(), True, False)
+    assert "400GB" in full[2].text and "400GB" not in only[2].text and only[2].text == "یک کاربر"
+    # بدونِ تعدادِ کاربر (limit_ip=0) حجم نشان داده می‌شود تا خانه خالی نماند
+    nolimit = type("P", (), dict(id=2, volume_gb=50, days=30, price=1, limit_ip=0, title="x"))()
+    assert "50GB" in VU._plan_table_row(nolimit, True, False)[2].text
+    # قیمت و زمان دست‌نخورده
+    assert only[0].text and only[1].text == "30 روز"
+
+
+def test_admin_has_volume_toggle_handler_and_setting_key():
+    import inspect
+    assert hasattr(VA, "vpn_plan_volume_toggle")
+    src = inspect.getsource(VA.vpn_plans)
+    assert "tvpn:planvol:" in src and "plan_vol_" in src

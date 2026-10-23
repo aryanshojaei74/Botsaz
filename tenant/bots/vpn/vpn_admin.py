@@ -4007,6 +4007,12 @@ async def vpn_plans(cb: CallbackQuery, bot: Bot):
                 text="👥 نمایشِ تعدادِ کاربر در جدول: " + ("✅ روشن" if _pu else "⛔️ خاموش"),
                 callback_data=f"tvpn:planusers:{key}",
                 style=ButtonStyle.SUCCESS if _pu else ButtonStyle.DANGER)])
+            if _pu:       # PATCH_PLAN_TABLE_VOLUME_TOGGLE_V1 — فقط وقتی «کاربر» نشان داده می‌شود می‌شود حجم را برداشت
+                _pvol = (await _gset(row.id, f"plan_vol_{key}", "1")) != "0"
+                rows_kb.append([InlineKeyboardButton(
+                    text="🔋 نمایشِ حجم در جدول: " + ("✅ روشن" if _pvol else "⛔️ خاموش (فقط کاربر | زمان | قیمت)"),
+                    callback_data=f"tvpn:planvol:{key}",
+                    style=ButtonStyle.SUCCESS if _pvol else ButtonStyle.DANGER)])
     else:
         rows_kb.append([InlineKeyboardButton(text="🔒 نمایشِ جدولیِ پلن‌ها (ویژهٔ حرفه‌ای)",
                                              callback_data=f"tvpn:planview:{key}")])
@@ -4056,6 +4062,23 @@ async def vpn_plan_users_toggle(cb: CallbackQuery, bot: Bot):
     from tenant import get_setting as _gset, set_setting as _sset
     cur = (await _gset(row.id, f"plan_users_{key}", "1")) != "0"
     await _sset(row.id, f"plan_users_{key}", "0" if cur else "1")
+    await vpn_plans(cb.model_copy(update={"data": f"tvpn:plans:{key}"}), bot)
+
+
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:planvol:"))
+async def vpn_plan_volume_toggle(cb: CallbackQuery, bot: Bot):
+    """PATCH_PLAN_TABLE_VOLUME_TOGGLE_V1 — روشن/خاموش‌کردنِ ستونِ «حجم» در جدولِ پلن‌ها (هر پنل جدا)."""
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    from plans import has_feature as _hf, Feature as _Ft
+    if not _hf(row.plan, _Ft.PLAN_TABLE_VIEW):
+        await cb.answer("🔒 فقط در پلنِ حرفه‌ای فعال است.", show_alert=True)
+        return
+    key = cb.data.split(":", 2)[2]
+    from tenant import get_setting as _gset, set_setting as _sset
+    cur = (await _gset(row.id, f"plan_vol_{key}", "1")) != "0"
+    await _sset(row.id, f"plan_vol_{key}", "0" if cur else "1")
     await vpn_plans(cb.model_copy(update={"data": f"tvpn:plans:{key}"}), bot)
 
 

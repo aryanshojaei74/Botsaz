@@ -1792,12 +1792,15 @@ async def show_vpn_plans(bot: Bot, msg: Message, bot_id: int, state=None, panel_
     # ردیف به همان پلن می‌روند. پیش‌فرض «لیستی» = رفتارِ قبلی.
     _table_mode = False
     _tbl_users = True   # PATCH_PLAN_TABLE_USERS_TOGGLE_V1 — نمایشِ تعدادِ کاربر در جدول (پیش‌فرض روشن)
+    _tbl_vol = True     # PATCH_PLAN_TABLE_VOLUME_TOGGLE_V1
     try:
         from plans import has_feature as _hf, Feature as _Ft
         if _hf(_row_check.plan, _Ft.PLAN_TABLE_VIEW):
             from tenant import get_setting as _gset
             _table_mode = (await _gset(bot_id, f"plan_view_{cur_panel_key}", "list")) == "table"
             _tbl_users = (await _gset(bot_id, f"plan_users_{cur_panel_key}", "1")) != "0"
+            # === PATCH_PLAN_TABLE_VOLUME_TOGGLE_V1 === (ایلیا) ستونِ «حجم» را بشود خاموش کرد و فقط «کاربر | زمان | قیمت» دید
+            _tbl_vol = (await _gset(bot_id, f"plan_vol_{cur_panel_key}", "1")) != "0" or not _tbl_users
     except Exception:
         logger.exception("vpn: خواندنِ حالتِ نمایشِ پلن‌ها ناموفق بود")
     for cat in _order:
@@ -1808,7 +1811,8 @@ async def show_vpn_plans(bot: Bot, msg: Message, bot_id: int, state=None, panel_
             # === PATCH_PLAN_TABLE_VIEW_V3 === ترتیبِ چپ→راست: قیمت | زمان | حجم، و عنوان‌ها سبز
             rows.append([InlineKeyboardButton(text="💲 قیمت", callback_data="noop", style=ButtonStyle.SUCCESS),
                          InlineKeyboardButton(text="🕐 زمان", callback_data="noop", style=ButtonStyle.SUCCESS),
-                         InlineKeyboardButton(text="🔋 حجم", callback_data="noop", style=ButtonStyle.SUCCESS)])
+                         InlineKeyboardButton(text=("🔋 حجم" if _tbl_vol else "👥 کاربر"), callback_data="noop",
+                                              style=ButtonStyle.SUCCESS)])
         for p in _groups[cat]:
             # === PATCH_PERSIAN_DIGITS_RTL_V1 ===
             # ارقام به فارسی و جداکنندهٔ «/» به «،» تغییر کرد. دلیل: ترکیبِ
@@ -1871,7 +1875,10 @@ async def show_vpn_plans(bot: Bot, msg: Message, bot_id: int, state=None, panel_
                         _ul = title
                     # === PATCH_PLAN_TABLE_VIEW_V4 === نامحدود: «♾ تک‌کاربره» (نه فقط «تک‌کاربره» که
                     # معلوم نبود حجم چقدر است)؛ هنوز کوتاه و جا می‌شود.
-                    _vtxt = f"♾ {_ul}" if not _v else f"{_ul} · {_vtxt}"
+                    if not _tbl_vol:                      # PATCH_PLAN_TABLE_VOLUME_TOGGLE_V1: فقط تعدادِ کاربر
+                        _vtxt = _ul
+                    else:
+                        _vtxt = f"♾ {_ul}" if not _v else f"{_ul} · {_vtxt}"
                 _dtxt = "♾ بی‌انقضا" if not p.days else f"{p.days} روز"
                 _cbd = f"vbuy:{p.id}"
                 rows.append([
@@ -2007,7 +2014,7 @@ def _bundle_back_row(back_cb: str | None):
                                  style=ButtonStyle.DANGER)]
 
 
-def _plan_table_row(p, show_users: bool = True) -> list:
+def _plan_table_row(p, show_users: bool = True, show_volume: bool = True) -> list:
     """یک ردیفِ جدولِ پلن‌ها [قیمت | زمان | حجم] — برایِ صفحهٔ دسته‌هایِ خریدِ ترکیبی
     (PATCH_BUNDLE_TABLE_VIEW_V1). همان قالبِ جدولِ صفحهٔ پنل."""
     v = p.volume_gb
@@ -2021,7 +2028,10 @@ def _plan_table_row(p, show_users: bool = True) -> list:
         _t = (getattr(p, "title", "") or "").strip()      # PATCH_PLAN_TABLE_TITLE_LABEL_V1
         if "کاربر" in _t and len(_t) <= 18:
             ul = _t
-        vtxt = f"♾ {ul}" if not v else f"{ul} · {vtxt}"
+        if not show_volume:                         # PATCH_PLAN_TABLE_VOLUME_TOGGLE_V1
+            vtxt = ul
+        else:
+            vtxt = f"♾ {ul}" if not v else f"{ul} · {vtxt}"
     dtxt = "♾ بی‌انقضا" if not p.days else f"{p.days} روز"
     cbd = f"vbuy:{p.id}"
     st = ButtonStyle.SUCCESS
@@ -2062,7 +2072,7 @@ async def _render_bundle_bucket(bot: Bot, msg: Message, bot_id: int, plans: list
     # گزارش: ادمین «جدولی» را روشن کرده بود ولی کاربر از مسیرِ «خرید سرویس» (صفحهٔ دسته‌ها)
     # همچنان لیستی می‌دید؛ چون این صفحه به تنظیمِ نمایشِ پنل‌ها توجه نمی‌کرد. حالا اگر
     # *همهٔ* پنل‌هایِ پلن‌هایِ این دسته جدولی باشند (و پلن حرفه‌ای)، جدول نشان داده می‌شود.
-    _tbl, _tbl_users = False, True
+    _tbl, _tbl_users, _tbl_vol = False, True, True      # PATCH_PLAN_TABLE_VOLUME_TOGGLE_V1
     if matched_plans:
         try:
             from plans import has_feature as _hf, Feature as _Ft
@@ -2073,15 +2083,19 @@ async def _render_bundle_bucket(bot: Bot, msg: Message, bot_id: int, plans: list
                 _views = [(await _gset(bot_id, f"plan_view_{k}", "list")) == "table" for k in _pks]
                 _tbl = bool(_views) and all(_views)
                 _tbl_users = any([(await _gset(bot_id, f"plan_users_{k}", "1")) != "0" for k in _pks])
+                # PATCH_PLAN_TABLE_VOLUME_TOGGLE_V1: حجم فقط وقتی پنهان است که همهٔ پنل‌هایِ این دسته خاموشش کرده باشند
+                _tbl_vol = (any([(await _gset(bot_id, f"plan_vol_{k}", "1")) != "0" for k in _pks])
+                            or not _tbl_users)
         except Exception:
             logger.exception("vpn: خواندنِ حالتِ جدولیِ صفحهٔ دسته ناموفق بود")
     if _tbl:
         rows.append([InlineKeyboardButton(text="💲 قیمت", callback_data="noop", style=ButtonStyle.SUCCESS),
                      InlineKeyboardButton(text="🕐 زمان", callback_data="noop", style=ButtonStyle.SUCCESS),
-                     InlineKeyboardButton(text="🔋 حجم", callback_data="noop", style=ButtonStyle.SUCCESS)])
+                     InlineKeyboardButton(text=("🔋 حجم" if _tbl_vol else "👥 کاربر"), callback_data="noop",
+                                          style=ButtonStyle.SUCCESS)])
     for p in matched_plans:
         if _tbl:
-            rows.append(_plan_table_row(p, _tbl_users))
+            rows.append(_plan_table_row(p, _tbl_users, _tbl_vol))
             continue
         vol = "نامحدود" if p.volume_gb == 0 else f"{fa_digits(p.volume_gb)} گیگ"
         dur = "بی‌انقضا" if p.days == 0 else f"{fa_digits(p.days)} روز"
