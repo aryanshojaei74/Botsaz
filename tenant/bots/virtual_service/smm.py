@@ -12465,7 +12465,16 @@ async def gift_orders(cb: CallbackQuery, bot: Bot):
         waiting = (await s.scalars(select(GiftOrder).where(
             GiftOrder.bot_id == row.id, GiftOrder.status == "awaiting_stars")
             .order_by(GiftOrder.id).limit(8))).all()
+    async with Session() as s_pa:        # === PATCH_PENDING_LISTS_FIX_V1 === سفارش‌هایِ منتظرِ تأییدِ ادمین (هر نوع) با دکمهٔ تأیید/رد
+        pending_admin = (await s_pa.scalars(select(GiftOrder).where(
+            GiftOrder.bot_id == row.id, GiftOrder.status == "awaiting_admin")
+            .order_by(GiftOrder.id).limit(8))).all()
     lines = ["🧾 <b>سفارش‌هایِ گیفت</b>\n"]
+    if pending_admin:
+        lines.append(f"⏳ <b>در انتظارِ تأیید شما: {len(pending_admin)} سفارش</b>\n"
+                     + "\n".join(f"• {_gift_item_label(o)} → {_html_escape(str(o.dest_label or ''))} — "
+                                 f"{float(o.price_toman or 0):,.0f} تومان — 🔖 {o.tracking_code or '#' + str(o.id)}"
+                                 for o in pending_admin) + "\n")
     if waiting:
         lines.append(f"⏳ <b>منتظرِ موجودیِ استارزِ ربات: {len(waiting)} سفارش</b>\n"
                      "موجودیِ ربات را شارژ کن و برایِ هر سفارش «🔄 ارسال» را بزن؛ یا «❌ لغو» تا وجهِ مشتری برگردد.\n")
@@ -12479,17 +12488,18 @@ async def gift_orders(cb: CallbackQuery, bot: Bot):
         lines.append("هنوز سفارشی ثبت نشده.")
     for o in orders:
         # === PATCH_MANUAL_GIFT_V1 / PATCH_TON_SELL_V1 ===
-        if (o.gift_id or "").startswith("manual"):
-            item = "🔗 گیفتِ سفارشی"
-        elif (o.gift_id or "").startswith("tonsell_"):
-            item = f"💎 {(o.star_count or 0) / 100:g} TON"
-        else:
-            item = f"{o.gift_emoji or '🎁'} {o.star_count}⭐"
+        item = _gift_item_label(o)       # PATCH_PENDING_LISTS_FIX_V1
         # === PATCH_GIFT_QUANTITY_V1 ===
         qty_suffix = f" ×{o.quantity}" if (o.quantity or 1) > 1 else ""
-        lines.append(f"🔖 {o.tracking_code or '#' + str(o.id)} — {item}{qty_suffix} → {o.dest_label} "
+        lines.append(f"🔖 {o.tracking_code or '#' + str(o.id)} — {item}{qty_suffix} → {_html_escape(str(o.dest_label or ''))} "
                     f"— {status_label.get(o.status, o.status)}")
     rows = []
+    for _po in pending_admin:     # PATCH_PENDING_LISTS_FIX_V1
+        _pc = _po.tracking_code or f"#{_po.id}"
+        rows.append([InlineKeyboardButton(text=f"✅ تأیید {_pc}", callback_data=f"gift:lp:ok:{_po.id}:{page}",
+                                          style=ButtonStyle.SUCCESS),
+                     InlineKeyboardButton(text=f"❌ رد {_pc}", callback_data=f"gift:lp:no:{_po.id}:{page}",
+                                          style=ButtonStyle.DANGER)])
     for _w in waiting:   # PATCH_GIFT_WAITING_STARS_LIST_V1
         _wc = _w.tracking_code or f"#{_w.id}"
         rows.append([InlineKeyboardButton(text=f"🔄 ارسال {_wc}", callback_data=f"gift:lr:{_w.id}:{page}",
@@ -12528,6 +12538,56 @@ async def _gift_list_action(cb: CallbackQuery, bot: Bot, action_cb: str, handler
             await gift_orders(cb.model_copy(update={"data": f"gift:orders:{page}"}), bot)
         except Exception:
             logger.info("تازه‌کردنِ لیستِ سفارش‌هایِ گیفت پس از اقدام ممکن نشد", exc_info=True)
+
+
+def _gift_item_label(o) -> str:
+    """PATCH_PENDING_LISTS_FIX_V1 — برچسبِ کالایِ هر نوعِ سفارشِ گیفت/استارز/تون/ری‌اکشن/پریمیوم (قبلاً همه «🎁 N⭐» بود)."""
+    gid = (o.gift_id or "")
+    n = int(o.star_count or 0)
+    if gid.startswith("manual"):
+        return "🔗 گیفتِ سفارشی"
+    if gid.startswith("tonsell_"):
+        return f"💎 {n / 100:g} TON"
+    if gid.startswith("starsell_"):
+        return f"⭐ {n:,} استارز"
+    if gid.startswith("srx_"):
+        return f"⭐️ ری‌اکشنِ استارزی ×{n:,}"
+    if gid.startswith("premium_"):
+        return "👑 پریمیومِ تلگرام"
+    return f"{o.gift_emoji or '🎁'} {n}⭐"
+
+
+# تأیید/ردِ سفارشِ منتظرِ تأیید از داخلِ لیستِ سفارش‌ها؛ هر نوع به هندلرِ خودش وصل است و بعد لیست تازه می‌شود.
+_LP_ROUTES = {
+    ("starsell_", "ok"): ("star:done", "star_admin_done"), ("starsell_", "no"): ("star:reject", "star_admin_reject"),
+    ("tonsell_", "ok"): ("ton:done", "ton_order_done"), ("tonsell_", "no"): ("ton:refund", "ton_order_refund"),
+    ("srx_", "ok"): ("srx:ok", "srx_admin_done"), ("srx_", "no"): ("srx:no", "srx_admin_reject"),
+    ("", "ok"): ("gift:cardok", "gift_cardpay_approve"), ("", "no"): ("gift:cardno", "gift_cardpay_reject"),
+}
+
+
+@smm_router.callback_query(F.data.startswith("gift:lp:"))
+async def gift_list_pending_action(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    try:
+        _, _, act, oid_s, page_s = cb.data.split(":")
+        oid, page = int(oid_s), int(page_s)
+    except ValueError:
+        return await cb.answer()
+    async with Session() as s:
+        o = await s.get(GiftOrder, oid)
+    if not o or o.bot_id != row.id:
+        return await cb.answer("سفارش پیدا نشد.", show_alert=True)
+    gid = o.gift_id or ""
+    key = next((p for p in ("starsell_", "tonsell_", "srx_") if gid.startswith(p)), "")
+    cb_prefix, fn_name = _LP_ROUTES[(key, act)]
+    await globals()[fn_name](cb.model_copy(update={"data": f"{cb_prefix}:{oid}"}), bot)
+    try:
+        await gift_orders(cb.model_copy(update={"data": f"gift:orders:{page}"}), bot)
+    except Exception:
+        logger.info("تازه‌کردنِ لیستِ سفارش‌هایِ گیفت پس از تأیید/ردِ سفارش ممکن نشد", exc_info=True)
 
 
 @smm_router.callback_query(F.data.startswith("gift:lr:"))
@@ -16378,8 +16438,9 @@ async def ssl_orders(cb: CallbackQuery, bot: Bot):
         return
     rows = []
     lines_ = ["⭐ <b>سفارش‌هایِ در انتظارِ استارز</b>\n"]
-    for oid, qty, price, dest, trk in rows_data:
-        lines_.append(f"#{await order_no(GiftOrder, oid)} — {qty:,} ⭐ — {price:,.0f} تومان\n🎯 {dest}  🔖 {trk}")
+    for oid, qty, price, dest, trk, memo in rows_data:       # PATCH_PENDING_LISTS_FIX_V1: tuple شش‌تایی بود و پنج‌تایی باز می‌شد ⇒ هندلر می‌مرد
+        lines_.append(f"#{await order_no(GiftOrder, oid)} — {(qty or 0):,} ⭐ — {float(price or 0):,.0f} تومان\n🎯 {_html_escape(str(dest or ''))}  🔖 {trk}"
+                      + (f"\n📝 ممو: <code>{_html_escape(memo)}</code>" if memo else ""))
         rows.append([
             InlineKeyboardButton(text=f"✅ انجام شد #{await order_no(GiftOrder, oid)}", callback_data=f"star:done:{oid}", style=ButtonStyle.SUCCESS),
             InlineKeyboardButton(text=f"❌ رد #{await order_no(GiftOrder, oid)}", callback_data=f"star:reject:{oid}", style=ButtonStyle.DANGER),
@@ -17069,7 +17130,7 @@ async def ton_orders(cb: CallbackQuery, bot: Bot):
             GiftOrder.bot_id == row.id, GiftOrder.gift_id.like("tonsell_%"),
             GiftOrder.status == "awaiting_admin").order_by(GiftOrder.id.desc())
         orders = (await s.scalars(q.limit(per).offset(page * per))).all()
-        rows_data = [(o.id, o.star_count, o.price_toman, o.dest_label, o.tracking_code)
+        rows_data = [(o.id, o.star_count, o.price_toman, o.dest_label, o.tracking_code, o.dest_memo)   # PATCH_PENDING_LISTS_FIX_V1
                      for o in orders]
     if not rows_data:
         await cb.answer("سفارشِ در انتظاری نیست.", show_alert=True)
@@ -17476,8 +17537,8 @@ async def srx_orders_list(cb: CallbackQuery, bot: Bot):
     if not orders:
         lines.append("سفارشِ در انتظاری نیست.")
     for o in orders[start:end]:
-        lines.append(f"🔖 {o.tracking_code or '#' + str(o.id)} — {o.star_count:,}⭐️ — {o.dest_label} — {o.price_toman:,} تومان"
-                     + (" — 🕶 ناشناس" if o.anonymous else " — 👤 با نام"))
+        lines.append(f"🔖 {o.tracking_code or '#' + str(o.id)} — {(o.star_count or 0):,}⭐️ — {_html_escape(str(o.dest_label or ''))} — {float(o.price_toman or 0):,.0f} تومان"
+                     + (" — 🕶 ناشناس" if o.anonymous else " — 👤 با نام"))      # PATCH_PENDING_LISTS_FIX_V1
     rows = []
     for o in orders[start:end]:
         rows.append([InlineKeyboardButton(text=f"{o.tracking_code or '#' + str(o.id)} — {o.star_count:,}⭐️",
@@ -17515,12 +17576,12 @@ async def srx_order_detail(cb: CallbackQuery, bot: Bot):
         InlineKeyboardButton(text="❌ رد", callback_data=f"srx:no:{order_id}", style=ButtonStyle.DANGER),
     ], [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="srx:orders:0", style=ButtonStyle.DANGER)]])
     await cb.message.edit_text(
-        f"#{await order_no(GiftOrder, order_id)} — {o.star_count:,}⭐️ ری‌اکشن\n"
-        f"🔗 پست: {o.dest_label}\n💰 {o.price_toman:,} تومان\n"
+        f"#{await order_no(GiftOrder, order_id)} — {(o.star_count or 0):,}⭐️ ری‌اکشن\n"
+        f"🔗 پست: {_html_escape(str(o.dest_label or ''))}\n💰 {float(o.price_toman or 0):,.0f} تومان\n"
         + ("🕶 <b>ثبت: ناشناس</b> — نامِ فرستنده را مخفی کن\n" if o.anonymous
            else "👤 <b>ثبت: با نامِ مشتری</b> (ناشناس نیست)\n")
         + f"🔖 کد: {o.tracking_code}",
-        reply_markup=kb)
+        reply_markup=kb, parse_mode="HTML")      # PATCH_PENDING_LISTS_FIX_V1: بدونِ HTML تگ‌هایِ <b> خام دیده می‌شد
     await cb.answer()
 
 
