@@ -24,7 +24,7 @@ gateway_layout_router = Router(name="gateway_layout")
 
 # (کلید، callback_data دکمهٔ کیف پول، عنوان، قابلِ تغییرِ نام؟)
 ITEMS: list[tuple[str, str, str, bool]] = [
-    ("card",        "w:charge",      "💳 کارت‌به‌کارت",   False),
+    ("card",        "w:charge",      "💳 کارت‌به‌کارت",   True),
     ("zarinpal",    "w:zarinpal",    "🔐 زرین‌پال",       True),
     ("zibal",       "w:zibal",       "🔐 زیبال",          False),
     ("uniquepay",   "w:uniquepay",   "💳 یونیک‌پی",       True),
@@ -107,7 +107,7 @@ async def gw_custom_label(bot_id: int, key: str, default_label: str) -> str:
     قالبِ دیگری اضافه شود، تپ‌کردنِ دکمه در حالتِ کیبوردی بی‌واکنش می‌ماند."""
     from tenant import GATEWAY_LABELS
     _d, setting_key = GATEWAY_LABELS.get(key, (key, f"{key}_display_name"))
-    custom = ((await _get(bot_id, setting_key, "")) or "").strip()[:40]
+    custom = ((await _get(bot_id, setting_key, "")) or "").strip()[:64]
     return custom or default_label
 
 
@@ -116,7 +116,27 @@ _COLOR_CYCLE = ["", "success", "primary", "danger"]
 _COLOR_EMOJI = {"": "⚪️", "success": "🟢", "primary": "🔵", "danger": "🔴"}
 
 
+# === PATCH_CARD_RENAME_COLOR_V1 === (MidnightSoul) کارت‌به‌کارت هم اسم و رنگِ دلخواه بگیرد؛ دکمه‌هایِ کارتِ صفحه‌هایِ خرید
+CARD_CB_PREFIXES = ("pay:card:", "vpay:card:", "shop:buy:card:", "gift:cardpay:", "star:cardpay:",
+                    "vc:cardpay:", "mcfg:paycard:")
+
+
+def _is_card_cb(cb: str) -> bool:
+    return (cb or "").startswith(CARD_CB_PREFIXES)
+
+
+def has_gateway_buttons(markup) -> bool:
+    """آیا این کیبورد دکمهٔ درگاه/کارت‌به‌کارت دارد (برایِ فعال‌شدنِ هوکِ رنگ/نام/ترتیب در لایهٔ ارسال)؟"""
+    try:
+        return any((b.callback_data or "").startswith("w:") or _is_card_cb(b.callback_data or "")
+                   for r in markup.inline_keyboard for b in r)
+    except Exception:
+        return False
+
+
 def _gw_key_of_cb(cb: str) -> str | None:
+    if _is_card_cb(cb):
+        return "card"
     for key, base, _t, _r in ITEMS:
         if cb == base or cb.startswith(base + ":"):
             return key
@@ -131,7 +151,7 @@ async def apply_gateway_colors(bot_id: int, markup):
         if not isinstance(markup, _IKM):
             return markup
         hits = [(i, j, _gw_key_of_cb(b.callback_data or "")) for i, r in enumerate(markup.inline_keyboard)
-                for j, b in enumerate(r) if b.callback_data and b.callback_data.startswith("w:")]
+                for j, b in enumerate(r) if b.callback_data and (b.callback_data.startswith("w:") or _is_card_cb(b.callback_data))]
         hits = [h for h in hits if h[2]]
         if not hits:
             return markup
@@ -182,6 +202,28 @@ async def apply_direct_first(bot_id: int, markup):
         return _IKM(inline_keyboard=direct + rest)
     except Exception:
         logger.exception("gateway_layout: بالا آوردنِ دکمهٔ پرداختِ مستقیم ناموفق بود")
+        return markup
+
+
+async def apply_card_rename(bot_id: int, markup):
+    """اسمِ دلخواهِ «کارت‌به‌کارت» (card_display_name) را عیناً رویِ دکمه‌هایِ کارتِ صفحه‌هایِ خرید/کیف پول می‌گذارد."""
+    try:
+        from aiogram.types import InlineKeyboardMarkup as _IKM
+        if not isinstance(markup, _IKM):
+            return markup
+        hit = any((b.callback_data or "") == "w:charge" or _is_card_cb(b.callback_data or "")
+                  for r in markup.inline_keyboard for b in r)
+        if not hit:
+            return markup
+        custom = ((await _get(bot_id, "card_display_name", "")) or "").strip()[:64]
+        if not custom:
+            return markup
+        rows = [[b.model_copy(update={"text": custom}) if ((b.callback_data or "") == "w:charge"
+                                                           or _is_card_cb(b.callback_data or "")) else b for b in r]
+                for r in markup.inline_keyboard]
+        return _IKM(inline_keyboard=rows)
+    except Exception:
+        logger.exception("gateway_layout: اعمالِ اسمِ کارت‌به‌کارت ناموفق بود")
         return markup
 
 
@@ -339,7 +381,7 @@ async def gwl_name_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await state.set_state(GwLayoutFSM.name)
     await state.update_data(gwl_key=key)
     await cb.message.answer(
-        f"🏷 اسمِ جدیدِ دکمهٔ <b>{_BY_KEY[key][1]}</b> را بفرست (حداکثر ۴۰ حرف؛ همان‌طور که "
+        f"🏷 اسمِ جدیدِ دکمهٔ <b>{_BY_KEY[key][1]}</b> را بفرست (حداکثر ۴۰ حرف، برایِ کارت‌به‌کارت ۶۴؛ همان‌طور که "
         "نوشتی نمایش داده می‌شود).\nبرایِ برگشت به اسمِ پیش‌فرض: <code>پیش‌فرض</code>",
         reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
     await cb.answer()
@@ -365,7 +407,8 @@ async def gwl_name_save(msg: Message, bot: Bot, state: FSMContext):
         await msg.answer("اسمِ نامعتبر.")
         return
     else:
-        await set_setting(row.id, sk, txt[:40])
-        await msg.answer(f"✅ اسمِ دکمه روی «{txt[:40]}» تنظیم شد.")
+        _cap = 64 if key == "card" else 40     # کارت‌به‌کارت اسمِ بلندتر (مثلاً «… تأیید آنی و خودکار با هوش مصنوعی») می‌خواهد
+        await set_setting(row.id, sk, txt[:_cap])
+        await msg.answer(f"✅ اسمِ دکمه روی «{txt[:_cap]}» تنظیم شد.")
     await msg.answer("برگشت به صفحهٔ نام و ترتیب:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎛 نام و ترتیبِ دکمه‌ها", callback_data="gwl:menu")]]))

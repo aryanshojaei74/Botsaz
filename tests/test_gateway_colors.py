@@ -124,3 +124,27 @@ async def test_menu_has_direct_first_toggle(settings):
     text, kb = await GL._menu_content(1)
     t = next(b for r in kb.inline_keyboard for b in r if b.callback_data == "gwl:first")
     assert "❌" in t.text
+
+
+@pytest.mark.asyncio
+async def test_card_to_card_buttons_get_color_and_custom_name_everywhere(settings):
+    store, _ = settings
+    store["gw_color_card"] = "success"
+    store["card_display_name"] = "💳 کارت به کارت (تأیید آنی و خودکار با هوش مصنوعی)"
+    mk = M(inline_keyboard=[[B(text="💳 شارژ کارت‌به‌کارت", callback_data="w:charge")],
+                            [B(text="💳 کارت‌به‌کارت", callback_data="pay:card:5")],
+                            [B(text="💳 پرداخت کارت‌به‌کارت", callback_data="vpay:card:9")],
+                            [B(text="🏷 کد تخفیف", callback_data="vdisc:add:9")]])
+    out = await GL.apply_card_rename(1, await GL.apply_gateway_colors(1, mk))
+    flat = [b for r in out.inline_keyboard for b in r]
+    assert [b.text for b in flat[:3]] == [store["card_display_name"]] * 3
+    assert all(b.style == ButtonStyle.SUCCESS for b in flat[:3]) and flat[3].text == "🏷 کد تخفیف"
+    store["card_display_name"] = ""
+    assert await GL.apply_card_rename(1, mk) is mk                       # بدونِ اسمِ سفارشی دست نمی‌خورد
+
+
+def test_card_is_renamable_and_in_gateway_labels():
+    assert GL._BY_KEY["card"][2] is True
+    assert "card" in tenant.GATEWAY_LABELS and tenant.GATEWAY_LABELS["card"][1] == "card_display_name"
+    assert GL.has_gateway_buttons(M(inline_keyboard=[[B(text="x", callback_data="vpay:card:1")]]))
+    assert not GL.has_gateway_buttons(M(inline_keyboard=[[B(text="x", callback_data="set:card")]]))

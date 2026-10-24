@@ -3167,7 +3167,7 @@ def _nav_install(bot) -> None:
         if (name in ("SendMessage", "EditMessageText", "EditMessageReplyMarkup")
                 and isinstance(mk, InlineKeyboardMarkup) and isinstance(getattr(method, "chat_id", None), int)
                 and method.chat_id > 0 and not getattr(method, "inline_message_id", None)
-                and any((b.callback_data or "").startswith("w:") for r in mk.inline_keyboard for b in r)):
+                and __import__("tenant.gateways.gateway_layout", fromlist=["x"]).has_gateway_buttons(mk)):
             try:
                 _rowc = await get_bot_row(bot_)
                 if _rowc:
@@ -3175,6 +3175,8 @@ def _nav_install(bot) -> None:
                     _mk2 = await _agc(_rowc.id, mk)
                     from tenant.gateways.gateway_layout import apply_direct_first as _adf   # PATCH_GATEWAY_DIRECT_FIRST_V1
                     _mk2 = await _adf(_rowc.id, _mk2)
+                    from tenant.gateways.gateway_layout import apply_card_rename as _acr   # PATCH_CARD_RENAME_COLOR_V1
+                    _mk2 = await _acr(_rowc.id, _mk2)
                     if _mk2 is not mk:
                         method = method.model_copy(update={"reply_markup": _mk2})
                         mk = _mk2
@@ -3770,6 +3772,7 @@ def buy_unlimited_info_text(cfg: dict) -> str:
 # یک رجیستریِ مشترک: کلیدِ درگاه → (اسمِ پیش‌فرض، کلیدِ تنظیمات).
 # افزودنِ درگاهِ بعدی فقط یک سطر این‌جاست.
 GATEWAY_LABELS: dict[str, tuple[str, str]] = {
+    "card":      ("کارت‌به‌کارت",     "card_display_name"),     # PATCH_CARD_RENAME_COLOR_V1
     "hesabpay":  ("افغانی (حساب‌پی)", "hesabpay_display_name"),
     "zarinpal":  ("زرین‌پال",         "zarinpal_display_name"),
     "zibal":     ("زیبال",            "zibal_display_name"),
@@ -3788,7 +3791,7 @@ async def gw_name(bot_id: int, key: str) -> str:
     """اسمی که کاربرِ نهایی برایِ این درگاه می‌بیند."""
     default, setting_key = GATEWAY_LABELS.get(key, (key, f"{key}_display_name"))
     v = (await get_setting(bot_id, setting_key, "") or "").strip()
-    return v[:40] if v else default
+    return v[:64] if v else default
 
 
 async def gw_btn(bot_id: int, key: str, verb: str, emoji: str) -> str:
@@ -3805,7 +3808,7 @@ async def gw_btn(bot_id: int, key: str, verb: str, emoji: str) -> str:
     """
     default, setting_key = GATEWAY_LABELS.get(key, (key, f"{key}_display_name"))
     custom = (await get_setting(bot_id, setting_key, "") or "").strip()
-    return f"{emoji} {custom[:40]}" if custom else f"{emoji} {verb} {default}"
+    return f"{emoji} {custom[:64]}" if custom else f"{emoji} {verb} {default}"
 
 
 async def gw_label_set(bot_id: int, key: str, verb: str) -> set[str]:
@@ -3813,7 +3816,7 @@ async def gw_label_set(bot_id: int, key: str, verb: str) -> set[str]:
     حالتِ کیبوردی. بدونِ این، تغییرِ اسم دکمه را بی‌واکنش می‌کند — همان
     دامی که آبان گیت‌وی و تون‌پیز قبلاً تویش افتادند."""
     default, setting_key = GATEWAY_LABELS.get(key, (key, f"{key}_display_name"))
-    custom = (await get_setting(bot_id, setting_key, "") or "").strip()[:40]
+    custom = (await get_setting(bot_id, setting_key, "") or "").strip()[:64]
     # هر سه شکل پذیرفته می‌شود: پیش‌فرضِ قالب‌دار، سفارشیِ خام (شکلِ فعلی)،
     # و سفارشیِ قالب‌دار (برایِ کیبوردهایِ قدیمی که هنوز دستِ کاربر است).
     out = {f"{verb} {default}"}
@@ -7414,7 +7417,8 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         return
 
     # گزینه‌های منوی کیف پول (وقتی ربات در حالتِ کیبورد است)
-    if msg.text == "💳 شارژ کارت‌به‌کارت":
+    if msg.text == "💳 شارژ کارت‌به‌کارت" or (
+            msg.text and msg.text in await gw_label_set(bot_id, "card", "💳 شارژ")):   # PATCH_CARD_RENAME_COLOR_V1
         await wallet_charge_text(msg, bot, state)
         return
     if msg.text in ("🪙 شارژ با ارز دیجیتال (درگاه)", "🔒 شارژ با ارز دیجیتال (پلن رشد+)",
@@ -7906,7 +7910,8 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
     options: list[tuple[str, str, object]] = []  # (برچسب, callback_data, استایل)
     _ab_repl_w = await _ab_replaces_card(bot_id)   # === PATCH_ABANGATEWAY_REPLACE_CARD_V1 ===
     if card_enabled == "1" and not _ab_repl_w:
-        options.append(("💳 شارژ کارت‌به‌کارت", "w:charge", succ))
+        from tenant.gateways.gateway_layout import gw_custom_label as _gwcl_card   # PATCH_CARD_RENAME_COLOR_V1
+        options.append((await _gwcl_card(bot_id, "card", "💳 شارژ کارت‌به‌کارت"), "w:charge", succ))
     if is_free:
         options.append(("🔒 شارژ با ارز دیجیتال (پلن رشد+)", "w:crypto", None))
     else:
