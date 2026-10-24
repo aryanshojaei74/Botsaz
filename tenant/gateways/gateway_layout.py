@@ -159,13 +159,14 @@ async def apply_gateway_colors(bot_id: int, markup):
 # ═══════════════════ صفحهٔ مدیریت ═══════════════════
 
 async def _menu_content(bot_id: int):
-    from tenant import GATEWAY_LABELS
+    """هر درگاه دو ردیف: ردیفِ اول فقط نامِ درگاه (به رنگِ انتخابی)، ردیفِ دوم ابزارها: ⬆️ ⬇️ 🏷 🎨."""
+    from tenant import GATEWAY_LABELS, _IBTN_COLOR_STYLE
     order = await get_order(bot_id)
-    lines = ["🎛 <b>نام و ترتیبِ دکمه‌هایِ پرداخت</b>\n",
-             "با ⬆️ و ⬇️ جایِ دکمه‌ها را عوض کن و با «🏷» اسمی که کاربر می‌بیند را تغییر بده "
-             "(فقط درگاه‌هایی که پشتیبانی می‌کنند). با دکمهٔ رنگی (⚪️/🟢/🔵/🔴) رنگِ دکمهٔ آن درگاه را عوض کن "
-             "(فقط در پلن‌هایِ دارایِ «دکمهٔ رنگی»). ترتیب در «کیف پول» و دکمه‌هایِ شارژِ "
-             "صفحهٔ خرید اعمال می‌شود؛ درگاهِ غیرفعال اصلاً به کاربر نشان داده نمی‌شود.\n"]
+    text = ("🎛 <b>نام و ترتیبِ دکمه‌هایِ پرداخت</b>\n\n"
+            "زیرِ نامِ هر درگاه:\n"
+            "⬆️ ⬇️ جابه‌جایی  •  🏷 تغییرِ اسم  •  🎨 تغییرِ رنگ\n\n"
+            "رنگ فقط در پلن‌هایِ دارایِ «دکمهٔ رنگی» اعمال می‌شود. ترتیب در «کیف پول» و دکمه‌هایِ شارژِ صفحهٔ خرید "
+            "دیده می‌شود؛ درگاهِ غیرفعال به کاربر نشان داده نمی‌شود.")
     rows = []
     for n, key in enumerate(order):
         cb, title, renamable = _BY_KEY[key]
@@ -175,20 +176,22 @@ async def _menu_content(bot_id: int):
             cur = ((await _get(bot_id, sk, "")) or "").strip()
             if cur:
                 shown = f"{title} ← «{cur}»"
-        lines.append(f"{n + 1}. {shown}")
-        r = [InlineKeyboardButton(text=f"{n + 1}. {title}", callback_data="gwl:noop")]
-        _cur_col = ((await _get(bot_id, f"gw_color_{key}", "")) or "").strip()
-        r.append(InlineKeyboardButton(text=_COLOR_EMOJI.get(_cur_col, "⚪️"), callback_data=f"gwl:col:{key}"))
+        col = ((await _get(bot_id, f"gw_color_{key}", "")) or "").strip()
+        head = {"text": f"{n + 1}. {shown}", "callback_data": "gwl:noop"}
+        if col in _IBTN_COLOR_STYLE:
+            head["style"] = _IBTN_COLOR_STYLE[col]
+        rows.append([InlineKeyboardButton(**head)])
+        tools = [InlineKeyboardButton(text="⬆️", callback_data=f"gwl:up:{key}"),
+                 InlineKeyboardButton(text="⬇️", callback_data=f"gwl:dn:{key}")]
         if renamable:
-            r.append(InlineKeyboardButton(text="🏷", callback_data=f"gwl:name:{key}"))
-        r.append(InlineKeyboardButton(text="⬆️", callback_data=f"gwl:up:{key}"))
-        r.append(InlineKeyboardButton(text="⬇️", callback_data=f"gwl:dn:{key}"))
-        rows.append(r)
-    rows.append([InlineKeyboardButton(text="♻️ برگشت به ترتیب و نامِ پیش‌فرض", callback_data="gwl:reset",
+            tools.append(InlineKeyboardButton(text="🏷 اسم", callback_data=f"gwl:name:{key}"))
+        tools.append(InlineKeyboardButton(text=f"🎨 رنگ {_COLOR_EMOJI.get(col, '⚪️')}", callback_data=f"gwl:col:{key}"))
+        rows.append(tools)
+    rows.append([InlineKeyboardButton(text="♻️ برگشت به ترتیب، نام و رنگِ پیش‌فرض", callback_data="gwl:reset",
                                       style=ButtonStyle.SUCCESS)])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:finance",
                                       style=ButtonStyle.DANGER)])
-    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _show(cb: CallbackQuery, bot_id: int) -> None:

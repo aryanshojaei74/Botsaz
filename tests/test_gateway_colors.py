@@ -90,3 +90,16 @@ async def test_menu_has_color_button_for_each_gateway_and_cycle_order(settings):
     cbs = [b.callback_data for r in kb.inline_keyboard for b in r]
     assert all(f"gwl:col:{k}" in cbs for k, *_ in GL.ITEMS)
     assert GL._COLOR_CYCLE == ["", "success", "primary", "danger"]
+
+
+@pytest.mark.asyncio
+async def test_menu_layout_is_two_rows_per_gateway_name_then_tools(settings):
+    text, kb = await GL._menu_content(1)
+    rows = kb.inline_keyboard
+    n = len(GL.ITEMS)
+    assert len(rows) == 2 * n + 2                                   # نام + ابزار برایِ هر درگاه + بازنشانی + بازگشت
+    name_row, tools = rows[0], rows[1]
+    assert len(name_row) == 1 and name_row[0].callback_data == "gwl:noop" and name_row[0].text.startswith("1.")
+    assert [b.text[:2] for b in tools][:2] == ["⬆️", "⬇️"] and tools[-1].callback_data.startswith("gwl:col:")
+    apay_head = next(r[0] for r in rows if "آپی" in r[0].text)
+    assert apay_head.style == ButtonStyle.PRIMARY                    # رنگِ انتخابی روی نامِ درگاه پیش‌نمایش می‌شود
