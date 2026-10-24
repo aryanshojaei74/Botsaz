@@ -126,3 +126,41 @@ async def test_start_deeplink_of_giveaway_is_blocked_for_non_member_and_resumed_
     await tenant.tenant_start(msg, CommandObject(prefix="/", command="start", args="gw_7_3"), FakeBot("left"), st)
     assert shown == [["-1001"]] and not hooked
     assert (await st.get_data()).get("pending_gw") == "gw_7_3"
+
+
+def test_broken_reason_uses_real_telegram_error():
+    f = tenant._fj_broken_reason
+    assert "پیدا نشد" in f(Exception("Bad Request: chat not found"))
+    assert "ادمین" in f(Exception("Bad Request: CHAT_ADMIN_REQUIRED"))
+    assert "همین کاربر" in f(Exception("Bad Request: user not found"))
+    assert f(Exception("Bad Request: weird thing")).startswith("خطای تلگرام: weird thing")
+
+
+@pytest.mark.asyncio
+async def test_diag_clears_stale_warning_when_live_check_works(env, monkeypatch):
+    async def gbr(bot):
+        return NS(id=1, owner_id=9, plan="pro")
+    monkeypatch.setattr(tenant, "get_bot_row", gbr)
+    tenant._FORCEJOIN_BROKEN[(1, "-1001")] = "ربات ادمینِ این کانال/گروه نیست"
+    tenant._FORCEJOIN_UNCHECKABLE_CACHE[(1, "-1001")] = 10 ** 12
+    cb, out = _cb(9)
+    await tenant.fj_diag(cb, FakeBot("member", "administrator"))        # بررسیِ زنده موفق
+    assert (1, "-1001") not in tenant._FORCEJOIN_BROKEN and (1, "-1001") not in tenant._FORCEJOIN_UNCHECKABLE_CACHE
+
+
+@pytest.mark.asyncio
+async def test_diag_shows_real_reason_when_live_check_fails(env, monkeypatch):
+    async def gbr(bot):
+        return NS(id=1, owner_id=9, plan="pro")
+    monkeypatch.setattr(tenant, "get_bot_row", gbr)
+
+    class Bad(FakeBot):
+        async def get_chat_member(self, chat, uid):
+            if uid == 99:
+                return NS(status="administrator")
+            raise Exception("Bad Request: chat not found")
+    tenant._FORCEJOIN_BROKEN.clear()
+    cb, out = _cb(9)
+    await tenant.fj_diag(cb, Bad())
+    text = [x[1] for x in out if x[0] == "msg"][0]
+    assert "علت" in text and "پیدا نشد" in text

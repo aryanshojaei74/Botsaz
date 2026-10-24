@@ -1369,6 +1369,21 @@ async def _section_ok(cb: CallbackQuery, bot: Bot, section: str) -> "BotRow | No
     return row
 
 
+def _fj_broken_reason(e: Exception) -> str:
+    """=== PATCH_FJ_REAL_ERROR_V1 === دلیلِ ⚠️ را از خطای واقعیِ تلگرام می‌سازد؛ قبلاً هر خطا «ربات ادمین نیست» نوشته می‌شد
+    (حتی «chat not found» برایِ یوزرنیمِ عوض‌شده یا «user not found»)."""
+    m = str(e).lower()
+    if "chat not found" in m:
+        return "کانال/گروه پیدا نشد (یوزرنیم عوض شده یا ربات از آن حذف شده؛ کانال را حذف و دوباره اضافه کن)"
+    if "member list is inaccessible" in m or "chat_admin_required" in m or "not enough rights" in m:
+        return "ربات ادمینِ این کانال/گروه نیست یا دسترسیِ دیدنِ اعضا ندارد"
+    if "user not found" in m or "participant_id_invalid" in m or "user_id_invalid" in m:
+        return "تلگرام این کاربر را پیدا نکرد (مشکلِ همین کاربر است، نه کانال)"
+    if "forbidden" in m or "kicked" in m:
+        return "ربات از این کانال/گروه بیرون انداخته شده یا مسدود است"
+    return "خطای تلگرام: " + str(e).replace("Bad Request: ", "")[:90]
+
+
 async def check_force_join(bot: Bot, bot_id: int, user_id: int, bypass_cache: bool = False) -> list[dict]:
     """لیست کانال‌هایی که کاربر هنوز عضو نشده.
 
@@ -1458,7 +1473,7 @@ async def check_force_join(bot: Bot, bot_id: int, user_id: int, bypass_cache: bo
                 "force-join: کانال %s قابلِ بررسی نیست (ربات ادمین نیست؟) — "
                 "نادیده گرفته شد تا کاربر قفل نشه. جزئیات: %s", fj.chat_id, e)
             _FORCEJOIN_UNCHECKABLE_CACHE[uck] = _time.monotonic() + _FORCEJOIN_UNCHECKABLE_TTL  # PATCH_FORCEJOIN_UNCHECKABLE_CACHE_V1
-            _FORCEJOIN_BROKEN[uck] = "ربات ادمینِ این کانال/گروه نیست"  # PATCH_FORCEJOIN_HEALTH_V1
+            _FORCEJOIN_BROKEN[uck] = _fj_broken_reason(e)  # PATCH_FORCEJOIN_HEALTH_V1 (+ خطای واقعیِ تلگرام)
             return
         except Exception:
             logger.exception("force-join: خطای غیرمنتظره در بررسیِ کانال %s", fj.chat_id)
@@ -30072,15 +30087,21 @@ async def fj_diag(cb: CallbackQuery, bot: Bot):
         except Exception as e:      # noqa: BLE001
             bst = f"خطا: {str(e)[:60]}"
         bot_ok = bst in ("administrator", "creator")
+        _uck = (row.id, fj.chat_id)
         try:
             um = await asyncio.wait_for(bot.get_chat_member(fj.chat_id, cb.from_user.id), timeout=6)
             ust = um.status
+            # === PATCH_FJ_REAL_ERROR_V1 === بررسیِ زنده موفق بود ⇒ کانال سالم است؛ ⚠️ و کشِ «غیرقابلِ‌بررسی» پاک شود
+            _FORCEJOIN_BROKEN.pop(_uck, None)
+            _FORCEJOIN_UNCHECKABLE_CACHE.pop(_uck, None)
         except Exception as e:      # noqa: BLE001
             ust = f"خطا: {str(e)[:60]}"
+            _FORCEJOIN_BROKEN[_uck] = _fj_broken_reason(e)
         joined = ust in ("member", "administrator", "creator")
         all_ok = all_ok and bot_ok
         lines.append(f"• <b>{title}</b>\n  ربات: {'✅ ادمین' if bot_ok else '⚠️ ' + _html.escape(str(bst)) + ' (باید ادمین باشد)'}"
-                     f"\n  حسابِ تو: {'عضو' if joined else 'عضو نیست'} ({_html.escape(str(ust))})")
+                     f"\n  حسابِ تو: {'عضو' if joined else 'عضو نیست'} ({_html.escape(str(ust))})"
+                     + (f"\n  ⚠️ علت: {_html.escape(_FORCEJOIN_BROKEN[_uck])}" if _uck in _FORCEJOIN_BROKEN else ""))
     exempt = await is_owner_or_admin(row.id, cb.from_user.id, row.owner_id)
     test_on = (await get_setting(row.id, "fj_test_mode", "0")) == "1"
     if exempt and not test_on:
