@@ -1700,6 +1700,7 @@ async def gg_filter_edit_save(msg: Message, state: FSMContext):
 
 # === PATCH_GROUP_AI_REVAMP_V1 === پرامپتِ پایه، بخش‌هایِ تازه، جست‌وجو و پاک‌کنندهٔ فرمت در platform_ai_kb.py
 from platform_ai_kb import (ALWAYS as _GG_AI_ALWAYS, TOPICS_2026_10D as _GG_AI_TOPICS_NEW,
+                            TOPICS_2026_10E as _GG_AI_TOPICS_NEW_E,
                             clean_ai_text as _gg_clean_ai_text, select_relevant_topics as _kb_select,
                             strip_marks as _gg_strip_marks)
 
@@ -2122,6 +2123,7 @@ _GG_AI_TOPICS.extend([
 
 # === PATCH_GROUP_AI_REVAMP_V1 === بخش‌هایِ تازه (کانفیگ دستی، تحویل دستی، بازی‌هایِ شرط‌بندی، گزارش، …)
 _GG_AI_TOPICS.extend(_GG_AI_TOPICS_NEW)
+_GG_AI_TOPICS.extend(_GG_AI_TOPICS_NEW_E)   # آپدیتِ ۲۴۵ تا ۲۶۶
 
 
 def _gg_select_relevant_topics(question: str, char_budget: int = 11000) -> str:

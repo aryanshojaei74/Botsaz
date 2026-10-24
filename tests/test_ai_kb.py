@@ -181,3 +181,17 @@ async def test_answer_sent_to_group_is_clean_even_if_cached_dirty(monkeypatch):
     G._AI_CACHE[dirty] = (__import__("time").monotonic(), "**جواب** با `کد`")
     await G._answer_ai_question(msg, "بات ساز کانفیگ دستی؟")
     assert sent[-1] == "🤖 جواب با کد"
+
+
+def test_new_topics_2026_10e_are_findable_and_clean():
+    from platform_ai_kb import TOPICS_2026_10E, select_relevant_topics
+    assert TOPICS_2026_10E and all("**" not in t for _, t in TOPICS_2026_10E)
+    out = select_relevant_topics("چطور نتایج تستی قرعه کشی رو پاک کنم؟", TOPICS_2026_10E)
+    assert "پاک‌کردن کل تاریخچه" in out
+    out = select_relevant_topics("رنگ دکمه کارت به کارت اعمال نمیشه", TOPICS_2026_10E)
+    assert "۶۴ حرف" in out
+
+
+def test_group_guard_registers_new_topics():
+    import platform_group_guard as g
+    assert any("پاک‌کردن کل تاریخچه" in t for _, t in g._GG_AI_TOPICS)
