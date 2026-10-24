@@ -3144,6 +3144,21 @@ def _nav_install(bot) -> None:
                 logger.debug("home_kb: جایگزینیِ ReplyKeyboardRemove ممکن نشد (بی‌اهمیت)")
         if _order_notice:
             return await orig(bot_, method, timeout=timeout)       # PATCH_ORDER_MSG_NO_NAV_FOOTER_V1
+        # === PATCH_GATEWAY_COLORS_V1 === رنگِ دکمهٔ هر درگاهِ پرداخت طبقِ انتخابِ مالک (فقط پیام‌هایِ چتِ خصوصی)
+        if (name in ("SendMessage", "EditMessageText", "EditMessageReplyMarkup")
+                and isinstance(mk, InlineKeyboardMarkup) and isinstance(getattr(method, "chat_id", None), int)
+                and method.chat_id > 0 and not getattr(method, "inline_message_id", None)
+                and any((b.callback_data or "").startswith("w:") for r in mk.inline_keyboard for b in r)):
+            try:
+                _rowc = await get_bot_row(bot_)
+                if _rowc:
+                    from tenant.gateways.gateway_layout import apply_gateway_colors as _agc
+                    _mk2 = await _agc(_rowc.id, mk)
+                    if _mk2 is not mk:
+                        method = method.model_copy(update={"reply_markup": _mk2})
+                        mk = _mk2
+            except Exception:
+                logger.exception("gateway_colors: اعمالِ رنگ ناموفق بود")
         # === PATCH_NAV_KB_ONLY_V1 === بازگشت/خانه فقط در کیبوردِ پایین؛ از منوهایِ شیشه‌ایِ مشتری برداشته می‌شود
         if (name in ("SendMessage", "EditMessageText", "EditMessageReplyMarkup", "SendPhoto", "EditMessageCaption")
                 and isinstance(mk, InlineKeyboardMarkup) and isinstance(getattr(method, "chat_id", None), int)

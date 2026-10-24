@@ -111,6 +111,51 @@ async def gw_custom_label(bot_id: int, key: str, default_label: str) -> str:
     return custom or default_label
 
 
+# === PATCH_GATEWAY_COLORS_V1 === (فرزاد) رنگِ دکمهٔ هر درگاه را مالک انتخاب کند
+_COLOR_CYCLE = ["", "success", "primary", "danger"]
+_COLOR_EMOJI = {"": "⚪️", "success": "🟢", "primary": "🔵", "danger": "🔴"}
+
+
+def _gw_key_of_cb(cb: str) -> str | None:
+    for key, base, _t, _r in ITEMS:
+        if cb == base or cb.startswith(base + ":"):
+            return key
+    return None
+
+
+async def apply_gateway_colors(bot_id: int, markup):
+    """دکمه‌هایِ درگاه (w:apay، w:zarinpal، …) را با رنگِ انتخابِ مالک می‌سازد؛ اگر رنگی تنظیم نشده یا پلنِ ربات
+    «دکمهٔ رنگی» ندارد همان markupِ ورودی (همان شیء) برمی‌گردد."""
+    try:
+        from aiogram.types import InlineKeyboardMarkup as _IKM
+        if not isinstance(markup, _IKM):
+            return markup
+        hits = [(i, j, _gw_key_of_cb(b.callback_data or "")) for i, r in enumerate(markup.inline_keyboard)
+                for j, b in enumerate(r) if b.callback_data and b.callback_data.startswith("w:")]
+        hits = [h for h in hits if h[2]]
+        if not hits:
+            return markup
+        from tenant import _ibtn_colored_allowed
+        if not await _ibtn_colored_allowed(bot_id):
+            return markup
+        from tenant import _IBTN_COLOR_STYLE
+        colors = {}
+        for key in {h[2] for h in hits}:
+            v = ((await _get(bot_id, f"gw_color_{key}", "")) or "").strip()
+            if v in _IBTN_COLOR_STYLE:
+                colors[key] = _IBTN_COLOR_STYLE[v]
+        if not colors:
+            return markup
+        rows = [list(r) for r in markup.inline_keyboard]
+        for i, j, key in hits:
+            if key in colors:
+                rows[i][j] = rows[i][j].model_copy(update={"style": colors[key]})
+        return _IKM(inline_keyboard=rows)
+    except Exception:
+        logger.exception("gateway_layout: اعمالِ رنگِ درگاه‌ها ناموفق بود")
+        return markup
+
+
 # ═══════════════════ صفحهٔ مدیریت ═══════════════════
 
 async def _menu_content(bot_id: int):
@@ -118,7 +163,8 @@ async def _menu_content(bot_id: int):
     order = await get_order(bot_id)
     lines = ["🎛 <b>نام و ترتیبِ دکمه‌هایِ پرداخت</b>\n",
              "با ⬆️ و ⬇️ جایِ دکمه‌ها را عوض کن و با «🏷» اسمی که کاربر می‌بیند را تغییر بده "
-             "(فقط درگاه‌هایی که پشتیبانی می‌کنند). ترتیب در «کیف پول» و دکمه‌هایِ شارژِ "
+             "(فقط درگاه‌هایی که پشتیبانی می‌کنند). با دکمهٔ رنگی (⚪️/🟢/🔵/🔴) رنگِ دکمهٔ آن درگاه را عوض کن "
+             "(فقط در پلن‌هایِ دارایِ «دکمهٔ رنگی»). ترتیب در «کیف پول» و دکمه‌هایِ شارژِ "
              "صفحهٔ خرید اعمال می‌شود؛ درگاهِ غیرفعال اصلاً به کاربر نشان داده نمی‌شود.\n"]
     rows = []
     for n, key in enumerate(order):
@@ -131,6 +177,8 @@ async def _menu_content(bot_id: int):
                 shown = f"{title} ← «{cur}»"
         lines.append(f"{n + 1}. {shown}")
         r = [InlineKeyboardButton(text=f"{n + 1}. {title}", callback_data="gwl:noop")]
+        _cur_col = ((await _get(bot_id, f"gw_color_{key}", "")) or "").strip()
+        r.append(InlineKeyboardButton(text=_COLOR_EMOJI.get(_cur_col, "⚪️"), callback_data=f"gwl:col:{key}"))
         if renamable:
             r.append(InlineKeyboardButton(text="🏷", callback_data=f"gwl:name:{key}"))
         r.append(InlineKeyboardButton(text="⬆️", callback_data=f"gwl:up:{key}"))
@@ -192,6 +240,25 @@ async def gwl_move(cb: CallbackQuery, bot: Bot):
     await cb.answer()
 
 
+@gateway_layout_router.callback_query(F.data.startswith("gwl:col:"))
+async def gwl_color(cb: CallbackQuery, bot: Bot):
+    """PATCH_GATEWAY_COLORS_V1 — چرخشِ رنگ: بی‌رنگ ← سبز ← آبی ← قرمز."""
+    from tenant import _owner_ok, set_setting, _ibtn_colored_allowed
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    key = cb.data.split(":", 2)[2]
+    if key not in _BY_KEY:
+        return await cb.answer()
+    if not await _ibtn_colored_allowed(row.id):
+        return await cb.answer("🔒 رنگِ دکمه‌ها در پلنِ فعلیِ ربات فعال نیست.", show_alert=True)
+    cur = ((await _get(row.id, f"gw_color_{key}", "")) or "").strip()
+    nxt = _COLOR_CYCLE[(_COLOR_CYCLE.index(cur) + 1) % len(_COLOR_CYCLE)] if cur in _COLOR_CYCLE else "success"
+    await set_setting(row.id, f"gw_color_{key}", nxt)
+    await _show(cb, row.id)
+    await cb.answer(f"رنگ: {_COLOR_EMOJI[nxt]}")
+
+
 @gateway_layout_router.callback_query(F.data == "gwl:reset")
 async def gwl_reset(cb: CallbackQuery, bot: Bot):
     from tenant import _owner_ok, set_setting, GATEWAY_LABELS
@@ -200,6 +267,7 @@ async def gwl_reset(cb: CallbackQuery, bot: Bot):
         return
     await set_setting(row.id, "gw_order", "")
     for key, _cb, _t, renamable in ITEMS:
+        await set_setting(row.id, f"gw_color_{key}", "")       # PATCH_GATEWAY_COLORS_V1
         if renamable:
             _d, sk = GATEWAY_LABELS.get(key, (key, f"{key}_display_name"))
             await set_setting(row.id, sk, "")
