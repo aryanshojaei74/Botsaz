@@ -156,6 +156,35 @@ async def apply_gateway_colors(bot_id: int, markup):
         return markup
 
 
+# === PATCH_GATEWAY_DIRECT_FIRST_V1 === (فرزاد) دکمهٔ پرداختِ مستقیمِ درگاه (مثلاً «کارت به کارت آنی») بالایِ «پرداخت از کیف پول»
+def _is_direct_gw_cb(cb: str) -> bool:
+    """w:apay:vpn:5:1000 / w:apay:12 → پرداختِ مستقیمِ همین سفارش؛ خودِ w:apay (شارژِ کیف پول) نه."""
+    key = _gw_key_of_cb(cb or "")
+    return bool(key) and (cb or "").startswith("w:") and cb != _BY_KEY[key][0]
+
+
+async def apply_direct_first(bot_id: int, markup):
+    """اگر مالک روشن کرده باشد، ردیف‌هایِ پرداختِ مستقیمِ درگاه (به ترتیبِ gw_order) می‌روند بالایِ صفحهٔ خرید."""
+    try:
+        from aiogram.types import InlineKeyboardMarkup as _IKM
+        if not isinstance(markup, _IKM):
+            return markup
+        rows = [list(r) for r in markup.inline_keyboard]
+        idx = [i for i, r in enumerate(rows) if any(_is_direct_gw_cb(b.callback_data or "") for b in r)]
+        if not idx or idx == list(range(len(idx))):
+            return markup
+        if (await _get(bot_id, "gw_direct_first", "0")) != "1":
+            return markup
+        rank = {k: n for n, k in enumerate(await get_order(bot_id))}
+        direct = sorted((rows[i] for i in idx), key=lambda r: rank.get(
+            next((_gw_key_of_cb(b.callback_data or "") for b in r if _is_direct_gw_cb(b.callback_data or "")), ""), 999))
+        rest = [r for i, r in enumerate(rows) if i not in set(idx)]
+        return _IKM(inline_keyboard=direct + rest)
+    except Exception:
+        logger.exception("gateway_layout: بالا آوردنِ دکمهٔ پرداختِ مستقیم ناموفق بود")
+        return markup
+
+
 # ═══════════════════ صفحهٔ مدیریت ═══════════════════
 
 async def _menu_content(bot_id: int):
@@ -165,6 +194,8 @@ async def _menu_content(bot_id: int):
     text = ("🎛 <b>نام و ترتیبِ دکمه‌هایِ پرداخت</b>\n\n"
             "زیرِ نامِ هر درگاه:\n"
             "⬆️ ⬇️ جابه‌جایی  •  🏷 تغییرِ اسم  •  🎨 تغییرِ رنگ\n\n"
+            "🔝 با روشن‌کردنِ گزینهٔ پایین، در صفحهٔ خرید دکمهٔ پرداختِ مستقیمِ درگاه (مثلاً «کارت به کارت آنی») "
+            "بالایِ «پرداخت از کیف پول» می‌آید.\n"
             "رنگ فقط در پلن‌هایِ دارایِ «دکمهٔ رنگی» اعمال می‌شود. ترتیب در «کیف پول» و دکمه‌هایِ شارژِ صفحهٔ خرید "
             "دیده می‌شود؛ درگاهِ غیرفعال به کاربر نشان داده نمی‌شود.")
     rows = []
@@ -187,6 +218,10 @@ async def _menu_content(bot_id: int):
             tools.append(InlineKeyboardButton(text="🏷 اسم", callback_data=f"gwl:name:{key}"))
         tools.append(InlineKeyboardButton(text=f"🎨 رنگ {_COLOR_EMOJI.get(col, '⚪️')}", callback_data=f"gwl:col:{key}"))
         rows.append(tools)
+    _first = (await _get(bot_id, "gw_direct_first", "0")) == "1"
+    rows.append([InlineKeyboardButton(
+        text=f"🔝 پرداختِ مستقیمِ درگاه بالایِ «پرداخت از کیف پول»: {'✅' if _first else '❌'}",
+        callback_data="gwl:first")])
     rows.append([InlineKeyboardButton(text="♻️ برگشت به ترتیب، نام و رنگِ پیش‌فرض", callback_data="gwl:reset",
                                       style=ButtonStyle.SUCCESS)])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:finance",
@@ -262,6 +297,18 @@ async def gwl_color(cb: CallbackQuery, bot: Bot):
     await cb.answer(f"رنگ: {_COLOR_EMOJI[nxt]}")
 
 
+@gateway_layout_router.callback_query(F.data == "gwl:first")
+async def gwl_first(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok, set_setting
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    new = "0" if (await _get(row.id, "gw_direct_first", "0")) == "1" else "1"
+    await set_setting(row.id, "gw_direct_first", new)
+    await _show(cb, row.id)
+    await cb.answer("روشن شد ✅" if new == "1" else "خاموش شد ❌")
+
+
 @gateway_layout_router.callback_query(F.data == "gwl:reset")
 async def gwl_reset(cb: CallbackQuery, bot: Bot):
     from tenant import _owner_ok, set_setting, GATEWAY_LABELS
@@ -269,6 +316,7 @@ async def gwl_reset(cb: CallbackQuery, bot: Bot):
     if not row:
         return
     await set_setting(row.id, "gw_order", "")
+    await set_setting(row.id, "gw_direct_first", "0")
     for key, _cb, _t, renamable in ITEMS:
         await set_setting(row.id, f"gw_color_{key}", "")       # PATCH_GATEWAY_COLORS_V1
         if renamable:

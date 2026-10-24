@@ -3157,6 +3157,8 @@ def _nav_install(bot) -> None:
                 if _rowc:
                     from tenant.gateways.gateway_layout import apply_gateway_colors as _agc
                     _mk2 = await _agc(_rowc.id, mk)
+                    from tenant.gateways.gateway_layout import apply_direct_first as _adf   # PATCH_GATEWAY_DIRECT_FIRST_V1
+                    _mk2 = await _adf(_rowc.id, _mk2)
                     if _mk2 is not mk:
                         method = method.model_copy(update={"reply_markup": _mk2})
                         mk = _mk2
