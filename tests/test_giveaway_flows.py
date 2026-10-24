@@ -96,7 +96,7 @@ def tmsg(text="", uid=11, contact=None, chat_type="private"):
 
     async def answer(t, **kw):
         out.append(t)
-        return SimpleNamespace(message_id=77, chat=SimpleNamespace(id=uid))
+        return SimpleNamespace(message_id=77, chat=SimpleNamespace(id=uid), edit_text=_edit_noop, answer=_edit_noop)
 
     async def reply(t, **kw):
         out.append(t)
@@ -113,6 +113,10 @@ def tmsg(text="", uid=11, contact=None, chat_type="private"):
 
 async def _noop():
     return None
+
+
+async def _edit_noop(*a, **k):
+    return SimpleNamespace(message_id=78, chat=SimpleNamespace(id=1))
 
 
 def fsm(uid=11):
@@ -280,15 +284,13 @@ async def test_referral_via_deeplink_and_notification(env):
     st = fsm(12)
     m = tmsg("/start", 12)
     shown = await USR.on_start(m, bot, ROW, f"gw_{g.id}_11", st)
-    assert shown and (await st.get_data())["gw_inv"] == 11
-    await USR.gw_join(cb(f"gw:j:{g.id}", 12), bot, st)
-    assert (await E.entry_of(g.id, 12)).invited_by == 11 and (await E.entry_of(g.id, 11)).bonus == 2
+    # PATCH_GW_LINK_AUTOJOIN_V1: بدونِ زدنِ «شرکت» مستقیم ثبت‌نام می‌شود (اینجا کپچا خاموش است)
+    assert shown and (await E.entry_of(g.id, 12)).invited_by == 11 and (await E.entry_of(g.id, 11)).bonus == 2
     assert any(k == "msg" and cid == 11 and "ثبت‌نام کرد" in a[0] for k, cid, a, kw in bot.sent)
     # «به‌روزرسانی» دادهٔ دعوت را پاک نمی‌کند
     st3 = fsm(13)
     await USR.on_start(tmsg("/start", 13), bot, ROW, f"gw_{g.id}_11", st3)
-    await USR.gw_view(cb(f"gw:v:{g.id}", 13), bot, st3)
-    assert (await st3.get_data())["gw_inv"] == 11
+    assert (await E.entry_of(g.id, 13)).invited_by == 11
 
 
 async def test_on_start_plain_in_giveaway_bot_and_other_field(env):
@@ -673,3 +675,26 @@ async def test_clear_history_removes_only_finished(env):
     await ADM.adm_hist_clear_do(cb("gw:a:hclrok", OWNER), FakeBot())
     assert await E.get_giveaway(a, BOT) is None and await E.get_giveaway(b, BOT) is None
     assert await E.get_giveaway(live, BOT) is not None
+
+
+async def test_link_entry_asks_captcha_directly_without_join_button_and_counts_referral(env):
+    g = await mk_gw(captcha=True, ref_bonus=1)
+    bot = FakeBot()
+    await USR.gw_join(cb(f"gw:j:{g.id}", 11), bot, fsm(11))
+    # دعوت‌کننده خودش کپچا دارد؛ پاسخ را از state می‌خوانیم
+    st = fsm(12)
+    m = tmsg("/start", 12)
+    await USR.on_start(m, bot, ROW, f"gw_{g.id}_11", st)
+    d = await st.get_data()
+    assert d.get("gw_id") == g.id and "gw_ans" in d and d["gw_inv"] == 11      # مستقیم رفت سراغِ سؤالِ ریاضی
+    assert await E.entry_of(g.id, 12) is None                                  # تا جواب ندهد ثبت نشده
+    await USR.gw_captcha_in(tmsg(str(d["gw_ans"]), 12), bot, st)
+    assert (await E.entry_of(g.id, 12)).invited_by == 11                       # جزوِ رفرالِ دعوت‌کننده
+
+
+async def test_link_entry_for_existing_participant_or_self_invite_shows_card(env):
+    g = await mk_gw(captcha=True)
+    bot = FakeBot()
+    st = fsm(14)
+    await USR.on_start(tmsg("/start", 14), bot, ROW, f"gw_{g.id}_14", st)      # لینکِ خودش ⇒ فقط کارت
+    assert "gw_ans" not in (await st.get_data())

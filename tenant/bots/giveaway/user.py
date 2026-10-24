@@ -155,45 +155,54 @@ async def gw_view(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await cb.answer()
 
 
-@giveaway_user_router.callback_query(F.data.regexp(r"^gw:j:\d+$"))
-async def gw_join(cb: CallbackQuery, bot: Bot, state: FSMContext):
-    row = await _row(bot)
-    if not row:
-        return await cb.answer()
-    uid, gid = cb.from_user.id, int(cb.data.split(":")[2])
+async def _begin_join(ev, bot: Bot, row, state: FSMContext, gid: int, uid: int, say, ack) -> None:
+    """مسیرِ مشترکِ شروعِ ثبت‌نام (دکمهٔ «شرکت» و ورود با لینک). ev باید from_user و message داشته باشد.
+    say(text, alert) پیامِ کوتاه می‌دهد؛ ack() پاسخِ خالیِ کال‌بک (برایِ ورود با لینک بی‌اثر است)."""
     u = await _bu(row, uid)
     if u is not None and u.is_banned:
-        return await cb.answer("شما از این ربات مسدود شده‌اید.", show_alert=True)
+        return await say("شما از این ربات مسدود شده‌اید.", True)
     g = await E.get_giveaway(gid, row.id)
     if g is None or g.status != "active":
-        await cb.answer("این قرعه‌کشی پایان یافته است.", show_alert=True)
-        return await show_detail(cb, bot, row, gid, uid)
+        await say("این قرعه‌کشی پایان یافته است.", True)
+        return await show_detail(ev, bot, row, gid, uid)
     if await E.entry_of(gid, uid):
-        await cb.answer("قبلاً ثبت‌نام کرده‌ای ✅")
-        return await show_detail(cb, bot, row, gid, uid)
+        await say("قبلاً ثبت‌نام کرده‌ای ✅", False)
+        return await show_detail(ev, bot, row, gid, uid)
     left = _locked(row.id, uid)
     if left:
-        return await cb.answer(f"به‌خاطرِ پاسخِ غلطِ مکرر، {fa(left // 60 + 1)} دقیقه صبر کن.", show_alert=True)
-    await cb.answer()
-    if await _forcejoin_block(cb, bot, row, uid, gid):
+        return await say(f"به‌خاطرِ پاسخِ غلطِ مکرر، {fa(left // 60 + 1)} دقیقه صبر کن.", True)
+    await ack()
+    if await _forcejoin_block(ev, bot, row, uid, gid):
         return
     data = await state.get_data()
-    await state.update_data(gw_id=gid, gw_chat=cb.message.chat.id, gw_msg=cb.message.message_id,
+    await state.update_data(gw_id=gid, gw_chat=ev.message.chat.id, gw_msg=ev.message.message_id,
                             gw_inv=data.get("gw_inv_for") == gid and data.get("gw_inv") or None, gw_tries=0)
     phone = None
     if g.require_phone:
         phone = E.normalize_iran_phone(u.phone_number) if (u is not None and u.phone_verified and u.phone_number) else None
         if not phone:
             await state.set_state(GwUserFSM.phone)
-            await edit_or_send(cb, "☎️ <b>تأییدِ شماره</b>\n\nبرایِ شرکت باید شمارهٔ <b>ایرانیِ</b> خودت را با دکمهٔ پایینِ صفحه "
+            await edit_or_send(ev, "☎️ <b>تأییدِ شماره</b>\n\nبرایِ شرکت باید شمارهٔ <b>ایرانیِ</b> خودت را با دکمهٔ پایینِ صفحه "
                                    "تأیید کنی (تایپِ دستی قبول نیست).", kb(back_row(f"gw:cx:{gid}", "❌ انصراف")))
-            await cb.message.answer(
+            await ev.message.answer(
                 "👇 با دکمهٔ زیر شمارهٔ خودت را بفرست:",
                 reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📱 ارسالِ شمارهٔ من", request_contact=True)]],
                                                  resize_keyboard=True, one_time_keyboard=True))
             return
     await state.update_data(gw_phone=phone)
-    await _after_phone(cb, bot, row, state, g, uid)
+    await _after_phone(ev, bot, row, state, g, uid)
+
+
+@giveaway_user_router.callback_query(F.data.regexp(r"^gw:j:\d+$"))
+async def gw_join(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _row(bot)
+    if not row:
+        return await cb.answer()
+    uid, gid = cb.from_user.id, int(cb.data.split(":")[2])
+
+    async def say(text: str, alert: bool) -> None:
+        await cb.answer(text, show_alert=alert)
+    await _begin_join(cb, bot, row, state, gid, uid, say, cb.answer)
 
 
 async def _after_phone(event, bot: Bot, row, state: FSMContext, g, uid: int) -> None:
@@ -350,7 +359,22 @@ async def on_start(msg: Message, bot: Bot, row, payload: str | None, state: FSMC
     if parsed:
         gid, inv = parsed
         await state.update_data(gw_inv=inv, gw_inv_for=gid)
-        await show_detail(msg, bot, row, gid, msg.from_user.id, back="home")
+        # === PATCH_GW_LINK_AUTOJOIN_V1 === (مهدی) با لینک (دعوت یا اعلان) که آمد، لازم نیست دکمهٔ «شرکت» را بزند:
+        # مستقیم می‌رود سراغِ سؤالِ ریاضی (و شماره/عضویتِ اجباری اگر لازم باشد) و با لینکِ دعوت جزوِ رفرالِ دعوت‌کننده می‌شود.
+        uid = msg.from_user.id
+        g = await E.get_giveaway(gid, row.id)
+        if g is not None and g.status == "active" and inv != uid and await E.entry_of(gid, uid) is None:
+            ph = await msg.answer("🎰 <b>" + esc(g.title) + "</b>\n\n⏳ در حالِ شروعِ ثبت‌نام…", parse_mode="HTML")
+            ev = type("Ev", (), {"from_user": msg.from_user, "data": "x", "message": ph})()
+
+            async def say(text: str, alert: bool) -> None:
+                await msg.answer(text)
+
+            async def ack() -> None:
+                return None
+            await _begin_join(ev, bot, row, state, gid, uid, say, ack)
+            return True
+        await show_detail(msg, bot, row, gid, uid, back="home")
         return True
     if row.field == FIELD_KEY:
         await show_list(msg, bot, row, msg.from_user.id)
