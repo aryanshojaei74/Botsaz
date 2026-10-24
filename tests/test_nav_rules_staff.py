@@ -30,6 +30,9 @@ class Cap(BaseSession):
 
     async def make_request(self, bot, method, timeout=None):
         self.calls.append(method)
+        if getattr(self, "fail_edit", False) and type(method).__name__ == "EditMessageText":
+            from aiogram.exceptions import TelegramBadRequest
+            raise TelegramBadRequest(method=method, message="Bad Request: message can't be edited")
         if type(method).__name__ in ("SendMessage", "EditMessageText"):
             self.n += 1
             return Message(message_id=getattr(method, "message_id", None) or self.n, date=datetime.datetime.now(),

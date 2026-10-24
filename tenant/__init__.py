@@ -3279,7 +3279,17 @@ async def nav_back(cb: CallbackQuery, bot: Bot, state: FSMContext):
                                     reply_markup=st[4])
     except Exception as e:
         if "not modified" not in str(e).lower():
-            logger.info("nav back edit failed: %s", e)
+            logger.warning("nav back edit failed: %s", e)
+            # === PATCH_NAV_BACK_RESEND_V1 === ویرایش نشد (پیامِ قدیمی/نوعِ دیگر): به‌جایِ پرتاب به منوی اصلی،
+            # همان صفحهٔ قبلی را به‌صورتِ پیامِ تازه می‌فرستیم تا «بازگشت» همیشه به «صفحهٔ قبل» برسد.
+            try:
+                sent = await bot.send_message(chat_id=m.chat.id, text=st[0], parse_mode=st[1], entities=st[2],
+                                              link_preview_options=st[3], reply_markup=st[4])
+                _NAV_MSGS[(m.chat.id, sent.message_id)] = {"cur": st, "hist": list(ent["hist"])}
+                await cb.answer()
+                return
+            except Exception:
+                logger.exception("nav back resend failed")
             ent["hist"].append(st)
             await mbtn_tap(cb.model_copy(update={"data": "mbtn:home"}), bot, state)
             return
