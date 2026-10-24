@@ -1385,8 +1385,11 @@ async def check_force_join(bot: Bot, bot_id: int, user_id: int, bypass_cache: bo
         )).all()
         bot_row = await s.scalar(select(BotRow).where(BotRow.id == bot_id))
     # ادمین و اونر از بررسی عضویت معاف هستند
+    # === PATCH_FJ_TEST_MODE_V1 === (محمد، رباتِ قرعه‌کشی: «اصلاً کار نمی‌کند») مالک با حسابِ خودش تست می‌کرد و چون معاف است
+    # هیچ‌وقت صفحهٔ عضویت را نمی‌دید؛ «حالتِ تست» این معافیت را برایِ خودِ مالک/ادمین برمی‌دارد.
     if bot_row and await is_owner_or_admin(bot_id, user_id, bot_row.owner_id):
-        return []
+        if (await get_setting(bot_id, "fj_test_mode", "0")) != "1":
+            return []
     if not fjs:
         return []
     # === PATCH_FORCEJOIN_PARALLEL_CACHE_V1 ===
@@ -29812,6 +29815,14 @@ async def _fj_hub_kb(bot_id: int, plan: str) -> InlineKeyboardMarkup:
             callback_data=f"fj:view:{fj.id}"
         )])
     rows_kb.append([InlineKeyboardButton(text="➕ افزودن کانال", callback_data="fj:add")])
+    if fjs:      # === PATCH_FJ_TEST_MODE_V1 ===
+        _tm = (await get_setting(bot_id, "fj_test_mode", "0")) == "1"
+        rows_kb.append([InlineKeyboardButton(text="🧪 بررسیِ وضعیتِ کانال‌ها و عضویتِ من", callback_data="fj:diag",
+                                             style=ButtonStyle.PRIMARY)])
+        rows_kb.append([InlineKeyboardButton(
+            text=("🧪 حالتِ تست: ✅ روشن (مالک/ادمین هم عضویت را می‌بینند)" if _tm
+                  else "🧪 حالتِ تست: ⛔️ خاموش (مالک/ادمین معاف‌اند)"),
+            callback_data="fj:testmode", style=(ButtonStyle.SUCCESS if _tm else ButtonStyle.DANGER))])
     # === PATCH_TRUST_TEXT_PRO_ONLY_V1 ===
     # ویرایشِ متن فقط در پلنِ حرفه‌ای (و رباتِ همکار)؛ رایگان و رشد متنِ
     # پیش‌فرض را می‌گیرند.
@@ -29983,6 +29994,69 @@ async def fj_text_save(msg: Message, state: FSMContext, bot: Bot):
     # === PATCH_FJ_TEXT_NAV_FIX_V1 ===
     await msg.answer("✅ متن عضویت اجباری ذخیره شد.",
                      reply_markup=await _fj_hub_kb(row.id, row.plan))
+
+
+@tenant_router.callback_query(F.data == "fj:testmode")
+async def fj_test_mode(cb: CallbackQuery, bot: Bot):
+    """PATCH_FJ_TEST_MODE_V1 — روشن/خاموشِ «حالتِ تست»: مالک و ادمین هم دروازهٔ عضویت را ببینند."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    new = "0" if (await get_setting(row.id, "fj_test_mode", "0")) == "1" else "1"
+    await set_setting(row.id, "fj_test_mode", new)
+    await cb.answer("روشن شد؛ حالا خودت هم عضویت را می‌بینی. بعد از تست خاموشش کن." if new == "1"
+                    else "خاموش شد؛ مالک و ادمین‌ها دوباره معاف‌اند.", show_alert=True)
+    try:
+        await cb.message.edit_reply_markup(reply_markup=await _fj_hub_kb(row.id, row.plan))
+    except Exception:
+        logger.debug("fj: بازسازیِ هاب بعد از حالتِ تست ممکن نشد")
+
+
+@tenant_router.callback_query(F.data == "fj:diag")
+async def fj_diag(cb: CallbackQuery, bot: Bot):
+    """PATCH_FJ_TEST_MODE_V1 — برایِ هر کانالِ فعال: ربات ادمین است؟ و تو عضوی؟ (زنده از تلگرام)."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await cb.answer("در حال بررسی…")
+    async with Session() as s:
+        fjs = (await s.scalars(select(ForceJoin).where(ForceJoin.bot_id == row.id,
+                                                       ForceJoin.is_active == True))).all()   # noqa: E712
+    if not fjs:
+        return await cb.message.answer("کانالِ فعالی ثبت نشده.")
+    try:
+        me = await bot.me()
+    except Exception:
+        me = None
+    lines = ["🧪 <b>وضعیتِ عضویتِ اجباری</b>\n"]
+    all_ok = True
+    for fj in fjs:
+        title = _html.escape(str(fj.title or fj.chat_id))
+        try:
+            bm = await asyncio.wait_for(bot.get_chat_member(fj.chat_id, me.id), timeout=6) if me else None
+            bst = bm.status if bm else "?"
+        except Exception as e:      # noqa: BLE001
+            bst = f"خطا: {str(e)[:60]}"
+        bot_ok = bst in ("administrator", "creator")
+        try:
+            um = await asyncio.wait_for(bot.get_chat_member(fj.chat_id, cb.from_user.id), timeout=6)
+            ust = um.status
+        except Exception as e:      # noqa: BLE001
+            ust = f"خطا: {str(e)[:60]}"
+        joined = ust in ("member", "administrator", "creator")
+        all_ok = all_ok and bot_ok
+        lines.append(f"• <b>{title}</b>\n  ربات: {'✅ ادمین' if bot_ok else '⚠️ ' + _html.escape(str(bst)) + ' (باید ادمین باشد)'}"
+                     f"\n  حسابِ تو: {'عضو' if joined else 'عضو نیست'} ({_html.escape(str(ust))})")
+    exempt = await is_owner_or_admin(row.id, cb.from_user.id, row.owner_id)
+    test_on = (await get_setting(row.id, "fj_test_mode", "0")) == "1"
+    if exempt and not test_on:
+        lines.append("\nℹ️ <b>تو مالک/ادمینِ ربات هستی و معاف</b>؛ پس خودت هیچ‌وقت صفحهٔ «اول عضو شو» را نمی‌بینی. "
+                     "با یک حسابِ عادی تست کن، یا «🧪 حالتِ تست» را روشن کن.")
+    elif exempt and test_on:
+        lines.append("\n🧪 حالتِ تست روشن است؛ اگر عضو نباشی باید صفحهٔ عضویت را ببینی. بعد از تست خاموشش کن.")
+    if not all_ok:
+        lines.append("\n⚠️ تا وقتی ربات در همهٔ کانال‌ها ادمین نباشد، عضویتِ اجباری عملاً اعمال نمی‌شود.")
+    await cb.message.answer("\n".join(lines), parse_mode="HTML")
 
 
 @tenant_router.callback_query(F.data == "fj:add")
