@@ -36,6 +36,10 @@ panel_relink_router = Router()
 # فاصلهٔ بینِ پیام‌ها تا به محدودیتِ تلگرام نخوریم (۳۰ پیام در ثانیه)
 _NOTIFY_SLEEP = 0.05
 
+from tenant.shared.panel_clients.rate_limit import (   # PATCH_RELINK_RATE_LIMIT_V1
+    _DEFAULT_RETRY_WAIT, _MAX_RETRIES, _MAX_RETRY_WAIT, _PACE_SLEEP, _get_client_retry, _retry_wait_from,
+)
+
 
 def relink_button(key: str, plan: str) -> list[InlineKeyboardButton] | None:
     """دکمهٔ این قابلیت برای کیبوردِ مدیریتِ پنل. برایِ پلن‌های پایین‌تر
@@ -130,11 +134,17 @@ async def relink_run(cb: CallbackQuery, bot: Bot):
     changed: list[tuple[int, str, str]] = []   # (telegram_id, email, new_link)
     same = 0
     missing: list[str] = []
+    failed: list[str] = []                     # PATCH_RELINK_RATE_LIMIT_V1: خطایِ پنل (۴۲۹/تایم‌اوت) — «پیدا نشد» نیست
     try:
         await client.login()
         for aid, email, tg_id, old_link, sub_id in work:
             try:
-                cur = await client.get_client(email)
+                await asyncio.sleep(_PACE_SLEEP)
+                cur, _err = await _get_client_retry(client, email)
+                if _err is not None:
+                    logger.warning("relink: خطایِ پنل برایِ %s: %s", email, _err)
+                    failed.append(f"{email}: {str(_err)[:90]}")
+                    continue
                 new_link = (cur or {}).get("sub_link") or ""
                 new_sub_id = (cur or {}).get("subId") or sub_id
                 new_uuid = (cur or {}).get("uuid") or (cur or {}).get("id")
@@ -174,6 +184,8 @@ async def relink_run(cb: CallbackQuery, bot: Bot):
         f"• بدون تغییر: {same}",
         f"• پیدا نشد روی پنل: {len(missing)}",
     ]
+    if failed:
+        lines.append(f"• ⚠️ خطایِ موقتِ پنل (محدودیتِ نرخ/تایم‌اوت): {len(failed)}")
     if missing:
         preview = "\n".join(f"  – <code>{m}</code>" for m in missing[:15])
         lines.append("\n<b>پیدا نشدند:</b>\n" + preview)
@@ -182,6 +194,11 @@ async def relink_run(cb: CallbackQuery, bot: Bot):
         lines.append(
             "\nℹ️ اینها روی پنلِ جدید با همین شناسه ساخته نشده‌اند. اگر "
             "کلاینت‌ها را با همان emailها بسازی و دوباره این دکمه را بزنی، وصل می‌شوند.")
+    if failed:
+        lines.append("\n<b>به‌خاطرِ خطایِ پنل بازسازی نشدند:</b>\n"
+                     + "\n".join(f"  – <code>{m}</code>" for m in failed[:10])
+                     + (f"\n  … و {len(failed) - 10} مورد دیگر" if len(failed) > 10 else "")
+                     + "\n\nℹ️ چند دقیقه صبر کن و همین دکمه را دوباره بزن؛ فقط همین‌ها دوباره بررسی می‌شوند (بقیه «بدون تغییر» می‌مانند).")
     await cb.message.answer("\n".join(lines))
 
     if not notify or not changed:

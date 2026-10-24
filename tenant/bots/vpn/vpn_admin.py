@@ -2480,7 +2480,13 @@ async def vpn_refresh_subs(cb: CallbackQuery, bot: Bot):
                     if _bk(key) in ("marzban", "rebecca", "pasargad", "pasarguard", "marzneshin", "upanel_mizban", "rickpanel"):
                         # مرزبان/ربکا/پاسارگاد/PasarGuard/مرزنشین لینک ساب را خودشان
                         # برمی‌گردانند؛ از روی sub_id قابل بازسازی نیست — همیشه از پنل می‌خوانیم.
-                        cur = await client.get_client(email)
+                        # PATCH_RELINK_RATE_LIMIT_V1: فاصله + صبر روی ۴۲۹ی پنل (RickPanel و …)
+                        from tenant.shared.panel_clients.rate_limit import _PACE_SLEEP as _PS, _get_client_retry as _gcr
+                        await asyncio.sleep(_PS)
+                        cur, _gerr = await _gcr(client, email)
+                        if _gerr is not None:
+                            failed_list.append(f"{email}: {str(_gerr)[:90]}")
+                            continue
                         new_sub_link = (cur or {}).get("sub_link") or ""
                         if not new_sub_link:
                             failed_list.append(email)
