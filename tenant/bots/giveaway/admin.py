@@ -442,14 +442,15 @@ async def wiz_confirm(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 # ═══════════════════════ فهرست و جزئیات ═══════════════════════
 
-async def _list(event, row, statuses, title: str, empty: str) -> None:
+async def _list(event, row, statuses, title: str, empty: str, extra_rows=()) -> None:
     gs = await E.recent_giveaways(row.id, 20, statuses)
     rows = []
     for g in gs:
         n = await E.count_entries(g.id)
         ic = {"active": "🟢", "ended": "🏁", "cancelled": "⛔️"}.get(g.status, "•")
         rows.append([btn(f"{ic} {g.title[:30]} · {fa(n)} نفر", f"gw:a:g:{g.id}", style=ButtonStyle.PRIMARY)])
-    await edit_or_send(event, f"{title}\n\n" + ("" if gs else empty), kb(*rows, back_row(MENU)))
+    await edit_or_send(event, f"{title}\n\n" + ("" if gs else empty),
+                       kb(*rows, *(extra_rows if gs else ()), back_row(MENU)))
 
 
 @giveaway_admin_router.callback_query(F.data == "gw:a:act")
@@ -466,8 +467,61 @@ async def adm_hist(cb: CallbackQuery, bot: Bot):
     row = await _guard(cb, bot)
     if not row:
         return
-    await _list(cb, row, ("ended", "cancelled"), "🏁 <b>تاریخچه</b>", "هنوز قرعه‌کشیِ پایان‌یافته‌ای نیست.")
+    await _list(cb, row, ("ended", "cancelled"), "🏁 <b>تاریخچه</b>", "هنوز قرعه‌کشیِ پایان‌یافته‌ای نیست.",
+                extra_rows=[[btn("🗑 پاک‌کردنِ کلِ تاریخچه", "gw:a:hclr", style=ButtonStyle.DANGER)]])
     await cb.answer()
+
+
+# === PATCH_GW_DELETE_HISTORY_V1 === (محمد) پاک‌کردنِ نتایجِ تستی: یکی یا کلِ تاریخچه؛ قرعه‌کشیِ فعال دست‌نخورده
+@giveaway_admin_router.callback_query(F.data == "gw:a:hclr")
+async def adm_hist_clear_ask(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    n = len(await E.recent_giveaways(row.id, 1000, ("ended", "cancelled")))
+    await edit_or_send(cb, f"🗑 <b>پاک‌کردنِ کلِ تاریخچه</b>\n\n{fa(n)} قرعه‌کشیِ پایان‌یافته/لغوشده با برنده‌ها، "
+                           "شرکت‌کننده‌ها و جایزه‌هایشان برای همیشه پاک می‌شود. قرعه‌کشی‌هایِ فعال دست نمی‌خورند. "
+                           "<b>برگشت‌پذیر نیست.</b> ادامه؟",
+                       kb([btn("✅ بله، پاک کن", "gw:a:hclrok", style=ButtonStyle.DANGER)],
+                          back_row("gw:a:hist", "❌ انصراف")))
+    await cb.answer()
+
+
+@giveaway_admin_router.callback_query(F.data == "gw:a:hclrok")
+async def adm_hist_clear_do(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    n = await E.delete_finished(row.id)
+    await cb.answer(f"{n} مورد پاک شد.", show_alert=True)
+    await _list(cb, row, ("ended", "cancelled"), "🏁 <b>تاریخچه</b>", "هنوز قرعه‌کشیِ پایان‌یافته‌ای نیست.")
+
+
+@giveaway_admin_router.callback_query(F.data.regexp(r"^gw:a:del:\d+$"))
+async def adm_del_ask(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    gid = int(cb.data.split(":")[3])
+    g = await E.get_giveaway(gid, row.id)
+    if g is None or g.status == "active":
+        return await cb.answer("فقط قرعه‌کشیِ پایان‌یافته یا لغوشده پاک می‌شود.", show_alert=True)
+    await edit_or_send(cb, f"🗑 <b>حذفِ «{esc(g.title)}»</b>\n\nبرنده‌ها، شرکت‌کننده‌ها و جایزه‌هایِ این قرعه‌کشی برای همیشه "
+                           "پاک می‌شود. <b>برگشت‌پذیر نیست.</b> ادامه؟",
+                       kb([btn("✅ بله، حذف کن", f"gw:a:delok:{gid}", style=ButtonStyle.DANGER)],
+                          back_row(f"gw:a:g:{gid}", "❌ انصراف")))
+    await cb.answer()
+
+
+@giveaway_admin_router.callback_query(F.data.regexp(r"^gw:a:delok:\d+$"))
+async def adm_del_do(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    n = await E.delete_finished(row.id, int(cb.data.split(":")[3]))
+    await cb.answer("پاک شد." if n else "پیدا نشد یا فعال است.", show_alert=True)
+    await _list(cb, row, ("ended", "cancelled"), "🏁 <b>تاریخچه</b>", "هنوز قرعه‌کشیِ پایان‌یافته‌ای نیست.",
+                extra_rows=[[btn("🗑 پاک‌کردنِ کلِ تاریخچه", "gw:a:hclr", style=ButtonStyle.DANGER)]])
 
 
 async def _detail(event, bot: Bot, row, gid: int, note: str = "") -> None:
@@ -491,7 +545,8 @@ async def _detail(event, bot: Bot, row, gid: int, note: str = "") -> None:
                 [btn("❌ لغوِ قرعه‌کشی", f"gw:a:xl:{gid}", style=ButtonStyle.DANGER)]]
     else:
         rows = [[btn("🏆 جزئیاتِ برندگان", f"gw:a:win:{gid}", style=ButtonStyle.SUCCESS)] if g.status == "ended" else [],
-                [btn("👥 فهرست (CSV)", f"gw:a:csv:{gid}", style=ButtonStyle.PRIMARY)]]
+                [btn("👥 فهرست (CSV)", f"gw:a:csv:{gid}", style=ButtonStyle.PRIMARY)],
+                [btn("🗑 حذفِ این قرعه‌کشی", f"gw:a:del:{gid}", style=ButtonStyle.DANGER)]]
     rows.append(back_row("gw:a:act" if g.status == "active" else "gw:a:hist"))
     await edit_or_send(event, text, kb(*rows))
 

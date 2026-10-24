@@ -642,3 +642,34 @@ async def test_giveaway_resumes_after_forcejoin_check(env, monkeypatch):
     other = SimpleNamespace(id=BOT, field="vpn")
     await tenant._resume_giveaway_after_gate(c, FakeBot(), other, st, {})      # رباتِ دیگر بدونِ payload ⇒ هیچ
     assert shown == []
+
+
+# === PATCH_GW_DELETE_HISTORY_V1 === (محمد) پاک‌کردنِ نتایجِ تستی
+async def _finished(status):
+    g = await mk_gw()
+    async with E.Session() as s:
+        gg = await s.get(models.Giveaway, g.id)
+        gg.status = status
+        await s.commit()
+    return g.id
+
+
+async def test_delete_single_finished_keeps_active(env):
+    done, live = await _finished("ended"), (await mk_gw()).id
+    c = cb(f"gw:a:del:{live}", OWNER)
+    await ADM.adm_del_ask(c, FakeBot())
+    assert c.alerts and c.alerts[0][1]                       # قرعه‌کشیِ فعال پاک‌شدنی نیست
+    c = cb(f"gw:a:delok:{done}", OWNER)
+    await ADM.adm_del_do(c, FakeBot())
+    assert await E.get_giveaway(done, BOT) is None and await E.get_giveaway(live, BOT) is not None
+    assert not await E.prizes_of(done)
+
+
+async def test_clear_history_removes_only_finished(env):
+    a, b, live = await _finished("ended"), await _finished("cancelled"), (await mk_gw()).id
+    c = cb("gw:a:hclr", OWNER)
+    await ADM.adm_hist_clear_ask(c, FakeBot())
+    assert "gw:a:hclrok" in cbs(c.message.edits[-1][1])
+    await ADM.adm_hist_clear_do(cb("gw:a:hclrok", OWNER), FakeBot())
+    assert await E.get_giveaway(a, BOT) is None and await E.get_giveaway(b, BOT) is None
+    assert await E.get_giveaway(live, BOT) is not None

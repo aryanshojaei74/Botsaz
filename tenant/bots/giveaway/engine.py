@@ -16,10 +16,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Awaitable, Callable, Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from config import Session
-from models import Giveaway, GiveawayEntry, GiveawayPrize, GiveawayWinner
+from models import Giveaway, GiveawayEntry, GiveawayPost, GiveawayPrize, GiveawayWinner
 
 from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
@@ -134,6 +134,23 @@ async def recent_giveaways(bot_id: int, limit: int = 15, statuses=("active", "en
     async with Session() as s:
         return list((await s.scalars(select(Giveaway).where(
             Giveaway.bot_id == bot_id, Giveaway.status.in_(statuses)).order_by(Giveaway.id.desc()).limit(limit))).all())
+
+
+async def delete_finished(bot_id: int, gid: int | None = None) -> int:
+    """پاک‌کردنِ قرعه‌کشی‌هایِ پایان‌یافته/لغوشده (یکی یا همه) با برنده‌ها، شرکت‌کننده‌ها، جایزه‌ها و پست‌ها.
+    قرعه‌کشیِ فعال هرگز پاک نمی‌شود. خروجی: تعدادِ قرعه‌کشیِ پاک‌شده."""
+    async with Session() as s:
+        q = select(Giveaway.id).where(Giveaway.bot_id == bot_id, Giveaway.status.in_(("ended", "cancelled")))
+        if gid is not None:
+            q = q.where(Giveaway.id == gid)
+        ids = list((await s.scalars(q)).all())
+        if not ids:
+            return 0
+        for model in (GiveawayWinner, GiveawayPost, GiveawayPrize, GiveawayEntry):
+            await s.execute(delete(model).where(model.giveaway_id.in_(ids)))
+        await s.execute(delete(Giveaway).where(Giveaway.id.in_(ids)))
+        await s.commit()
+        return len(ids)
 
 
 async def prizes_of(gid: int) -> list[GiveawayPrize]:
