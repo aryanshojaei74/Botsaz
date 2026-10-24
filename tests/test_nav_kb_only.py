@@ -91,9 +91,12 @@ async def test_send_layer_strips_nav_for_customers_not_staff(monkeypatch):
     mk = _kb([("پرداخت", "pay:1")], [("⬅️ بازگشت", "vsvcback"), ("🏠 خانه", "vsvc:home")])
     await bot.session.make_request(bot, SendMessage(chat_id=500, text="x", reply_markup=mk))
     assert [b.text for r in sent[-1].reply_markup.inline_keyboard for b in r] == ["پرداخت"]
-    staff["v"] = True                                           # مالک/ادمین: دست‌نخورده
+    staff["v"] = True                                           # مالک/ادمین: صفحهٔ منویِ مشتری هم مثلِ مشتری
     await bot.session.make_request(bot, SendMessage(chat_id=500, text="x", reply_markup=mk))
-    assert len([b for r in sent[-1].reply_markup.inline_keyboard for b in r]) >= 3
+    assert [b.text for r in sent[-1].reply_markup.inline_keyboard for b in r] == ["پرداخت"]
+    adm = _kb([("تنظیمات", "tadm:sec:x")], [("⬅️ بازگشت", "mbtn:home")])      # صفحهٔ مدیریتی: دست‌نخورده
+    await bot.session.make_request(bot, SendMessage(chat_id=500, text="x", reply_markup=adm))
+    assert len([b for r in sent[-1].reply_markup.inline_keyboard for b in r]) == 2
 
 
 def test_plan_table_uses_owner_title_for_user_count_label():

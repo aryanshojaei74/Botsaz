@@ -2795,6 +2795,22 @@ def _is_inline_nav_button(b) -> bool:
     return cb in _NAV_INLINE_BACK_CBS or _nav_norm_label(getattr(b, "text", "")) in _NAV_INLINE_BACK_TEXTS
 
 
+_STAFF_PAGE_CB_PREFIXES = ("tadm:", "tvpn:", "sadm:", "smm:", "cfg:", "cfgf:", "set:", "usr:", "bc:", "vcadm:", "kyc:")
+_CUSTOMER_NAV_CBS = ("mbtn:home", "nav:back", "vsvc:home", "vsvcback", "vc:home")
+
+
+def _is_customer_nav_page(mk) -> bool:
+    """PATCH_NAV_KB_ONLY_STAFF_V1 — صفحه‌ایِ از منویِ مشتری (دکمهٔ خانه/بازگشتِ مشتری دارد و دکمهٔ مدیریتی ندارد).
+    مالک وقتی رباتِ خودش را تست می‌کند همین صفحه‌ها را می‌بیند؛ پس «بازگشت فقط در کیبورد» رویشان هم اعمال می‌شود.
+    صفحه‌هایِ پنلِ مدیریت (tadm:/tvpn:/…) هرگز دست نمی‌خورند."""
+    if not isinstance(mk, InlineKeyboardMarkup):
+        return False
+    cbs = [str(getattr(b, "callback_data", "") or "") for r in mk.inline_keyboard for b in r]
+    if any(c.startswith(_STAFF_PAGE_CB_PREFIXES) for c in cbs):
+        return False
+    return any(c in _CUSTOMER_NAV_CBS or c.startswith("smopen:") for c in cbs)
+
+
 def strip_inline_nav(mk):
     """دکمه‌هایِ بازگشت/خانهٔ شیشه‌ای را برمی‌دارد؛ ردیف‌هایِ خالی‌شده حذف می‌شوند. اگر چیزی نماند None."""
     if not isinstance(mk, InlineKeyboardMarkup):
@@ -3170,7 +3186,8 @@ def _nav_install(bot) -> None:
                 and method.chat_id > 0 and not getattr(method, "inline_message_id", None)):
             try:
                 _rown = await get_bot_row(bot_)
-                if _rown and await nav_kb_only(_rown.id) and not await _nav_is_staff(bot_, method.chat_id):
+                if _rown and await nav_kb_only(_rown.id) and (
+                        not await _nav_is_staff(bot_, method.chat_id) or _is_customer_nav_page(mk)):
                     _stripped = strip_inline_nav(mk)
                     return await orig(bot_, method.model_copy(update={"reply_markup": _stripped}), timeout=timeout)
             except Exception:
