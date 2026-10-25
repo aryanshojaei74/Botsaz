@@ -20100,7 +20100,8 @@ async def feedback_save(msg: Message, state: FSMContext, bot: Bot):
         await s.commit()
     if PLATFORM_ADMIN_ID:
         reply_kb = InlineKeyboardMarkup(inline_keyboard=[[
-            hx_button("↩️ پاسخ", callback_data=f"afb:reply:{fb_id}", style=ButtonStyle.PRIMARY)
+            hx_button("↩️ پاسخ", callback_data=f"afb:reply:{fb_id}", style=ButtonStyle.PRIMARY),
+            hx_button("🔒 بستنِ تیکت", callback_data=f"afb:close:{fb_id}", style=ButtonStyle.DANGER),   # PATCH_FB_CLOSE_V1
         ]])
         await bot.send_message(
             PLATFORM_ADMIN_ID,
@@ -20158,16 +20159,95 @@ async def afb_reply_send(msg: Message, state: FSMContext, bot: Bot):
         user_tg_id = fb.user_telegram_id
         await s.commit()
     # ارسال پاسخ به کاربر
+    # === PATCH_FB_CLOSE_V1 === (پیشنهاد ادمین) زیرِ پاسخ، دکمهٔ «بستنِ تیکت» + توضیح؛ از پاسخِ دوم به بعد به‌صورتِ اخطار
+    n_replies = await _fb_bump_replies(fb_id)
+    await set_pset(f"fbc:{fb_id}", "")            # پاسخِ تازه تیکتِ بسته‌شده را دوباره باز می‌کند
     if user_tg_id:
         try:
             await bot.send_message(
                 user_tg_id,
                 f"📬 <b>پاسخ به نظر شما (#{fb_id})</b>\n\n"
-                f"✍️ {reply_text}"
+                f"✍️ {reply_text}\n\n" + _fb_close_hint(n_replies),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="✅ مشکلم حل شد — بستنِ تیکت", callback_data=f"ufb:close:{fb_id}")]]),
             )
         except Exception:
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     await msg.answer(f"✅ پاسخ به نظر #{fb_id} ارسال شد.", reply_markup=await smart_home_kb(msg.from_user.id, show_admin=True))
+    await msg.answer(
+        "ℹ️ اگر مسئله حل شده، تیکت را ببند (کاربر هم زیرِ پاسخ دکمهٔ بستن دارد):",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            hx_button("🔒 بستنِ تیکت", callback_data=f"afb:close:{fb_id}", style=ButtonStyle.DANGER)]]))
+
+
+# === PATCH_FB_CLOSE_V1 === بستنِ تیکتِ نظر/پیشنهاد (هم مدیر هم کاربر)
+async def _fb_bump_replies(fb_id: int) -> int:
+    try:
+        n = int((await get_pset(f"fbn:{fb_id}", "0")) or 0) + 1
+    except ValueError:
+        n = 1
+    await set_pset(f"fbn:{fb_id}", str(n))
+    return n
+
+
+def _fb_close_hint(n_replies: int) -> str:
+    """پاسخِ اول: توضیحِ ساده؛ از پاسخِ دوم به بعد: حالتِ اخطار."""
+    if n_replies >= 2:
+        return ("⚠️ <b>اگر مشکلت حل شده، لطفاً تیکت را ببند.</b>\n"
+                "با دکمهٔ «✅ مشکلم حل شد» زیرِ همین پیام؛ تیکتِ باز تا وقتی بسته نشود در صفِ پیگیری می‌ماند.")
+    return "ℹ️ اگر مشکلت حل شد، با دکمهٔ زیر تیکت را ببند؛ اگر نه، همین‌جا پیامِ تازه بفرست."
+
+
+@router.callback_query(F.data.startswith("afb:close:"))
+async def afb_close(cb: CallbackQuery, bot: Bot):
+    if cb.from_user.id != PLATFORM_ADMIN_ID:
+        await cb.answer("دسترسی ندارید", show_alert=True)
+        return
+    from models import PlatformFeedback
+    fb_id = int(cb.data.split(":")[2])
+    async with Session() as s:
+        fb = await s.get(PlatformFeedback, fb_id)
+    if not fb:
+        return await cb.answer("نظر پیدا نشد.", show_alert=True)
+    await set_pset(f"fbc:{fb_id}", "1")
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        logger.debug("afb:close: برداشتنِ دکمه ممکن نشد")
+    await cb.answer("🔒 تیکت بسته شد")
+    try:
+        await bot.send_message(fb.user_telegram_id,
+                               f"🔒 گفتگوی #{fb_id} توسطِ پشتیبانی بسته شد.\nاگر هنوز مشکلی داری، از منو «نظر/پیشنهاد» یک پیامِ تازه بفرست.")
+    except Exception:
+        logger.exception("اطلاعِ بسته‌شدنِ تیکت به کاربر نرفت")
+
+
+@router.callback_query(F.data.startswith("ufb:close:"))
+async def ufb_close(cb: CallbackQuery, bot: Bot):
+    from models import PlatformFeedback
+    fb_id = int(cb.data.split(":")[2])
+    async with Session() as s:
+        fb = await s.get(PlatformFeedback, fb_id)
+    if not fb or fb.user_telegram_id != cb.from_user.id:
+        return await cb.answer("این تیکت برایِ تو نیست.", show_alert=True)
+    if (await get_pset(f"fbc:{fb_id}", "")) == "1":
+        try:
+            await cb.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            logger.debug("ufb:close: برداشتنِ دکمه ممکن نشد")
+        return await cb.answer("این تیکت قبلاً بسته شده.", show_alert=True)
+    await set_pset(f"fbc:{fb_id}", "1")
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        logger.debug("ufb:close: برداشتنِ دکمه ممکن نشد")
+    await cb.answer("🔒 تیکت بسته شد. ممنون! 🙏", show_alert=True)
+    if PLATFORM_ADMIN_ID:
+        try:
+            await bot.send_message(PLATFORM_ADMIN_ID,
+                                   f"✅ کاربر <b>{fb.user_name or fb.user_telegram_id}</b> تیکتِ #{fb_id} را بست (مشکل حل شد).")
+        except Exception:
+            logger.exception("اطلاعِ بسته‌شدنِ تیکت به مدیر نرفت")
 
 
 
