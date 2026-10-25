@@ -882,6 +882,32 @@ async def _drop_btn_sticker(bot, bot_id, chat_id) -> None:
         logger.info("پاک‌کردنِ استیکرِ دکمه ممکن نشد (bot_id=%s)", bot_id)
 
 
+# === PATCH_START_STICKER_CLEANUP_V1 === (Sajad، #180) استیکرِ /start هم مثلِ استیکرِ دکمه‌ها با رفتن به صفحهٔ بعد
+# (زدنِ هر دکمهٔ منو) یا /startِ دوباره پاک شود. جدا از استیکرِ دکمه نگه داشته می‌شود تا بازگشت به خانه
+# (send_home_menu) که استیکرِ دکمه را برمی‌دارد، استیکرِ استارتی را که همین الان فرستاده شده نپراند.
+_LAST_START_STICKER: dict[tuple, int] = {}
+
+
+async def _drop_start_sticker(bot, bot_id, chat_id) -> None:
+    mid = _LAST_START_STICKER.pop((bot_id, chat_id), None)
+    if not mid:
+        try:
+            v = (await get_setting(bot_id, f"startst:{chat_id}", "") or "").strip()
+            mid = int(v) if v.isdigit() else None
+        except Exception:
+            logger.debug("خواندنِ شناسهٔ استیکرِ استارت از دیتابیس ممکن نشد")
+    if not mid:
+        return
+    try:
+        await set_setting(bot_id, f"startst:{chat_id}", "")
+    except Exception:
+        logger.debug("پاک‌کردنِ شناسهٔ استیکرِ استارت از دیتابیس ممکن نشد")
+    try:
+        await bot.delete_message(chat_id, mid)
+    except Exception:
+        logger.info("پاک‌کردنِ استیکرِ استارت ممکن نشد (bot_id=%s)", bot_id)
+
+
 _HIDDEN_HOME_BUBBLES: dict = {}
 
 # === PATCH_CUSTOM_HOME_MENU_TEXT_HIDE_V11 ===
@@ -5270,7 +5296,13 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
             from tenant.shared.home_sticker_admin import get_start_sticker
             _start_sticker = await get_start_sticker(row.id)
             if _start_sticker:
-                await msg.answer_sticker(_start_sticker)
+                await _drop_start_sticker(bot, row.id, msg.chat.id)      # /startِ دوباره: استیکرِ قبلی نماند
+                _sent_ss = await msg.answer_sticker(_start_sticker)
+                _LAST_START_STICKER[(row.id, msg.chat.id)] = _sent_ss.message_id
+                try:
+                    await set_setting(row.id, f"startst:{msg.chat.id}", str(_sent_ss.message_id))
+                except Exception:
+                    logger.debug("ذخیرهٔ شناسهٔ استیکرِ استارت در دیتابیس ممکن نشد")
         except Exception:
             logger.exception("ارسال استیکرِ استارت ناموفق بود")
 
@@ -5957,6 +5989,7 @@ async def _exec_main_button(btn, msg, bot, state, row, u, bot_id, cb=None):
             # === PATCH_BTN_STICKER_PERSIST_V1 === با رفتن به صفحهٔ بعد، استیکرِ صفحهٔ قبل (که همراهِ دکمه‌هایِ قبلی بود)
             # همیشه پاک می‌شود؛ چه دکمهٔ تازه استیکر داشته باشد چه نه.
             await _drop_btn_sticker(bot, bot_id, msg.chat.id)
+            await _drop_start_sticker(bot, bot_id, msg.chat.id)        # PATCH_START_STICKER_CLEANUP_V1
             if _btn_sticker:
                 _sent_st = await msg.answer_sticker(_btn_sticker)
                 _LAST_BTN_STICKER[(bot_id, msg.chat.id)] = _sent_st.message_id

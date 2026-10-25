@@ -73,3 +73,30 @@ async def test_next_button_without_sticker_also_removes_previous_sticker(env, mo
     assert b.deleted == [(500, 701)]                       # استیکرِ اول با ارسالِ استیکرِ دوم پاک شد
     await tenant._exec_main_button(NS(id=11, action="x"), Msg(), b, None, row, None, 1)
     assert b.deleted[-1] == (500, 702) and len(sent) == 2   # دکمهٔ بدونِ استیکر هم استیکرِ قبلی را برداشت
+
+
+@pytest.mark.asyncio
+async def test_start_sticker_is_removed_when_user_opens_a_button_and_survives_restart(env, monkeypatch):
+    b = FakeBot()
+    await tenant.set_setting(1, "startst:500", "55")           # فرستاده‌شده در /start؛ حافظه خالی (ری‌استارت)
+    from tenant.shared import home_sticker_admin as HS
+
+    async def gbs(bot_id, btn_id):
+        return ""
+
+    async def run(*a, **k):
+        return None
+    monkeypatch.setattr(HS, "get_button_sticker", gbs)
+    monkeypatch.setattr(tenant, "_run_button_action", run)
+    monkeypatch.setattr(tenant, "has_feature", lambda plan, feat: True)
+    await tenant._exec_main_button(NS(id=11, action="x"), NS(chat=NS(id=500)), b, None, NS(plan="pro"), None, 1)
+    assert (500, 55) in b.deleted
+    assert not await tenant.get_setting(1, "startst:500", "")
+
+
+@pytest.mark.asyncio
+async def test_home_menu_does_not_delete_the_fresh_start_sticker(env):
+    b = FakeBot()
+    tenant._LAST_START_STICKER[(1, 500)] = 77
+    await tenant._drop_btn_sticker(b, 1, 500)                  # همان کاری که send_home_menu می‌کند
+    assert b.deleted == [] and tenant._LAST_START_STICKER[(1, 500)] == 77
