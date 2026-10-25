@@ -318,7 +318,7 @@ def _receipt_ai_autonomous_prompt(expected_amount_toman: int,
 _ARVAN_MAX_IMG_BYTES = 900_000     # حدودِ ۱٫۲ مگابایت بعد از base64
 
 
-def _shrink_receipt_image(raw: bytes) -> bytes:
+def _shrink_receipt_image(raw: bytes, max_w: int = 1600, max_bytes: int = _ARVAN_MAX_IMG_BYTES) -> bytes:
     """عکسِ رسید را تا حدِ خوانا کوچک می‌کند.
 
     عکسِ خامِ گوشی گاهی ۵ مگابایت است؛ فرستادنش هم کند است هم گران، و
@@ -326,21 +326,21 @@ def _shrink_receipt_image(raw: bytes) -> bytes:
     خواناست. اگر Pillow نصب نباشد یا تبدیل شکست بخورد، همان عکسِ اصلی
     فرستاده می‌شود (هیچ‌وقت نباید جلویِ بررسیِ رسید را بگیرد).
     """
-    if not raw or len(raw) <= _ARVAN_MAX_IMG_BYTES:
+    if not raw or len(raw) <= max_bytes:
         return raw
     try:
         import io as _io
         from PIL import Image
         im = Image.open(_io.BytesIO(raw))
         im = im.convert("RGB")
-        if im.width > 1600:
-            ratio = 1600 / im.width
-            im = im.resize((1600, max(1, int(im.height * ratio))))
+        if im.width > max_w:
+            ratio = max_w / im.width
+            im = im.resize((max_w, max(1, int(im.height * ratio))))
         for quality in (80, 65, 50):
             buf = _io.BytesIO()
             im.save(buf, format="JPEG", quality=quality, optimize=True)
             out = buf.getvalue()
-            if len(out) <= _ARVAN_MAX_IMG_BYTES:
+            if len(out) <= max_bytes:
                 return out
         return out
     except Exception:
@@ -368,6 +368,7 @@ async def _arvan_autonomous_call(prompt: str, image_bytes: bytes | None,
         return None, "کتابخانه aiohttp روی سرور نصب نیست."
     import base64
     content = [{"type": "text", "text": prompt}]
+    _raw_image = image_bytes
     if image_bytes:
         image_bytes = _shrink_receipt_image(image_bytes)   # PATCH_..._IMAGE_SHRINK_V1
         b64 = base64.b64encode(image_bytes).decode("ascii")
@@ -402,7 +403,13 @@ async def _arvan_autonomous_call(prompt: str, image_bytes: bytes | None,
     elif "gpt-oss" in _model_l:
         payload["reasoning_effort"] = "low"
     try:
-        timeout = aiohttp.ClientTimeout(total=ARVAN_AI_TIMEOUT_SECONDS)
+        # === PATCH_ARVAN_TIMEOUT_RETRY_V1 === (MidnightSoul: «آروان در ۶۰ ثانیه جواب نداد» بارها)
+        # قبلاً یک تایم‌اوت (asyncio.TimeoutError) از حلقهٔ تلاش‌ها می‌پرید بیرون و بدونِ امتحانِ کلیدِ دیگر/تلاشِ دوباره
+        # شکستِ نهایی بود، پس یک پاسخِ کندِ لحظه‌ای کافی بود رسید به تاییدِ دستی برود. حالا هر تلاش سقفِ کوتاه‌تری دارد
+        # (نصفِ ARVAN_AI_TIMEOUT، حداقل ۲۰ ثانیه)، تایم‌اوت هم مثلِ خطایِ موقتِ سرور تلاشِ بعدی را (با کلیدِ دیگر و
+        # عکسِ کوچک‌ترِ ۱۱۰۰ پیکسلی) امتحان می‌کند.
+        _attempt_secs = max(20, ARVAN_AI_TIMEOUT_SECONDS // 2)
+        timeout = aiohttp.ClientTimeout(total=_attempt_secs)
         last_err = None
         # === PATCH_ARVAN_MULTI_KEY_ROTATION_V1 ===
         # با چند کلید، تعدادِ تلاش‌ها رو به تعدادِ کلیدها (حداقل ۳) می‌رسونیم
@@ -472,6 +479,19 @@ async def _arvan_autonomous_call(prompt: str, image_bytes: bytes | None,
                         _img_note = " [این درخواست شاملِ عکس بود]" if image_bytes else ""
                         return None, (f"آروان خطای HTTP {resp.status} (مدل: {_model})"
                                       f"{_img_note}: {html.escape(body)}")
+            except asyncio.TimeoutError:
+                last_err = f"آروان در {_attempt_secs} ثانیه جواب نداد (تلاش {attempt + 1})"
+                logger.warning("auto_receipt: %s", last_err)
+                if _raw_image and attempt == 0:      # تلاشِ بعدی با عکسِ کوچک‌ترِ خوانا
+                    try:
+                        _small = _shrink_receipt_image(_raw_image, max_w=1100, max_bytes=350_000)
+                        _b64s = base64.b64encode(_small).decode("ascii")
+                        payload["messages"] = [{"role": "user", "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{_b64s}"}}]}]
+                    except Exception:
+                        logger.info("auto_receipt: کوچک‌ترکردنِ عکس برایِ تلاشِ دوم ممکن نشد")
+                continue
             except (aiohttp.ClientError, ConnectionError) as _net_e:
                 last_err = f"خطایِ موقتِ اتصال به آروان: {type(_net_e).__name__}"
                 await asyncio.sleep(1.5 * (attempt + 1))
@@ -497,7 +517,7 @@ async def _arvan_autonomous_call(prompt: str, image_bytes: bytes | None,
     except asyncio.TimeoutError:
         # === PATCH_AUTO_RECEIPT_TIMEOUT_V1 ===
         return None, (f"آروان در {ARVAN_AI_TIMEOUT_SECONDS} ثانیه جواب نداد "
-                      "(شلوغیِ موقت یا عکسِ خیلی بزرگ). رسید به تاییدِ دستی رفت.")
+                      "(شلوغیِ موقت یا عکسِ خیلی بزرگ). رسید به تاییدِ دستی رفت.")   # فقط اگر تایم‌اوتِ بیرونی
     except Exception as e:
         # === PATCH_AUTO_RECEIPT_ESCAPE_ERR_BODY_V1 ===
         return None, f"خطای اتصال به آروان: {type(e).__name__}: {html.escape(str(e)[:200])}"
