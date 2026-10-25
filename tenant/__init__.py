@@ -862,8 +862,20 @@ _LAST_BTN_STICKER: dict[tuple, int] = {}
 
 async def _drop_btn_sticker(bot, bot_id, chat_id) -> None:
     mid = _LAST_BTN_STICKER.pop((bot_id, chat_id), None)
+    # === PATCH_BTN_STICKER_PERSIST_V1 === (Sajad، پیشنهاد #178/#179) شناسهٔ آخرین استیکر در دیتابیس هم نگه داشته می‌شود؛
+    # فقط حافظه کافی نبود: بعد از ری‌استارتِ ربات (یا اگر پردازشِ دیگری استیکر را فرستاده بود) استیکرِ قبلی گم می‌شد و پاک نمی‌شد.
+    if not mid:
+        try:
+            v = (await get_setting(bot_id, f"btnst:{chat_id}", "") or "").strip()
+            mid = int(v) if v.isdigit() else None
+        except Exception:
+            logger.debug("خواندنِ شناسهٔ استیکرِ دکمه از دیتابیس ممکن نشد")
     if not mid:
         return
+    try:
+        await set_setting(bot_id, f"btnst:{chat_id}", "")
+    except Exception:
+        logger.debug("پاک‌کردنِ شناسهٔ استیکرِ دکمه از دیتابیس ممکن نشد")
     try:
         await bot.delete_message(chat_id, mid)
     except Exception:
@@ -5942,10 +5954,16 @@ async def _exec_main_button(btn, msg, bot, state, row, u, bot_id, cb=None):
         try:
             from tenant.shared.home_sticker_admin import get_button_sticker
             _btn_sticker = await get_button_sticker(bot_id, btn.id)
+            # === PATCH_BTN_STICKER_PERSIST_V1 === با رفتن به صفحهٔ بعد، استیکرِ صفحهٔ قبل (که همراهِ دکمه‌هایِ قبلی بود)
+            # همیشه پاک می‌شود؛ چه دکمهٔ تازه استیکر داشته باشد چه نه.
+            await _drop_btn_sticker(bot, bot_id, msg.chat.id)
             if _btn_sticker:
-                await _drop_btn_sticker(bot, bot_id, msg.chat.id)
                 _sent_st = await msg.answer_sticker(_btn_sticker)
                 _LAST_BTN_STICKER[(bot_id, msg.chat.id)] = _sent_st.message_id
+                try:
+                    await set_setting(bot_id, f"btnst:{msg.chat.id}", str(_sent_st.message_id))
+                except Exception:
+                    logger.debug("ذخیرهٔ شناسهٔ استیکرِ دکمه در دیتابیس ممکن نشد")
         except Exception:
             logger.exception("ارسال استیکرِ دکمه ناموفق بود")
     # دکمهٔ شرطی‌شده با زیرمجموعه: منطق اختصاصی خودش را دارد (متن پیش‌فرض را نشان نده)
