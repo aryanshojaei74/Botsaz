@@ -148,3 +148,20 @@ def test_card_is_renamable_and_in_gateway_labels():
     assert "card" in tenant.GATEWAY_LABELS and tenant.GATEWAY_LABELS["card"][1] == "card_display_name"
     assert GL.has_gateway_buttons(M(inline_keyboard=[[B(text="x", callback_data="vpay:card:1")]]))
     assert not GL.has_gateway_buttons(M(inline_keyboard=[[B(text="x", callback_data="set:card")]]))
+
+
+@pytest.mark.asyncio
+async def test_direct_crypto_deposit_is_renamable_colorable_and_orderable(settings):
+    store, _ = settings
+    store.update(gw_color_cdirect="danger", cdirect_display_name="💎 واریز مستقیم (TON/USDT)", gw_order="cdirect,card")
+    assert GL._BY_KEY["cdirect"][2] is True and tenant.GATEWAY_LABELS["cdirect"][1] == "cdirect_display_name"
+    mk = M(inline_keyboard=[[B(text="x", callback_data="w:charge")], [B(text="y", callback_data="trxd:ent:USDT")],
+                            [B(text="z", callback_data="w:ton_direct")], [B(text="h", callback_data="w:history")]])
+    out = await GL.apply_card_rename(1, await GL.apply_gateway_colors(1, mk))
+    flat = [b for r in out.inline_keyboard for b in r]
+    assert [b.text for b in flat[1:3]] == ["💎 واریز مستقیم (TON/USDT)"] * 2          # هر دو شکلِ دکمه
+    assert all(b.style == ButtonStyle.DANGER for b in flat[1:3]) and flat[3].text == "h"
+    assert GL.has_gateway_buttons(M(inline_keyboard=[[B(text="y", callback_data="trxd:ent:TRX")]]))
+    ordered = await GL.apply_order_rows(1, [[B(text="card", callback_data="w:charge")], [B(text="cd", callback_data="w:cdirect")]])
+    assert [r[0].callback_data for r in ordered] == ["w:cdirect", "w:charge"]            # ترتیب شاملِ واریزِ مستقیم
+    assert not GL._is_direct_gw_cb("w:ton_direct")                                       # شارژِ کیف پول است، نه پرداختِ مستقیمِ فاکتور

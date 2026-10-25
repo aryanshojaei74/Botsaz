@@ -34,6 +34,7 @@ ITEMS: list[tuple[str, str, str, bool]] = [
     ("hesabpay",    "w:hesabpay",    "🇦🇫 حساب‌پی",       False),
     ("swap",        "w:swap",        "🟦 سواپ‌ولت",       True),
     ("crypto",      "w:crypto",      "🪙 ارز دیجیتال",    False),
+    ("cdirect",     "w:cdirect",     "💎 واریز مستقیم ارز", True),     # PATCH_CDIRECT_LAYOUT_V1 (TON/ترون/تتر؛ هر سه شکلِ دکمه)
     ("stars",       "w:stars",       "⭐ استارز",         False),
 ]
 _BY_KEY = {k: (cb, title, ren) for k, cb, title, ren in ITEMS}
@@ -59,11 +60,11 @@ async def get_order(bot_id: int) -> list[str]:
 
 def _reorder(seq: list, cb_of, order: list[str]) -> list:
     """فقط اعضایِ «درگاه» را طبقِ order مرتب می‌کند و در همان جایگاه‌هایِ قبلی می‌گذارد."""
-    idxs = [i for i, it in enumerate(seq) if _KEY_BY_CB.get(cb_of(it)) is not None]
+    idxs = [i for i, it in enumerate(seq) if _gw_key_of_cb(cb_of(it) or "") is not None]
     if len(idxs) < 2:
         return seq
     rank = {k: n for n, k in enumerate(order)}
-    gw_items = sorted((seq[i] for i in idxs), key=lambda it: rank.get(_KEY_BY_CB[cb_of(it)], 999))
+    gw_items = sorted((seq[i] for i in idxs), key=lambda it: rank.get(_gw_key_of_cb(cb_of(it) or ""), 999))
     out = list(seq)
     for i, it in zip(idxs, gw_items):
         out[i] = it
@@ -129,14 +130,21 @@ def has_gateway_buttons(markup) -> bool:
     """آیا این کیبورد دکمهٔ درگاه/کارت‌به‌کارت دارد (برایِ فعال‌شدنِ هوکِ رنگ/نام/ترتیب در لایهٔ ارسال)؟"""
     try:
         return any((b.callback_data or "").startswith("w:") or _is_card_cb(b.callback_data or "")
-                   for r in markup.inline_keyboard for b in r)
+                   or _is_cdirect_cb(b.callback_data or "") for r in markup.inline_keyboard for b in r)
     except Exception:
         return False
+
+
+def _is_cdirect_cb(cb: str) -> bool:
+    """واریز مستقیمِ ارز: w:cdirect (انتخابِ ارز)، w:ton_direct، trxd:ent:{ارز} (وقتی فقط یک ارز فعال است)."""
+    return cb in ("w:cdirect", "w:ton_direct") or (cb or "").startswith("trxd:ent:")
 
 
 def _gw_key_of_cb(cb: str) -> str | None:
     if _is_card_cb(cb):
         return "card"
+    if _is_cdirect_cb(cb):
+        return "cdirect"
     for key, base, _t, _r in ITEMS:
         if cb == base or cb.startswith(base + ":"):
             return key
@@ -151,7 +159,8 @@ async def apply_gateway_colors(bot_id: int, markup):
         if not isinstance(markup, _IKM):
             return markup
         hits = [(i, j, _gw_key_of_cb(b.callback_data or "")) for i, r in enumerate(markup.inline_keyboard)
-                for j, b in enumerate(r) if b.callback_data and (b.callback_data.startswith("w:") or _is_card_cb(b.callback_data))]
+                for j, b in enumerate(r) if b.callback_data and (b.callback_data.startswith("w:") or _is_card_cb(b.callback_data)
+                                                                   or _is_cdirect_cb(b.callback_data))]
         hits = [h for h in hits if h[2]]
         if not hits:
             return markup
@@ -180,7 +189,7 @@ async def apply_gateway_colors(bot_id: int, markup):
 def _is_direct_gw_cb(cb: str) -> bool:
     """w:apay:vpn:5:1000 / w:apay:12 → پرداختِ مستقیمِ همین سفارش؛ خودِ w:apay (شارژِ کیف پول) نه."""
     key = _gw_key_of_cb(cb or "")
-    return bool(key) and (cb or "").startswith("w:") and cb != _BY_KEY[key][0]
+    return bool(key) and key != "cdirect" and (cb or "").startswith("w:") and cb != _BY_KEY[key][0]
 
 
 async def apply_direct_first(bot_id: int, markup):
@@ -211,16 +220,22 @@ async def apply_card_rename(bot_id: int, markup):
         from aiogram.types import InlineKeyboardMarkup as _IKM
         if not isinstance(markup, _IKM):
             return markup
-        hit = any((b.callback_data or "") == "w:charge" or _is_card_cb(b.callback_data or "")
-                  for r in markup.inline_keyboard for b in r)
-        if not hit:
+        def _kind(cb: str) -> str | None:
+            if cb == "w:charge" or _is_card_cb(cb):
+                return "card"
+            return "cdirect" if _is_cdirect_cb(cb) else None
+        kinds = {_kind(b.callback_data or "") for r in markup.inline_keyboard for b in r} - {None}
+        if not kinds:
             return markup
-        custom = ((await _get(bot_id, "card_display_name", "")) or "").strip()[:64]
-        if not custom:
+        names = {}
+        for k in kinds:
+            v = ((await _get(bot_id, f"{k}_display_name", "")) or "").strip()[:64]
+            if v:
+                names[k] = v
+        if not names:
             return markup
-        rows = [[b.model_copy(update={"text": custom}) if ((b.callback_data or "") == "w:charge"
-                                                           or _is_card_cb(b.callback_data or "")) else b for b in r]
-                for r in markup.inline_keyboard]
+        rows = [[b.model_copy(update={"text": names[_kind(b.callback_data or "")]})
+                 if _kind(b.callback_data or "") in names else b for b in r] for r in markup.inline_keyboard]
         return _IKM(inline_keyboard=rows)
     except Exception:
         logger.exception("gateway_layout: اعمالِ اسمِ کارت‌به‌کارت ناموفق بود")
@@ -381,7 +396,7 @@ async def gwl_name_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await state.set_state(GwLayoutFSM.name)
     await state.update_data(gwl_key=key)
     await cb.message.answer(
-        f"🏷 اسمِ جدیدِ دکمهٔ <b>{_BY_KEY[key][1]}</b> را بفرست (حداکثر ۴۰ حرف، برایِ کارت‌به‌کارت ۶۴؛ همان‌طور که "
+        f"🏷 اسمِ جدیدِ دکمهٔ <b>{_BY_KEY[key][1]}</b> را بفرست (حداکثر ۴۰ حرف، برایِ کارت‌به‌کارت و واریزِ مستقیم ۶۴؛ همان‌طور که "
         "نوشتی نمایش داده می‌شود).\nبرایِ برگشت به اسمِ پیش‌فرض: <code>پیش‌فرض</code>",
         reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
     await cb.answer()
@@ -407,7 +422,7 @@ async def gwl_name_save(msg: Message, bot: Bot, state: FSMContext):
         await msg.answer("اسمِ نامعتبر.")
         return
     else:
-        _cap = 64 if key == "card" else 40     # کارت‌به‌کارت اسمِ بلندتر (مثلاً «… تأیید آنی و خودکار با هوش مصنوعی») می‌خواهد
+        _cap = 64 if key in ("card", "cdirect") else 40     # کارت‌به‌کارت اسمِ بلندتر (مثلاً «… تأیید آنی و خودکار با هوش مصنوعی») می‌خواهد
         await set_setting(row.id, sk, txt[:_cap])
         await msg.answer(f"✅ اسمِ دکمه روی «{txt[:_cap]}» تنظیم شد.")
     await msg.answer("برگشت به صفحهٔ نام و ترتیب:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[

@@ -3788,6 +3788,7 @@ def buy_unlimited_info_text(cfg: dict) -> str:
 # افزودنِ درگاهِ بعدی فقط یک سطر این‌جاست.
 GATEWAY_LABELS: dict[str, tuple[str, str]] = {
     "card":      ("کارت‌به‌کارت",     "card_display_name"),     # PATCH_CARD_RENAME_COLOR_V1
+    "cdirect":   ("واریز مستقیم ارز", "cdirect_display_name"),  # PATCH_CDIRECT_LAYOUT_V1
     "hesabpay":  ("افغانی (حساب‌پی)", "hesabpay_display_name"),
     "zarinpal":  ("زرین‌پال",         "zarinpal_display_name"),
     "zibal":     ("زیبال",            "zibal_display_name"),
@@ -7480,6 +7481,15 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
     # === PATCH_COIN_DIRECT_MULTI_ASSET_V1 ===
     # برچسب‌هایِ تازهٔ همان قابلیت (انتخابِ ارز، ترون، تتر). برچسبِ قدیمیِ
     # TON بالا دست‌نخورده ماند چون کیبوردِ رویِ صفحهٔ کاربرانِ فعلی همان است.
+    if msg.text and msg.text in await gw_label_set(bot_id, "cdirect", "💎 شارژ با"):   # PATCH_CDIRECT_LAYOUT_V1 اسمِ سفارشی
+        from tenant.gateways.tron_direct import wallet_button as _cd_btn, wallet_coin_direct_text as _cd_txt
+        _cdb = await _cd_btn(bot_id)
+        if _cdb and _cdb[1] == "w:ton_direct":
+            from tenant.gateways.ton_direct import wallet_ton_direct_text as _ton_txt
+            await _ton_txt(msg, bot, state)
+        else:
+            await _cd_txt(msg, bot, state)
+        return
     if msg.text in ("💎 شارژ با ارز دیجیتال (واریز مستقیم)",
                     "🔺 شارژ با ترون (واریز مستقیم)",
                     "💵 شارژ با تتر (واریز مستقیم)"):
@@ -7958,7 +7968,8 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
         from tenant.gateways.tron_direct import wallet_button as _cdir_btn
         _cdir = await _cdir_btn(bot_id)
         if _cdir:
-            options.append((_cdir[0], _cdir[1], succ))
+            from tenant.gateways.gateway_layout import gw_custom_label as _gwcl_cd   # PATCH_CDIRECT_LAYOUT_V1
+            options.append((await _gwcl_cd(bot_id, "cdirect", _cdir[0]), _cdir[1], succ))
     # زرین‌پالِ مستأجر مستقل از شاخهٔ پلنِ ارز دیجیتال است؛ اگر merchant و فعال‌سازی
     # تنظیم شده باشد، باید در کیف پولِ همهٔ حالت‌های منو نمایش داده شود.
     # === PATCH_UNIQUEPAY_WALLET_BUG_FIX_V1 ===
