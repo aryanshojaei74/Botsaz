@@ -131,6 +131,7 @@ def _wid(cb: CallbackQuery, idx: int = 2) -> int:
 
 async def _show(cb: CallbackQuery, w: PlatformWager) -> None:
     text, kb = core.render(w)
+    kb = (await core.result_kb(w)) or kb               # PATCH_WAGER_RESULT_KB_V1
     try:
         await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except TelegramBadRequest as e:
@@ -344,6 +345,7 @@ async def expire_wagers_once() -> int:
                 continue
             bot = bots.get(w.bot_id) or bots.setdefault(w.bot_id, Bot(token=b_row.token))
             text, kb = core.render(w)
+            kb = (await core.result_kb(w)) or kb           # PATCH_WAGER_RESULT_KB_V1
             try:
                 await bot.edit_message_text(text, chat_id=w.chat_id, message_id=w.message_id,
                                             reply_markup=kb, parse_mode="HTML")

@@ -860,6 +860,29 @@ def render(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
     return text, kb
 
 
+async def result_kb(w: PlatformWager):
+    """=== PATCH_WAGER_RESULT_KB_V1 === (فدایی) نتیجهٔ همهٔ بازی‌هایِ ربات‌هایِ مشتری یک شکل: همان پیامِ بازی ادیت شود و زیرش
+    دکمه‌هایِ شیشه‌ایِ «🎁 جایزهٔ برنده / 💎 موجودیِ برنده / ❌ موجودیِ بازنده» (مثلِ نتیجهٔ بازیِ قبلی) بیاید.
+    فقط وقتی برنده دارد و مالِ ربات مستأجر است؛ مساوی/لغو/برگشتِ پول ⇒ None (همان کیبوردِ render می‌ماند)."""
+    if not w.bot_id or w.status != "settled" or not w.winner_id:
+        return None
+    loser_id = w.opponent_id if w.winner_id == w.creator_id else w.creator_id
+    from models import BotUser
+    async with Session() as s:
+        rows = (await s.scalars(select(BotUser).where(BotUser.bot_id == w.bot_id,
+                                                      BotUser.telegram_id.in_([w.winner_id, loser_id])))).all()
+    bal = {u.telegram_id: _money(u.balance) for u in rows}
+    noop = "twg:noop"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎁 جایزهٔ برنده", callback_data=noop, style=ButtonStyle.SUCCESS),
+         InlineKeyboardButton(text=_rial(w.payout_amount), callback_data=noop, style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="💎 موجودیِ برنده", callback_data=noop, style=ButtonStyle.PRIMARY),
+         InlineKeyboardButton(text=_rial(bal.get(w.winner_id, 0)), callback_data=noop, style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="❌ موجودیِ بازنده", callback_data=noop, style=ButtonStyle.DANGER),
+         InlineKeyboardButton(text=_rial(bal.get(loser_id, 0)), callback_data=noop, style=ButtonStyle.DANGER)],
+    ])
+
+
 def example_amount(cfg: dict | None) -> int:
     """مبلغِ نمونه برایِ راهنما: ۱۰٬۰۰۰ تومان، ولی داخلِ حداقل/حداکثرِ تنظیم‌شده (مثالِ زیرِ حداقل گمراه‌کننده است)."""
     cfg = cfg or {}

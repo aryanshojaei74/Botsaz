@@ -188,3 +188,56 @@ async def test_help_and_settings_show_race_games_for_tenant(db, monkeypatch):
     assert "سرعت" in text and "ریاضی" in text and len(rows) == 2
     cbs = [b.callback_data for r in rows for b in r]
     assert cbs == ["twg:set:xo", "twg:set:rps", "twg:set:dice", "twg:set:guess", "twg:set:speed", "twg:set:math"]
+
+
+def _rows(kb):
+    return [[(b.text, b.callback_data) for b in r] for r in kb.inline_keyboard]
+
+
+@pytest.mark.asyncio
+async def test_result_message_is_edited_with_prize_and_balance_buttons_for_every_game(db, monkeypatch):
+    """فدایی: نتیجهٔ همهٔ بازی‌ها همان پیامِ بازی را ادیت می‌کند و دکمه‌هایِ جایزه/موجودیِ برنده/بازنده می‌آید."""
+    await setup(db, monkeypatch)
+    # ۱) مسابقهٔ سرعت
+    m, _ = _msg("سرعت 10000", uid=U1)
+    await WR.twr_create(m, FakeBot())
+    async with db() as s:
+        w = await s.scalar(select(models.PlatformWager))
+    edits = []
+    await WR.twr_join(_cb(f"twr:join:{w.id}", U2, edits), FakeBot())
+    bot = FakeBot()
+    right, replies = _msg(R.LIVE[w.id]["answer"], uid=U2)
+    await WR.twr_answer(right, bot)
+    text, kb = bot.edited[-1]
+    assert "برنده" in text
+    assert _rows(kb) == [[("🎁 جایزهٔ برنده", "twg:noop"), ("20,000 تومان", "twg:noop")],
+                         [("💎 موجودیِ برنده", "twg:noop"), ("110,000 تومان", "twg:noop")],
+                         [("❌ موجودیِ بازنده", "twg:noop"), ("90,000 تومان", "twg:noop")]]
+    assert "برنده شد" in replies[-1]                                  # ریپلایِ «برنده شدید» برایِ پیامِ بازیکن هم می‌ماند
+    # ۲) تاس/ایکس‌او/سنگ‌کاغذ‌قیچی (هستهٔ مشترک) از مسیرِ _show
+    w2 = await PW_new(db)
+    async with db() as s:
+        row = await s.get(models.PlatformWager, w2.id, with_for_update=True)
+        await PW._settle_win(s, row, U1, "win")
+        await s.commit()
+    done = await wager(db, w2.id)
+    ed = []
+    await WG._show(_cb(f"twg:x:{w2.id}:0", U1, ed), done)
+    assert ed and _rows(ed[-1][1])[0][0] == ("🎁 جایزهٔ برنده", "twg:noop") and "موجودیِ بازنده" in str(_rows(ed[-1][1]))
+    # ۳) مساوی/لغو: بدونِ دکمه‌هایِ نتیجه
+    assert await PW.result_kb(await wager(db, w.id)) is not None
+    w3 = await PW_new(db, amount=5_000)
+    async with db() as s:
+        r3 = await s.get(models.PlatformWager, w3.id, with_for_update=True)
+        await PW._refund_both(s, r3, "draw", "draw")
+        await s.commit()
+    assert await PW.result_kb(await wager(db, w3.id)) is None
+    # ربات اصلی: بدونِ تغییر
+    plat = SimpleNamespace(bot_id=0, status="settled", winner_id=1, creator_id=1, opponent_id=2, payout_amount=1)
+    assert await PW.result_kb(plat) is None
+
+
+async def PW_new(db, amount=10_000):
+    from tests.test_wager_tenant import join, new
+    w = await new(db, "dice", amount=amount)
+    return await join(w)

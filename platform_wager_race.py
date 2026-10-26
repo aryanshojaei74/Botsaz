@@ -316,6 +316,7 @@ async def _edit(bot: Bot, w: PlatformWager) -> None:
     if not w.message_id:
         return
     text, kb = render_race(w)
+    kb = (await core.result_kb(w)) or kb               # PATCH_WAGER_RESULT_KB_V1 (فقط ربات‌هایِ مستأجر)
     try:
         await bot.edit_message_text(text, chat_id=w.chat_id, message_id=w.message_id, reply_markup=kb, parse_mode="HTML")
     except TelegramBadRequest as e:
