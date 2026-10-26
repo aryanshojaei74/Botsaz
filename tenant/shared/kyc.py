@@ -82,7 +82,7 @@ _NOT_DEPOSIT_KINDS = ("refund", "smm_refund", "bet_refund", "admin", "referral",
 # حالا فقط درگاه‌هایِ واقعیِ پرداخت شمرده می‌شوند؛ kind="charge" فقط وقتی یادداشتش «شارژ…»/«AUTO:…» باشد
 # (تأییدِ رسیدِ کارت‌به‌کارت، شارژِ استارز، شارژِ خودکار) — نه «بازگشتِ وجه…»/«جایزه…».
 DEPOSIT_GATEWAY_KINDS = ("zarinpal_charge", "zibal_charge", "apay_charge", "swap_charge", "crypto_charge",
-                         "tonpays_charge", "uniquepay_charge", "hesabpay_charge", "abangateway_charge",
+                         "tonpays_charge", "uniquepay_charge", "hesabpay_charge", "abangateway_charge", "hooshpay_charge",
                          "abangw_manual", "ton_direct", "tron_direct")
 
 

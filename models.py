@@ -1632,6 +1632,26 @@ class UniquePayCharge(Base):
     paid_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
+# === PATCH_HOOSHPAY_GATEWAY_V1 ===
+class HooshPayCharge(Base):
+    """شارژ کیف پول با درگاهِ کارت‌به‌کارتِ آنیِ «هوش‌پی» (hooshpay.xyz)."""
+    __tablename__ = "hooshpay_charges"
+    __table_args__ = (UniqueConstraint("order_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    user_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    order_id: Mapped[str] = mapped_column(String(40), index=True)         # شناسهٔ ما (order_id در API)
+    invoice_uid: Mapped[str | None] = mapped_column(String(64), index=True)   # inv_… از هوش‌پی
+    amount_toman: Mapped[int] = mapped_column(Integer, default=0)         # مبلغی که کیف پول شارژ می‌شود
+    payable_amount: Mapped[int | None] = mapped_column(Integer)           # مبلغِ دقیقِ واریزِ خریدار (با کارمزد/رقمِ یکتا)
+    fee_mode: Mapped[str | None] = mapped_column(String(10))
+    tracking_code: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20), default="waiting")    # waiting/paid/cancelled/expired
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 # === PATCH_APAY_GATEWAY_V1 ===
 class ApayCharge(Base):
     """شارژ کیف پول با درگاهِ کارت‌به‌کارتِ آنیِ «آپی» (apaygate.shop)."""
@@ -3684,7 +3704,7 @@ TENANT_OWNED_MODELS += [
     Bet, BetLedger,                        # شرط‌بندیِ گروهی
     KycRequest, RefPointWallet,
     SmmPanel, SmmCategory,
-    HesabPayCharge, TonDirectCharge, UniquePayCharge, ApayCharge, AbanGatewayCharge,
+    HesabPayCharge, TonDirectCharge, UniquePayCharge, ApayCharge, AbanGatewayCharge, HooshPayCharge,
     CommunityChat, BotCustomDomain, TenantPremiumEmoji,
     TenantGroupBan, TenantGroupWarn, TenantGroupEvent, TenantGroupCaptcha,
     AdminWebSession, ResellerTrialLog, VpnPartner,

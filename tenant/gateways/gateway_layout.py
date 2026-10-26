@@ -30,6 +30,7 @@ ITEMS: list[tuple[str, str, str, bool]] = [
     ("uniquepay",   "w:uniquepay",   "💳 یونیک‌پی",       True),
     ("apay",        "w:apay",        "💳 آپی",            True),
     ("abangateway", "w:abangateway", "💳 آبان گیت‌وی",    True),
+    ("hooshpay",    "w:hooshpay",    "💳 هوش‌پی",         True),     # PATCH_HOOSHPAY_GATEWAY_V1
     ("tonpays",     "w:tonpays",     "💠 تون‌پیز",        True),
     ("hesabpay",    "w:hesabpay",    "🇦🇫 حساب‌پی",       False),
     ("swap",        "w:swap",        "🟦 سواپ‌ولت",       True),

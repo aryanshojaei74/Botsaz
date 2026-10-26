@@ -44,7 +44,7 @@ BONUS_KIND = "charge_bonus"      # ≤ ۲۰ کاراکتر (ستونِ WalletTxn
 # شارژهایِ واقعیِ درگاه/دستی (تراکنش‌هایِ «charge» عمومی فقط با این یادداشت‌ها: بقیه بازگشتِ وجه/جایزه‌اند)
 TOPUP_KINDS = frozenset({
     "crypto_charge", "nowpay_charge", "uniquepay_charge", "tonpays_charge", "swap_charge",
-    "abangateway_charge", "hesabpay_charge", "zibal_charge", "zarinpal_charge", "apay_charge",
+    "abangateway_charge", "hesabpay_charge", "zibal_charge", "zarinpal_charge", "apay_charge", "hooshpay_charge",
 })
 TOPUP_NOTE_PREFIXES = ("AUTO:شارژ خودکار", "شارژ با استارز", "شارژ سفارش #")
 
@@ -60,6 +60,7 @@ METHODS: dict[str, tuple[str, tuple[str, ...], tuple[str, ...]]] = {
     "swap":        ("🔄 سواپ‌ولت", ("swap_charge",), ()),
     "uniquepay":   ("🟣 یونیک‌پی", ("uniquepay_charge",), ()),
     "abangateway": ("🏦 آبان‌گیت‌وی", ("abangateway_charge",), ()),
+    "hooshpay":    ("💳 هوش‌پی", ("hooshpay_charge",), ()),          # PATCH_HOOSHPAY_GATEWAY_V1
     "hesabpay":    ("🇦🇫 حساب‌پی", ("hesabpay_charge",), ()),
 }
 

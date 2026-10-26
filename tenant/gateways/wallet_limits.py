@@ -82,6 +82,11 @@ async def _enabled_abangateway(bot_id: int) -> bool:
     return bool(await is_available(bot_id))
 
 
+async def _enabled_hooshpay(bot_id: int) -> bool:
+    from tenant.gateways.hooshpay import is_available
+    return bool(await is_available(bot_id))
+
+
 async def _enabled_swap(bot_id: int) -> bool:
     return bool(await _s(bot_id, "swap_api_key", "")) and bool(
         await _s(bot_id, "swap_addr_usdt", "") or await _s(bot_id, "swap_addr_ton", "")
@@ -112,6 +117,8 @@ GATEWAYS: dict[str, Gateway] = {g.key: g for g in (
             floor_min=1_000, note="کفِ فنیِ آپی ۱٬۰۰۰ و سقفش ۱۰۰ میلیون تومان است.", enabled=_enabled_apay),
     Gateway("abangateway", "💳 آبان گیت‌وی", "abangateway_min_amount", "abangateway_max_amount", 10_000,
             floor_min=1_000, enabled=_enabled_abangateway),
+    Gateway("hooshpay", "💳 هوش‌پی", "hooshpay_min_amount", "hooshpay_max_amount", 10_000,
+            floor_min=1_000, note="کفِ فنیِ هوش‌پی ۱٬۰۰۰ تومان است.", enabled=_enabled_hooshpay),
     Gateway("swap", "🟦 سواپ‌ولت", "swap_min_toman", "swap_max_toman", 10_000,
             floor_min=1_000, enabled=_enabled_swap),
     Gateway("crypto", "🪙 ارز دیجیتال (ورودیِ تومان)", "wl_min_crypto", "wl_max_crypto", 100_000,
