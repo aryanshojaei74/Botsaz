@@ -293,6 +293,8 @@ async def _render_selfsaz_admin(cb: CallbackQuery):
             [hx_button("🔄 روشن/خاموش کردن", callback_data="sszg2:toggle", style=ButtonStyle.PRIMARY)],
             [hx_button("💰 تعیین قیمت پیش‌فرض", callback_data="sszg2:price", style=ButtonStyle.SUCCESS)],
             [hx_button("👥 مدیریت کاربران سلف‌ساز", callback_data="sszg3:users", style=ButtonStyle.PRIMARY)],
+            [hx_button("📊 آمار و فروش", callback_data="sszg2:stats", style=ButtonStyle.PRIMARY),
+             hx_button("🏷 تخفیف پلن‌ها", callback_data="sszg2:disc", style=ButtonStyle.PRIMARY)],
             [hx_button("🖼 افزودن/تغییر تصویر پنل", callback_data="sszg2:image", style=ButtonStyle.SUCCESS)],
             [hx_button(("🔒 SelfSaz: فقط من (حالت تست)" if _admin_only else "🌐 SelfSaz: نمایش برای کاربران"),
                        callback_data="sszg2:visibility",
@@ -440,6 +442,71 @@ async def selfsaz_admin_price_fix_save(msg: Message, state: FSMContext):
         return
     await state.clear()
     await msg.answer(f"✅ قیمت پیش‌فرض سلف‌ساز روی {int(raw):,} تومان تنظیم شد.")
+
+
+# ---- SelfSaz pro: آمار و تخفیف پلن‌ها ----
+class _SelfSazDiscFSM(StatesGroup):
+    value = State()
+
+
+@admin_menu_router.callback_query(F.data == "sszg2:stats")
+async def selfsaz_admin_stats(cb: CallbackQuery):
+    if cb.from_user.id != PLATFORM_ADMIN_ID:
+        await cb.answer("فقط مدیر اصلی", show_alert=True)
+        return
+    from datetime import datetime, timezone
+    from platform_selfsaz_pro import compute_stats, revenue, stats_text
+    res = await selfsaz_api("GET", "/v1/admin/accounts")
+    if res is None:
+        await cb.answer("سرویس مستقل در دسترس نیست", show_alert=True)
+        return
+    st = compute_stats(res.get("accounts", []), datetime.now(timezone.utc))
+    r30, rall, c30 = await revenue()
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [hx_button("🔄 بروزرسانی", callback_data="sszg2:stats", style=ButtonStyle.PRIMARY)],
+        [hx_button("⬅️ بازگشت", callback_data="adm:selfsaz", style=ButtonStyle.DANGER)]])
+    try:
+        await cb.message.edit_text(stats_text(st, r30, rall, c30), reply_markup=kb)
+    except Exception:
+        await cb.message.answer(stats_text(st, r30, rall, c30), reply_markup=kb)
+    await cb.answer()
+
+
+@admin_menu_router.callback_query(F.data == "sszg2:disc")
+async def selfsaz_admin_disc_start(cb: CallbackQuery, state: FSMContext):
+    if cb.from_user.id != PLATFORM_ADMIN_ID:
+        await cb.answer("فقط مدیر اصلی", show_alert=True)
+        return
+    from platform_bot import get_pset
+    from platform_selfsaz_pro import DISC_KEY, parse_discounts
+    cur = parse_discounts(await get_pset(DISC_KEY, ""))
+    await state.clear()
+    await state.set_state(_SelfSazDiscFSM.value)
+    await cb.message.answer(
+        "🏷 <b>تخفیف پلن‌ها</b>\n\n"
+        f"فعلی: ۳ ماهه {cur[3]}٪ · ۶ ماهه {cur[6]}٪ · ۱۲ ماهه {cur[12]}٪\n\n"
+        "درصدها را به‌صورت «سه‌ماهه ششم‌اهه دوازده‌ماهه» بفرستید، مثلاً: <code>5 10 15</code>\n"
+        "(سقف ۹۰٪؛ پلن یک‌ماهه همیشه بدون تخفیف است)")
+    await cb.answer()
+
+
+@admin_menu_router.message(_SelfSazDiscFSM.value, F.text)
+async def selfsaz_admin_disc_save(msg: Message, state: FSMContext):
+    if msg.from_user.id != PLATFORM_ADMIN_ID:
+        return
+    parts = (msg.text or "").replace("٪", " ").replace("%", " ").replace("،", " ").replace(",", " ").split()
+    try:
+        a, b, c = (int(x) for x in parts)
+        if not all(0 <= v <= 90 for v in (a, b, c)):
+            raise ValueError
+    except ValueError:
+        await msg.answer("سه عدد بین ۰ تا ۹۰ بفرستید؛ مثلاً: <code>5 10 15</code>")
+        return
+    from platform_bot import set_pset
+    from platform_selfsaz_pro import DISC_KEY
+    await set_pset(DISC_KEY, f"3:{a},6:{b},12:{c}")
+    await state.clear()
+    await msg.answer(f"✅ تخفیف‌ها ذخیره شد: ۳ ماهه {a}٪ · ۶ ماهه {b}٪ · ۱۲ ماهه {c}٪")
 
 
 # SELFSaz_ADMIN_USERS_V1 — پنل ایزولهٔ کاربران خریداری‌کرده/متصل‌شده

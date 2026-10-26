@@ -72,6 +72,7 @@ from platform_msg_tickets import ticket_reminder_loop
 from platform_offsite_backup import offsite_backup_loop
 # === PATCH_PLATFORM_SADMIN_V1 ===
 from platform_sadmin import sadmin_loop
+from platform_selfsaz_pro import selfsaz_watch_loop
 
 
 async def _worker_startup():
@@ -117,6 +118,8 @@ async def _worker_startup():
         offsite_backup_loop(mp.platform_bot),
         # === PATCH_PLATFORM_SADMIN_V1 === پنلِ مدیریت در سروش (ورود با کدِ تلگرام)
         sadmin_loop(mp.platform_bot),
+        # === PATCH_SELFSAZ_WATCH_V1 === یادآور انقضا، هشدار قطعیِ سرویس و خطای حساب‌ها
+        selfsaz_watch_loop(mp.platform_bot),
     ):
         mp.spawn(_coro)
 

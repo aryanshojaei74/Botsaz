@@ -1,0 +1,30 @@
+[Unit]
+Description=SelfSaz independent service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=selfsaz
+Group=selfsaz
+WorkingDirectory=/opt/selfsaz
+EnvironmentFile=-/opt/selfsaz/.env
+ExecStart=/opt/selfsaz/.venv/bin/uvicorn selfsaz_service.app:app --host 127.0.0.1 --port 8791
+Restart=always
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/opt/selfsaz/data
+MemoryMax=1G
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target

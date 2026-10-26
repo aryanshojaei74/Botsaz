@@ -78,7 +78,7 @@ _SELFSAZ_SLIDER_PAGES = {
     2: ('📣 <b>تنظیمات تپچی</b>', [('🌐 ترجمه', 'translate'), ('💬 پاسخ خودکار', 'auto_reply'), ('🤝 دوست و دشمن', 'enemy'), ('😍 ریکت', 'reaction'), ('🎬 انیمیشن', 'animation'), ('💎 ایموجی پریمیوم', 'premium'), ('🎥 ساخت ویدیو گرد', 'video')]),
     3: ('🛡 <b>مدیریت گروه</b>', [('⛔ بن کاربر', 'group:بن'), ('👢 کیک کاربر', 'group:کیک'), ('🔇 سکوت کاربر', 'group:سکوت'), ('🔊 حذف سکوت', 'group:حذف سکوت'), ('📌 پین پیام', 'group:پین'), ('📍 آنپین پیام', 'group:آنپین')]),
     4: ('🔧 <b>ابزارهای حساب</b>', [('🔇 سکوت', 'mute'), ('ℹ️ اطلاعات', 'info'), ('🗣 تبدیل متن به ویس', 'tts'), ('🧮 ماشین حساب', 'calculator'), ('💱 قیمت ارز', 'currency'), ('💎 موجودی', 'balance')]),
-    5: ('🎲 <b>ابزارهای بیشتر</b>', [('🎲 تقلب', 'dice'), ('🔍 سرچ', 'search'), ('📸 اسکرین', 'screen'), ('💬 کامنت اول', 'first_comment'), ('📨 اسپم', 'spam'), ('🚫 فیلتر کلمات', 'filter')]),
+    5: ('🎲 <b>ابزارهای بیشتر</b>', [('🎲 تقلب', 'dice'), ('🔍 سرچ', 'search'), ('📸 اسکرین', 'screen'), ('💬 کامنت اول', 'first_comment'), ('🚫 فیلتر کلمات', 'filter')]),
     6: ('✍️ <b>حالت متن</b>', [('بولد', 'format:بولد'), ('ایتالیک', 'format:ایتالیک'), ('زیرخط', 'format:زیر خط'), ('خط‌خورده', 'format:خط‌ خورده'), ('اسپویلر', 'format:اسپویلر'), ('کد', 'format:کد'), ('پیش‌فرمت', 'format:پیش‌ فرمت'), ('نقل‌قول', 'format:نقل ‌قول')]),
     7: ('🛡 <b>قفل‌های پیام</b>', [('همه', 'lock:همه'), ('مدیا', 'lock:مدیا'), ('استیکر', 'lock:استیکر'), ('فوروارد', 'lock:فوروارد'), ('ویس', 'lock:ویس'), ('پیام', 'lock:پیام'), ('فایل', 'lock:فایل')]),
     8: ('⚡ <b>اکشن‌ها</b>', [('تایپ', 'action:typing'), ('آپلود عکس', 'action:upload_photo'), ('آپلود ویدیو', 'action:upload_video'), ('ضبط صدا', 'action:record_audio'), ('پخش', 'action:playing'), ('موقعیت', 'action:find_location')]),
@@ -285,7 +285,7 @@ async def selfsaz_inline_slider_callback(cb: CallbackQuery, bot: Bot, state: FSM
                 await _edit_slider_message(cb, bot, f'🌐 <b>ترجمه خودکار</b>\n\nوضعیت: <b>{"روشن" if enabled else "خاموش"}</b>\nزبان مقصد: فارسی', await _selfsaz_tabchi_kb(cb.from_user.id))
                 await cb.answer('ترجمه خودکار روشن شد' if enabled else 'ترجمه خودکار خاموش شد')
             else:
-                await cb.answer(f'خطا در ذخیره ترجمه: {SELFSaz_LAST_ERROR or "سرویس در دسترس نیست"}', show_alert=True)
+                await cb.answer(f'خطا در ذخیره ترجمه: {_pss_friendly()}', show_alert=True)
             return
         if action == 'animation':
             await _edit_slider_message(cb, bot, '🎬 <b>انیمیشن و اکشن‌های رسانه</b>\n\nبرای فعال‌سازی نمایش وضعیت ارسال، از بخش «اکشن» یکی از گزینه‌های آپلود یا ضبط را روشن کنید.', _selfsaz_slider_kb(8))
@@ -299,7 +299,7 @@ async def selfsaz_inline_slider_callback(cb: CallbackQuery, bot: Bot, state: FSM
                 await _edit_slider_message(cb, bot, f'💎 <b>ایموجی پریمیوم</b>\n\nوضعیت: <b>{"روشن" if enabled else "خاموش"}</b>\n\nبرای یادگیری ایموجی‌های انتخابی، آن‌ها را یک‌بار در پیام‌های ذخیره‌شده ارسال کنید؛ worker شناسهٔ واقعی را ذخیره و در پاسخ‌های خودکار استفاده می‌کند.', await _selfsaz_tabchi_kb(cb.from_user.id))
                 await cb.answer('پشتیبانی ایموجی پریمیوم روشن شد' if enabled else 'پشتیبانی ایموجی پریمیوم خاموش شد')
             else:
-                await cb.answer(f'خطا در ذخیره ایموجی پریمیوم: {SELFSaz_LAST_ERROR or "سرویس در دسترس نیست"}', show_alert=True)
+                await cb.answer(f'خطا در ذخیره ایموجی پریمیوم: {_pss_friendly()}', show_alert=True)
             return
         if action == 'auto_reply':
             await cb.answer()
@@ -332,7 +332,7 @@ async def selfsaz_inline_slider_callback(cb: CallbackQuery, bot: Bot, state: FSM
             if updated:
                 await cb.answer('ساعت روشن شد' if enabled else 'ساعت خاموش شد', show_alert=True)
             else:
-                await cb.answer(f'خطا در تنظیم ساعت: {SELFSaz_LAST_ERROR or "سرویس در دسترس نیست"}', show_alert=True)
+                await cb.answer(f'خطا در تنظیم ساعت: {_pss_friendly()}', show_alert=True)
             return
         if action.startswith('format:'):
             key = action.split(':', 1)[1]
@@ -341,7 +341,7 @@ async def selfsaz_inline_slider_callback(cb: CallbackQuery, bot: Bot, state: FSM
             formats = control.get('formats') or {}
             enabled = not bool(formats.get(key, False))
             updated = await selfsaz_api('PUT', f'/v1/accounts/{cb.from_user.id}/control', {'formats': {key: enabled}})
-            await cb.answer(('✅ ' if enabled else '❌ ') + key + (' روشن شد' if enabled else ' خاموش شد'), show_alert=True) if updated else await cb.answer(f'خطا در حالت متن: {SELFSaz_LAST_ERROR or "سرویس در دسترس نیست"}', show_alert=True)
+            await cb.answer(('✅ ' if enabled else '❌ ') + key + (' روشن شد' if enabled else ' خاموش شد'), show_alert=True) if updated else await cb.answer(f'خطا در حالت متن: {_pss_friendly()}', show_alert=True)
             return
         if action == 'format':
             await cb.answer('برای هر فرمت، صفحهٔ حالت متن را باز کنید.', show_alert=True)
@@ -353,7 +353,7 @@ async def selfsaz_inline_slider_callback(cb: CallbackQuery, bot: Bot, state: FSM
             locks = control.get('locks') or {}
             enabled = not bool(locks.get(key, False))
             updated = await selfsaz_api('PUT', f'/v1/accounts/{cb.from_user.id}/advanced-control', {'locks': {key: enabled}})
-            await cb.answer(('✅ قفل ' if enabled else '❌ قفل ') + key + (' فعال شد' if enabled else ' غیرفعال شد'), show_alert=True) if updated else await cb.answer(f'خطا در قفل‌ها: {SELFSaz_LAST_ERROR or "سرویس در دسترس نیست"}', show_alert=True)
+            await cb.answer(('✅ قفل ' if enabled else '❌ قفل ') + key + (' فعال شد' if enabled else ' غیرفعال شد'), show_alert=True) if updated else await cb.answer(f'خطا در قفل‌ها: {_pss_friendly()}', show_alert=True)
             return
         if action.startswith('action:'):
             key = action.split(':', 1)[1]
@@ -362,7 +362,7 @@ async def selfsaz_inline_slider_callback(cb: CallbackQuery, bot: Bot, state: FSM
             actions = control.get('actions') or {}
             enabled = not bool(actions.get(key, False))
             updated = await selfsaz_api('PUT', f'/v1/accounts/{cb.from_user.id}/advanced-control', {'actions': {key: enabled}})
-            await cb.answer(('✅ اکشن ' if enabled else '❌ اکشن ') + key + (' فعال شد' if enabled else ' غیرفعال شد'), show_alert=True) if updated else await cb.answer(f'خطا در اکشن: {SELFSaz_LAST_ERROR or "سرویس در دسترس نیست"}', show_alert=True)
+            await cb.answer(('✅ اکشن ' if enabled else '❌ اکشن ') + key + (' فعال شد' if enabled else ' غیرفعال شد'), show_alert=True) if updated else await cb.answer(f'خطا در اکشن: {_pss_friendly()}', show_alert=True)
             return
         await cb.answer('این قابلیت به ورودی متنی، ریپلای یا گروه هدف نیاز دارد و از همین دکمه راهنمای اجرای آن نمایش داده می‌شود.', show_alert=True)
         return
@@ -465,7 +465,7 @@ async def selfsaz_context_enemy_target(msg: Message, state: FSMContext):
         await state.clear(); await msg.answer('❌ اطلاعات عملیات ناقص است.'); return
     queued = await _queue_selfsaz_command(msg.from_user.id, f'سلف دشمن {operation} {value}')
     await state.clear()
-    await msg.answer('✅ عملیات دشمن در صف اجرا قرار گرفت.' if queued else f'❌ ارسال به worker ناموفق بود: {SELFSaz_LAST_ERROR or "سرویس در دسترس نیست"}')
+    await msg.answer('✅ عملیات دشمن در صف اجرا قرار گرفت.' if queued else f'❌ ارسال به worker ناموفق بود: {_pss_friendly()}')
 
 
 @router.message(SelfSazContextFSM.group_chat, F.text)
@@ -503,7 +503,7 @@ async def selfsaz_context_group_target(msg: Message, state: FSMContext):
         await state.clear(); await msg.answer('❌ عملیات نامعتبر است.'); return
     queued = await _queue_selfsaz_command(msg.from_user.id, f'سلف عملیات {operation} {chat_id} {target}')
     await state.clear()
-    await msg.answer('✅ عملیات در صف اجرا قرار گرفت.' if queued else f'❌ ارسال به worker ناموفق بود: {SELFSaz_LAST_ERROR or "سرویس در دسترس نیست"}')
+    await msg.answer('✅ عملیات در صف اجرا قرار گرفت.' if queued else f'❌ ارسال به worker ناموفق بود: {_pss_friendly()}')
 
 
 @router.message(SelfSazContextFSM.auto_reply, F.text)
@@ -527,7 +527,7 @@ async def selfsaz_context_auto_reply(msg: Message, state: FSMContext):
         command = f'پاسخ افزودن {trigger}|{reply}'
     queued = await _queue_selfsaz_command(msg.from_user.id, command)
     await state.clear()
-    await msg.answer('✅ پاسخ در صف اجرا قرار گرفت.' if queued else f'❌ ارسال به worker ناموفق بود: {SELFSaz_LAST_ERROR or "سرویس در دسترس نیست"}')
+    await msg.answer('✅ پاسخ در صف اجرا قرار گرفت.' if queued else f'❌ ارسال به worker ناموفق بود: {_pss_friendly()}')
 
 
 async def _profile_upload_path(owner_id: int, suffix: str) -> Path:
@@ -545,7 +545,7 @@ async def selfsaz_context_profile_name(msg: Message, state: FSMContext):
         await msg.answer('⚠️ نام باید بین ۱ تا ۶۴ نویسه باشد.'); return
     queued = await _queue_selfsaz_command(msg.from_user.id, f'تنظیم نام {value}')
     await state.clear()
-    await msg.answer('✅ درخواست تغییر نام برای worker ارسال شد.' if queued else f'❌ ارسال ناموفق بود: {SELFSaz_LAST_ERROR or "سرویس در دسترس نیست"}')
+    await msg.answer('✅ درخواست تغییر نام برای worker ارسال شد.' if queued else f'❌ ارسال ناموفق بود: {_pss_friendly()}')
 
 
 @router.message(SelfSazContextFSM.profile_bio, F.text)
@@ -557,7 +557,7 @@ async def selfsaz_context_profile_bio(msg: Message, state: FSMContext):
         await msg.answer('⚠️ بیو نباید بیشتر از ۷۰ نویسه باشد.'); return
     queued = await _queue_selfsaz_command(msg.from_user.id, f'تنظیم بیو {value}')
     await state.clear()
-    await msg.answer('✅ درخواست تغییر بیو برای worker ارسال شد.' if queued else f'❌ ارسال ناموفق بود: {SELFSaz_LAST_ERROR or "سرویس در دسترس نیست"}')
+    await msg.answer('✅ درخواست تغییر بیو برای worker ارسال شد.' if queued else f'❌ ارسال ناموفق بود: {_pss_friendly()}')
 
 
 @router.message(SelfSazContextFSM.profile_photo, F.photo)
@@ -569,7 +569,7 @@ async def selfsaz_context_profile_photo(msg: Message, bot: Bot, state: FSMContex
         if not queued:
             target.unlink(missing_ok=True)
         await state.clear()
-        await msg.answer('✅ عکس برای تنظیم لوگوی پروفایل به worker ارسال شد.' if queued else f'❌ ارسال عکس ناموفق بود: {SELFSaz_LAST_ERROR or "سرویس در دسترس نیست"}')
+        await msg.answer('✅ عکس برای تنظیم لوگوی پروفایل به worker ارسال شد.' if queued else f'❌ ارسال عکس ناموفق بود: {_pss_friendly()}')
     except Exception as exc:
         target.unlink(missing_ok=True)
         await state.clear()
@@ -604,7 +604,7 @@ async def selfsaz_context_reaction_target(msg: Message, state: FSMContext):
     command = f'ریکت {data.get("reaction_emoji", "😊")} {target}'
     queued = await _queue_selfsaz_command(msg.from_user.id, command)
     await state.clear()
-    await msg.answer('✅ درخواست ریکت خودکار در صف worker قرار گرفت.' if queued else f'❌ ارسال ناموفق بود: {SELFSaz_LAST_ERROR or "سرویس در دسترس نیست"}')
+    await msg.answer('✅ درخواست ریکت خودکار در صف worker قرار گرفت.' if queued else f'❌ ارسال ناموفق بود: {_pss_friendly()}')
 
 
 @router.message(SelfSazContextFSM.content_link, F.text)
@@ -616,7 +616,7 @@ async def selfsaz_context_content_link(msg: Message, state: FSMContext):
         await msg.answer('⚠️ لینک پست تلگرام را با https://t.me/ بفرستید.'); return
     queued = await _queue_selfsaz_command(msg.from_user.id, f'دانلود {value}')
     await state.clear()
-    await msg.answer('✅ لینک برای ذخیره در پیام‌های ذخیره‌شده به worker ارسال شد.' if queued else f'❌ ارسال ناموفق بود: {SELFSaz_LAST_ERROR or "سرویس در دسترس نیست"}')
+    await msg.answer('✅ لینک برای ذخیره در پیام‌های ذخیره‌شده به worker ارسال شد.' if queued else f'❌ ارسال ناموفق بود: {_pss_friendly()}')
 
 
 @router.message(SelfSazContextFSM.video_note, F.video)
@@ -628,7 +628,7 @@ async def selfsaz_context_video_note(msg: Message, bot: Bot, state: FSMContext):
         if not queued:
             target.unlink(missing_ok=True)
         await state.clear()
-        await msg.answer('✅ ویدیو برای تبدیل و ارسال به‌صورت ویدیوی گرد به worker ارسال شد.' if queued else f'❌ ارسال ویدیو ناموفق بود: {SELFSaz_LAST_ERROR or "سرویس در دسترس نیست"}')
+        await msg.answer('✅ ویدیو برای تبدیل و ارسال به‌صورت ویدیوی گرد به worker ارسال شد.' if queued else f'❌ ارسال ویدیو ناموفق بود: {_pss_friendly()}')
     except Exception as exc:
         target.unlink(missing_ok=True)
         await state.clear()
@@ -638,6 +638,11 @@ async def selfsaz_context_video_note(msg: Message, bot: Bot, state: FSMContext):
 @router.message(SelfSazContextFSM.video_note, F.text)
 async def selfsaz_context_video_note_invalid(msg: Message):
     await msg.answer('⚠️ لطفاً یک ویدیو ارسال کنید؛ برای لغو «🔴 بازگشت» را بفرستید.')
+
+
+def _pss_friendly() -> str:
+    from platform_selfsaz_pro import friendly_error
+    return friendly_error(SELFSaz_LAST_ERROR)
 
 
 async def selfsaz_api(method: str, path: str, payload: dict | None = None):
@@ -761,9 +766,34 @@ def _pss_miniapp_keyboard(url: str) -> InlineKeyboardMarkup:
 @router.callback_query(F.data == "pss:secure_connect")
 async def selfsaz_connect_start(cb: CallbackQuery, state: FSMContext):
     await state.clear()
+    from platform_selfsaz_pro import TOS_TEXT, tos_accepted
+    if not await tos_accepted(cb.from_user.id):
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ قوانین را می‌پذیرم و ادامه", callback_data="pss:tos:yes", style=ButtonStyle.SUCCESS)],
+            [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="pss:status", style=ButtonStyle.DANGER)],
+        ])
+        try:
+            await cb.message.edit_text(TOS_TEXT, reply_markup=kb)
+        except Exception:
+            await cb.message.answer(TOS_TEXT, reply_markup=kb)
+        await cb.answer()
+        return
+    await _pss_connect_link(cb)
+
+
+@router.callback_query(F.data == "pss:tos:yes")
+async def selfsaz_tos_yes(cb: CallbackQuery):
+    from platform_selfsaz_pro import accept_tos
+    await accept_tos(cb.from_user.id)
+    await _pss_connect_link(cb)
+
+
+async def _pss_connect_link(cb: CallbackQuery):
     result = await selfsaz_api("POST", "/v1/connect/start", {"owner_id": cb.from_user.id})
     if not result or not result.get("url"):
-        await cb.answer(SELFSaz_LAST_ERROR or "ساخت لینک اتصال ناموفق بود", show_alert=True)
+        from platform_selfsaz_pro import friendly_error
+        logger.warning("selfsaz connect/start failed: %s", SELFSaz_LAST_ERROR)
+        await cb.answer(friendly_error(SELFSaz_LAST_ERROR), show_alert=True)
         return
     await cb.answer("فرم ورود آماده شد", show_alert=False)
     text = (
@@ -887,35 +917,94 @@ async def selfsaz_trial(cb: CallbackQuery):
     if account.get("trial_used"):
         await cb.answer("دورهٔ آزمایشی قبلاً استفاده شده است", show_alert=True)
         return
-    result = await selfsaz_api("POST", f"/v1/accounts/{account_id}/trial")
+    from platform_selfsaz_pro import friendly_error, release, try_acquire
+    if not try_acquire(cb.from_user.id):
+        await cb.answer("⏳ درخواست قبلی شما در حال پردازش است")
+        return
+    try:
+        result = await selfsaz_api("POST", f"/v1/accounts/{account_id}/trial")
+        err = SELFSaz_LAST_ERROR
+    finally:
+        release(cb.from_user.id)
     if result:
         await cb.answer("✅ تست رایگان ۱ روزه فعال شد")
     else:
-        await cb.answer("دورهٔ آزمایشی قبلاً استفاده شده یا سرویس در دسترس نیست", show_alert=True)
+        await cb.answer(friendly_error(err), show_alert=True)
     await show_selfsaz_panel(cb.message, cb.from_user.id, edit=True)
 
-@router.callback_query(F.data.regexp(r"^pss:buy:\d+$"))
-async def selfsaz_buy(cb: CallbackQuery):
-    account_id = int(cb.data.rsplit(":", 1)[1])
+async def _pss_discounts() -> dict:
+    from platform_bot import get_pset
+    from platform_selfsaz_pro import DISC_KEY, parse_discounts
+    return parse_discounts(await get_pset(DISC_KEY, ""))
+
+
+async def _pss_owned_account(cb: CallbackQuery, account_id: int):
     account = await selfsaz_api("GET", f"/v1/accounts/{cb.from_user.id}")
     if not account or not account.get("configured") or int(account.get("id", 0)) != account_id:
         await cb.answer("حساب سلف‌ساز پیدا نشد", show_alert=True)
-        return
-    price = int(account.get("price", 0))
-    if price <= 0:
+        return None
+    if int(account.get("price", 0)) <= 0:
         await cb.answer("قیمت سلف‌ساز هنوز تعیین نشده است", show_alert=True)
+        return None
+    return account
+
+
+@router.callback_query(F.data.regexp(r"^pss:buy:\d+$"))
+async def selfsaz_buy(cb: CallbackQuery):
+    """لیست پلن‌ها (۱/۳/۶/۱۲ ماهه) با تخفیف."""
+    from platform_selfsaz_pro import plan_options
+    account_id = int(cb.data.rsplit(":", 1)[1])
+    account = await _pss_owned_account(cb, account_id)
+    if not account:
         return
+    renew = bool(account.get("expires_at"))
+    title = "تمدید اشتراک سلف‌ساز" if renew else "فعال‌سازی سلف‌ساز"
+    opts = plan_options(int(account["price"]), await _pss_discounts())
+    lines, rows = [], []
+    for o in opts:
+        off = f" — {o['discount']}٪ تخفیف" if o["discount"] else ""
+        lines.append(f"• {o['months']} ماهه: <b>{o['price']:,}</b> تومان{off}")
+        label = f"{o['months']} ماهه — {o['price']:,} تومان" + (f" ({o['discount']}٪ off)" if o["discount"] else "")
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"pss:buy:pick:{account_id}:{o['months']}", style=ButtonStyle.SUCCESS)])
+    rows.append([InlineKeyboardButton(text="❌ لغو و بازگشت", callback_data="pss:status", style=ButtonStyle.DANGER)])
+    text = f"🧩 <b>{title}</b>\n\nپلن مدنظر را انتخاب کنید:\n" + "\n".join(lines)
+    try:
+        await cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    except Exception:
+        await cb.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("pss:buy:pick:"))
+async def selfsaz_buy_pick(cb: CallbackQuery):
+    from platform_selfsaz_pro import PLAN_DAYS, plan_price
+    try:
+        _, _, _, aid, months = cb.data.split(":")
+        account_id, months = int(aid), int(months)
+    except ValueError:
+        await cb.answer()
+        return
+    if months not in PLAN_DAYS:
+        await cb.answer()
+        return
+    account = await _pss_owned_account(cb, account_id)
+    if not account:
+        return
+    pct = (await _pss_discounts()).get(months, 0)
+    price = plan_price(int(account["price"]), months, pct)
     renew = bool(account.get("expires_at"))
     title = "تمدید اشتراک سلف‌ساز" if renew else "فعال‌سازی سلف‌ساز"
     text = (
         f"🧩 <b>{title}</b>\n\n"
-        f"مبلغ اشتراک یک‌ماهه: <b>{price:,} تومان</b>\n"
+        f"پلن: <b>{months} ماهه</b> ({PLAN_DAYS[months]} روز)\n"
+        f"مبلغ: <b>{price:,} تومان</b>"
+        + (f" ({pct}٪ تخفیف)" if pct else "") + "\n"
         "پس از تأیید، مبلغ از کیف پول شما کسر می‌شود. "
-        "اگر فعال‌سازی ناموفق باشد، مبلغ به‌صورت خودکار به کیف پول برمی‌گردد.\n\n"
-        "برای ادامه روی دکمهٔ پرداخت بزنید یا برای لغو به پنل سلف‌ساز برگردید."
+        "اگر فعال‌سازی ناموفق باشد، مبلغ به‌صورت خودکار به کیف پول برمی‌گردد."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ تأیید و پرداخت", callback_data=f"pss:buy:confirm:{account_id}", style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="✅ تأیید و پرداخت", callback_data=f"pss:buy:confirm:{account_id}:{months}", style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="⬅️ انتخاب پلن دیگر", callback_data=f"pss:buy:{account_id}", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="❌ لغو و بازگشت", callback_data="pss:status", style=ButtonStyle.DANGER)],
     ])
     try:
@@ -924,17 +1013,37 @@ async def selfsaz_buy(cb: CallbackQuery):
         await cb.message.answer(text, reply_markup=kb)
     await cb.answer()
 
+
 @router.callback_query(F.data.startswith("pss:buy:confirm:"))
 async def selfsaz_buy_confirm(cb: CallbackQuery):
-    account_id = int(cb.data.rsplit(":", 1)[1])
-    account = await selfsaz_api("GET", f"/v1/accounts/{cb.from_user.id}")
-    if not account or not account.get("configured") or int(account.get("id", 0)) != account_id:
-        await cb.answer("حساب سلف‌ساز پیدا نشد", show_alert=True)
+    from platform_selfsaz_pro import PLAN_DAYS, plan_price, release, try_acquire
+    parts = cb.data.split(":")
+    try:
+        account_id = int(parts[3])
+        months = int(parts[4]) if len(parts) > 4 else 1      # دکمه‌های قدیمیِ بدون ماه = یک‌ماهه
+    except (ValueError, IndexError):
+        await cb.answer()
         return
-    price = int(account.get("price", 0))
-    if price <= 0:
-        await cb.answer("قیمت سلف‌ساز هنوز تعیین نشده است", show_alert=True)
+    if months not in PLAN_DAYS:
+        await cb.answer()
         return
+    uid = cb.from_user.id
+    if not try_acquire(uid):                                  # دابل‌تپ / تپ هم‌زمان
+        await cb.answer("⏳ درخواست قبلی شما در حال پردازش است", show_alert=False)
+        return
+    try:
+        await _pss_buy_confirm_locked(cb, account_id, months)
+    finally:
+        release(uid)
+
+
+async def _pss_buy_confirm_locked(cb: CallbackQuery, account_id: int, months: int):
+    from platform_selfsaz_pro import PLAN_DAYS, plan_price
+    account = await _pss_owned_account(cb, account_id)
+    if not account:
+        return
+    price = plan_price(int(account["price"]), months, (await _pss_discounts()).get(months, 0))
+    days = PLAN_DAYS[months]
     from platform_bot import get_user, rial
     async with Session() as s:
         user = await get_user(s, cb.from_user.id, cb.from_user.full_name, for_update=True, username=cb.from_user.username)
@@ -951,13 +1060,13 @@ async def selfsaz_buy_confirm(cb: CallbackQuery):
             await cb.answer()
             return
         user.balance = float(user.balance) - price
-        s.add(PlatformTxn(user_telegram_id=cb.from_user.id, amount=-price, kind="purchase", note="خرید و فعال‌سازی سلف‌ساز"))
+        s.add(PlatformTxn(user_telegram_id=cb.from_user.id, amount=-price, kind="purchase", note=f"خرید و فعال‌سازی سلف‌ساز ({months} ماهه)"))
         await s.commit()
-    activated = await selfsaz_api("POST", f"/v1/accounts/{account_id}/activate", {"days": 30})
+    activated = await selfsaz_api("POST", f"/v1/accounts/{account_id}/activate", {"days": days})
     ok = bool(activated and activated.get("enabled"))
     if not ok:
         # پاسخ نرسید (مثلاً تایم‌اوت) ولی شاید سرویس فعال کرده باشد؛ اگر تاریخِ
-        # انقضا جلو رفته، بازپرداخت نکن — وگرنه ۳۰ روزِ رایگان می‌ماند
+        # انقضا جلو رفته، بازپرداخت نکن — وگرنه روزهای رایگان می‌ماند
         after = await selfsaz_api("GET", f"/v1/accounts/{cb.from_user.id}")
         ok = bool(after and after.get("expires_at")
                   and after.get("expires_at") != account.get("expires_at"))
@@ -969,8 +1078,10 @@ async def selfsaz_buy_confirm(cb: CallbackQuery):
             await s.commit()
         await cb.answer("فعال‌سازی ناموفق بود؛ مبلغ به کیف پول برگشت داده شد", show_alert=True)
     else:
-        await cb.answer("✅ خرید با کیف پول انجام شد و سلف‌ساز فعال شد")
+        await cb.answer(f"✅ خرید {months} ماهه انجام شد و سلف‌ساز فعال شد")
     await show_selfsaz_panel(cb.message, cb.from_user.id, edit=True)
+
+
 @router.callback_query(F.data.startswith("pss:toggle:"))
 async def selfsaz_toggle(cb: CallbackQuery):
     account_id = int(cb.data.rsplit(":", 1)[1])
@@ -1076,7 +1187,6 @@ _SELFSaz_FEATURES = {
         "• <code>پاسخ</code> برای مدیریت پاسخ‌های خودکار\n"
         "• <code>دشمن</code> و <code>لیست دشمن</code>\n"
         "• <code>دشمنان</code> و <code>پاک کردن دشمنان</code>\n"
-        "• <code>فحش</code> و <code>لیست فحش</code>\n"
         "• <code>ترجمه</code> در صورت فعال‌بودن قابلیت worker\n"
         "• <code>ریکت متن</code> برای واکنش خودکار"
     ),
@@ -1100,7 +1210,7 @@ _SELFSaz_FEATURES = {
 _SELFSaz_FEATURE_COMMANDS = {
     'groups': [('بن', 'بن'), ('آنبن', 'آنبن @username'), ('کیک', 'کیک'), ('سکوت', 'سکوت'), ('حذف سکوت', 'حذف سکوت'), ('ادمین', 'ادمین'), ('حذف ادمین', 'حذف ادمین'), ('پاک‌کردن پیام', 'پاک 10'), ('پین', 'پین'), ('آنپین', 'آنپین'), ('تنظیم عنوان', 'تنظیم عنوان متن'), ('تنظیم توضیحات', 'تنظیم توضیحات متن'), ('تنظیم عکس', 'تنظیم عکس'), ('حالت آهسته', 'اهسته روشن')],
     'profile': [('ساعت روشن/خاموش', 'تایم روشن / تایم خاموش'), ('لیست فونت', 'لیست فونت'), ('تنظیم فونت', 'تنظیم فونت نام فونت'), ('آنلاین روشن/خاموش', 'آنلاین روشن / آنلاین خاموش'), ('شناسه حساب', 'ایدی')],
-    'private': [('پاسخ خودکار', 'پاسخ'), ('پاسخ عمومی', 'پاسخ عمومی روشن'), ('دشمن', 'دشمن'), ('لیست دشمن', 'لیست دشمن'), ('پاک‌کردن دشمنان', 'پاک کردن دشمنان'), ('فهرست فحش', 'فحش'), ('واکنش خودکار', 'ریکت متن'), ('ترجمه', 'ترجمه')],
+    'private': [('پاسخ خودکار', 'پاسخ'), ('پاسخ عمومی', 'پاسخ عمومی روشن'), ('دشمن', 'دشمن'), ('لیست دشمن', 'لیست دشمن'), ('پاک‌کردن دشمنان', 'پاک کردن دشمنان'), ('واکنش خودکار', 'ریکت متن'), ('ترجمه', 'ترجمه')],
     'tools': [('اطلاعات گروه', 'اطلاعات گروه'), ('لیست ادمین', 'لیست ادمین'), ('تعداد اعضا', 'تعداد اعضا'), ('همه روشن', 'همه روشن'), ('همه خاموش', 'همه خاموش'), ('مدیا', 'مدیا روشن/خاموش'), ('استیکر', 'استیکر روشن/خاموش'), ('فوروارد', 'فوروارد روشن/خاموش'), ('ویس', 'ویس روشن/خاموش'), ('فایل', 'فایل روشن/خاموش'), ('پینگ', 'پینگ')],
 }
 
@@ -1301,7 +1411,6 @@ async def selfsaz_private_panel(cb: CallbackQuery):
         '• <code>دشمن</code> — مدیریت فهرست دشمنان\n'
         '• <code>لیست دشمن</code> — نمایش دشمنان\n'
         '• <code>پاک کردن دشمنان</code> — پاک‌کردن فهرست\n'
-        '• <code>فحش</code> و <code>لیست فحش</code> — مدیریت فهرست کلمات\n'
         '• <code>ریکت متن</code> — تنظیم واکنش خودکار\n\n'
         'حساب متصل باید این دستورها را در Saved Messages یا چت موردنظر اجرا کند.'
     )
