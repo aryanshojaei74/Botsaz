@@ -62,19 +62,21 @@ _AR = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "012345678901234
 LIVE: dict[int, dict] = {}
 
 
-def _live_chat(chat_id: int) -> list[dict]:
-    """مسابقه‌هایِ پولیِ زنده (منتظرِ حریف یا در حالِ بازی) در این گروه؛ مهلتِ گذشته = آزاد."""
+def _live_chat(chat_id: int, bot_id: int = 0) -> list[dict]:
+    """مسابقه‌هایِ پولیِ زنده (منتظرِ حریف یا در حالِ بازی) در این گروه برایِ همین ربات (۰ = ربات اصلی؛ مستأجر = شناسهٔ ربات)؛
+    مهلتِ گذشته = آزاد."""
     now = time.monotonic()
-    return [lv for lv in LIVE.values() if lv.get("chat") == chat_id and lv.get("until", 0) > now]
+    return [lv for lv in LIVE.values()
+            if lv.get("chat") == chat_id and lv.get("bot", 0) == bot_id and lv.get("until", 0) > now]
 
 
-def busy_paid(chat_id: int) -> bool:
-    return bool(_live_chat(chat_id))
+def busy_paid(chat_id: int, bot_id: int = 0) -> bool:
+    return bool(_live_chat(chat_id, bot_id))
 
 
-def player_race(chat_id: int, uid: int) -> dict | None:
+def player_race(chat_id: int, uid: int, bot_id: int = 0) -> dict | None:
     """مسابقهٔ در حالِ بازیِ این کاربر در این گروه (هر نفر هم‌زمان فقط در یک مسابقهٔ زنده بازی می‌کند)."""
-    for lv in _live_chat(chat_id):
+    for lv in _live_chat(chat_id, bot_id):
         if uid in lv["players"]:
             return lv
     return None
@@ -124,9 +126,14 @@ def _rule(w: PlatformWager) -> str:
 
 
 def _kb_pending(w: PlatformWager) -> InlineKeyboardMarkup:
+    px = "twr" if w.bot_id else "pgr"           # ربات مستأجر: callbackهایِ twr:* (tenant/shared/wager_race.py)
+    if w.bot_id:                                # دکمهٔ شیشه‌ایِ ساده (ایموجیِ پرمیومِ بات‌ساز برایِ ربات مشتری معنا ندارد)
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ قبول و پیوستن", callback_data=f"{px}:join:{w.id}", style=ButtonStyle.SUCCESS),
+            InlineKeyboardButton(text="❌ لغو", callback_data=f"{px}:cancel:{w.id}", style=ButtonStyle.DANGER)]])
     return InlineKeyboardMarkup(inline_keyboard=[[
-        hx_btn("✅ قبول و پیوستن", f"pgr:join:{w.id}", ButtonStyle.SUCCESS),
-        hx_btn("❌ لغو", f"pgr:cancel:{w.id}", ButtonStyle.DANGER)]])
+        hx_btn("✅ قبول و پیوستن", f"{px}:join:{w.id}", ButtonStyle.SUCCESS),
+        hx_btn("❌ لغو", f"{px}:cancel:{w.id}", ButtonStyle.DANGER)]])
 
 
 def hx_btn(text: str, cb: str, style):
@@ -135,7 +142,7 @@ def hx_btn(text: str, cb: str, style):
 
 
 def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
-    wd = core.words(0)
+    wd = core.words(w.bot_id or 0)
     head = f"{wd['icon']} <b>{wd['bet']} {RACE_FA[w.game]}</b>"
     st = core._st(w)
     if w.status == "pending":
@@ -174,12 +181,12 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
 
 # ───────────────────────── عملیات ─────────────────────────
 
-async def join_race(wid: int, user: tuple):
+async def join_race(wid: int, user: tuple, bot_id: int = 0):
     """مثلِ core.join_wager، ولی با ساختِ پرسش؛ خروجی R(w, err, note)."""
     uid, uname, uuser = user
     async with Session() as s:
         w = await s.get(PlatformWager, wid, with_for_update=True)
-        if not w or (w.bot_id or 0) != 0 or w.game not in RACE_GAMES or w.status != "pending":
+        if not w or (w.bot_id or 0) != bot_id or w.game not in RACE_GAMES or w.status != "pending":
             return core._res(err="این مسابقه دیگر در انتظار نیست.")
         if w.creator_id == uid:
             return core._res(err="سازنده نمی‌تواند خودش به مسابقه بپیوندد.")
@@ -189,17 +196,17 @@ async def join_race(wid: int, user: tuple):
             await core._timeout_locked(s, w)
             await s.commit()
             return core._res(w=w, err="مهلتِ مسابقه تمام شده؛ مبلغ به سازنده برگشت.")
-        if player_race(w.chat_id, uid):
+        if player_race(w.chat_id, uid, bot_id):
             return core._res(err="تا تمام‌شدنِ مسابقهٔ فعلی‌ات نمی‌توانی به مسابقهٔ دیگری بپیوندی.")
-        if player_race(w.chat_id, w.creator_id):
+        if player_race(w.chat_id, w.creator_id, bot_id):
             return core._res(err="سازندهٔ این مسابقه همین حالا در مسابقهٔ دیگری است؛ چند لحظهٔ دیگر دوباره امتحان کن.")
-        opp = await core._lock_user(s, uid, 0)
+        opp = await core._lock_user(s, uid, bot_id)
         if not opp or opp.is_banned or _money(opp.balance) < _money(w.amount):
             return core._res(err=f"موجودی کافی نیست؛ نیاز به {_rial(w.amount)} داری.")
-        if await core._active_count(s, uid, 0) >= core.MAX_ACTIVE:
-            return core._res(err=f"هم‌زمان حداکثر {core.MAX_ACTIVE} شرط باز می‌توانی داشته باشی.")
+        if await core._active_count(s, uid, bot_id) >= core.MAX_ACTIVE:
+            return core._res(err=core._t(f"هم‌زمان حداکثر {core.MAX_ACTIVE} {{bet}} باز می‌توانی داشته باشی.", bot_id))
         opp.balance = Decimal(str(opp.balance)) - Decimal(str(w.amount))
-        core._add_txn(s, 0, opp, -_money(w.amount), "wager_stake", f"پیوستن به شرط #{w.id}")
+        core._add_txn(s, bot_id, opp, -_money(w.amount), "wager_stake", f"پیوستن به {{bet}} #{w.id}")
         w.opponent_id, w.opponent_name, w.opponent_username = uid, uname or "", uuser or None
         w.status = "playing"
         st = new_question(w.game)
@@ -282,7 +289,7 @@ async def race_create(msg: Message):
     if err:
         await msg.reply(err)
         return
-    LIVE[w.id] = {"wid": w.id, "chat": cid, "kind": game, "players": set(), "answer": None, "n": None,
+    LIVE[w.id] = {"wid": w.id, "chat": cid, "bot": 0, "kind": game, "players": set(), "answer": None, "n": None,
                   "until": time.monotonic() + cfg["ttl"] + 5}
     text, kb = render_race(w)
     try:
@@ -341,7 +348,7 @@ async def race_join(cb: CallbackQuery):
         r = await join_race(wid, (cb.from_user.id, cb.from_user.full_name or "", cb.from_user.username or ""))
     if r.w is not None and r.w.status == "playing":
         st = core._st(r.w)
-        LIVE[r.w.id] = {"wid": r.w.id, "chat": r.w.chat_id, "kind": r.w.game,
+        LIVE[r.w.id] = {"wid": r.w.id, "chat": r.w.chat_id, "bot": 0, "kind": r.w.game,
                         "players": {r.w.creator_id, r.w.opponent_id},
                         "answer": st.get("a"), "n": st.get("n"),
                         "until": time.monotonic() + SECS[r.w.game] + 5}
@@ -382,12 +389,12 @@ async def race_cancel(cb: CallbackQuery):
     await cb.answer(r.err or "لغو شد و مبلغ برگشت.", show_alert=bool(r.err))
 
 
-def _match(m: Message) -> dict | None:
+def _match(m: Message, bot_id: int = 0) -> dict | None:
     """مسابقه‌ای که این پیام پاسخِ بازیکنِ آن است (هر نفر فقط در یک مسابقهٔ زنده بازیکن است)."""
     if not m.from_user or not m.text:
         return None
     t = norm_answer(m.text)
-    lv = player_race(m.chat.id, m.from_user.id)
+    lv = player_race(m.chat.id, m.from_user.id, bot_id)
     if not lv:
         return None
     if lv["kind"] == "guess":

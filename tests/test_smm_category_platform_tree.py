@@ -103,7 +103,8 @@ async def test_type_page_maps_by_pk_not_panel_id(db):
     finally:
         _t.get_bot_row = orig
     cbs = [b.callback_data for r in cb.message.kb.inline_keyboard for b in r]
-    assert "smmu:svc:11" in cbs and "smmu:svc:10" not in cbs   # هر دو service_id=77 دارند
+    _ids = {c.split(":")[2] for c in cbs if c.startswith("smmu:svc:")}       # callback حالا پسوندِ لیست/صفحه هم دارد
+    assert "11" in _ids and "10" not in _ids   # هر دو service_id=77 دارند
 
 
 @pytest.mark.asyncio

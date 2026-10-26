@@ -248,6 +248,8 @@ tenant_router.include_router(group_wallet_router)  # === PATCH_GROUP_WALLET_V1 =
 tenant_router.include_router(betting_router)  # === PATCH_GROUP_BETTING_V1 ===
 from tenant.shared.wager_games import wager_games_router  # === PATCH_WAGER_TENANT_V1 ===
 tenant_router.include_router(wager_games_router)  # === PATCH_WAGER_TENANT_V1 ===
+from tenant.shared.wager_race import wager_race_router  # === PATCH_WAGER_RACE_TENANT_V1 ===
+tenant_router.include_router(wager_race_router)  # === PATCH_WAGER_RACE_TENANT_V1 ===
 # === PATCH_SMM_AI_ALL_KINDS_V1 ===
 # «تنظیماتِ گروه» (group_wallet) و «سرویس‌ها و محصولات» در همهٔ انواعِ ربات هست و دکمه‌هایِ
 # «راه‌اندازی و تنظیمات هوش مصنوعی» (smmai:*) به این روتر می‌رسند. قبلاً فقط در پروسهٔ

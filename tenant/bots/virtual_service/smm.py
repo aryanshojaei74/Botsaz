@@ -9365,14 +9365,10 @@ async def _smm_myorder_detail_content(bot_id: int, user_id: int, oid: int, back_
         except Exception:
             logger.exception("[refill] بخشِ ریفیلِ صفحهٔ جزئیاتِ سفارش خطا داد (بدونِ آن نمایش داده شد)")
         # === PATCH_SMM_CANCEL_FLAG_V1 === اگر پنل برایِ این سرویس صراحتاً cancel=false گفته، دکمه نشان داده نمی‌شود
+        # === PATCH_SMM_CANCEL_ALWAYS_V1 === (فدایی) «برایِ همهٔ محصولات می‌شود درخواستِ لغو ثبت کرد» ولی برایِ بعضی
+        # سرویس‌ها دکمه نبود: چون پرچمِ cancelِ فهرستِ ارائه‌دهنده false بود و دکمه را پنهان می‌کردیم. پرچم در عمل قابل‌اعتماد
+        # نیست؛ دکمه همیشه هست و اگر پنل لغو را نپذیرد، مشتری پیامِ روشنِ «پنل اجازه نمی‌دهد» می‌بیند (smmu:reqcancel).
         _cancel_ok = True
-        try:
-            from tenant.bots.virtual_service import smm_refill as _rf2
-            _au, _ak, _ = await _panel_creds(bot_id, o.panel_pk)
-            _rf2.warm(_au, _ak)
-            _cancel_ok = _rf2.cached_cancel(_au, _ak, o.service_id) is not False
-        except Exception:
-            logger.exception("چکِ پرچمِ cancel سرویس ناموفق بود (دکمه نشان داده شد)")
         if o.status in ("sent", "awaiting_admin") and _cancel_ok:
             rows.append([InlineKeyboardButton(text="🚫 درخواستِ لغوِ سفارش", callback_data=f"smmu:reqcancel:{o.id}:{back_page}", style=ButtonStyle.DANGER)])
     rows.append([back_btn])
@@ -9976,8 +9972,9 @@ async def smmu_pick_type(cb: CallbackQuery, bot: Bot):
     entries.sort(key=lambda x: _ord[x[1].id])
     entries, _pg, _pages = _page_slice(entries, _pg)
     for it, v in entries:
+        _cbd = f"smmu:svc:{v.id}:{pkey}:{tkey}:{_pg}"          # PATCH_SMM_PRODUCT_BACK_TO_LIST_V1: صفحهٔ محصول بداند از کدام لیست آمده
         rows.append([InlineKeyboardButton(
-            text=it["name"][:55], callback_data=f"smmu:svc:{v.id}")])
+            text=it["name"][:55], callback_data=_cbd if len(_cbd.encode()) <= 64 else f"smmu:svc:{v.id}")])
     _nav = _page_nav(f"smmu:type:{pkey}:{tkey}", _pg, _pages)
     if _nav:
         rows.append(_nav)
@@ -10013,8 +10010,12 @@ async def smmu_pick_service(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if not row:
         await cb.answer()
         return
-    vid = int(cb.data.split(":")[2])
-    ok = await send_smm_product_page(cb, bot, vid, state)
+    _p = cb.data.split(":")
+    vid = int(_p[2])
+    _back = None                                            # PATCH_SMM_PRODUCT_BACK_TO_LIST_V1
+    if len(_p) >= 6 and _p[5].isdigit():
+        _back = f"smmu:type:{_p[3]}:{_p[4]}:{_p[5]}"
+    ok = await send_smm_product_page(cb, bot, vid, state, back_cb=_back)
     if not ok:
         await cb.answer("این سرویس دیگر موجود نیست", show_alert=True)
         return
@@ -10183,7 +10184,7 @@ async def open_product_shortcut(msg: Message, bot: Bot, state: FSMContext, vid: 
 
 
 async def send_smm_product_page(msg_or_cb, bot: Bot, vid: int, state: FSMContext,
-                                breadcrumb: str | None = None) -> bool:
+                                breadcrumb: str | None = None, back_cb: str | None = None) -> bool:
     """صفحهٔ خریدِ یک سرویسِ SMM مشخص را نشون می‌ده — چه از وسطِ مرورِ عادی
     صدا زده بشه (cb از smmu_pick_service)، چه مستقیم از یه دکمهٔ سفارشی
     که ادمین این سرویس رو بهش وصل کرده (بدونِ نیازِ به مرورِ پلتفرم/نوع).
@@ -10218,7 +10219,10 @@ async def send_smm_product_page(msg_or_cb, bot: Bot, vid: int, state: FSMContext
     cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
         *([[InlineKeyboardButton(text="📦 ثبتِ سفارشِ انبوه (چندلینکی)", callback_data=f"smmu:bulk:{vid}",
                                  style=ButtonStyle.PRIMARY)]] if _ik == "link" else []),
-        [InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="mbtn:home", style=ButtonStyle.DANGER)]])
+        ([InlineKeyboardButton(text="⬅️ بازگشت به لیست", callback_data=back_cb, style=ButtonStyle.DANGER),
+          InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="mbtn:home", style=ButtonStyle.DANGER)]
+         if back_cb else
+         [InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="mbtn:home", style=ButtonStyle.DANGER)])])
     _rate = ""
     try:
         from tenant.shared.product_rating import rating_line, smm_key
