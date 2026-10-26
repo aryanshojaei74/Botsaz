@@ -258,7 +258,8 @@ async def _miniapp_bg(bot_id: int) -> str:
     color = (await get_setting(bot_id, "miniapp_bg_color", "")).strip()
     if color.startswith("#") and len(color) in (4, 7):
         return color
-    return ""
+    from halloween import theme_colors as _hw_theme   # === PATCH_HALLOWEEN_V1 === رنگِ مالک اولویت دارد
+    return await _hw_theme(bot_id, "bg")
 
 
 def _is_dark(hex_color: str) -> bool:
@@ -277,7 +278,8 @@ async def _miniapp_card(bot_id: int) -> str:
     color = (await get_setting(bot_id, "miniapp_card_color", "")).strip()
     if color.startswith("#") and len(color) in (4, 7):
         return color
-    return ""
+    from halloween import theme_colors as _hw_theme   # === PATCH_HALLOWEEN_V1 ===
+    return await _hw_theme(bot_id, "card")
 
 
 def _theme_css(bg: str, card_override: str = "") -> str:

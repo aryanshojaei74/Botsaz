@@ -210,6 +210,8 @@ from tenant.gateways.wallet_limits_admin import wallet_limits_admin_router
 tenant_router.include_router(wallet_limits_admin_router)
 from tenant.gateways.gateway_layout import gateway_layout_router  # === PATCH_GATEWAY_LAYOUT_V1 ===
 tenant_router.include_router(gateway_layout_router)
+from halloween import halloween_router   # === PATCH_HALLOWEEN_V1 ===
+tenant_router.include_router(halloween_router)
 # === PATCH_ABANGATEWAY_V1 ===
 from tenant.gateways.abangateway_admin import abangateway_router
 tenant_router.include_router(abangateway_router)
@@ -5418,6 +5420,8 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
             except Exception:
                 logger.exception("بازکردنِ صفحهٔ ربات همکار از دیپ‌لینک ناموفق بود")
         await _giveaway_start_hook(msg, bot, row, gw_payload, state)   # === PATCH_GIVEAWAY_BOT_V1 ===
+        from halloween import start_hook as _hw_start   # === PATCH_HALLOWEEN_V1 ===
+        await _hw_start(msg, bot, row)
         return
     kb = await main_kb_or_remove(row.id, row.owner_id, msg.from_user.id)
     if msg.from_user.id == row.owner_id:
@@ -5493,6 +5497,8 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
         except Exception:
             logger.exception("بازکردنِ صفحهٔ ربات همکار از دیپ‌لینک ناموفق بود")
     await _giveaway_start_hook(msg, bot, row, gw_payload, state)   # === PATCH_GIVEAWAY_BOT_V1 ===
+    from halloween import start_hook as _hw_start2   # === PATCH_HALLOWEEN_V1 ===
+    await _hw_start2(msg, bot, row)
 
 
 # === PATCH_FIX_MISSING_PACK_BUY_HEADER_V1 ===

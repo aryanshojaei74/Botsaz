@@ -227,6 +227,8 @@ router.include_router(feedback_admin_router)
 # چیدمانِ دسته‌بندی‌شدهٔ پنل مدیریت — نقشه‌اش در platform_admin_menu.py.
 from platform_admin_menu import admin_menu_router
 router.include_router(admin_menu_router)
+from platform_halloween import platform_halloween_router   # === PATCH_HALLOWEEN_V1 ===
+router.include_router(platform_halloween_router)
 # PATCH_SFTP_ADMIN_PANEL_V1
 from sftp_admin import sftp_admin_router
 router.include_router(sftp_admin_router)
