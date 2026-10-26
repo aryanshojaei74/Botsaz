@@ -19,7 +19,9 @@ async def env(monkeypatch):
         await c.run_sync(models.Base.metadata.create_all)
     mk = async_sessionmaker(eng, expire_on_commit=False)
     import platform_bot as PB
-    for mod in (G, M, PB):
+    import platform_candy as PC
+    import halloween as HWm
+    for mod in (G, M, PB, PC, HWm):
         monkeypatch.setattr(mod, "Session", mk, raising=False)
     G._GAMES.clear(); G._LAST_END.clear(); G._LAST_GUESS.clear()
     allowed = {"v": True}
@@ -55,7 +57,7 @@ def test_parse_guess_digits_and_range():
 
 
 def test_points_fast_bonus():
-    assert G.points_for(10) == 8 and G.points_for(31) == 5
+    assert G.points_for(10) == 6 and G.points_for(31) == 4
 
 
 @pytest.mark.asyncio
@@ -69,8 +71,8 @@ async def test_start_hint_and_win_flow_awards_candies(env, monkeypatch):
     g2 = mk_msg("90", uid=2, name="Sara"); await G.gg_guess(g2)
     assert g1.sent == ["⬆️ بالاتر"] and g2.sent == ["⬇️ پایین‌تر"]
     w = mk_msg("42", uid=3, name="Omid"); await G.gg_guess(w)
-    assert -100 not in G._GAMES and "درست حدس زد" in w.sent[0] and "+8" in w.sent[0]      # سریع ⇒ ۵+۳
-    assert (await G.top())[0] == ("Omid", 8)
+    assert -100 not in G._GAMES and "درست حدس زد" in w.sent[0] and "+6" in w.sent[0]      # سریع ⇒ ۴+۲
+    assert (await G.top())[0] == ("Omid", 6)
     t = mk_msg("جدول"); await G.gg_top(t)
     assert "Omid" in t.sent[0]
 
@@ -144,10 +146,10 @@ async def test_word_race_first_correct_wins_wrong_is_silent(env, monkeypatch):
     win = mk_msg("جادوگر", uid=3, name="Omid")
     assert G._is_race_answer(win) is True
     await G.gg_race_answer(win)
-    assert -100 not in G._RACES and "اول شد" in win.sent[0] and "+3" in win.sent[0]
+    assert -100 not in G._RACES and "اول شد" in win.sent[0] and "+2" in win.sent[0]
     late = mk_msg("جادوگر", uid=4)
     assert G._is_race_answer(late) is False                                 # بعد از برنده، دیگر جواب نمی‌گیرد
-    assert (await G.top())[0] == ("Omid", 3)
+    assert (await G.top())[0] == ("Omid", 2)
 
 
 @pytest.mark.asyncio
@@ -160,7 +162,7 @@ async def test_math_race_fast_bonus_and_one_game_at_a_time(env, monkeypatch):
     busy2 = mk_msg("سرعت"); await G.gg_speed(busy2)
     assert "جریان دارد" in busy2.sent[0]
     w = mk_msg("۷", uid=5); await G.gg_race_answer(w)
-    assert "+5" in w.sent[0]                                                # ریاضیِ سریع ⇒ ۳+۲
+    assert "+3" in w.sent[0]                                                # ریاضیِ سریع ⇒ ۲+۱
 
 
 # === PATCH_GROUP_GAMES_HELP_V1 ===

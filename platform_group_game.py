@@ -37,12 +37,12 @@ platform_group_game_router = Router(name="platform_group_game")
 
 LOW, HIGH, TIMEOUT = 1, 100, 300
 START_COOLDOWN, GUESS_GAP = 45, 2.5
-BASE_POINTS, FAST_BONUS, FAST_SECS = 5, 3, 30
+BASE_POINTS, FAST_BONUS, FAST_SECS = 4, 2, 30      # PATCH_CANDY_REWARD_V1: کمی سخت‌تر (جایزهٔ ۱۰۰ شیرینی)
 KEY_ON = "pgg_on"
 
 _GAMES: dict[int, dict] = {}              # chat_id → {"n", "t0", "guesses", "mid"}
 _RACES: dict[int, dict] = {}              # chat_id → {"kind", "answer", "t0"}
-RACE_TIMEOUT, RACE_POINTS, RACE_FAST_BONUS, RACE_FAST_SECS = 60, 3, 2, 10
+RACE_TIMEOUT, RACE_POINTS, RACE_FAST_BONUS, RACE_FAST_SECS = 60, 2, 1, 10
 WORDS = ["کدوتقلبی", "جادوگر", "خون‌آشام", "اسکلت", "شبح", "عنکبوت", "خفاش", "قبرستان", "طلسم", "گربه‌سیاه",
          "قلعهٔ‌متروک", "جاروپرنده", "مومیایی", "دیوانه", "شیرینی‌هالوین", "TrickOrTreat", "HappyHalloween", "Boo"]
 _LAST_END: dict[int, float] = {}
@@ -118,6 +118,36 @@ async def top(limit: int = 10) -> list[tuple[str, int]]:
             continue
     out.sort(key=lambda x: -x[1])
     return out[:limit]
+
+
+async def _award(uid: int, name: str, pts: int) -> tuple[int, int, str]:
+    """سقفِ روزانه ⇒ امتیاز ⇒ جایزه؛ خروجی: (امتیازِ داده‌شده، مجموع، متنِ اضافه برایِ پیامِ برنده)."""
+    import halloween as HW
+    import platform_candy as C
+    c = await C.cfg()
+    day = HW._tehran_day()
+    got = await C.apply_cap(uid, pts, day, c["cap"])
+    total = await add_points(uid, name, got) if got else await _total(uid)
+    extra = ""
+    if got < pts:
+        extra += f"\n⏳ سقفِ شیرینیِ امروزت ({c['cap']}) پر شد؛ فردا ادامه بده."
+    rw = await C.try_reward(uid, total)
+    if rw["status"] == "paid":
+        extra += (f"\n\n🎉💎 <b>تبریک!</b> {c['goal']} شیرینی جمع کردی؛ <b>{rw['amount']:,} تومان</b> به کیف پولِ بات‌سازت اضافه شد!")
+    elif rw["status"] == "no_user" :
+        extra += "\n\n💎 به هدفِ جایزه رسیدی! برایِ دریافت، یک بار ربات اصلیِ بات‌ساز را استارت کن و در گروه «شیرینی من» را بنویس."
+    elif rw["status"] == "budget":
+        extra += "\n\n💎 جایزه‌هایِ این دوره تمام شد؛ امتیازت در جدول می‌ماند."
+    return got, total, extra
+
+
+async def _total(uid: int) -> int:
+    async with Session() as s:
+        r = await s.scalar(select(Setting).where(Setting.bot_id == 0, Setting.key == _akey(uid)))
+    try:
+        return int((r.value or "0|").split("|", 1)[0]) if r else 0
+    except ValueError:
+        return 0
 
 
 def _is_start(m: Message) -> bool:
@@ -196,9 +226,9 @@ async def gg_guess(msg: Message):
     _LAST_END[cid] = now
     pts = points_for(now - g["t0"])
     name = msg.from_user.full_name or str(uid)
-    total = await add_points(uid, name, pts)
+    got, total, extra = await _award(uid, name, pts)
     await msg.reply(f"🎉 <b>{_html.escape(name)}</b> درست حدس زد: <b>{g['n']}</b>!\n"
-                    f"🍬 +{pts} شیرینی (مجموع: {total}) · {g['guesses']} حدس\n\n«جدول» را بنویس تا برترین‌ها را ببینی.",
+                    f"🍬 +{got} شیرینی (مجموع: {total}) · {g['guesses']} حدس{extra}\n\n«جدول» را بنویس تا برترین‌ها را ببینی.",
                     parse_mode="HTML")
 
 
@@ -299,8 +329,8 @@ async def gg_race_answer(msg: Message):
     _LAST_END[cid] = now
     pts = RACE_POINTS + (RACE_FAST_BONUS if race["kind"] == "math" and now - race["t0"] <= RACE_FAST_SECS else 0)
     name = msg.from_user.full_name or str(msg.from_user.id)
-    total = await add_points(msg.from_user.id, name, pts)
-    await msg.reply(f"🏁 <b>{_html.escape(name)}</b> اول شد! ({now - race['t0']:.1f} ثانیه)\n🍬 +{pts} شیرینی (مجموع: {total})",
+    got, total, extra = await _award(msg.from_user.id, name, pts)
+    await msg.reply(f"🏁 <b>{_html.escape(name)}</b> اول شد! ({now - race['t0']:.1f} ثانیه)\n🍬 +{got} شیرینی (مجموع: {total}){extra}",
                     parse_mode="HTML")
 
 
@@ -314,10 +344,21 @@ def _is_help(m: Message) -> bool:
 async def help_text() -> str:
     lines = ["🎮 <b>بازی‌هایِ گروه</b>\n",
              "🆓 <b>رایگان (شیرینی 🍬)</b>",
-             "🎯 <b>حدس عدد</b> — بنویس «حدس عدد»؛ عددی بین ۱ تا ۱۰۰ را حدس بزن، ربات می‌گوید بالاتر/پایین‌تر. اولین نفرِ درست ۵ 🍬 (زیرِ ۳۰ ثانیه ۸ 🍬).",
-             "⚡️ <b>سرعت</b> — بنویس «سرعت»؛ اولین نفری که کلمهٔ ربات را دقیقاً بنویسد ۳ 🍬 می‌گیرد.",
-             "🧮 <b>ریاضی</b> — بنویس «ریاضی»؛ اولین جوابِ درست ۳ 🍬 (زیرِ ۱۰ ثانیه ۵ 🍬).",
-             "🏆 <b>جدول</b> — بنویس «جدول» تا ۱۰ نفرِ برترِ شیرینی‌ها را ببینی."]
+             "🎯 <b>حدس عدد</b> — بنویس «حدس عدد»؛ عددی بین ۱ تا ۱۰۰ را حدس بزن، ربات می‌گوید بالاتر/پایین‌تر. اولین نفرِ درست {B} 🍬 (زیرِ ۳۰ ثانیه {BF} 🍬).",
+             "⚡️ <b>سرعت</b> — بنویس «سرعت»؛ اولین نفری که کلمهٔ ربات را دقیقاً بنویسد {R} 🍬 می‌گیرد.",
+             "🧮 <b>ریاضی</b> — بنویس «ریاضی»؛ اولین جوابِ درست {R} 🍬 (زیرِ ۱۰ ثانیه {RF} 🍬).",
+             "🏆 <b>جدول</b> — بنویس «جدول» تا ۱۰ نفرِ برترِ شیرینی‌ها را ببینی.",
+             "🍬 <b>شیرینی من</b> — پیشرفتِ تو تا جایزه."]
+    lines = [ln.replace("{B}", str(BASE_POINTS)).replace("{BF}", str(BASE_POINTS + FAST_BONUS)).replace("{R}", str(RACE_POINTS))
+             .replace("{RF}", str(RACE_POINTS + RACE_FAST_BONUS)) for ln in lines]
+    try:
+        import platform_candy as C, halloween as HW
+        c = await C.cfg()
+        if c["on"] and await HW.is_on():
+            lines += ["", f"💎 <b>جایزهٔ هالوین:</b> با جمع‌کردنِ {c['goal']} 🍬 مبلغِ <b>{c['amount']:,} تومان</b> به کیف پولت اضافه می‌شود "
+                          f"(روزی حداکثر {c['cap']} 🍬؛ فقط {c['max']} نفرِ اول)."]
+    except Exception:
+        logger.debug("games help: بخشِ جایزه خوانده نشد")
     try:
         from platform_wager import _bet_enabled, game_enabled
         if await _bet_enabled():
@@ -352,3 +393,56 @@ async def gg_help(msg: Message):
         return                                   # تکرارِ پشتِ‌سرهم: بی‌صدا (گروه شلوغ نشود)
     _LAST_HELP[msg.chat.id] = now
     await msg.reply(await help_text(), parse_mode="HTML")
+
+
+# ───────────────────────── «شیرینی من» و تنظیمِ جایزه ─────────────────────────
+# === PATCH_CANDY_REWARD_V1 ===
+_MYC = re.compile(r"^\s*(?:/mycandy(?:@\w+)?|شیرینی[\s‌]*(?:من|های[\s‌]*من))\s*$", re.I)
+
+
+def _is_myc(m: Message) -> bool:
+    return bool(m.text and _MYC.match(m.text))
+
+
+@platform_group_game_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_myc))
+async def gg_mycandy(msg: Message):
+    await _gate(msg)
+    import halloween as HW
+    import platform_candy as C
+    uid = msg.from_user.id
+    c = await C.cfg()
+    total = await _total(uid)
+    used = await C.used_today(uid, HW._tehran_day())
+    lines = [f"🍬 <b>شیرینی‌هایِ {_html.escape(msg.from_user.full_name or str(uid))}</b>",
+             f"مجموع: <b>{total}</b> از {c['goal']}",
+             f"امروز: {used} از {c['cap']}"]
+    rw = await C.try_reward(uid, total)
+    if rw["status"] == "paid":
+        lines.append(f"\n🎉💎 جایزه پرداخت شد: <b>{rw['amount']:,} تومان</b> به کیف پولت اضافه شد!")
+    elif rw["status"] == "already":
+        lines.append("\n💎 جایزهٔ این دوره را قبلاً گرفته‌ای.")
+    elif rw["status"] == "no_user":
+        lines.append("\n💎 به هدف رسیدی! یک بار ربات اصلی را استارت کن و دوباره «شیرینی من» را بنویس.")
+    elif rw["status"] == "budget":
+        lines.append("\n💎 جایزه‌هایِ این دوره تمام شد.")
+    elif rw["status"] == "below" and c["on"]:
+        lines.append(f"\n💎 {max(0, c['goal'] - total)} شیرینیِ دیگر تا <b>{c['amount']:,} تومان</b>!")
+    await msg.reply("\n".join(lines), parse_mode="HTML")
+
+
+@platform_group_game_router.message(F.chat.type == ChatType.PRIVATE, F.text.regexp(r"^/hwreward\b"))
+async def hw_reward_cmd(msg: Message):
+    from config import PLATFORM_ADMIN_ID
+    if not msg.from_user or msg.from_user.id != PLATFORM_ADMIN_ID:
+        raise SkipHandler
+    import platform_candy as C
+    parts = (msg.text or "").replace("،", " ").split()[1:]
+    nums = [int(p.translate(_AR)) for p in parts if p.translate(_AR).isdigit()]
+    if len(nums) == 4:
+        await C.set_numbers(*nums)
+    c = await C.cfg()
+    await msg.answer(f"💎 <b>جایزهٔ شیرینی</b> ({'✅ روشن' if c['on'] else '⛔️ خاموش'})\n"
+                     f"مبلغ: <b>{c['amount']:,}</b> تومان · هدف: <b>{c['goal']}</b> 🍬 · سقفِ نفرات: <b>{c['max']}</b> · سقفِ روزانه: <b>{c['cap']}</b> 🍬\n"
+                     f"پرداخت‌شده تاکنون: {await C.paid_count()} نفر\n\n"
+                     "تغییر: <code>/hwreward مبلغ هدف سقفِ‌نفرات سقفِ‌روزانه</code> — مثال: <code>/hwreward 7000 100 20 25</code>",
+                     parse_mode="HTML")
