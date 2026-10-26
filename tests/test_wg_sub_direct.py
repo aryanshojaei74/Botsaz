@@ -83,3 +83,64 @@ async def test_multi_sub_files_sent_directly(monkeypatch):
     monkeypatch.setattr(_vu, "_fetch_wg_files_from_sub", fetch)
     b = _Bot()
     assert await _vu._send_sub_wg_files(b, 1, "https://s") == 2
+
+
+# === PATCH_WG_SUB_DIRECT_SINGLE_V1 === دکمهٔ «کانفیگ‌هایِ تکی» هم اول فایل را عیناً از ساب می‌فرستد
+@pytest.mark.asyncio
+async def test_single_configs_button_sends_sub_file_first_and_skips_rebuilt_wireguard(monkeypatch):
+    import pytest_asyncio  # noqa: F401
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    import models
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(models.Base.metadata.create_all)
+    mk = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(_vu, "Session", mk)
+    async with mk() as s:
+        s.add(models.Bot(id=5, owner_id=1, token="5:T", username="x", field="vpn_sales", plan="pro", status="active"))
+        s.add(models.PanelAccount(id=7, bot_id=5, user_telegram_id=777, email="u1", panel_key="marzban",
+                                  sub_link="https://p.example/sub/TOK"))
+        await s.commit()
+    calls = []
+
+    async def sub_files(bot, chat_id, sub_link, panel=None, email=""):
+        calls.append(("sub", sub_link, email))
+        return 2                                               # ساب دو فایل داد و فرستاده شد
+
+    async def native(bot, chat_id, client, email):
+        calls.append(("native",))
+        return 0
+
+    class Client:
+        async def get_client_links(self, email):
+            return ["[Interface]\nPrivateKey = rebuilt\n", "vless://abc#x"]
+
+        async def close(self):
+            return None
+
+    async def panel_for(s, bot_id, a):
+        return SimpleNS(panel_key="marzban")
+    from types import SimpleNamespace as SimpleNS
+    monkeypatch.setattr(_vu, "_send_sub_wg_files", sub_files)
+    monkeypatch.setattr(_vu, "_send_native_wg_files", native)
+    monkeypatch.setattr(_vu, "_client_from_panel", lambda p: Client())
+    monkeypatch.setattr(_vu, "_panel_for_account", panel_for)
+    sent_msgs, cards = [], []
+
+    async def send_cards(bot, bid, uid, c):
+        cards.extend(c)
+    monkeypatch.setattr(_vu, "_send_config_cards", send_cards)
+
+    class CB:
+        data = "vget:single:7"
+        from_user = SimpleNS(id=777)
+
+        class message:
+            @staticmethod
+            async def answer(*a, **k): sent_msgs.append(a)
+
+        async def answer(self, *a, **k): pass
+    await _vu.vget_single(CB(), SimpleNS(token="5:T"))
+    assert calls == [("sub", "https://p.example/sub/TOK", "u1")]                    # ساب اول؛ مسیرِ بومی صدا زده نشد
+    assert [c[1] for c in cards] == ["vless://abc#x"]                                # وایرگاردِ بازسازی‌شده دوباره فرستاده نشد
+    await engine.dispose()

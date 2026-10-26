@@ -3503,7 +3503,7 @@ async def _fetch_wg_files_from_sub(sub_link: str) -> list[tuple[str, bytes]]:
     for ua in ("WireGuard/1.0", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                                 "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"):
         try:
-            async with _aio.ClientSession(timeout=_aio.ClientTimeout(total=10),
+            async with _aio.ClientSession(timeout=_aio.ClientTimeout(total=15),
                                           headers={"User-Agent": ua, "Accept": "*/*"}) as sess:
                 async with sess.get(sub_link, allow_redirects=True) as r:
                     if r.status != 200:
@@ -3629,6 +3629,7 @@ async def vget_single(cb: CallbackQuery, bot: Bot):
             await cb.answer("یافت نشد.", show_alert=True)
             return
         email = a.email
+        _single_sub_link = a.sub_link or ""      # PATCH_WG_SUB_DIRECT_SINGLE_V1
         panel = await _panel_for_account(s, row.id, a)
     await cb.answer("در حال دریافت کانفیگ‌ها…")
     # === PATCH_SINGLE_CONFIG_DIAGNOSTIC_V1 ===
@@ -3644,7 +3645,11 @@ async def vget_single(cb: CallbackQuery, bot: Bot):
         try:
             client = _client_from_panel(panel)
             try:
-                native_sent = await _send_native_wg_files(bot, cb.from_user.id, client, email)
+                # === PATCH_WG_SUB_DIRECT_SINGLE_V1 === (WhaleSupport) «کانفیگ‌هایِ تکی» هم مثلِ دکمهٔ وایرگارد اول فایل را عیناً از
+                # ساب‌لینک بگیرد (بایت‌به‌بایت، با همان اسم)؛ فقط اگر ساب وایرگارد نداد مسیرِ بومی/ساخت از لینک.
+                native_sent = await _send_sub_wg_files(bot, cb.from_user.id, _single_sub_link, panel, email)
+                if not native_sent:
+                    native_sent = await _send_native_wg_files(bot, cb.from_user.id, client, email)
                 links = await client.get_client_links(email)
                 if native_sent:
                     # وایرگارد قبلاً با اسمِ اصلیِ پنل فرستاده شد؛ تکراری نفرست
