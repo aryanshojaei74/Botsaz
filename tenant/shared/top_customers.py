@@ -74,6 +74,7 @@ _MEDALS = {1: "🥇", 2: "🥈", 3: "🥉", 4: "🎗", 5: "⭐"}
 
 
 class TcFSM(StatesGroup):
+    hide_add = State()          # PATCH_TOP_CUSTOMERS_HIDE_V1
     set_gb = State()
     set_day = State()
     seg_label = State()
@@ -99,6 +100,25 @@ async def _tset(bot_id: int, key: str, value: str):
         else:
             s.add(Setting(bot_id=bot_id, key=key, value=value))
         await s.commit()
+
+
+# === PATCH_TOP_CUSTOMERS_HIDE_V1 === کاربرانِ «حذف‌شده از رتبه‌بندی» (مثلاً خودِ مالک/پشتیبان یا خریدِ آزمایشی):
+# در لیستِ نفراتِ برتر نمی‌آیند و رتبه/تخفیفِ رتبه هم نمی‌گیرند. خریدهایشان دست‌نخورده می‌ماند (فقط از رتبه‌بندی کنار می‌روند).
+def _parse_ids(raw: str) -> list[int]:
+    out: list[int] = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if part.lstrip("-").isdigit() and int(part) not in out:
+            out.append(int(part))
+    return out
+
+
+async def hidden_ids(bot_id: int) -> list[int]:
+    return _parse_ids(await _tget(bot_id, "tc_hidden", ""))
+
+
+async def set_hidden(bot_id: int, ids: list[int]) -> None:
+    await _tset(bot_id, "tc_hidden", ",".join(str(i) for i in dict.fromkeys(ids)))
 
 
 async def tc_is_enabled(bot_id: int) -> bool:
@@ -240,7 +260,9 @@ async def top_buyers(bot_id: int, limit: int = TOP_N) -> list[tuple[BotUser, flo
         if bot_row and bot_row.field == "virtual_service":
             await _add_virtual_service_totals(s, bot_id, since, totals, users)
 
-    ranked = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+    hidden = set(await hidden_ids(bot_id))
+    ranked = [kv for kv in sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
+              if users[kv[0]].telegram_id not in hidden][:limit]
     return [(users[uid], total) for uid, total in ranked]
 
 
@@ -288,12 +310,14 @@ async def top_referrers(bot_id: int, limit: int = TOP_N) -> list[tuple[BotUser, 
     مبنا: رکوردهایِ ReferralJoin (هر رکورد یعنی یک دعوت‌شدهٔ منحصربه‌فرد
     که با موفقیت به ربات پیوسته)."""
     since = datetime.utcnow() - timedelta(days=WINDOW_DAYS)
+    hidden = await hidden_ids(bot_id)
     async with Session() as s:
         rows = (await s.execute(
             select(BotUser, func.count(ReferralJoin.id).label("cnt"))
             .join(ReferralJoin, ReferralJoin.inviter_user_id == BotUser.id)
             .where(BotUser.bot_id == bot_id, ReferralJoin.bot_id == bot_id,
-                   ReferralJoin.created_at >= since)
+                   ReferralJoin.created_at >= since,
+                   *([BotUser.telegram_id.notin_(hidden)] if hidden else []))
             .group_by(BotUser.id)
             .order_by(func.count(ReferralJoin.id).desc())
             .limit(limit)
@@ -499,6 +523,7 @@ def _settings_kb(enabled: bool, mode: str, basis: str = "toman",
              InlineKeyboardButton(text="📅 تخفیف هر روز", callback_data="tc:set:day", style=ButtonStyle.PRIMARY)])
         rows.append([InlineKeyboardButton(text="🧩 قسمت‌گذاری پنل‌ها", callback_data="tc:segments", style=ButtonStyle.PRIMARY)])
     rows.append([InlineKeyboardButton(text="🏅 تخفیف بر اساس رتبه (۱ تا ۵)", callback_data="tc:ranks", style=ButtonStyle.PRIMARY)])
+    rows.append([InlineKeyboardButton(text="🙈 حذف افراد از رتبه‌بندی", callback_data="tc:hid", style=ButtonStyle.PRIMARY)])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:stats", style=ButtonStyle.DANGER)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -547,6 +572,118 @@ async def tc_settings(cb: CallbackQuery, bot: Bot):
     await edit_or_replace(cb.message, await _settings_text(row.id, row.field),
                           reply_markup=_settings_kb(enabled, mode, basis, row.field))
     await cb.answer()
+
+
+# ─────────────────── 🙈 حذف افراد از رتبه‌بندی (PATCH_TOP_CUSTOMERS_HIDE_V1) ───────────────────
+
+async def _hid_view(row) -> tuple[str, InlineKeyboardMarkup]:
+    ids = await hidden_ids(row.id)
+    names: dict[int, str] = {}
+    if ids:
+        async with Session() as s:
+            for u in (await s.execute(select(BotUser).where(BotUser.bot_id == row.id,
+                                                            BotUser.telegram_id.in_(ids)))).scalars():
+                names[u.telegram_id] = u.full_name or (f"@{u.username}" if u.username else "")
+    lines = ["🙈 <b>حذف افراد از رتبه‌بندی</b>\n",
+             "کسانی که اینجا اضافه کنی (مثلاً خودِ مالک/پشتیبان یا خریدِ آزمایشی) در لیستِ «برترین مشتریان» نمی‌آیند و "
+             "تخفیفِ رتبه هم نمی‌گیرند. خریدهایشان پاک نمی‌شود؛ فقط از رتبه‌بندی کنار می‌روند.\n"]
+    rows = []
+    if ids:
+        lines.append("<b>حذف‌شده‌ها:</b>")
+        for i in ids:
+            nm = names.get(i) or "—"
+            lines.append(f"• {nm} — <code>{i}</code>")
+            rows.append([InlineKeyboardButton(text=f"↩️ برگرداندن {nm if nm != '—' else i}"[:60],
+                                              callback_data=f"tc:hid_del:{i}", style=ButtonStyle.SUCCESS)])
+    else:
+        lines.append("هنوز کسی حذف نشده.")
+    if row.owner_id not in ids:
+        rows.insert(0, [InlineKeyboardButton(text="🙈 حذفِ خودم (مالک) از رتبه‌بندی", callback_data="tc:hid_me",
+                                             style=ButtonStyle.PRIMARY)])
+    rows.append([InlineKeyboardButton(text="➕ حذفِ یک نفرِ دیگر (آیدی عددی / @یوزرنیم)", callback_data="tc:hid_add",
+                                      style=ButtonStyle.PRIMARY)])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tc:settings", style=ButtonStyle.DANGER)])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@top_customers_router.callback_query(F.data == "tc:hid")
+async def tc_hid(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok, edit_or_replace
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    text, kb = await _hid_view(row)
+    await edit_or_replace(cb.message, text, reply_markup=kb)
+    await cb.answer()
+
+
+@top_customers_router.callback_query(F.data == "tc:hid_me")
+async def tc_hid_me(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok, edit_or_replace
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await set_hidden(row.id, await hidden_ids(row.id) + [row.owner_id])
+    text, kb = await _hid_view(row)
+    await edit_or_replace(cb.message, text, reply_markup=kb)
+    await cb.answer("✅ از رتبه‌بندی حذف شدی.")
+
+
+@top_customers_router.callback_query(F.data.startswith("tc:hid_del:"))
+async def tc_hid_del(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok, edit_or_replace
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    try:
+        tid = int(cb.data.split(":")[2])
+    except ValueError:
+        await cb.answer()
+        return
+    await set_hidden(row.id, [i for i in await hidden_ids(row.id) if i != tid])
+    text, kb = await _hid_view(row)
+    await edit_or_replace(cb.message, text, reply_markup=kb)
+    await cb.answer("↩️ به رتبه‌بندی برگشت.")
+
+
+@top_customers_router.callback_query(F.data == "tc:hid_add")
+async def tc_hid_add(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok, smart_cancel_kb
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await state.set_state(TcFSM.hide_add)
+    await cb.message.answer("آیدی عددیِ تلگرام یا @یوزرنیمِ کسی را بفرست که می‌خواهی از رتبه‌بندی حذف شود "
+                            "(کاربر باید قبلاً ربات را استارت کرده باشد تا با یوزرنیم پیدا شود):",
+                            reply_markup=await smart_cancel_kb(bot))
+    await cb.answer()
+
+
+@top_customers_router.message(TcFSM.hide_add, F.text)
+async def tc_hid_add_save(msg: Message, state: FSMContext, bot: Bot):
+    from tenant import _owner_ok_msg
+    row = await _owner_ok_msg(msg, bot)
+    if not row:
+        await state.clear()
+        return
+    txt = (msg.text or "").strip()
+    tid = None
+    if txt.lstrip("-").isdigit():
+        tid = int(txt)
+    else:
+        uname = txt.lstrip("@").strip().lower()
+        if uname:
+            async with Session() as s:
+                u = await s.scalar(select(BotUser).where(BotUser.bot_id == row.id,
+                                                         func.lower(BotUser.username) == uname))
+            tid = u.telegram_id if u else None
+    if tid is None:
+        await msg.answer("❌ پیدا نشد. آیدی عددی یا @یوزرنیمِ کاربری که ربات را استارت کرده بفرست:")
+        return
+    await state.clear()
+    await set_hidden(row.id, await hidden_ids(row.id) + [tid])
+    text, kb = await _hid_view(row)
+    await msg.answer(f"✅ <code>{tid}</code> از رتبه‌بندی حذف شد.\n\n" + text, reply_markup=kb, parse_mode="HTML")
 
 
 @top_customers_router.callback_query(F.data.startswith("tc:basis:"))
