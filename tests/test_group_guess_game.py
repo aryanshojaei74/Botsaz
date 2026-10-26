@@ -245,3 +245,29 @@ async def test_gameson_is_admin_only_and_blocked_hint_for_admin(env, monkeypatch
     with pytest.raises(SkipHandler):
         await G.gg_start(msg("حدس عدد", 77, chat=-999))
     assert "/gameson" in sent[-1]
+
+
+@pytest.mark.asyncio
+async def test_gameson_also_turns_main_switch_on_and_off_hint(env, monkeypatch):
+    import config
+    from platform_bot import set_pset
+    monkeypatch.setattr(config, "PLATFORM_ADMIN_ID", 77)
+    sent = []
+
+    async def reply(t, **k):
+        sent.append(t)
+
+    def msg(text, uid, chat=-555):
+        return NS(text=text, chat=NS(id=chat), from_user=NS(id=uid, is_bot=False, full_name="x"), sender_chat=None, reply=reply, bot=NS())
+    monkeypatch.setattr(G, "_group_allowed", G.allowed_chat)
+    await set_pset(G.KEY_CHAT, "-555")
+    await set_pset(G.KEY_ON, "0")
+    assert await G.enabled() is False
+    with pytest.raises(SkipHandler):
+        await G.gg_start(msg("حدس عدد", 5))
+    assert not sent                                      # کاربر عادی چیزی نمی‌بیند
+    with pytest.raises(SkipHandler):
+        await G.gg_start(msg("حدس عدد", 77))
+    assert "خاموش" in sent[-1] and "/gameson" in sent[-1]
+    await G.gg_admin_switch(msg("/gameson", 77))
+    assert await G.enabled() is True

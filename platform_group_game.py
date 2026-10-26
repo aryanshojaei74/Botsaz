@@ -199,6 +199,10 @@ async def _gate(msg: Message) -> bool:
         await _hint_admin_blocked(msg)
         raise SkipHandler
     if not await enabled():
+        from config import PLATFORM_ADMIN_ID
+        if msg.from_user.id == PLATFORM_ADMIN_ID:
+            await msg.reply("ℹ️ بازی‌هایِ رایگان خاموش‌اند (کلید pgg_on). برایِ روشن‌کردن: <code>/gameson</code>",
+                            parse_mode="HTML")
         raise SkipHandler
     return True
 
@@ -490,5 +494,7 @@ async def gg_admin_switch(msg: Message):
     from platform_bot import set_pset
     on = "gameson" in (msg.text or "").lower()
     await set_pset(KEY_CHAT, str(msg.chat.id) if on else "")
+    if on:
+        await set_pset(KEY_ON, "1")                  # کلیدِ اصلی هم روشن شود
     await msg.reply("✅ بازی‌هایِ رایگان (حدس عدد · سرعت · ریاضی) در این گروه فعال شد. بنویس «بازی» تا راهنما بیاید."
                     if on else "⛔️ این گروه از گروهِ بازی‌ها برداشته شد (اگر به محافظ وصل باشد هنوز بازی‌ها فعال است).")
