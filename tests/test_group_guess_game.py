@@ -117,3 +117,47 @@ async def test_admin_toggle_flips_game_switch(env, monkeypatch):
     assert await G.enabled() is False
     await PH.adm_halloween(cb)
     assert await G.enabled() is True
+
+
+# === PATCH_GROUP_RACE_GAMES_V1 ===
+def test_math_questions_have_consistent_answers():
+    for _ in range(200):
+        q, a = G.make_math()
+        expr = q.replace("×", "*").replace("−", "-")
+        assert str(eval(expr)) == a and int(a) > 0
+
+
+def test_answer_normalization_is_forgiving():
+    assert G._norm_answer(" کدو‌تقلبی ") == G._norm_answer("کدوتقلبی")
+    assert G._norm_answer("۱۲") == "12" and G._norm_answer("TrickOrTreat") == G._norm_answer("trickortreat")
+
+
+@pytest.mark.asyncio
+async def test_word_race_first_correct_wins_wrong_is_silent(env, monkeypatch):
+    monkeypatch.setattr(G, "_expire_race", _noop_expire)
+    monkeypatch.setattr(G.secrets, "choice", lambda seq: "جادوگر")
+    m = mk_msg("سرعت")
+    await G.gg_speed(m)
+    assert G._RACES[-100]["answer"] == "جادوگر" and "جادوگر" in m.sent[0]
+    wrong = mk_msg("اسکلت", uid=2)
+    assert G._is_race_answer(wrong) is False                                # پاسخِ غلط اصلاً هندلر را فعال نمی‌کند
+    win = mk_msg("جادوگر", uid=3, name="Omid")
+    assert G._is_race_answer(win) is True
+    await G.gg_race_answer(win)
+    assert -100 not in G._RACES and "اول شد" in win.sent[0] and "+3" in win.sent[0]
+    late = mk_msg("جادوگر", uid=4)
+    assert G._is_race_answer(late) is False                                 # بعد از برنده، دیگر جواب نمی‌گیرد
+    assert (await G.top())[0] == ("Omid", 3)
+
+
+@pytest.mark.asyncio
+async def test_math_race_fast_bonus_and_one_game_at_a_time(env, monkeypatch):
+    monkeypatch.setattr(G, "_expire_race", _noop_expire)
+    monkeypatch.setattr(G, "make_math", lambda: ("3 + 4", "7"))
+    await G.gg_math(mk_msg("ریاضی"))
+    busy = mk_msg("حدس عدد"); await G.gg_start(busy)
+    assert "مسابقهٔ سرعت جریان دارد" in busy.sent[0] and -100 not in G._GAMES
+    busy2 = mk_msg("سرعت"); await G.gg_speed(busy2)
+    assert "جریان دارد" in busy2.sent[0]
+    w = mk_msg("۷", uid=5); await G.gg_race_answer(w)
+    assert "+5" in w.sent[0]                                                # ریاضیِ سریع ⇒ ۳+۲

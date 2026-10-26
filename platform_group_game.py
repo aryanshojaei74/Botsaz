@@ -6,6 +6,11 @@
 • امتیاز: برنده «شیرینی 🍬» می‌گیرد (۵ تا؛ اگر زیرِ ۳۰ ثانیه حدس بزند +۳). پول/کیف‌پول در کار نیست.
 • «جدول» (یا /top): ۱۰ نفرِ برتر. روشن/خاموش: مدیر از پنلِ «🎃 تم هالوین» (کلید pgg_on، پیش‌فرض روشن).
 • فقط در گروهِ محافظ؛ هر گروهِ دیگر دست‌نخورده (پیام به بقیهٔ هندلرها می‌رسد).
+
+=== PATCH_GROUP_RACE_GAMES_V1 === دو بازیِ «مسابقهٔ سرعت» هم کنارش:
+  ⚡️ «سرعت» (/speed): ربات یک کلمهٔ هالوینی می‌فرستد؛ اولین نفری که دقیقاً همان را بنویسد برنده است (۳ 🍬).
+  🧮 «ریاضی» (/math): یک محاسبهٔ ساده؛ اولین جوابِ درست برنده است (۳ 🍬، زیرِ ۱۰ ثانیه ۵ 🍬).
+  مهلتِ هر مسابقه ۶۰ ثانیه؛ پاسخِ غلط بی‌صدا نادیده گرفته می‌شود (گروه شلوغ نشود). در هر لحظه فقط یک بازی (از هر نوع).
 """
 from __future__ import annotations
 
@@ -36,11 +41,17 @@ BASE_POINTS, FAST_BONUS, FAST_SECS = 5, 3, 30
 KEY_ON = "pgg_on"
 
 _GAMES: dict[int, dict] = {}              # chat_id → {"n", "t0", "guesses", "mid"}
+_RACES: dict[int, dict] = {}              # chat_id → {"kind", "answer", "t0"}
+RACE_TIMEOUT, RACE_POINTS, RACE_FAST_BONUS, RACE_FAST_SECS = 60, 3, 2, 10
+WORDS = ["کدوتقلبی", "جادوگر", "خون‌آشام", "اسکلت", "شبح", "عنکبوت", "خفاش", "قبرستان", "طلسم", "گربه‌سیاه",
+         "قلعهٔ‌متروک", "جاروپرنده", "مومیایی", "دیوانه", "شیرینی‌هالوین", "TrickOrTreat", "HappyHalloween", "Boo"]
 _LAST_END: dict[int, float] = {}
 _LAST_GUESS: dict[tuple[int, int], float] = {}
 
 _AR = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 _START = re.compile(r"^\s*(?:/guess(?:@\w+)?|حدس[\s‌]*عدد)\s*$", re.I)
+_SPEED = re.compile(r"^\s*(?:/speed(?:@\w+)?|سرعت)\s*$", re.I)
+_MATH = re.compile(r"^\s*(?:/math(?:@\w+)?|ریاضی)\s*$", re.I)
 _TOP = re.compile(r"^\s*(?:/top(?:@\w+)?|جدول(?:[\s‌]*شیرینی(?:[\s‌]*ها)?)?)\s*$", re.I)
 
 
@@ -122,6 +133,8 @@ async def _gate(msg: Message) -> bool:
 async def gg_start(msg: Message):
     await _gate(msg)
     cid, now = msg.chat.id, time.monotonic()
+    if cid in _RACES:
+        return await msg.reply("🎮 یک مسابقهٔ سرعت جریان دارد؛ بعد از تمام‌شدنش دوباره بنویس.")
     if cid in _GAMES:
         return await msg.reply("🎯 یک بازیِ حدس عدد جریان دارد؛ عددت را بنویس (۱ تا ۱۰۰).")
     wait = START_COOLDOWN - (now - _LAST_END.get(cid, -1e9))
@@ -187,3 +200,92 @@ async def gg_top(msg: Message):
     for i, (name, p) in enumerate(rows):
         lines.append(f"{medals[i]} {_html.escape(name)} — {p} 🍬")
     await msg.reply("\n".join(lines), parse_mode="HTML")
+
+
+# ───────────────────────── مسابقهٔ سرعت (کلمه / ریاضی) ─────────────────────────
+
+def _norm_answer(t: str | None) -> str:
+    return (t or "").strip().translate(_AR).replace("\u200c", "").replace(" ", "").lower()
+
+
+def make_math(rnd=secrets) -> tuple[str, str]:
+    a, b = 2 + rnd.randbelow(18), 2 + rnd.randbelow(18)
+    if rnd.randbelow(3) == 0:
+        return f"{a} × {b % 10 + 2}", str(a * (b % 10 + 2))
+    if rnd.randbelow(2):
+        return f"{a} + {b}", str(a + b)
+    hi, lo = max(a, b) + 10, min(a, b)
+    return f"{hi} − {lo}", str(hi - lo)
+
+
+def _is_speed(m: Message) -> bool:
+    return bool(m.text and _SPEED.match(m.text))
+
+
+def _is_math(m: Message) -> bool:
+    return bool(m.text and _MATH.match(m.text))
+
+
+def _is_race_answer(m: Message) -> bool:
+    r = _RACES.get(m.chat.id)
+    return bool(r and m.text and _norm_answer(m.text) == r["answer"])
+
+
+async def _start_race(msg: Message, kind: str) -> None:
+    await _gate(msg)
+    cid, now = msg.chat.id, time.monotonic()
+    if cid in _GAMES or cid in _RACES:
+        return await msg.reply("🎮 یک بازی جریان دارد؛ بعد از تمام‌شدنش دوباره بنویس.")
+    wait = START_COOLDOWN - (now - _LAST_END.get(cid, -1e9))
+    if wait > 0:
+        return await msg.reply(f"⏳ {int(wait) + 1} ثانیهٔ دیگر می‌شود دوباره شروع کرد.")
+    if kind == "word":
+        word = secrets.choice(WORDS)
+        race = {"kind": kind, "answer": _norm_answer(word), "shown": word, "t0": now}
+        text = (f"⚡️ <b>مسابقهٔ سرعت!</b>\n\nاولین نفری که دقیقاً این را بنویسد برنده است:\n\n"
+                f"👉 <b>{_html.escape(word)}</b>\n\n⏱ {RACE_TIMEOUT} ثانیه")
+    else:
+        q, ans = make_math()
+        race = {"kind": kind, "answer": ans, "shown": ans, "t0": now}
+        text = f"🧮 <b>ریاضیِ سریع!</b>\n\nجوابِ این چیست؟\n\n👉 <b>{q} = ؟</b>\n\n⏱ {RACE_TIMEOUT} ثانیه"
+    _RACES[cid] = race
+    await msg.reply(text, parse_mode="HTML")
+    asyncio.create_task(_expire_race(msg.bot, cid, race))
+
+
+async def _expire_race(bot, cid: int, race: dict) -> None:
+    await asyncio.sleep(RACE_TIMEOUT)
+    if _RACES.get(cid) is race:
+        _RACES.pop(cid, None)
+        _LAST_END[cid] = time.monotonic()
+        try:
+            await bot.send_message(cid, f"⌛ وقت تمام شد؛ کسی نتوانست! جواب: <b>{_html.escape(str(race['shown']))}</b> 👻",
+                                   parse_mode="HTML")
+        except Exception:
+            logger.debug("race: پیامِ پایانِ مهلت نرفت")
+
+
+@platform_group_game_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_speed))
+async def gg_speed(msg: Message):
+    await _start_race(msg, "word")
+
+
+@platform_group_game_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_math))
+async def gg_math(msg: Message):
+    await _start_race(msg, "math")
+
+
+@platform_group_game_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_race_answer))
+async def gg_race_answer(msg: Message):
+    await _gate(msg)
+    cid, now = msg.chat.id, time.monotonic()
+    race = _RACES.get(cid)
+    if not race or _norm_answer(msg.text) != race["answer"]:
+        raise SkipHandler
+    _RACES.pop(cid, None)                       # اولین پاسخِ درست برنده است؛ هم‌زمان‌ها دیگر چیزی نمی‌بینند
+    _LAST_END[cid] = now
+    pts = RACE_POINTS + (RACE_FAST_BONUS if race["kind"] == "math" and now - race["t0"] <= RACE_FAST_SECS else 0)
+    name = msg.from_user.full_name or str(msg.from_user.id)
+    total = await add_points(msg.from_user.id, name, pts)
+    await msg.reply(f"🏁 <b>{_html.escape(name)}</b> اول شد! ({now - race['t0']:.1f} ثانیه)\n🍬 +{pts} شیرینی (مجموع: {total})",
+                    parse_mode="HTML")

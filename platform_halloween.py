@@ -36,7 +36,7 @@ async def _panel() -> tuple[str, InlineKeyboardMarkup]:
     rows = [[hx_button("⚪️ خاموش‌کردن" if on else "🟢 روشن‌کردن برایِ همهٔ ربات‌ها",
                        callback_data="adm:halloween:off" if on else "adm:halloween:on",
                        style=ButtonStyle.DANGER if on else ButtonStyle.SUCCESS)],
-            [hx_button(f"🎯 بازیِ «حدس عدد» در گروهِ بات‌ساز: {'✅ روشن' if gg_on else '⛔️ خاموش'}",
+            [hx_button(f"🎯 بازی‌هایِ گروهِ بات‌ساز (حدس عدد · سرعت · ریاضی): {'✅ روشن' if gg_on else '⛔️ خاموش'}",
                        callback_data="adm:halloween:gg", style=ButtonStyle.PRIMARY)],
             [hx_button("⬅️ بازگشت", callback_data="adm:back", style=ButtonStyle.DANGER)]]
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
