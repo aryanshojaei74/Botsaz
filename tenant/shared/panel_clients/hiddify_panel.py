@@ -69,6 +69,12 @@ def gen_uuid():
     return str(_uuid_mod.uuid4())
 
 
+def _hid_ms(v) -> int:
+    """last_online/created هیدیفای (ISO یا تاریخ) ⇒ میلی‌ثانیه؛ خالی/نامعتبر ⇒ ۰."""
+    from tenant.shared.panel_clients.inactive_users import parse_ms
+    return parse_ms(v)
+
+
 class HiddifyPanelClient:
     """کلاینتِ پنلِ هیدیفای.
 
@@ -403,6 +409,10 @@ class HiddifyPanelClient:
                 "traffic": {"up": 0, "down": int(used_gb * GB), "total": int(cap_gb * GB)},
                 "totalGB": int(cap_gb * GB),
                 "expiryTime": expiry_ms,
+                # PATCH_PANEL_YAR_IDLE_V1
+                "last_online_ms": _hid_ms(u.get("last_online")),
+                "created_ms": _hid_ms(u.get("created_at") or u.get("start_date")),
+                "status": "active" if u.get("enable", True) else "disabled",
             })
         return out
 

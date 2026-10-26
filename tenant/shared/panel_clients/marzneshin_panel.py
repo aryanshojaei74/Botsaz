@@ -627,11 +627,17 @@ class MarzneshinPanelClient:
         for u in users:
             used = int(u.get("used_traffic", 0) or 0)
             cap = int(u.get("data_limit", 0) or 0)
+            _su = str(u.get("key") or u.get("subscription_url") or "").rstrip("/")
             out.append({
                 "email": u.get("username"),
                 "traffic": {"up": 0, "down": used, "total": cap},
                 "totalGB": cap,
                 "expiryTime": _parse_iso_to_ms(_read_expire(u)),
+                # PATCH_PANEL_YAR_IDLE_V1
+                "last_online_ms": _parse_iso_to_ms(u.get("online_at")) if u.get("online_at") else 0,
+                "created_ms": _parse_iso_to_ms(u.get("created_at")) if u.get("created_at") else 0,
+                "status": "active" if u.get("enabled", True) else "disabled",
+                "sub_id": _su.rsplit("/", 1)[-1] if _su else None,
             })
         return out
 

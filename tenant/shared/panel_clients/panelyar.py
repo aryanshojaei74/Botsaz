@@ -31,6 +31,7 @@ callbackها: همه با پیشوند pyar: (نگاه کن به references/call
   pyar:panel:{id}            — منویِ مدیریتِ یک پنل
   pyar:del:{id} / pyar:del_yes:{id} — حذفِ پنل
   pyar:users:{id}:{page}     — لیستِ کاربرانِ پنل (حجم/انقضایِ باقی‌مانده)
+  pyar:idle:{id}:{days}      — کاربرانِ فعالِ بدونِ اتصال (۲/۷/۳۰ روز)
   pyar:backup:{id}           — بکاپِ JSON از کاربرانِ پنل
   pyar:migrate:{id}          — انتخابِ پنلِ مقصد
   pyar:migto:{src}:{dst}     — صفحهٔ پیش‌نمایش/تأیید
@@ -410,6 +411,8 @@ def _panel_menu_kb(panel: VpnPanel) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="👥 کاربران (حجم/انقضایِ باقی‌مانده)",
                               callback_data=f"pyar:users:{panel.id}:0", style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="😴 کاربرانِ بدونِ اتصال (۲ روز و بیشتر)",
+                              callback_data=f"pyar:idle:{panel.id}:2", style=ButtonStyle.PRIMARY)],
     ]
     # === PATCH_PANEL_YAR_MOVE_V1 ===
     # این قابلیت‌ها فقط برایِ خانوادهٔ مرزبان تایید و پیاده‌سازی شدن —
@@ -986,6 +989,89 @@ def _back_kb(panel_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"pyar:panel:{panel_id}",
                              style=ButtonStyle.DANGER)]])
+
+
+# ─────────────────── 😴 کاربرانِ بدونِ اتصال (PATCH_PANEL_YAR_IDLE_V1) ───────────────────
+
+_IDLE_DAYS = (2, 7, 30)
+_IDLE_SHOW = 15
+
+
+def _idle_kb(panel_id: int, days: int) -> InlineKeyboardMarkup:
+    row = [InlineKeyboardButton(text=(f"✅ {d} روز" if d == days else f"{d} روز"),
+                                callback_data=f"pyar:idle:{panel_id}:{d}") for d in _IDLE_DAYS]
+    return InlineKeyboardMarkup(inline_keyboard=[row, [InlineKeyboardButton(
+        text="⬅️ بازگشت", callback_data=f"pyar:panel:{panel_id}", style=ButtonStyle.DANGER)]])
+
+
+@panelyar_router.callback_query(F.data.regexp(r"^pyar:idle:\d+:\d+$"))
+async def pyar_idle(cb: CallbackQuery):
+    from tenant.shared.panel_clients import inactive_users as IU
+    _, _, pid_s, days_s = cb.data.split(":")
+    days = int(days_s) if int(days_s) in _IDLE_DAYS else 2
+    g = await _pyar_guard(cb, int(pid_s))
+    if not g:
+        return
+    _row, panel = g
+    label = PANEL_LABELS.get(panel_base_key(panel.panel_key), panel.panel_key)
+    await cb.answer("🔄 در حالِ بررسی…")
+    try:
+        await cb.message.edit_text(f"🔄 در حالِ بررسیِ اتصالِ کاربرانِ <b>{label}</b>… (روی پنل‌هایِ بزرگ چند دقیقه طول می‌کشد)",
+                                   parse_mode="HTML")
+    except Exception:
+        logger.debug("[panelyar] edit loading failed")
+    skipped, listed = 0, False
+    try:
+        client = make_panel_client(panel)
+        try:
+            clients = list(await client.list_clients() or [])
+            listed = IU.has_last_online_field(clients)          # خودِ لیست زمانِ اتصال می‌دهد؟
+            if clients and not listed:
+                _n, skipped = await IU.probe_last_online(client, clients)
+        finally:
+            try:
+                await client.close()
+            except Exception:
+                logger.exception("خطای نادیده‌گرفته‌شده (بستنِ کلاینتِ پنل)")
+    except PanelError as e:
+        await cb.message.edit_text(f"❌ خواندنِ کاربران ناموفق بود:\n<code>{_esc_html(str(e)[:300])}</code>",
+                                   reply_markup=_back_kb(panel.id), parse_mode="HTML")
+        return
+    except Exception:
+        logger.exception("[panelyar] بررسیِ کاربرانِ بدونِ اتصال ناموفق (panel_id=%s)", panel.id)
+        await cb.message.edit_text("❌ خطایِ غیرمنتظره در بررسی. دوباره امتحان کن.", reply_markup=_back_kb(panel.id))
+        return
+    if not clients:
+        await cb.message.edit_text(f"👥 <b>{label}</b>\n\nهیچ کاربری روی این پنل پیدا نشد.",
+                                   reply_markup=_back_kb(panel.id), parse_mode="HTML")
+        return
+    if not listed and not IU.supported(clients):
+        await cb.message.edit_text(
+            f"ℹ️ پنلِ <b>{label}</b> زمانِ «آخرین اتصال» کاربران را نمی‌دهد؛ برایِ همین نمی‌شود کاربرانِ بدونِ اتصال را "
+            "از روی آن فهرست کرد.", reply_markup=_back_kb(panel.id), parse_mode="HTML")
+        return
+    now_ms = int(time.time() * 1000)
+    res = IU.classify(clients, now_ms, days)
+    rows = res["rows"]
+    head = (f"😴 <b>{label}</b>\nکاربرانِ فعال که بیش از <b>{days} روز</b> وصل نشده‌اند: <b>{len(rows)}</b> "
+            f"از {res['active']} کاربرِ فعال")
+    if skipped:
+        head += f"\n⚠️ برایِ سبک‌ماندنِ پنل فقط {IU.MAX_PROBE} کاربر بررسی شد ({skipped} کاربر ردشدند)."
+    lines = [head, ""]
+    for r in rows[:_IDLE_SHOW]:
+        lines.append(f"• <code>{_esc_html(r['name'])}</code> · کد: <code>{_esc_html(r['code'])}</code> · "
+                     f"{IU.fmt_last(r['last_ms'], now_ms)}")
+    if len(rows) > _IDLE_SHOW:
+        lines.append(f"… و {len(rows) - _IDLE_SHOW} کاربرِ دیگر (فهرستِ کامل در فایلِ زیر)")
+    if not rows:
+        lines.append("🎉 همهٔ کاربرانِ فعال در این بازه وصل شده‌اند.")
+    await cb.message.edit_text("\n".join(lines)[:4000], reply_markup=_idle_kb(panel.id, days), parse_mode="HTML")
+    if rows:
+        stamp = _dt.datetime.utcnow().strftime("%Y%m%d_%H%M")
+        await cb.message.answer_document(
+            BufferedInputFile(IU.render_txt(label, days, res, now_ms).encode("utf-8"),
+                              filename=f"idle_{panel_base_key(panel.panel_key)}_{days}d_{stamp}.txt"),
+            caption=f"📄 فهرستِ کاملِ {len(rows)} کاربرِ بدونِ اتصال (بیش از {days} روز)")
 
 
 # ─────────────────────────── 💾 بکاپ ───────────────────────────

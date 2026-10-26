@@ -1136,11 +1136,18 @@ class MarzbanPanelClient:
             used = int(u.get("used_traffic", 0) or 0)
             cap = int(u.get("data_limit", 0) or 0)
             expire = u.get("expire")
+            _on, _cr = u.get("online_at"), u.get("created_at")
+            _su = str(u.get("subscription_url") or "").rstrip("/")
             out.append({
                 "email": u.get("username"),
                 "traffic": {"up": 0, "down": used, "total": cap},
                 "totalGB": cap,
                 "expiryTime": _expire_to_epoch(expire) * 1000,
+                # PATCH_PANEL_YAR_IDLE_V1: برایِ «کاربرانِ بدونِ اتصال» (کلیدهایِ افزوده؛ بقیهٔ مصرف‌کننده‌ها نادیده می‌گیرند)
+                "last_online_ms": (_expire_to_epoch(_on) * 1000) if _on else 0,
+                "created_ms": (_expire_to_epoch(_cr) * 1000) if _cr else 0,
+                "status": u.get("status"),
+                "sub_id": _su.rsplit("/", 1)[-1] if _su else None,
             })
         return out
 
