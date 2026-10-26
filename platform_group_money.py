@@ -17,12 +17,16 @@ from aiogram import Bot, F, Router
 from aiogram.enums import ButtonStyle, ChatType
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import select
 
 from config import PLATFORM_ADMIN_ID, Session
 from models import PlatformBet, PlatformBetLedger, PlatformTxn, PlatformUser
+from logging_setup import get_logger as _get_logger
 from premium_emoji import hx_button
+
+logger = _get_logger(__name__)
 
 platform_group_money_router = Router()
 
@@ -133,13 +137,17 @@ async def _bet_enabled() -> bool:
     F.func(lambda m: bool(_INCOMPLETE_BET_RE.match((m.text or "").strip()))),
 )
 async def platform_incomplete_bet_command(msg: Message):
-    if not await _group_allowed(msg.chat.id):
-        return
-    if not await _bet_enabled():
-        await msg.reply("❌ شرط‌بندی در بات‌ساز اصلی فعال نیست.")
-        return
+    if not await _group_allowed(msg.chat.id) or not await _bet_enabled():
+        raise SkipHandler                   # راهنمای بازی‌هایِ رایگان (platform_group_game) جواب می‌دهد
     from platform_wager import GAMES, game_enabled, help_text, load_cfg
     await msg.reply(help_text({g: await game_enabled(g) for g in GAMES}, cfg=await load_cfg()), parse_mode="HTML")
+    try:                                    # بازی‌هایِ رایگان + مسابقه‌هایِ پولیِ حدس/سرعت/ریاضی + طرزِ گرفتنِ شیرینی
+        from platform_group_game import help_text as _games_help
+        extra = await _games_help(bet_games=False)
+        if extra:
+            await msg.reply(extra, parse_mode="HTML")
+    except Exception:
+        logger.exception("games help (extra) failed")
 
 @platform_group_money_router.message(
     F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}),

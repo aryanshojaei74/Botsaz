@@ -860,6 +860,17 @@ def render(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
     return text, kb
 
 
+def example_amount(cfg: dict | None) -> int:
+    """مبلغِ نمونه برایِ راهنما: ۱۰٬۰۰۰ تومان، ولی داخلِ حداقل/حداکثرِ تنظیم‌شده (مثالِ زیرِ حداقل گمراه‌کننده است)."""
+    cfg = cfg or {}
+    v = 10000
+    if cfg.get("min") and v < int(cfg["min"]):
+        v = int(cfg["min"])
+    if cfg.get("max") and v > int(cfg["max"]):
+        v = int(cfg["max"])
+    return v
+
+
 def _mins(secs: int) -> str:
     return f"{max(1, -(-int(secs) // 60))} دقیقه"
 
@@ -921,7 +932,11 @@ def help_text(enabled: dict[str, bool], bot_id: int = 0, cfg: dict | None = None
     rules.append("🕵️ با «ادمین ناشناس» یا هویت کانال نمی‌شود بازی ساخت؛ حالت ناشناس را خاموش کن.")
     lines += ["• " + r for r in rules]
     lines += ["", wd["notice"]]
-    return "\n".join(lines)
+    out = "\n".join(lines)
+    ex = example_amount(cfg)
+    if ex != 10000:                         # مثال‌ها داخلِ حداقل/حداکثرِ واقعی باشند
+        out = out.replace("۱۰۰۰۰", f"{ex:,}".translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")))
+    return out
 
 
 async def _show(cb_or_msg, w: PlatformWager) -> None:

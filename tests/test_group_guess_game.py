@@ -191,7 +191,7 @@ async def test_help_lists_free_games_and_wager_only_when_enabled(env, monkeypatc
     monkeypatch.setattr(W, "_bet_enabled", on)
     monkeypatch.setattr(W, "game_enabled", ge)
     m2 = mk_msg("بازی"); await G.gg_help(m2)
-    assert "xo 10000" in m2.sent[0] and "تاس 10000" not in m2.sent[0] and "ریسک" in m2.sent[0]
+    assert "xo 10000" in m2.sent[0] and "شیرینی چطور" in m2.sent[0] and "تاس 10000" not in m2.sent[0] and "ریسک" in m2.sent[0]
 
 
 @pytest.mark.asyncio

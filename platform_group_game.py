@@ -58,10 +58,11 @@ _MATH = re.compile(r"^\s*(?:/math(?:@\w+)?|ریاضی)\s*$", re.I)
 _TOP = re.compile(r"^\s*(?:/top(?:@\w+)?|جدول(?:[\s‌]*شیرینی(?:[\s‌]*ها)?)?)\s*$", re.I)
 
 
-def _paid_busy(chat_id: int) -> bool:
+def _paid_player(m: Message) -> bool:
+    """این کاربر الان بازیکنِ یک مسابقهٔ پولیِ زنده در همین گروه است؟ (عدد/کلمه‌اش مالِ مسابقهٔ پولی است، نه بازیِ رایگان)"""
     try:
-        from platform_wager_race import busy_paid
-        return busy_paid(chat_id)
+        from platform_wager_race import player_race
+        return bool(m.from_user and player_race(m.chat.id, m.from_user.id))
     except Exception:  # noqa: BLE001
         return False
 
@@ -188,7 +189,7 @@ def _is_top(m: Message) -> bool:
 
 
 def _is_guess(m: Message) -> bool:
-    return m.chat.id in _GAMES and parse_guess(m.text) is not None
+    return m.chat.id in _GAMES and parse_guess(m.text) is not None and not _paid_player(m)
 
 
 async def _gate(msg: Message) -> bool:
@@ -211,8 +212,6 @@ async def _gate(msg: Message) -> bool:
 async def gg_start(msg: Message):
     await _gate(msg)
     cid, now = msg.chat.id, time.monotonic()
-    if _paid_busy(cid):
-        return await msg.reply("🎮 یک مسابقهٔ پولی در گروه جریان دارد؛ بعد از تمام‌شدنش دوباره بنویس.")
     if cid in _RACES:
         return await msg.reply("🎮 یک مسابقهٔ سرعت جریان دارد؛ بعد از تمام‌شدنش دوباره بنویس.")
     if cid in _GAMES:
@@ -308,13 +307,13 @@ def _is_math(m: Message) -> bool:
 
 def _is_race_answer(m: Message) -> bool:
     r = _RACES.get(m.chat.id)
-    return bool(r and m.text and _norm_answer(m.text) == r["answer"])
+    return bool(r and m.text and _norm_answer(m.text) == r["answer"] and not _paid_player(m))
 
 
 async def _start_race(msg: Message, kind: str) -> None:
     await _gate(msg)
     cid, now = msg.chat.id, time.monotonic()
-    if cid in _GAMES or cid in _RACES or _paid_busy(cid):
+    if cid in _GAMES or cid in _RACES:
         return await msg.reply("🎮 یک بازی جریان دارد؛ بعد از تمام‌شدنش دوباره بنویس.")
     wait = START_COOLDOWN - (now - _LAST_END.get(cid, -1e9))
     if wait > 0:
@@ -378,38 +377,51 @@ def _is_help(m: Message) -> bool:
     return bool(m.text and _HELP.match(m.text))
 
 
-async def help_text() -> str:
+async def help_text(bet_games: bool = True) -> str:
+    """راهنمای بازی‌هایِ رایگان + طرزِ گرفتنِ شیرینی. bet_games=False: فهرستِ xo/سنگ‌کاغذ‌قیچی/تاس حذف می‌شود
+    (راهنمای شرط‌بندی خودش جدا آمده)؛ فقط بخشِ مسابقه‌هایِ پولی (حدس عدد/سرعت/ریاضی) می‌ماند."""
     lines = ["🎮 <b>بازی‌هایِ گروه</b>\n",
-             "🆓 <b>رایگان (شیرینی 🍬)</b>",
+             "🆓 <b>رایگان (جایزه: شیرینی 🍬)</b>",
              "🎯 <b>حدس عدد</b> — بنویس «حدس عدد»؛ عددی بین ۱ تا ۱۰۰ را حدس بزن، ربات می‌گوید بالاتر/پایین‌تر. اولین نفرِ درست {B} 🍬 (زیرِ ۳۰ ثانیه {BF} 🍬).",
              "⚡️ <b>سرعت</b> — بنویس «سرعت»؛ اولین نفری که کلمهٔ ربات را دقیقاً بنویسد {R} 🍬 می‌گیرد.",
              "🧮 <b>ریاضی</b> — بنویس «ریاضی»؛ اولین جوابِ درست {R} 🍬 (زیرِ ۱۰ ثانیه {RF} 🍬).",
              "🏆 <b>جدول</b> — بنویس «جدول» تا ۱۰ نفرِ برترِ شیرینی‌ها را ببینی.",
-             "🍬 <b>شیرینی من</b> — پیشرفتِ تو تا جایزه."]
+             "🍬 <b>شیرینی من</b> — شیرینی‌ها و پیشرفتِ تو تا جایزه.",
+             "",
+             "🍬 <b>شیرینی چطور گرفته می‌شود؟</b> فقط با بردنِ همین سه بازیِ رایگان (اول شدن در حدس عدد / سرعت / ریاضی). "
+             "شیرینی خرید و فروش و انتقال ندارد و از مسابقه‌هایِ پولی به دست نمی‌آید."]
     lines = [ln.replace("{B}", str(BASE_POINTS)).replace("{BF}", str(BASE_POINTS + FAST_BONUS)).replace("{R}", str(RACE_POINTS))
              .replace("{RF}", str(RACE_POINTS + RACE_FAST_BONUS)) for ln in lines]
     try:
         import platform_candy as C, halloween as HW
         c = await C.cfg()
         if c["on"] and await HW.is_on():
-            lines += ["", f"💎 <b>جایزهٔ هالوین:</b> با جمع‌کردنِ {c['goal']} 🍬 مبلغِ <b>{c['amount']:,} تومان</b> به کیف پولت اضافه می‌شود "
-                          f"(روزی حداکثر {c['cap']} 🍬؛ فقط {c['max']} نفرِ اول)."]
+            lines += [f"💎 <b>جایزهٔ هالوین:</b> با جمع‌کردنِ {c['goal']} 🍬 مبلغِ <b>{c['amount']:,} تومان</b> خودکار به کیف پولِ ربات اصلی‌ات "
+                      f"اضافه می‌شود (روزی حداکثر {c['cap']} 🍬؛ فقط {c['max']} نفرِ اول؛ هر نفر یک بار). "
+                      "برای دریافت، یک بار ربات اصلی را استارت کرده باشی."]
     except Exception:
         logger.debug("games help: بخشِ جایزه خوانده نشد")
     try:
-        from platform_wager import _bet_enabled, game_enabled
+        from platform_wager import _bet_enabled, game_enabled, load_cfg, example_amount
         if await _bet_enabled():
+            ex = example_amount(await load_cfg())
             parts = []
-            if await game_enabled("xo"):
-                parts.append("ایکس‌او: «xo 10000»")
-            if await game_enabled("rps"):
-                parts.append("سنگ‌کاغذ‌قیچی: «سنگ کاغذ قیچی 10000»")
-            if await game_enabled("dice"):
-                parts.append("تاس: «تاس 10000»")
+            if bet_games:
+                if await game_enabled("xo"):
+                    parts.append(f"ایکس‌او: «xo {ex}»")
+                if await game_enabled("rps"):
+                    parts.append(f"سنگ‌کاغذ‌قیچی: «سنگ کاغذ قیچی {ex}»")
+                if await game_enabled("dice"):
+                    parts.append(f"تاس: «تاس {ex}»")
             try:
-                from platform_wager_race import enabled as _race_on
+                from platform_wager_race import enabled as _race_on, help_section as _race_help
                 if await _race_on():
-                    parts += ["حدس عدد: «حدس عدد 10000»", "سرعت: «سرعت 10000»", "ریاضی: «ریاضی 10000»"]
+                    if bet_games:
+                        parts += [f"حدس عدد: «حدس عدد {ex}»", f"سرعت: «سرعت {ex}»", f"ریاضی: «ریاضی {ex}»"]
+                    else:
+                        sec = await _race_help()
+                        if sec:
+                            lines += ["", sec]
             except Exception:
                 logger.debug("games help: بخشِ مسابقهٔ پولی خوانده نشد")
             if parts:
@@ -418,7 +430,7 @@ async def help_text() -> str:
                           "⚠️ ریسکِ مالی دارد؛ مسئولیتش با خودِ توست."]
     except Exception:
         logger.debug("games help: بخشِ شرط‌بندی خوانده نشد")
-    lines += ["", "ℹ️ در هر لحظه فقط یک بازیِ رایگان فعال است و بین دو بازی چند ثانیه فاصله می‌افتد."]
+    lines += ["", "ℹ️ بازیِ رایگان هم‌زمان یکی است؛ مسابقه‌هایِ پولی را هر چند نفر بخواهند هم‌زمان می‌سازند."]
     return "\n".join(lines)
 
 

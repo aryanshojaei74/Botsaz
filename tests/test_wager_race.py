@@ -115,7 +115,7 @@ async def test_non_player_cannot_win_and_answers_are_matched_in_memory(env):
     w = await make(mk, "speed")
     r = await R.join_race(w.id, (2, "u2", None))
     st = json.loads(r.w.state)
-    R.LIVE[CHAT] = {"wid": w.id, "kind": "speed", "players": {1, 2}, "answer": st["a"], "n": None, "until": 10 ** 12}
+    R.LIVE[w.id] = {"wid": w.id, "chat": CHAT, "kind": "speed", "players": {1, 2}, "answer": st["a"], "n": None, "until": 10 ** 12}
     outsider = NS(text=st["q"], chat=NS(id=CHAT), from_user=NS(id=9, is_bot=False))
     wrong = NS(text="چیزِ دیگر", chat=NS(id=CHAT), from_user=NS(id=2, is_bot=False))
     right = NS(text=st["q"], chat=NS(id=CHAT), from_user=NS(id=2, is_bot=False))
@@ -130,7 +130,7 @@ async def test_guess_flow_hints_and_win_via_handler(env, monkeypatch):
     r = await R.join_race(w.id, (2, "u2", None))
     n = json.loads(r.w.state)["n"]
     monkeypatch.setattr(R, "GUESS_GAP", 0.0)
-    R.LIVE[CHAT] = {"wid": w.id, "kind": "guess", "players": {1, 2}, "answer": None, "n": n, "until": 10 ** 12}
+    R.LIVE[w.id] = {"wid": w.id, "chat": CHAT, "kind": "guess", "players": {1, 2}, "answer": None, "n": n, "until": 10 ** 12}
     sent = []
 
     async def reply(t, **k):
@@ -150,12 +150,12 @@ async def test_guess_flow_hints_and_win_via_handler(env, monkeypatch):
         await R.race_answer(msg(str(n + 1), 2))
         assert sent[-1] == "⬇️ پایین‌تر"
     await R.race_answer(msg(str(n), 2))
-    assert "برنده شد" in sent[-1] and CHAT not in R.LIVE
+    assert "برنده شد" in sent[-1] and w.id not in R.LIVE
     assert await bal(mk, 2) == 90000 + 19000
 
 
 @pytest.mark.asyncio
-async def test_create_handler_gates_one_at_a_time_and_free_game_conflict(env, monkeypatch):
+async def test_create_handler_allows_many_races_at_once_and_free_game_runs_beside_them(env, monkeypatch):
     mk = env
     out = []
 
@@ -174,13 +174,55 @@ async def test_create_handler_gates_one_at_a_time_and_free_game_conflict(env, mo
         await R.race_create(msg("سرعت 10000", chat=-5))                                    # گروهِ دیگر
     monkeypatch.setattr(W, "sweep_expired", sweep)
     await R.race_create(msg("سرعت 10000"))
-    assert "منتظر حریف" in out[-1] and CHAT in R.LIVE and await bal(mk, 1) == 90000
-    await R.race_create(msg("حدس عدد 10000", uid=2))
-    assert "جریان دارد" in out[-1] and await bal(mk, 2) == 100000                          # دومی ساخته نشد
-    free = NS(text="حدس عدد", chat=NS(id=CHAT), from_user=NS(id=2, is_bot=False, full_name="u2"), sender_chat=None,
+    assert "منتظر حریف" in out[-1] and len(R._live_chat(CHAT)) == 1 and await bal(mk, 1) == 90000
+    await R.race_create(msg("حدس عدد 10000", uid=2))                                       # دومی هم ساخته می‌شود
+    assert "منتظر حریف" in out[-1] and len(R._live_chat(CHAT)) == 2 and await bal(mk, 2) == 90000
+    free = NS(text="حدس عدد", chat=NS(id=CHAT), from_user=NS(id=3, is_bot=False, full_name="u3"), sender_chat=None,
               reply=reply, bot=bot)
+    async def noexp(*a, **k):
+        return None
+    monkeypatch.setattr(G, "_expire", noexp)
     await G.gg_start(free)
-    assert "پولی" in out[-1] and CHAT not in G._GAMES                                      # بازیِ رایگان وسطِ مسابقهٔ پولی شروع نمی‌شود
+    assert CHAT in G._GAMES                                                                # بازیِ رایگان وسطِ مسابقهٔ پولی هم شروع می‌شود
+
+
+@pytest.mark.asyncio
+async def test_two_parallel_races_route_answers_by_player(env):
+    mk = env
+    w1 = await make(mk, "speed")
+    r1 = await R.join_race(w1.id, (2, "u2", None))
+    st1 = json.loads(r1.w.state)
+    R.LIVE[w1.id] = {"wid": w1.id, "chat": CHAT, "kind": "speed", "players": {1, 2}, "answer": st1["a"], "n": None, "until": 10 ** 12}
+    # بازیکنِ مسابقهٔ اول نمی‌تواند هم‌زمان به مسابقهٔ دیگری بپیوندد؛ سازنده‌ای که در بازی است هم همین‌طور
+    async with mk() as s:
+        s.add(models.PlatformUser(telegram_id=4, full_name="u4", balance=100000))
+        await s.commit()
+    w2, err = await W.create_wager("guess", CHAT, (4, "u4", None), 10000, None, CFG)
+    assert err is None
+    j = await R.join_race(w2.id, (2, "u2", None))
+    assert j.err and "مسابقهٔ فعلی" in j.err
+    w3, err = await W.create_wager("math", CHAT, (1, "u1", None), 10000, None, CFG)
+    assert err is None
+    j2 = await R.join_race(w3.id, (4, "u4", None))
+    assert j2.err and "سازنده" in j2.err
+    m = lambda t, uid: NS(text=t, chat=NS(id=CHAT), from_user=NS(id=uid, is_bot=False))
+    assert R._is_answer(m(st1["q"], 2)) and not R._is_answer(m(st1["q"], 4))
+    # بازیکنِ پولی عددش به بازیِ رایگان نمی‌رسد
+    G._GAMES[CHAT] = {"n": 50, "t0": 0, "guesses": 0}
+    gm = NS(text="50", chat=NS(id=CHAT), from_user=NS(id=2, is_bot=False))
+    other = NS(text="50", chat=NS(id=CHAT), from_user=NS(id=9, is_bot=False))
+    assert G._is_guess(gm) is False and G._is_guess(other) is True
+
+
+@pytest.mark.asyncio
+async def test_example_amount_follows_min_max_and_race_help(env, monkeypatch):
+    assert W.example_amount({"min": 1000, "max": 0}) == 10000
+    assert W.example_amount({"min": 50000, "max": 0}) == 50000
+    assert W.example_amount({"min": 1000, "max": 5000}) == 5000
+    txt = W.help_text({"xo": True, "rps": True, "dice": True}, cfg={"min": 50000, "max": 0})
+    assert "۵۰٬۰۰۰" not in txt and "50,000".translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")) in txt
+    sec = await R.help_section()
+    assert "حدس عدد" in sec and "سرعت" in sec and "ریاضی" in sec and "تومان" in sec and "هم‌زمان" in sec
 
 
 @pytest.mark.asyncio

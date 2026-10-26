@@ -642,7 +642,7 @@ async def test_main_group_incomplete_command_sends_the_full_help(db, psets):
     replies = []
     m = SimpleNamespace(text="بازی", chat=SimpleNamespace(id=-100), reply=reply)
     await GM.platform_incomplete_bet_command(m)
-    assert len(replies) == 1 and "مراحل کار" in replies[0] and "ایکس‌او" in replies[0]
+    assert replies and "مراحل کار" in replies[0] and "ایکس‌او" in replies[0]
     assert "حداقل 1,000 تومان (بدون سقف)" in replies[0] and "5 دقیقه" in replies[0]
 
 

@@ -10,7 +10,8 @@
   سرعت (۴۵ ثانیه): اولین نفری که کلمه را دقیقاً بنویسد. ریاضی (۴۵ ثانیه): اولین جوابِ درست. کسی برنده نشد ⇒ برگشتِ هر دو.
 • پیش‌فرض خاموش است (کلیدِ pgr_on)؛ مدیر از «🎃 تم هالوین ← 💰 مسابقه‌هایِ پولی» روشن می‌کند. فقط گروهِ محافظ؛ ربات‌هایِ مشتری
   این بازی‌ها را ندارند (GAMES هسته دست‌نخورده است).
-• در هر لحظه فقط یک مسابقه (پولی یا رایگان) در هر گروه؛ برنده‌شدن فقط با حافظهٔ پردازش پی‌گیری می‌شود؛ اگر پردازش وسطِ بازی
+• چند مسابقهٔ پولی هم‌زمان در یک گروه مجازند (هر کس بخواهد می‌سازد/می‌پیوندد؛ هر نفر هم‌زمان فقط در یک مسابقهٔ زنده بازی می‌کند)؛
+  بازیِ رایگان هم جداست. برنده‌شدن فقط با حافظهٔ پردازش پی‌گیری می‌شود؛ اگر پردازش وسطِ بازی
   ری‌استارت شود، شرط با مهلتش تمام می‌شود و مبلغِ هر دو نفر برمی‌گردد (هسته).
 """
 from __future__ import annotations
@@ -56,14 +57,27 @@ _PATTERNS = (
 )
 _AR = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 
-# حافظهٔ پردازش: chat_id → {"wid", "kind", "players": {uid,..}, "answer", "n"}
+# حافظهٔ پردازش: wid → {"wid", "chat", "kind", "players": {uid,..}, "answer", "n", "until"}
+# (چند مسابقهٔ هم‌زمان در یک گروه مجازند؛ پاسخِ هر نفر به مسابقه‌ای می‌رسد که خودش بازیکنش است.)
 LIVE: dict[int, dict] = {}
 
 
+def _live_chat(chat_id: int) -> list[dict]:
+    """مسابقه‌هایِ پولیِ زنده (منتظرِ حریف یا در حالِ بازی) در این گروه؛ مهلتِ گذشته = آزاد."""
+    now = time.monotonic()
+    return [lv for lv in LIVE.values() if lv.get("chat") == chat_id and lv.get("until", 0) > now]
+
+
 def busy_paid(chat_id: int) -> bool:
-    """مسابقهٔ پولیِ در جریان (یا منتظرِ حریف) در این گروه؟ مهلتِ گذشته = آزاد (ورودیِ کهنه جلوی بازیِ رایگان را نگیرد)."""
-    live = LIVE.get(chat_id)
-    return bool(live and live.get("until", 0) > time.monotonic())
+    return bool(_live_chat(chat_id))
+
+
+def player_race(chat_id: int, uid: int) -> dict | None:
+    """مسابقهٔ در حالِ بازیِ این کاربر در این گروه (هر نفر هم‌زمان فقط در یک مسابقهٔ زنده بازی می‌کند)."""
+    for lv in _live_chat(chat_id):
+        if uid in lv["players"]:
+            return lv
+    return None
 _LAST_GUESS: dict[tuple[int, int], float] = {}
 
 
@@ -99,15 +113,6 @@ def new_question(kind: str) -> dict:
 async def enabled() -> bool:
     from platform_bot import get_pset
     return (await get_pset(KEY_ON, "0")) == "1"
-
-
-def _bot_busy(chat_id: int) -> bool:
-    """آیا در این گروه بازیِ رایگانِ فعال هست؟ (ورودی‌هایِ عددی با هم قاطی نشوند)"""
-    try:
-        import platform_group_game as G
-        return chat_id in G._GAMES or chat_id in G._RACES
-    except Exception:  # noqa: BLE001
-        return False
 
 
 # ───────────────────────── نمایش ─────────────────────────
@@ -184,6 +189,10 @@ async def join_race(wid: int, user: tuple):
             await core._timeout_locked(s, w)
             await s.commit()
             return core._res(w=w, err="مهلتِ مسابقه تمام شده؛ مبلغ به سازنده برگشت.")
+        if player_race(w.chat_id, uid):
+            return core._res(err="تا تمام‌شدنِ مسابقهٔ فعلی‌ات نمی‌توانی به مسابقهٔ دیگری بپیوندی.")
+        if player_race(w.chat_id, w.creator_id):
+            return core._res(err="سازندهٔ این مسابقه همین حالا در مسابقهٔ دیگری است؛ چند لحظهٔ دیگر دوباره امتحان کن.")
         opp = await core._lock_user(s, uid, 0)
         if not opp or opp.is_banned or _money(opp.balance) < _money(w.amount):
             return core._res(err=f"موجودی کافی نیست؛ نیاز به {_rial(w.amount)} داری.")
@@ -235,14 +244,6 @@ async def race_create(msg: Message):
         await msg.reply("❌ شرط‌بندی در بات‌ساز اصلی فعال نیست.")
         return
     cid = msg.chat.id
-    live = LIVE.get(cid)
-    if live and await _still_active(live["wid"]):
-        await msg.reply("🎮 یک مسابقهٔ پولی در این گروه جریان دارد؛ بعد از تمام‌شدنش دوباره بنویس.")
-        return
-    LIVE.pop(cid, None)
-    if _bot_busy(cid):
-        await msg.reply("🎮 یک بازیِ رایگان در این گروه جریان دارد؛ بعد از تمام‌شدنش دوباره بنویس.")
-        return
     game, amount = parse_race_command(msg.text)
     target = _reply_target(msg)
     if target and (target.is_bot or target.id == msg.from_user.id):
@@ -257,14 +258,14 @@ async def race_create(msg: Message):
     if err:
         await msg.reply(err)
         return
-    LIVE[cid] = {"wid": w.id, "kind": game, "players": set(), "answer": None, "n": None,
-                 "until": time.monotonic() + cfg["ttl"] + 5}
+    LIVE[w.id] = {"wid": w.id, "chat": cid, "kind": game, "players": set(), "answer": None, "n": None,
+                  "until": time.monotonic() + cfg["ttl"] + 5}
     text, kb = render_race(w)
     try:
         sent = await msg.reply(text, reply_markup=kb, parse_mode="HTML")
     except Exception:  # noqa: BLE001 — پیام نرفت: مبلغ را برگردان
         logger.exception("race #%s: sending the message failed; refunding", w.id)
-        LIVE.pop(cid, None)
+        LIVE.pop(w.id, None)
         async with core._wlock(w.id):
             await core.cancel_wager(w.id, w.creator_id)
         raise
@@ -316,9 +317,10 @@ async def race_join(cb: CallbackQuery):
         r = await join_race(wid, (cb.from_user.id, cb.from_user.full_name or "", cb.from_user.username or ""))
     if r.w is not None and r.w.status == "playing":
         st = core._st(r.w)
-        LIVE[r.w.chat_id] = {"wid": r.w.id, "kind": r.w.game, "players": {r.w.creator_id, r.w.opponent_id},
-                             "answer": st.get("a"), "n": st.get("n"),
-                             "until": time.monotonic() + SECS[r.w.game] + 5}
+        LIVE[r.w.id] = {"wid": r.w.id, "chat": r.w.chat_id, "kind": r.w.game,
+                        "players": {r.w.creator_id, r.w.opponent_id},
+                        "answer": st.get("a"), "n": st.get("n"),
+                        "until": time.monotonic() + SECS[r.w.game] + 5}
         await _edit(cb.bot, r.w)
         if r.w.game != "guess":
             asyncio.create_task(_expire_later(cb.bot, r.w.id, SECS[r.w.game]))
@@ -336,7 +338,7 @@ async def _expire_later(bot: Bot, wid: int, secs: int) -> None:
         async with core._wlock(wid):
             w = await core.expire_one(wid)
         if w is not None:
-            LIVE.pop(w.chat_id, None)
+            LIVE.pop(w.id, None)
             await _edit(bot, w)
             await bot.send_message(w.chat_id, "⌛ کسی برنده نشد؛ مبلغِ هر دو نفر برگشت. 👻")
     except Exception:  # noqa: BLE001
@@ -351,24 +353,31 @@ async def race_cancel(cb: CallbackQuery):
     async with core._wlock(wid):
         r = await core.cancel_wager(wid, cb.from_user.id)
     if r.w is not None:
-        LIVE.pop(r.w.chat_id, None)
+        LIVE.pop(r.w.id, None)
         await _edit(cb.bot, r.w)
     await cb.answer(r.err or "لغو شد و مبلغ برگشت.", show_alert=bool(r.err))
 
 
-def _is_answer(m: Message) -> bool:
-    live = LIVE.get(m.chat.id)
-    if not live or not live["players"] or not m.from_user or m.from_user.id not in live["players"] or not m.text:
-        return False
+def _match(m: Message) -> dict | None:
+    """مسابقه‌ای که این پیام پاسخِ بازیکنِ آن است (هر نفر فقط در یک مسابقهٔ زنده بازیکن است)."""
+    if not m.from_user or not m.text:
+        return None
     t = norm_answer(m.text)
-    if live["kind"] == "guess":
-        return t.isdigit() and len(t) <= 3 and 1 <= int(t) <= 100
-    return t == live["answer"]
+    lv = player_race(m.chat.id, m.from_user.id)
+    if not lv:
+        return None
+    if lv["kind"] == "guess":
+        return lv if (t.isdigit() and len(t) <= 3 and 1 <= int(t) <= 100) else None
+    return lv if t == lv["answer"] else None
+
+
+def _is_answer(m: Message) -> bool:
+    return _match(m) is not None
 
 
 @platform_wager_race_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_answer))
 async def race_answer(msg: Message):
-    live = LIVE.get(msg.chat.id)
+    live = _match(msg)
     if not live:
         raise SkipHandler
     uid, now = msg.from_user.id, time.monotonic()
@@ -385,9 +394,29 @@ async def race_answer(msg: Message):
     w = await settle_to(live["wid"], uid)
     if w is None:
         if not await _still_active(live["wid"]):
-            LIVE.pop(msg.chat.id, None)
+            LIVE.pop(live["wid"], None)
         return
-    LIVE.pop(msg.chat.id, None)
+    LIVE.pop(live["wid"], None)
     await _edit(msg.bot, w)
     await msg.reply(f"🏁 <b>{_html.escape(msg.from_user.full_name or str(uid))}</b> برنده شد!\n"
                     f"🎁 {_rial(w.payout_amount)} به کیف پولش اضافه شد.", parse_mode="HTML")
+
+
+async def help_section() -> str:
+    """بخشِ «مسابقه‌هایِ پولیِ حدس عدد / سرعت / ریاضی» برایِ پیامِ راهنمای گروه؛ خالی اگر خاموش است."""
+    if not await enabled():
+        return ""
+    cfg = await core.load_cfg()
+    ex = core.example_amount(cfg)
+    lim = (f"از {_rial(cfg['min'])} تا {_rial(cfg['max'])}" if cfg.get("max") else f"حداقل {_rial(cfg['min'])}")
+    fee = (f"کارمزد {float(cfg['fee_pct']):g}٪ از جایزهٔ برنده کم می‌شود." if float(cfg.get("fee_pct") or 0) > 0
+           else "کارمزدی ندارد.")
+    return "\n".join([
+        "💰 <b>مسابقه‌هایِ پولیِ دونفره (با کیف پول)</b>",
+        f"🎯 <b>حدس عدد</b>: «حدس عدد {ex}» — عددی بین ۱ تا ۱۰۰؛ اولین حدسِ دقیق برنده است.",
+        f"⚡️ <b>سرعت</b>: «سرعت {ex}» — اولین نفری که کلمهٔ ربات را دقیق بنویسد برنده است.",
+        f"🧮 <b>ریاضی</b>: «ریاضی {ex}» — اولین جوابِ درست برنده است.",
+        f"عددِ آخر مبلغِ هر نفر به تومان است ({lim}). هر کس بخواهد می‌تواند مسابقهٔ خودش را بسازد یا به مسابقهٔ دیگران "
+        "بپیوندد؛ چند مسابقه هم‌زمان برگزار می‌شود. برای بازی با یک نفرِ مشخص، دستور را روی پیامِ او ریپلای کن.",
+        f"{fee} کسی برنده نشد یا حریفی نیامد ⇒ پولِ هر دو کامل برمی‌گردد.",
+        "⚠️ ریسکِ مالی دارد؛ مسئولیتش با خودِ توست."])
