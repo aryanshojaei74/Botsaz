@@ -7147,7 +7147,7 @@ async def vpn_rename_save(msg: Message, bot: Bot, state: FSMContext):
     if not panel or not panel.enabled:
         await msg.answer("❌ پنلِ این کانفیگ در دسترس نیست. با پشتیبانی تماس بگیر.")
         return
-    if panel.panel_key in ("marzban", "rebecca", "pasargad", "pasarguard", "marzneshin", "rickpanel"):
+    if panel.panel_key in ("marzban", "rebecca", "pasargad", "pasarguard", "marzneshin", "rickpanel", "solidlayer"):
         # در این پنل‌ها نام‌کاربری همان شناسهٔ یکتای اکانت است و قابل تغییر نیست؛
         # فقط برچسبِ نمایشیِ داخلِ ربات را ذخیره می‌کنیم.
         async with Session() as s:

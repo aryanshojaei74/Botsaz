@@ -15,6 +15,7 @@ panel_key → کلاینت:
   pasarguard       → PasarGuardOfficialClient (PasarGuard رسمی — github.com/PasarGuard/panel)
   upanel_mizban    → UPanelMizbanClient     (یوپنل مرزبان)
   rickpanel        → RickPanelClient        (RickPanel — مرزبان‌سازگار، بدونِ انتخابِ inbound)
+  solidlayer       → SolidLayerPanelClient  (SolidLayer — Management API؛ سرویس‌ها به‌جایِ inbound)
 """
 from __future__ import annotations
 
@@ -34,6 +35,7 @@ from tenant.shared.panel_clients.degeris_panel import DegerisPanelClient  # === 
 from tenant.shared.panel_clients.eylan_panel import EylanPanelClient  # === PATCH_EYLAN_PANEL_V1 ===
 from tenant.shared.panel_clients.heimdall_panel import HeimdallPanelClient  # === PATCH_HEIMDALL_PANEL_V1 ===
 from tenant.shared.panel_clients.rickpanel_panel import RickPanelClient  # === PATCH_RICKPANEL_PANEL_V1 ===
+from tenant.shared.panel_clients.solidlayer_panel import SolidLayerPanelClient  # === PATCH_SOLIDLAYER_PANEL_V1 ===
 
 # پنل‌هایی که inbound_ids آن‌ها به‌صورت رشتهٔ تگ هستند (نه عدد)
 # نکته: پاسارگاد/PasarGuard واقعاً «گروه» عددی دارند نه تگ، اما چون فرم ورودی
@@ -59,6 +61,7 @@ _CLIENT_BY_PANEL_KEY = {
     "eylan":         EylanPanelClient,     # ایلان (EylanPanel — X-API-KEY) — PATCH_EYLAN_PANEL_V1
     "heimdall":      HeimdallPanelClient,  # HEIMDALL (نسلِ جدیدِ ۳X-UI، RBAC+CSRF) — PATCH_HEIMDALL_PANEL_V1
     "rickpanel":     RickPanelClient,      # RickPanel (مرزبان‌سازگار، بدونِ inbound) — PATCH_RICKPANEL_PANEL_V1
+    "solidlayer":    SolidLayerPanelClient,  # SolidLayer (Management API، /api/subscriptions) — PATCH_SOLIDLAYER_PANEL_V1
     "shahan":        ShahanPanelClient,    # شاهان — endpoint واحد + توکنِ ثابت (shahanpanel.com)
 }
 
@@ -92,7 +95,7 @@ def _parse_inbounds(panel_key: str, raw: str | None):
 # چون MarzbanPanelClient حالا api_key رو می‌شناسه) این کوارگ رو می‌گیرن؛
 # وگرنه کلاس‌هایِ دیگه (سنایی/علیرضا/هیدیفای/شاهان) با یه کوارگِ ناشناخته
 # خطا می‌دن.
-_API_KEY_CAPABLE_PANELS = frozenset({"marzban", "rebecca", "pasargad", "pasarguard", "upanel_mizban"})
+_API_KEY_CAPABLE_PANELS = frozenset({"marzban", "rebecca", "pasargad", "pasarguard", "upanel_mizban", "solidlayer"})
 
 
 def make_panel_client(panel):

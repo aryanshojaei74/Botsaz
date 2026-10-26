@@ -47,7 +47,7 @@ _BETWEEN_ACCOUNTS_SLEEP = 0.05
 # خانوادهٔ مرزبان: لینکِ ساب را خودِ پنل برمی‌گرداند و از روی sub_id قابلِ
 # بازسازی نیست (همان تفکیکی که در vpn_admin.vpn_refresh_subs هست).
 _MARZBAN_FAMILY = ("marzban", "rebecca", "pasargad", "pasarguard",
-                   "marzneshin", "upanel_mizban", "rickpanel")
+                   "marzneshin", "upanel_mizban", "rickpanel", "solidlayer")
 
 
 # ───────────────────────── دکمهٔ منوی پنل ─────────────────────────
