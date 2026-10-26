@@ -161,3 +161,41 @@ async def test_math_race_fast_bonus_and_one_game_at_a_time(env, monkeypatch):
     assert "جریان دارد" in busy2.sent[0]
     w = mk_msg("۷", uid=5); await G.gg_race_answer(w)
     assert "+5" in w.sent[0]                                                # ریاضیِ سریع ⇒ ۳+۲
+
+
+# === PATCH_GROUP_GAMES_HELP_V1 ===
+@pytest.mark.asyncio
+async def test_help_lists_free_games_and_wager_only_when_enabled(env, monkeypatch):
+    import platform_wager as W
+    G._LAST_HELP.clear()
+
+    async def off():
+        return False
+
+    async def on():
+        return True
+
+    async def ge(game, bot_id=0):
+        return game != "dice"
+    monkeypatch.setattr(W, "_bet_enabled", off)
+    m = mk_msg("بازی")
+    assert G._is_help(m) and G._is_help(mk_msg("بازی‌ها")) and G._is_help(mk_msg("/games"))
+    assert not G._is_help(mk_msg("بازی 10000")) and not G._is_help(mk_msg("بازی تاس 5000"))     # دستورِ شرط‌بندی را نمی‌گیرد
+    await G.gg_help(m)
+    t = m.sent[0]
+    assert "حدس عدد" in t and "سرعت" in t and "ریاضی" in t and "جدول" in t and "کیف پول" not in t
+    G._LAST_HELP.clear()
+    monkeypatch.setattr(W, "_bet_enabled", on)
+    monkeypatch.setattr(W, "game_enabled", ge)
+    m2 = mk_msg("بازی"); await G.gg_help(m2)
+    assert "xo 10000" in m2.sent[0] and "تاس 10000" not in m2.sent[0] and "ریسک" in m2.sent[0]
+
+
+@pytest.mark.asyncio
+async def test_help_is_rate_limited_and_group_only(env):
+    G._LAST_HELP.clear()
+    a = mk_msg("بازی"); await G.gg_help(a)
+    b = mk_msg("بازی"); await G.gg_help(b)
+    assert len(a.sent) == 1 and b.sent == []                                  # بار دوم بی‌صدا
+    with pytest.raises(SkipHandler):
+        await G.gg_help(mk_msg("بازی", chat=-555))

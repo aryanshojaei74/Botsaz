@@ -50,6 +50,9 @@ _LAST_GUESS: dict[tuple[int, int], float] = {}
 
 _AR = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 _START = re.compile(r"^\s*(?:/guess(?:@\w+)?|حدس[\s‌]*عدد)\s*$", re.I)
+_HELP = re.compile(r"^\s*(?:/games(?:@\w+)?|بازی|بازی[\s‌]*ها|راهنمای[\s‌]*بازی(?:[\s‌]*ها)?)\s*$", re.I)
+HELP_COOLDOWN = 20
+_LAST_HELP: dict[int, float] = {}
 _SPEED = re.compile(r"^\s*(?:/speed(?:@\w+)?|سرعت)\s*$", re.I)
 _MATH = re.compile(r"^\s*(?:/math(?:@\w+)?|ریاضی)\s*$", re.I)
 _TOP = re.compile(r"^\s*(?:/top(?:@\w+)?|جدول(?:[\s‌]*شیرینی(?:[\s‌]*ها)?)?)\s*$", re.I)
@@ -289,3 +292,47 @@ async def gg_race_answer(msg: Message):
     total = await add_points(msg.from_user.id, name, pts)
     await msg.reply(f"🏁 <b>{_html.escape(name)}</b> اول شد! ({now - race['t0']:.1f} ثانیه)\n🍬 +{pts} شیرینی (مجموع: {total})",
                     parse_mode="HTML")
+
+
+# ───────────────────────── راهنمای بازی‌ها («بازی») ─────────────────────────
+# === PATCH_GROUP_GAMES_HELP_V1 === هر کس در گروه بنویسد «بازی»، فهرستِ بازی‌ها و طرزِ شروعشان را می‌بیند.
+
+def _is_help(m: Message) -> bool:
+    return bool(m.text and _HELP.match(m.text))
+
+
+async def help_text() -> str:
+    lines = ["🎮 <b>بازی‌هایِ گروه</b>\n",
+             "🆓 <b>رایگان (شیرینی 🍬)</b>",
+             "🎯 <b>حدس عدد</b> — بنویس «حدس عدد»؛ عددی بین ۱ تا ۱۰۰ را حدس بزن، ربات می‌گوید بالاتر/پایین‌تر. اولین نفرِ درست ۵ 🍬 (زیرِ ۳۰ ثانیه ۸ 🍬).",
+             "⚡️ <b>سرعت</b> — بنویس «سرعت»؛ اولین نفری که کلمهٔ ربات را دقیقاً بنویسد ۳ 🍬 می‌گیرد.",
+             "🧮 <b>ریاضی</b> — بنویس «ریاضی»؛ اولین جوابِ درست ۳ 🍬 (زیرِ ۱۰ ثانیه ۵ 🍬).",
+             "🏆 <b>جدول</b> — بنویس «جدول» تا ۱۰ نفرِ برترِ شیرینی‌ها را ببینی."]
+    try:
+        from platform_wager import _bet_enabled, game_enabled
+        if await _bet_enabled():
+            parts = []
+            if await game_enabled("xo"):
+                parts.append("ایکس‌او: «xo 10000»")
+            if await game_enabled("rps"):
+                parts.append("سنگ‌کاغذ‌قیچی: «سنگ کاغذ قیچی 10000»")
+            if await game_enabled("dice"):
+                parts.append("تاس: «تاس 10000»")
+            if parts:
+                lines += ["", "💰 <b>دونفره با کیف پول</b> (عددِ آخر مبلغِ هر نفر به تومان؛ روی پیامِ حریف ریپلای کن تا مستقیم بازی کنید):",
+                          "• " + "\n• ".join(parts),
+                          "⚠️ ریسکِ مالی دارد؛ مسئولیتش با خودِ توست."]
+    except Exception:
+        logger.debug("games help: بخشِ شرط‌بندی خوانده نشد")
+    lines += ["", "ℹ️ در هر لحظه فقط یک بازیِ رایگان فعال است و بین دو بازی چند ثانیه فاصله می‌افتد."]
+    return "\n".join(lines)
+
+
+@platform_group_game_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_help))
+async def gg_help(msg: Message):
+    await _gate(msg)
+    now = time.monotonic()
+    if now - _LAST_HELP.get(msg.chat.id, -1e9) < HELP_COOLDOWN:
+        return                                   # تکرارِ پشتِ‌سرهم: بی‌صدا (گروه شلوغ نشود)
+    _LAST_HELP[msg.chat.id] = now
+    await msg.reply(await help_text(), parse_mode="HTML")
