@@ -99,7 +99,7 @@ async def test_full_ticket_flow_creates_ticket_and_notifies_admin(env):
     assert t.category == "pay" and t.status == "open" and t.name == "علی رضایی" and t.channel == "rubika"
     chat, card, kw = env.bot.msgs[-1]
     assert chat == 42 and f"BS-{t.id}" in card.split("\n")[0] and "&lt;b&gt;" in card and "@ali_r" in card
-    assert kw["reply_markup"].inline_keyboard[0][0].callback_data == f"mtk:close:{t.id}"
+    assert kw["reply_markup"].inline_keyboard[0][-1].callback_data == f"mtk:close:{t.id}"
     assert f"BS-{t.id}" in env.ch.sent[-1][1]                       # رسیدِ دریافت برایِ کاربر
     assert [T.BTN_CLOSE] in env.ch.sent[-1][2]                      # حالا دکمهٔ بستن در منو هست
 
@@ -381,3 +381,73 @@ async def test_reminder_can_be_turned_off_and_cycled(env):
                          message=SimpleNamespace(edit_text=edit_text, answer=edit_text))
     await T.tks_cb(cb, SimpleNamespace())
     assert await T._remind_hours() == 1 and "هر 1 ساعت" in out[-1]
+
+
+# === PATCH_TICKET_ACTIONS_V1 === نمایش / ریپلای / بستن زیرِ یادآوری
+def _cbq(data, uid=42):
+    out = {"alert": None, "answers": [], "edited": []}
+
+    async def answer(*a, **k):
+        out["alert"] = (a, k)
+
+    async def m_answer(text, **k):
+        out["answers"].append((text, k))
+
+    async def edit_rm(reply_markup=None, **k):
+        out["edited"].append(reply_markup)
+    msg = SimpleNamespace(answer=m_answer, edit_reply_markup=edit_rm,
+                          reply_markup=T.list_kb([1, 2]))
+    return SimpleNamespace(data=data, from_user=SimpleNamespace(id=uid), answer=answer, message=msg,
+                           bot=SimpleNamespace(send_message=None)), out
+
+
+@pytest.mark.asyncio
+async def test_reminder_carries_show_reply_close_buttons_per_ticket(env):
+    await new_ticket(env)
+    await _age_ticket(env, 5)
+    n = len(env.bot.msgs)
+    assert await T.remind_once(env.bot, DAY) == 1
+    kb = env.bot.msgs[n][2]["reply_markup"]
+    cbs = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert cbs == ["mtk:show:1", "mtk:reply:1", "mtk:rclose:1"]
+
+
+@pytest.mark.asyncio
+async def test_show_sends_thread_with_reply_and_close(env):
+    await new_ticket(env, "پولم نیومد")
+    cb, out = _cbq("mtk:show:1")
+    await T.tk_show_cb(cb)
+    text, kw = out["answers"][0]
+    assert text.split("\n")[0].count("BS-1") == 1 and "پولم نیومد" in text            # خطِ اول BS-… (ریپلایِ تلگرامی هم کار کند)
+    cbs = [b.callback_data for r in kw["reply_markup"].inline_keyboard for b in r]
+    assert cbs == ["mtk:reply:1", "mtk:close:1"]
+    assert T.ticket_id_from(text) == 1
+
+
+@pytest.mark.asyncio
+async def test_reply_button_sends_force_reply_prompt_that_routes_to_ticket(env):
+    await new_ticket(env)
+    cb, out = _cbq("mtk:reply:1")
+    await T.tk_reply_cb(cb)
+    text, kw = out["answers"][0]
+    assert T.ticket_id_from(text) == 1 and type(kw["reply_markup"]).__name__ == "ForceReply"
+
+
+@pytest.mark.asyncio
+async def test_close_from_reminder_removes_only_that_ticket_row(env):
+    await new_ticket(env)
+    cb, out = _cbq("mtk:rclose:1")
+    cb.bot = env.bot
+    await T.tk_rclose_cb(cb)
+    async with env.maker() as s:
+        assert (await s.get(models.PlatformTicket, 1)).status == "closed"
+    remaining = [b.callback_data for r in out["edited"][0].inline_keyboard for b in r]
+    assert all(c.endswith(":2") for c in remaining) and remaining
+
+
+@pytest.mark.asyncio
+async def test_non_admin_cannot_use_ticket_buttons(env):
+    flt = [h for h in T.platform_tickets_router.callback_query.handlers
+           if getattr(h.callback, "__name__", "") == "tk_rclose_cb"][0]
+    assert not T._is_admin(999)
+    assert flt is not None

@@ -229,7 +229,44 @@ def _card(t: PlatformTicket, ch: Channel, body: str, kind: str, new: bool) -> st
 
 def _kb(tid: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="↩️ پاسخ", callback_data=f"mtk:reply:{tid}", style=ButtonStyle.SUCCESS),   # PATCH_TICKET_ACTIONS_V1
         InlineKeyboardButton(text="🔒 بستنِ تیکت", callback_data=f"mtk:close:{tid}", style=ButtonStyle.DANGER)]])
+
+
+# === PATCH_TICKET_ACTIONS_V1 === (پیشنهادِ مدیر) نمایش / ریپلای / بستن زیرِ یادآوری و فهرستِ تیکت‌ها
+def _row_kb(tid: int) -> list[InlineKeyboardButton]:
+    return [InlineKeyboardButton(text=f"👁 BS-{tid}", callback_data=f"mtk:show:{tid}", style=ButtonStyle.PRIMARY),
+            InlineKeyboardButton(text="↩️ پاسخ", callback_data=f"mtk:reply:{tid}", style=ButtonStyle.SUCCESS),
+            InlineKeyboardButton(text="🔒 بستن", callback_data=f"mtk:rclose:{tid}", style=ButtonStyle.DANGER)]
+
+
+def list_kb(tids: list[int]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[_row_kb(t) for t in tids])
+
+
+def _card_kb(tid: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="↩️ پاسخ", callback_data=f"mtk:reply:{tid}", style=ButtonStyle.SUCCESS),
+        InlineKeyboardButton(text="🔒 بستنِ تیکت", callback_data=f"mtk:close:{tid}", style=ButtonStyle.DANGER)]])
+
+
+async def _thread_text(t: PlatformTicket, limit: int = 6) -> str:
+    """کارتِ کاملِ تیکت با آخرین پیام‌ها؛ خطِ اول شاملِ BS-<id> است تا ریپلای روی این پیام هم پاسخ بدهد."""
+    async with Session() as s:
+        msgs = (await s.scalars(select(PlatformTicketMsg).where(PlatformTicketMsg.ticket_id == t.id)
+                                .order_by(PlatformTicketMsg.id.desc()).limit(limit))).all()
+    lines = [f"🎫 <b>تیکت</b> <code>BS-{t.id}</code> · {STATUS_LABEL.get(t.status, t.status)}",
+             f"🏷 {_html.escape(CAT_LABEL.get(t.category, t.category))} · 📡 {'روبیکا' if t.channel == 'rubika' else 'سروش'}",
+             f"👤 {_html.escape(t.name or '—')}" + (f" · @{_html.escape(t.username.lstrip('@'))}" if t.username else ""),
+             f"📱 {_html.escape(t.phone) if t.phone else 'شماره ثبت نشده'} · 🕒 {_ago(t.updated_at)}", ""]
+    if not msgs:
+        lines.append("<i>پیامی ثبت نشده.</i>")
+    for m in reversed(msgs):
+        who = "👤 کاربر" if m.sender == "user" else "🛠 پشتیبانی"
+        body = _html.escape((m.text or ("📎 فایل" if m.kind == "file" else ""))[:300])
+        lines.append(f"{who}: {body}")
+    lines += ["", "<i>برای پاسخ، «↩️ پاسخ» را بزن یا روی همین پیام ریپلای کن.</i>"]
+    return "\n".join(lines)
 
 
 async def _to_admin(bot, ch: Channel, t: PlatformTicket, ev: dict, new: bool) -> None:
@@ -473,7 +510,49 @@ async def tk_list(msg: Message):
     if not rows:
         lines.append("— تیکتِ بازی نیست 🎉")
     lines.append(f"\nکل تیکت‌ها: {total}" + (f" · رضایتِ «عالی»: {good} از {rated}" if rated else ""))
-    await msg.answer("\n".join(lines), parse_mode="HTML")
+    await msg.answer("\n".join(lines), parse_mode="HTML",
+                     reply_markup=list_kb([t.id for t in rows[:10]]) if rows else None)   # PATCH_TICKET_ACTIONS_V1
+
+
+@platform_tickets_router.callback_query(F.data.startswith("mtk:show:"), F.func(lambda c: _is_admin(c.from_user.id)))
+async def tk_show_cb(cb: CallbackQuery):
+    tid = int(cb.data.rsplit(":", 1)[1])
+    async with Session() as s:
+        t = await s.get(PlatformTicket, tid)
+    if not t:
+        return await cb.answer("تیکت پیدا نشد", show_alert=True)
+    await cb.answer()
+    await cb.message.answer(await _thread_text(t), parse_mode="HTML",
+                            reply_markup=_card_kb(t.id) if t.status != "closed" else None)
+
+
+@platform_tickets_router.callback_query(F.data.startswith("mtk:reply:"), F.func(lambda c: _is_admin(c.from_user.id)))
+async def tk_reply_cb(cb: CallbackQuery):
+    """پیامِ ForceReply با BS-<id> در خطِ اول می‌فرستد؛ پاسخِ مدیر به آن همان مسیرِ ریپلایِ معمولی (tk_reply) را می‌رود."""
+    from aiogram.types import ForceReply
+    tid = int(cb.data.rsplit(":", 1)[1])
+    async with Session() as s:
+        t = await s.get(PlatformTicket, tid)
+    if not t:
+        return await cb.answer("تیکت پیدا نشد", show_alert=True)
+    await cb.answer()
+    await cb.message.answer(
+        f"↩️ پاسخ به تیکت <code>BS-{tid}</code>\n\nپاسخت را (متن، عکس یا فایل) روی همین پیام ریپلای کن 👇",
+        parse_mode="HTML", reply_markup=ForceReply(selective=True, input_field_placeholder=f"پاسخ به BS-{tid}"))
+
+
+@platform_tickets_router.callback_query(F.data.startswith("mtk:rclose:"), F.func(lambda c: _is_admin(c.from_user.id)))
+async def tk_rclose_cb(cb: CallbackQuery):
+    """بستن از رویِ پیامِ یادآوری/فهرست: فقط ردیفِ همان تیکت از دکمه‌ها برداشته می‌شود."""
+    tid = int(cb.data.rsplit(":", 1)[1])
+    t = await close_ticket(cb.bot, tid, by="admin")
+    await cb.answer("🔒 تیکت بسته شد" if t else "تیکت پیدا نشد", show_alert=not t)
+    try:
+        rows = [r for r in (cb.message.reply_markup.inline_keyboard if cb.message.reply_markup else [])
+                if not any((b.callback_data or "").endswith(f":{tid}") for b in r)]
+        await cb.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None)
+    except Exception:
+        logger.debug("tickets: به‌روزرسانیِ دکمه‌هایِ یادآوری ممکن نشد")
 
 
 @platform_tickets_router.callback_query(F.data.startswith("mtk:close:"), F.func(lambda c: _is_admin(c.from_user.id)))
@@ -598,9 +677,10 @@ async def remind_once(bot, now: datetime | None = None) -> int:
         lines.append(f"<code>BS-{t.id}</code> · {'روبیکا' if t.channel == 'rubika' else 'سروش'} · "
                      f"{_html.escape(CAT_LABEL.get(t.category, t.category))} · {_html.escape(t.name or '—')} · "
                      f"{_ago(t.updated_at)}")
-    lines.append("\nبرای دیدنِ کارتشان /tickets را بزن.")
+    lines.append("\nبا دکمه‌هایِ زیر: 👁 نمایش · ↩️ پاسخ · 🔒 بستن.")
     try:
-        await bot.send_message(PLATFORM_ADMIN_ID, "\n".join(lines), parse_mode="HTML")
+        await bot.send_message(PLATFORM_ADMIN_ID, "\n".join(lines), parse_mode="HTML",
+                               reply_markup=list_kb([t.id for t in rows]))      # PATCH_TICKET_ACTIONS_V1
     except Exception:
         logger.exception("tickets: یادآوری ارسال نشد")
         return 0
