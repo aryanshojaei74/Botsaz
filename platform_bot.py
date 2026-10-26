@@ -134,6 +134,8 @@ router.include_router(platform_group_money_router)
 # === PATCH_PLATFORM_WAGER_V1 === شرط‌بندی ایکس‌او / سنگ‌کاغذ‌قیچی / تاس (قبل از هندلر کلی متن بازی‌های تاس)
 from platform_wager import platform_wager_router
 router.include_router(platform_wager_router)
+from platform_group_game import platform_group_game_router   # === PATCH_GROUP_GUESS_GAME_V1 ===
+router.include_router(platform_group_game_router)
 # === PATCH_WAGER_ADDON_V1 === فروش «بازی‌های شرط‌بندی» به ربات‌های مشتری
 from platform_wager_sale import platform_wager_sale_router
 router.include_router(platform_wager_sale_router)

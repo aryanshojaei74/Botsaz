@@ -116,6 +116,8 @@ async def test_miniapp_theme_respects_owner_colors(env, monkeypatch):
 @pytest.mark.asyncio
 async def test_platform_panel_toggle_is_admin_only(env, monkeypatch):
     import platform_halloween as PH
+    import platform_bot as PB
+    monkeypatch.setattr(PB, "Session", env)
     monkeypatch.setattr(PH, "PLATFORM_ADMIN_ID", 1)
     out = {}
 

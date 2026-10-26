@@ -22,6 +22,8 @@ async def _panel() -> tuple[str, InlineKeyboardMarkup]:
     on = await HW.is_on()
     until = (await HW._pget(HW.KEY_UNTIL)).strip() if on else ""
     st = await HW.stats()
+    from platform_group_game import enabled as _gg_enabled
+    gg_on = await _gg_enabled()
     text = ("🎃 <b>تم هالوین</b>\n\n"
             f"وضعیت: {'🟢 روشن (برایِ همهٔ ربات‌ها)' if on else '⚪️ خاموش'}\n"
             + (f"⏳ خاموشیِ خودکار: <code>{until[:16].replace('T', ' ')}</code> (UTC)\n" if until else "")
@@ -34,16 +36,22 @@ async def _panel() -> tuple[str, InlineKeyboardMarkup]:
     rows = [[hx_button("⚪️ خاموش‌کردن" if on else "🟢 روشن‌کردن برایِ همهٔ ربات‌ها",
                        callback_data="adm:halloween:off" if on else "adm:halloween:on",
                        style=ButtonStyle.DANGER if on else ButtonStyle.SUCCESS)],
+            [hx_button(f"🎯 بازیِ «حدس عدد» در گروهِ بات‌ساز: {'✅ روشن' if gg_on else '⛔️ خاموش'}",
+                       callback_data="adm:halloween:gg", style=ButtonStyle.PRIMARY)],
             [hx_button("⬅️ بازگشت", callback_data="adm:back", style=ButtonStyle.DANGER)]]
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-@platform_halloween_router.callback_query(F.data.regexp(r"^adm:halloween(:(on|off))?$"))
+@platform_halloween_router.callback_query(F.data.regexp(r"^adm:halloween(:(on|off|gg))?$"))
 async def adm_halloween(cb: CallbackQuery):
     if cb.from_user.id != PLATFORM_ADMIN_ID:
         return await cb.answer("فقط مدیر اصلی", show_alert=True)
     parts = cb.data.split(":")
-    if len(parts) == 3:
+    if len(parts) == 3 and parts[2] == "gg":
+        from platform_group_game import enabled as _gg_enabled, KEY_ON as _GG_KEY
+        from platform_bot import set_pset as _set_pset
+        await _set_pset(_GG_KEY, "0" if await _gg_enabled() else "1")
+    elif len(parts) == 3:
         await HW.set_on(parts[2] == "on", now=datetime.utcnow())
     text, kb = await _panel()
     try:
@@ -51,4 +59,4 @@ async def adm_halloween(cb: CallbackQuery):
     except Exception:
         await cb.message.answer(text, reply_markup=kb)
     await cb.answer("🎃 روشن شد" if len(parts) == 3 and parts[2] == "on" else
-                    ("⚪️ خاموش شد" if len(parts) == 3 else ""))
+                    ("⚪️ خاموش شد" if len(parts) == 3 and parts[2] == "off" else ""))
