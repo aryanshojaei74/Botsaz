@@ -23,6 +23,7 @@ async def env(monkeypatch):
     import halloween as HWm
     for mod in (G, M, PB, PC, HWm):
         monkeypatch.setattr(mod, "Session", mk, raising=False)
+    HWm._CACHE.update(v=None, t=0.0)
     G._GAMES.clear(); G._LAST_END.clear(); G._LAST_GUESS.clear()
     allowed = {"v": True}
 
@@ -185,7 +186,7 @@ async def test_help_lists_free_games_and_wager_only_when_enabled(env, monkeypatc
     assert not G._is_help(mk_msg("بازی 10000")) and not G._is_help(mk_msg("بازی تاس 5000"))     # دستورِ شرط‌بندی را نمی‌گیرد
     await G.gg_help(m)
     t = m.sent[0]
-    assert "حدس عدد" in t and "سرعت" in t and "ریاضی" in t and "جدول" in t and "کیف پول" not in t
+    assert "حدس عدد" in t and "سرعت" in t and "ریاضی" in t and "جدول" in t and "دونفره" not in t
     G._LAST_HELP.clear()
     monkeypatch.setattr(W, "_bet_enabled", on)
     monkeypatch.setattr(W, "game_enabled", ge)
