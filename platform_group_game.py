@@ -58,6 +58,14 @@ _MATH = re.compile(r"^\s*(?:/math(?:@\w+)?|ریاضی)\s*$", re.I)
 _TOP = re.compile(r"^\s*(?:/top(?:@\w+)?|جدول(?:[\s‌]*شیرینی(?:[\s‌]*ها)?)?)\s*$", re.I)
 
 
+def _paid_busy(chat_id: int) -> bool:
+    try:
+        from platform_wager_race import busy_paid
+        return busy_paid(chat_id)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def parse_guess(text: str | None) -> int | None:
     t = (text or "").strip().translate(_AR)
     if not t.isdigit() or len(t) > 3:
@@ -136,6 +144,8 @@ async def _gate(msg: Message) -> bool:
 async def gg_start(msg: Message):
     await _gate(msg)
     cid, now = msg.chat.id, time.monotonic()
+    if _paid_busy(cid):
+        return await msg.reply("🎮 یک مسابقهٔ پولی در گروه جریان دارد؛ بعد از تمام‌شدنش دوباره بنویس.")
     if cid in _RACES:
         return await msg.reply("🎮 یک مسابقهٔ سرعت جریان دارد؛ بعد از تمام‌شدنش دوباره بنویس.")
     if cid in _GAMES:
@@ -237,7 +247,7 @@ def _is_race_answer(m: Message) -> bool:
 async def _start_race(msg: Message, kind: str) -> None:
     await _gate(msg)
     cid, now = msg.chat.id, time.monotonic()
-    if cid in _GAMES or cid in _RACES:
+    if cid in _GAMES or cid in _RACES or _paid_busy(cid):
         return await msg.reply("🎮 یک بازی جریان دارد؛ بعد از تمام‌شدنش دوباره بنویس.")
     wait = START_COOLDOWN - (now - _LAST_END.get(cid, -1e9))
     if wait > 0:
@@ -318,6 +328,12 @@ async def help_text() -> str:
                 parts.append("سنگ‌کاغذ‌قیچی: «سنگ کاغذ قیچی 10000»")
             if await game_enabled("dice"):
                 parts.append("تاس: «تاس 10000»")
+            try:
+                from platform_wager_race import enabled as _race_on
+                if await _race_on():
+                    parts += ["حدس عدد: «حدس عدد 10000»", "سرعت: «سرعت 10000»", "ریاضی: «ریاضی 10000»"]
+            except Exception:
+                logger.debug("games help: بخشِ مسابقهٔ پولی خوانده نشد")
             if parts:
                 lines += ["", "💰 <b>دونفره با کیف پول</b> (عددِ آخر مبلغِ هر نفر به تومان؛ روی پیامِ حریف ریپلای کن تا مستقیم بازی کنید):",
                           "• " + "\n• ".join(parts),

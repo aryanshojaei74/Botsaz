@@ -24,6 +24,8 @@ async def _panel() -> tuple[str, InlineKeyboardMarkup]:
     st = await HW.stats()
     from platform_group_game import enabled as _gg_enabled
     gg_on = await _gg_enabled()
+    from platform_wager_race import enabled as _pr_enabled
+    pr_on = await _pr_enabled()
     text = ("🎃 <b>تم هالوین</b>\n\n"
             f"وضعیت: {'🟢 روشن (برایِ همهٔ ربات‌ها)' if on else '⚪️ خاموش'}\n"
             + (f"⏳ خاموشیِ خودکار: <code>{until[:16].replace('T', ' ')}</code> (UTC)\n" if until else "")
@@ -32,17 +34,20 @@ async def _panel() -> tuple[str, InlineKeyboardMarkup]:
             "• مینی‌اپِ رباتی که مالکش رنگ نگذاشته، بنفشِ هالوینی می‌شود.\n"
             "• بعد از /start یک پیامِ «🎃 Trick or Treat» می‌آید؛ هر کاربر روزی یک بار شیرینی 🍬 جمع می‌کند و جدولِ ۱۰ نفرِ برتر دارد.\n"
             "• جایزه‌ها شیرینیِ سرگرمی است، نه پول؛ پس هزینه‌ای برایِ مالکِ ربات ندارد.\n"
+            "• «💰 مسابقه‌هایِ پولی» جداست و پیش‌فرض خاموش: دونفره با کیف پولِ بات‌ساز (ریسکِ مالی؛ کارمزد و حداقل/حداکثر از «تنظیماتِ شرط‌بندیِ گروه») و شرط‌بندیِ گروه هم باید روشن باشد.\n"
             f"• بعد از {HW.DEFAULT_DAYS} روز خودبه‌خود خاموش می‌شود؛ هر وقت هم دستی خاموشش کنی همه‌چیز فوراً برمی‌گردد.")
     rows = [[hx_button("⚪️ خاموش‌کردن" if on else "🟢 روشن‌کردن برایِ همهٔ ربات‌ها",
                        callback_data="adm:halloween:off" if on else "adm:halloween:on",
                        style=ButtonStyle.DANGER if on else ButtonStyle.SUCCESS)],
             [hx_button(f"🎯 بازی‌هایِ گروهِ بات‌ساز (حدس عدد · سرعت · ریاضی): {'✅ روشن' if gg_on else '⛔️ خاموش'}",
                        callback_data="adm:halloween:gg", style=ButtonStyle.PRIMARY)],
+            [hx_button(f"💰 مسابقه‌هایِ پولی (حدس/سرعت/ریاضی): {'✅ روشن' if pr_on else '⛔️ خاموش'}",
+                       callback_data="adm:halloween:pr", style=ButtonStyle.DANGER if pr_on else ButtonStyle.PRIMARY)],
             [hx_button("⬅️ بازگشت", callback_data="adm:back", style=ButtonStyle.DANGER)]]
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-@platform_halloween_router.callback_query(F.data.regexp(r"^adm:halloween(:(on|off|gg))?$"))
+@platform_halloween_router.callback_query(F.data.regexp(r"^adm:halloween(:(on|off|gg|pr))?$"))
 async def adm_halloween(cb: CallbackQuery):
     if cb.from_user.id != PLATFORM_ADMIN_ID:
         return await cb.answer("فقط مدیر اصلی", show_alert=True)
@@ -51,6 +56,10 @@ async def adm_halloween(cb: CallbackQuery):
         from platform_group_game import enabled as _gg_enabled, KEY_ON as _GG_KEY
         from platform_bot import set_pset as _set_pset
         await _set_pset(_GG_KEY, "0" if await _gg_enabled() else "1")
+    elif len(parts) == 3 and parts[2] == "pr":
+        from platform_bot import set_pset as _set_pset
+        from platform_wager_race import enabled as _pr_enabled, KEY_ON as _PR_KEY
+        await _set_pset(_PR_KEY, "0" if await _pr_enabled() else "1")
     elif len(parts) == 3:
         await HW.set_on(parts[2] == "on", now=datetime.utcnow())
     text, kb = await _panel()
