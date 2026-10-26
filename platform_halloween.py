@@ -21,7 +21,6 @@ platform_halloween_router = Router(name="platform_halloween")
 async def _panel() -> tuple[str, InlineKeyboardMarkup]:
     on = await HW.is_on()
     until = (await HW._pget(HW.KEY_UNTIL)).strip() if on else ""
-    st = await HW.stats()
     from platform_group_game import enabled as _gg_enabled
     gg_on = await _gg_enabled()
     from platform_wager_race import enabled as _pr_enabled
@@ -32,11 +31,9 @@ async def _panel() -> tuple[str, InlineKeyboardMarkup]:
     text = ("🎃 <b>تم هالوین</b>\n\n"
             f"وضعیت: {'🟢 روشن (برایِ همهٔ ربات‌ها)' if on else '⚪️ خاموش'}\n"
             + (f"⏳ خاموشیِ خودکار: <code>{until[:16].replace('T', ' ')}</code> (UTC)\n" if until else "")
-            + f"\n🎮 تاکنون: {st['players']} بازیکن در {st['bots']} ربات · {st['plays']} بار بازی\n\n"
-            "با روشن‌کردن:\n"
-            "• مینی‌اپِ رباتی که مالکش رنگ نگذاشته، بنفشِ هالوینی می‌شود.\n"
-            "• بعد از /start یک پیامِ «🎃 Trick or Treat» می‌آید؛ هر کاربر روزی یک بار شیرینی 🍬 جمع می‌کند و جدولِ ۱۰ نفرِ برتر دارد.\n"
-            "• جایزه‌ها شیرینیِ سرگرمی است، نه پول؛ پس هزینه‌ای برایِ مالکِ ربات ندارد.\n"
+            + "\nبا روشن‌کردن:\n"
+            "• مینی‌اپِ ربات‌هایِ مشتری (که مالکشان رنگ نگذاشته) بنفشِ هالوینی می‌شود.\n"
+            "• جایزهٔ شیرینی و بازی‌هایِ گروه فقط در گروهِ بات‌ساز است و به ربات‌هایِ مشتری ربطی ندارد.\n"
             f"• 💎 جایزهٔ شیرینی ({'✅ روشن' if cd['on'] else '⛔️ خاموش'}): با {cd['goal']} 🍬 مبلغِ {cd['amount']:,} تومان به کیف پولِ بات‌سازِ کاربر؛ روزی حداکثر {cd['cap']} 🍬، فقط {cd['max']} نفرِ اول ({cd_paid} نفر تاکنون). تغییرِ عددها: در پی‌ویِ ربات اصلی «/hwreward».\n"
             "• «💰 مسابقه‌هایِ پولی» جداست و پیش‌فرض خاموش: دونفره با کیف پولِ بات‌ساز (ریسکِ مالی؛ کارمزد و حداقل/حداکثر از «تنظیماتِ شرط‌بندیِ گروه») و شرط‌بندیِ گروه هم باید روشن باشد.\n"
             f"• بعد از {HW.DEFAULT_DAYS} روز خودبه‌خود خاموش می‌شود؛ هر وقت هم دستی خاموشش کنی همه‌چیز فوراً برمی‌گردد.")
