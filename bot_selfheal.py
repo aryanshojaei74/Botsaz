@@ -32,6 +32,29 @@ logger = logging.getLogger("bot_selfheal")
 CYCLE_SEC = 15 * 60
 CONCURRENCY = 8
 
+# === PATCH_SELFHEAL_QUIET_V1 === (مدیر: «خیلی زیاد میاد») اصلاحِ وبهوک همچنان هر دور انجام می‌شود، ولی پیامِ مدیر نه:
+# هر رباتِ اصلاح‌شده در هر ۲۴ ساعت حداکثر یک اعلان می‌گیرد؛ اگر در همان بازه بارها دوباره اصلاح شد (یعنی جایِ دیگری
+# وبهوکش را بازنویسی می‌کند) فقط یک اعلانِ «تکراری» با تعدادِ دفعات می‌رود.
+NOTIFY_WINDOW_SEC = 24 * 3600
+REPEAT_THRESHOLD = 3
+_HEAL_LOG: dict[tuple[int, str], list[float]] = {}     # (bot_id, kind) → زمان‌هایِ اصلاح در بازهٔ اخیر
+_NOTIFIED: dict[tuple[int, str], tuple[float, bool]] = {}   # (bot_id, kind) → (زمانِ آخرین اعلان، اعلانِ تکراری رفته؟)
+
+
+def decide_notice(b_id: int, kind: str, now: float) -> tuple[str | None, int]:
+    """«first» برایِ اولین اصلاحِ بازه، «repeat» (یک‌بار) وقتی تعدادِ اصلاح‌ها به REPEAT_THRESHOLD رسید، وگرنه None."""
+    key = (b_id, kind)
+    log = [t for t in _HEAL_LOG.get(key, []) if now - t < NOTIFY_WINDOW_SEC] + [now]
+    _HEAL_LOG[key] = log
+    last = _NOTIFIED.get(key)
+    if last is None or now - last[0] >= NOTIFY_WINDOW_SEC:
+        _NOTIFIED[key] = (now, False)
+        return "first", len(log)
+    if len(log) >= REPEAT_THRESHOLD and not last[1]:
+        _NOTIFIED[key] = (last[0], True)
+        return "repeat", len(log)
+    return None, len(log)
+
 
 async def _check_one(b_id: int, token: str, status: str) -> tuple[str, str] | None:
     """برمی‌گرداند (نوعِ اصلاح, @یوزرنیم) اگر چیزی اصلاح شد، وگرنه None."""
@@ -60,7 +83,7 @@ async def _check_one(b_id: int, token: str, status: str) -> tuple[str, str] | No
                 await tenant_status_bus.publish_tenant_invalidate(token)
             except Exception:
                 logger.debug("invalidate پس از بازیابی ناموفق بود (بی‌اهمیت)")
-        return (kind, me.username or str(b_id)) if kind else None
+        return (kind, me.username or str(b_id), b_id) if kind else None
     except Exception as e:
         # Unauthorized واقعی، timeout، شبکه: دست نمی‌زنیم؛ دور بعد دوباره امتحان می‌شود.
         logger.debug("selfheal bot %s: %s", b_id, str(e)[:100])
@@ -74,7 +97,7 @@ async def selfheal_once(platform_bot=None) -> int:
                 BotRow.status.in_(("active", "disabled_bad_token")),
                 BotRow.archived_at.is_(None)))).all()
     sem = asyncio.Semaphore(CONCURRENCY)
-    healed: list[tuple[str, str]] = []
+    healed: list[tuple[str, str, int]] = []
 
     async def _run(r):
         async with sem:
@@ -84,14 +107,24 @@ async def selfheal_once(platform_bot=None) -> int:
 
     await asyncio.gather(*[_run(r) for r in rows], return_exceptions=True)
     if healed:
-        logger.warning("selfheal: %d ربات خودکار اصلاح شد: %s", len(healed), healed[:20])
-        if platform_bot and PLATFORM_ADMIN_ID:
-            lines = [("🔗 وبهوک" if k == "webhook" else "🔑 توکن→فعال") + f" — @{u}" for k, u in healed[:25]]
+        logger.warning("selfheal: %d ربات خودکار اصلاح شد: %s", len(healed), [(k, u) for k, u, _i in healed[:20]])
+        import time as _t
+        now = _t.monotonic()
+        lines = []
+        for k, u, bid in healed:
+            why, n = decide_notice(bid, k, now)
+            base = ("🔗 وبهوک" if k == "webhook" else "🔑 توکن→فعال") + f" — @{u}"
+            if why == "first":
+                lines.append(base)
+            elif why == "repeat":
+                lines.append(base + f" ⚠️ {n} بار در ۲۴ ساعت اصلاح شد؛ احتمالاً جایِ دیگری (سرویسِ دیگر یا خودِ مالک) "
+                                    "وبهوکش را عوض می‌کند. تا ۲۴ ساعتِ دیگر برایش اعلان نمی‌آید.")
+        if lines and platform_bot and PLATFORM_ADMIN_ID:
             try:
                 await platform_bot.send_message(
                     PLATFORM_ADMIN_ID,
-                    f"🩺 <b>بازیابیِ خودکارِ ربات‌ها</b> ({len(healed)})\n\n" + "\n".join(lines)
-                    + (f"\n… و {len(healed) - 25} مورد دیگر" if len(healed) > 25 else ""))
+                    f"🩺 <b>بازیابیِ خودکارِ ربات‌ها</b> ({len(lines)})\n\n" + "\n".join(lines[:25])
+                    + (f"\n… و {len(lines) - 25} مورد دیگر" if len(lines) > 25 else ""))
             except Exception:
                 logger.debug("اعلانِ بازیابی به مدیر ناموفق بود (بی‌اهمیت)")
     return len(healed)
