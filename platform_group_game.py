@@ -49,12 +49,12 @@ _LAST_END: dict[int, float] = {}
 _LAST_GUESS: dict[tuple[int, int], float] = {}
 
 _AR = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
-_START = re.compile(r"^\s*(?:/guess(?:@\w+)?|حدس[\s‌]*عدد)\s*$", re.I)
+_START = re.compile(r"^\s*(?:/guess(?:@\w+)?|(?:بازی[\s‌]+)?حدس[\s‌]*عدد)\s*$", re.I)
 _HELP = re.compile(r"^\s*(?:/games(?:@\w+)?|بازی|بازی[\s‌]*ها|راهنمای[\s‌]*بازی(?:[\s‌]*ها)?)\s*$", re.I)
 HELP_COOLDOWN = 20
 _LAST_HELP: dict[int, float] = {}
-_SPEED = re.compile(r"^\s*(?:/speed(?:@\w+)?|سرعت)\s*$", re.I)
-_MATH = re.compile(r"^\s*(?:/math(?:@\w+)?|ریاضی)\s*$", re.I)
+_SPEED = re.compile(r"^\s*(?:/speed(?:@\w+)?|(?:بازی[\s‌]+)?سرعت)\s*$", re.I)
+_MATH = re.compile(r"^\s*(?:/math(?:@\w+)?|(?:بازی[\s‌]+)?ریاضی)\s*$", re.I)
 _TOP = re.compile(r"^\s*(?:/top(?:@\w+)?|جدول(?:[\s‌]*شیرینی(?:[\s‌]*ها)?)?)\s*$", re.I)
 
 
@@ -417,7 +417,8 @@ async def help_text(bet_games: bool = True) -> str:
                 from platform_wager_race import enabled as _race_on, help_section as _race_help
                 if await _race_on():
                     if bet_games:
-                        parts += [f"حدس عدد: «حدس عدد {ex}»", f"سرعت: «سرعت {ex}»", f"ریاضی: «ریاضی {ex}»"]
+                        parts += [f"حدس عدد: «شرطبندی حدس عدد {ex}»", f"سرعت: «شرطبندی سرعت {ex}»",
+                                  f"ریاضی: «شرطبندی ریاضی {ex}»"]
                     else:
                         sec = await _race_help()
                         if sec:

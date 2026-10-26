@@ -234,3 +234,25 @@ async def test_disabled_flag_skips_handlers(env, monkeypatch):
     m = NS(text="سرعت 10000", chat=NS(id=CHAT), from_user=NS(id=1, is_bot=False), sender_chat=None)
     with pytest.raises(SkipHandler):
         await R.race_create(m)
+
+
+@pytest.mark.asyncio
+async def test_paid_prefix_without_amount_asks_for_amount_and_plain_name_is_free(env):
+    out = []
+
+    async def reply(t, **k):
+        out.append(t)
+        return NS(message_id=1)
+
+    def msg(text, uid=1):
+        return NS(text=text, chat=NS(id=CHAT), from_user=NS(id=uid, is_bot=False, full_name=f"u{uid}", username=None),
+                  sender_chat=None, reply=reply, bot=NS(), reply_to_message=None)
+    for t in ("شرطبندی حدس عدد", "شرط‌بندی حدس عدد", "شرط بندی سرعت", "شرطبندی ریاضی"):
+        assert R._is_paid_hint(msg(t)) and not R._is_create(msg(t)) and not G._is_start(msg(t))
+        await R.race_paid_hint(msg(t))
+        assert "مبلغ" in out[-1] and "شرطبندی" in out[-1] and "رایگان" in out[-1]
+    for t in ("حدس عدد", "بازی حدس عدد", "سرعت", "بازی سرعت", "ریاضی", "بازی ریاضی"):
+        assert not R._is_paid_hint(msg(t)) and not R._is_create(msg(t))
+    assert G._is_start(msg("حدس عدد")) and G._is_start(msg("بازی حدس عدد"))
+    assert G._is_speed(msg("بازی سرعت")) and G._is_math(msg("بازی ریاضی"))
+    assert R._is_create(msg("شرطبندی حدس عدد 10000")) and not G._is_start(msg("شرطبندی حدس عدد 10000"))

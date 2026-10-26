@@ -231,6 +231,30 @@ def _is_create(m: Message) -> bool:
     return parse_race_command(m.text) is not None
 
 
+_NO_AMOUNT = re.compile(r"^شرط\s*بندی\s+(حدس\s*عدد|سرعت|ریاضی)$")
+
+
+def _is_paid_hint(m: Message) -> bool:
+    return bool(m.text and _NO_AMOUNT.match(core._norm(m.text)))
+
+
+@platform_wager_race_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_paid_hint))
+async def race_paid_hint(msg: Message):
+    """«شرطبندی حدس عدد» بدونِ مبلغ = مسابقهٔ پولی؛ مبلغ را می‌خواهد (بازیِ رایگان فقط با «حدس عدد» شروع می‌شود)."""
+    if not msg.from_user or msg.from_user.is_bot or msg.sender_chat:
+        raise SkipHandler
+    if not await _group_allowed(msg.chat.id) or not await enabled() or not await _bet_enabled():
+        raise SkipHandler
+    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی"}[
+        re.sub(r"\s+", "", _NO_AMOUNT.match(core._norm(msg.text)).group(1))]
+    cfg = await core.load_cfg()
+    ex = core.example_amount(cfg)
+    lim = (f"از {_rial(cfg['min'])} تا {_rial(cfg['max'])}" if cfg.get("max") else f"حداقل {_rial(cfg['min'])}")
+    await msg.reply(f"💰 برای مسابقهٔ پولیِ <b>{game}</b> مبلغ را هم بنویس (به تومان، {lim}):\n"
+                    f"<code>شرطبندی {game} {ex}</code>\n\n🆓 بازیِ رایگان با شیرینی: فقط «{game}» را بنویس.",
+                    parse_mode="HTML")
+
+
 @platform_wager_race_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_create))
 async def race_create(msg: Message):
     if not msg.from_user or msg.from_user.is_bot:
@@ -413,9 +437,10 @@ async def help_section() -> str:
            else "کارمزدی ندارد.")
     return "\n".join([
         "💰 <b>مسابقه‌هایِ پولیِ دونفره (با کیف پول)</b>",
-        f"🎯 <b>حدس عدد</b>: «حدس عدد {ex}» — عددی بین ۱ تا ۱۰۰؛ اولین حدسِ دقیق برنده است.",
-        f"⚡️ <b>سرعت</b>: «سرعت {ex}» — اولین نفری که کلمهٔ ربات را دقیق بنویسد برنده است.",
-        f"🧮 <b>ریاضی</b>: «ریاضی {ex}» — اولین جوابِ درست برنده است.",
+        f"🎯 <b>حدس عدد</b>: «شرطبندی حدس عدد {ex}» — عددی بین ۱ تا ۱۰۰؛ اولین حدسِ دقیق برنده است.",
+        f"⚡️ <b>سرعت</b>: «شرطبندی سرعت {ex}» — اولین نفری که کلمهٔ ربات را دقیق بنویسد برنده است.",
+        f"🧮 <b>ریاضی</b>: «شرطبندی ریاضی {ex}» — اولین جوابِ درست برنده است.",
+        "ℹ️ اگر فقط «حدس عدد» / «سرعت» / «ریاضی» (بدونِ «شرطبندی» و مبلغ) بنویسی، بازیِ رایگان با شیرینی شروع می‌شود.",
         f"عددِ آخر مبلغِ هر نفر به تومان است ({lim}). هر کس بخواهد می‌تواند مسابقهٔ خودش را بسازد یا به مسابقهٔ دیگران "
         "بپیوندد؛ چند مسابقه هم‌زمان برگزار می‌شود. برای بازی با یک نفرِ مشخص، دستور را روی پیامِ او ریپلای کن.",
         f"{fee} کسی برنده نشد یا حریفی نیامد ⇒ پولِ هر دو کامل برمی‌گردد.",
