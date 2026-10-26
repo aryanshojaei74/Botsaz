@@ -202,3 +202,46 @@ async def test_help_is_rate_limited_and_group_only(env):
     assert len(a.sent) == 1 and b.sent == []                                  # بار دوم بی‌صدا
     with pytest.raises(SkipHandler):
         await G.gg_help(mk_msg("بازی", chat=-555))
+
+
+# === PATCH_GAMES_GROUP_ALLOW_V1 ===
+@pytest.mark.asyncio
+async def test_games_allowed_by_guard_chat_even_if_guard_off_or_by_gameson(env, monkeypatch):
+    from platform_bot import set_pset
+    assert await G.allowed_chat(-777) is False
+    await set_pset("group_guard_chat_id", "-777")           # محافظ وصل است، حتی اگر خاموش
+    assert await G.allowed_chat(-777) is True and await G.allowed_chat(-888) is False
+    await set_pset(G.KEY_CHAT, "-888")
+    assert await G.allowed_chat(-888) is True
+
+
+@pytest.mark.asyncio
+async def test_gameson_is_admin_only_and_blocked_hint_for_admin(env, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "PLATFORM_ADMIN_ID", 77)
+    sent = []
+
+    async def reply(t, **k):
+        sent.append(t)
+
+    def msg(text, uid, chat=-555):
+        return NS(text=text, chat=NS(id=chat), from_user=NS(id=uid, is_bot=False, full_name="x"), sender_chat=None, reply=reply, bot=NS())
+    with pytest.raises(SkipHandler):
+        await G.gg_admin_switch(msg("/gameson", 5))                          # غیرمدیر
+    await G.gg_admin_switch(msg("/gameson", 77))
+    assert "فعال شد" in sent[-1]
+    from platform_bot import get_pset
+    assert await get_pset(G.KEY_CHAT, "") == "-555"
+    await G.gg_admin_switch(msg("/gamesoff", 77))
+    assert await get_pset(G.KEY_CHAT, "x") in ("", "x")
+    # گروهِ غیرمجاز: فقط مدیر راهنما می‌بیند
+    async def deny(chat_id):
+        return False
+    monkeypatch.setattr(G, "_group_allowed", deny)
+    n = len(sent)
+    with pytest.raises(SkipHandler):
+        await G.gg_start(msg("حدس عدد", 5, chat=-999))
+    assert len(sent) == n
+    with pytest.raises(SkipHandler):
+        await G.gg_start(msg("حدس عدد", 77, chat=-999))
+    assert "/gameson" in sent[-1]

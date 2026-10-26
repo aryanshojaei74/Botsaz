@@ -28,7 +28,7 @@ from sqlalchemy import select
 
 from config import Session
 from models import Setting
-from platform_group_money import _group_allowed, _pset
+from platform_group_money import _pset, blocked_reasons
 
 from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
@@ -76,6 +76,35 @@ def parse_guess(text: str | None) -> int | None:
 
 def points_for(elapsed: float) -> int:
     return BASE_POINTS + (FAST_BONUS if elapsed <= FAST_SECS else 0)
+
+
+# === PATCH_GAMES_GROUP_ALLOW_V1 === (گزارش: «سرعت/حدس عدد کار نمی‌کند با اینکه روشن است»)
+# قبلاً بازیِ رایگان هم مثلِ شرط‌بندی فقط وقتی کار می‌کرد که «گروه متصل به محافظ» باشد *و محافظ روشن*؛ اگر یکی نبود، بی‌صدا
+# رد می‌شد. حالا: گروهِ متصل به محافظ (روشن یا خاموش) یا گروهی که مدیر با «/gameson» ثبت کرده؛ و اگر مدیر در گروهِ غیرمجاز
+# دستورِ بازی بنویسد، دلیلش را می‌بیند. (مسابقه‌هایِ پولی همچنان شرطِ سخت‌گیرانهٔ شرط‌بندی را دارند.)
+KEY_CHAT = "pgg_chat_id"
+
+
+async def allowed_chat(chat_id: int) -> bool:
+    for key in (KEY_CHAT, "group_guard_chat_id"):
+        v = ((await _pset(key, "")) or "").strip()
+        if v and v == str(chat_id):
+            return True
+    return False
+
+
+_group_allowed = allowed_chat      # نامِ قدیمی (تست‌ها آن را جایگزین می‌کنند)
+
+
+async def _hint_admin_blocked(msg: Message) -> None:
+    from config import PLATFORM_ADMIN_ID
+    if not msg.from_user or msg.from_user.id != PLATFORM_ADMIN_ID:
+        return
+    guard = ((await _pset("group_guard_chat_id", "")) or "").strip()
+    why = (blocked_reasons(guard, True, msg.chat.id) or ["این گروه ثبت نشده"])[0]
+    await msg.reply(f"ℹ️ بازی‌ها در این گروه فعال نیستند چون: {why}.\n"
+                    "برایِ فعال‌کردنِ بازی‌ها در همین گروه، همین‌جا بنویس: <code>/gameson</code>\n"
+                    "(این پیام فقط برایِ مدیرِ اصلی نمایش داده می‌شود.)", parse_mode="HTML")
 
 
 async def enabled() -> bool:
@@ -165,7 +194,11 @@ def _is_guess(m: Message) -> bool:
 async def _gate(msg: Message) -> bool:
     if not msg.from_user or msg.from_user.is_bot or msg.sender_chat:
         raise SkipHandler
-    if not await _group_allowed(msg.chat.id) or not await enabled():
+    if not await _group_allowed(msg.chat.id):
+        logger.info("games: چت %s گروهِ بازی نیست؛ نادیده (برایِ فعال‌سازی /gameson)", msg.chat.id)
+        await _hint_admin_blocked(msg)
+        raise SkipHandler
+    if not await enabled():
         raise SkipHandler
     return True
 
@@ -446,3 +479,16 @@ async def hw_reward_cmd(msg: Message):
                      f"پرداخت‌شده تاکنون: {await C.paid_count()} نفر\n\n"
                      "تغییر: <code>/hwreward مبلغ هدف سقفِ‌نفرات سقفِ‌روزانه</code> — مثال: <code>/hwreward 7000 100 20 25</code>",
                      parse_mode="HTML")
+
+
+@platform_group_game_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.text.regexp(r"^/games(on|off)(@\w+)?\s*$"))
+async def gg_admin_switch(msg: Message):
+    """مدیرِ اصلی: «/gameson» همین گروه را گروهِ بازی‌ها می‌کند، «/gamesoff» برش می‌دارد."""
+    from config import PLATFORM_ADMIN_ID
+    if not msg.from_user or msg.from_user.id != PLATFORM_ADMIN_ID:
+        raise SkipHandler
+    from platform_bot import set_pset
+    on = "gameson" in (msg.text or "").lower()
+    await set_pset(KEY_CHAT, str(msg.chat.id) if on else "")
+    await msg.reply("✅ بازی‌هایِ رایگان (حدس عدد · سرعت · ریاضی) در این گروه فعال شد. بنویس «بازی» تا راهنما بیاید."
+                    if on else "⛔️ این گروه از گروهِ بازی‌ها برداشته شد (اگر به محافظ وصل باشد هنوز بازی‌ها فعال است).")
