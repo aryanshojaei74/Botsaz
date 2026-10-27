@@ -139,6 +139,121 @@ SPAM_ENABLED = os.getenv("SELFSAZ_ENABLE_SPAM") == "1"
     ("selfsaz_worker.py",
      '''    if user_id in enemies and message_text.strip():''',
      '''    if INSULTS_ENABLED and user_id in enemies and message_text.strip():  # SELFSAZ_HARDENING_V1'''),
+    # ───── ساعت کنار نام و حالت‌های حافظه‌ای (ری‌استارت نباید چیزی را به‌هم بریزد) ─────
+    ("selfsaz_worker.py",
+     '''def get_iran_time() -> str:''',
+     '''from selfsaz_service.clockname import strip_clock as _strip_clock, load_json as _load_json, save_json as _save_json  # SELFSAZ_HARDENING_V1
+
+
+def _load_base_name():
+    cfg = _load_json(CONTROL_FILE, {})
+    return str(cfg.get('clock_base_name') or '').strip()
+
+
+def _remember_base_name(user_id, name):
+    user_original_names[user_id] = name
+    if USER_ID and user_id == USER_ID and _load_base_name() != name:
+        try:
+            _worker_write_control_patch({'clock_base_name': name})
+        except Exception as exc:
+            print(f'⚠️ ذخیرهٔ نام اصلی ناموفق: {exc}')
+
+
+def _persist_clock(enabled):
+    try:
+        _worker_write_control_patch({'time_enabled': bool(enabled)})
+    except Exception as exc:
+        print(f'⚠️ ذخیرهٔ وضعیت ساعت ناموفق: {exc}')
+
+
+def get_iran_time() -> str:'''),
+    ("selfsaz_worker.py",
+     '''        original = (user_original_names.get(user_id) or user.first_name or '').strip() or 'SelfSaz'
+        user_original_names[user_id] = original
+''',
+     '''        original = (user_original_names.get(user_id) or _load_base_name() or _strip_clock(user.first_name or '')).strip() or 'SelfSaz'  # SELFSAZ_HARDENING_V1
+        _remember_base_name(user_id, original)
+'''),
+    ("selfsaz_worker.py",
+     '''        if USER_ID and not user_original_names.get(USER_ID):
+            user_original_names[USER_ID] = (me.first_name or 'SelfSaz').strip() or 'SelfSaz'
+''',
+     '''        if USER_ID and not user_original_names.get(USER_ID):  # SELFSAZ_HARDENING_V1: ساعتِ قبلی داخل نام «نام اصلی» حساب نشود
+            _remember_base_name(USER_ID, (_load_base_name() or _strip_clock(me.first_name or '') or 'SelfSaz').strip() or 'SelfSaz')
+'''),
+    ("selfsaz_worker.py",
+     '''        user_time_status[user_id] = True
+        user_original_names.setdefault(user_id, message.from_user.first_name or "")
+''',
+     '''        user_time_status[user_id] = True  # SELFSAZ_HARDENING_V1
+        _persist_clock(True)
+        user_original_names.setdefault(user_id, _load_base_name() or _strip_clock(message.from_user.first_name or ""))
+'''),
+    ("selfsaz_worker.py",
+     '''        user_time_status[user_id] = False
+        if user_id in user_original_names:
+''',
+     '''        user_time_status[user_id] = False  # SELFSAZ_HARDENING_V1
+        _persist_clock(False)
+        if user_id not in user_original_names and _load_base_name():
+            user_original_names[user_id] = _load_base_name()
+        if user_id in user_original_names:
+'''),
+    ("selfsaz_worker.py",
+     '''            user_fonts["me"] = font_num
+''',
+     '''            user_fonts["me"] = font_num
+            try:  # SELFSAZ_HARDENING_V1: فونت بعد از ری‌استارت برگردد
+                _worker_write_control_patch({'font': font_num})
+            except Exception as exc:
+                print(f'⚠️ ذخیرهٔ فونت ناموفق: {exc}')
+'''),
+    # پاسخ‌های خودکار («پاسخ افزودن») فقط در حافظه بود
+    ("selfsaz_worker.py",
+     '''auto_replies = {}
+general_auto_reply_enabled = False''',
+     '''AUTO_REPLIES_FILE = "auto_replies.json"  # SELFSAZ_HARDENING_V1: فایل در پوشهٔ کاریِ همین حساب است
+from selfsaz_service.clockname import load_json as _ar_load, save_json as _ar_save
+auto_replies = _ar_load(AUTO_REPLIES_FILE, {})
+general_auto_reply_enabled = False'''),
+    ("selfsaz_worker.py",
+     '''            auto_replies[trigger] = reply
+''',
+     '''            auto_replies[trigger] = reply
+            _ar_save(AUTO_REPLIES_FILE, auto_replies)
+'''),
+    ("selfsaz_worker.py",
+     '''            del auto_replies[trigger]
+''',
+     '''            del auto_replies[trigger]
+            _ar_save(AUTO_REPLIES_FILE, auto_replies)
+'''),
+    # حالت آنلاین/گاست
+    ("selfsaz_worker.py",
+     '''    presence_mode = mode
+    if mode in ('online', 'ghost'):''',
+     '''    presence_mode = mode
+    try:  # SELFSAZ_HARDENING_V1
+        _worker_write_control_patch({'presence_mode': mode})
+    except Exception as exc:
+        print(f'⚠️ ذخیرهٔ حالت حضور ناموفق: {exc}')
+    if mode in ('online', 'ghost'):'''),
+    ("selfsaz_worker.py",
+     '''    global _control_mtime, time_updater_started, translation_enabled, translation_lang, premium_emoji_enabled
+''',
+     '''    global _control_mtime, time_updater_started, translation_enabled, translation_lang, premium_emoji_enabled
+    global presence_mode, presence_task, always_online_enabled  # SELFSAZ_HARDENING_V1
+'''),
+    ("selfsaz_worker.py",
+     '''                    if cfg.get('font') is not None:
+                        user_fonts['me']''',
+     '''                    _pm = cfg.get('presence_mode')  # SELFSAZ_HARDENING_V1: بعد از ری‌استارت آنلاین/گاست برگردد
+                    if _pm in ('online', 'ghost') and presence_mode == 'off' and not (presence_task and not presence_task.done()):
+                        presence_mode = _pm
+                        always_online_enabled = _pm == 'online'
+                        presence_task = asyncio.create_task(keep_online(client))
+                    if cfg.get('font') is not None:
+                        user_fonts['me']'''),
 ]
 
 

@@ -356,6 +356,10 @@ def test_patches_on_real_source_and_app_smoke(tmp_path):
     assert AP.apply(root) == []                                      # idempotent
     shutil.copy(KIT / "files/selfsaz_service/vault.py", root / "selfsaz_service/vault.py")
     shutil.copy(KIT / "files/selfsaz_service/guards.py", root / "selfsaz_service/guards.py")
+    shutil.copy(KIT / "files/selfsaz_service/clockname.py", root / "selfsaz_service/clockname.py")
+    wsrc = (root / "selfsaz_worker.py").read_text(encoding="utf-8")
+    assert "_strip_clock(user.first_name" in wsrc and "_persist_clock(True)" in wsrc
+    assert "_ar_save(AUTO_REPLIES_FILE, auto_replies)" in wsrc and "'presence_mode'" in wsrc
     shutil.copy(KIT / "files/selfsaz_service/supervisor.py", root / "selfsaz_service/supervisor.py")
     code = f'''
 import os, json
@@ -374,3 +378,58 @@ print("OK")
     out = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True,
                          env={**os.environ, "PYTHONPATH": str(root)})
     assert "OK" in out.stdout, out.stdout + out.stderr
+
+
+# ───────────── ساعت کنار نام / ذخیرهٔ حالت ─────────────
+from selfsaz_service import clockname as CN  # noqa: E402
+
+_FONTS = {
+    1: dict(zip("0123456789", "𝟎𝟏𝟐𝟑𝟒𝟓𝟔𝟕𝟖𝟗")), 2: dict(zip("0123456789", "𝟬𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵")),
+    3: dict(zip("0123456789", "０１２３４５۶７８９")), 4: dict(zip("0123456789", "𝟢𝟣𝟤𝟥𝟦𝟧𝟨𝟩𝟪𝟫")),
+    5: dict(zip("0123456789", "𝟘𝟙𝟚𝟛𝟜𝟝𝟞𝟟𝟠𝟡")), 6: {d: d + "҉" for d in "0123456789"},
+}
+
+
+def _clock(font, hhmm="12:34"):
+    return "".join(_FONTS[font].get(c, c) for c in hhmm)
+
+
+@pytest.mark.parametrize("font", range(1, 7))
+def test_strip_clock_every_font_and_stacked(font):
+    assert CN.strip_clock(f"Ali {_clock(font)}") == "Ali"
+    assert CN.strip_clock(f"علی رضایی {_clock(font, '09:05')}") == "علی رضایی"
+    stacked = f"Ali {_clock(font)} {_clock(font, '12:35')} {_clock(font, '12:36')}"   # چند ری‌استارتِ پیاپی
+    assert CN.strip_clock(stacked) == "Ali"
+    assert CN.strip_clock(f"Ali {_clock(1)} {_clock(font, '12:35')}") == "Ali"        # فونتِ مخلوط
+
+
+def test_strip_clock_leaves_normal_names_alone():
+    for name in ("Reza 1999", "Room 12", "علی ۱۳۷۰", "Team 10:30 pm", "Ali", "", "A:B"):
+        assert CN.strip_clock(name) == name
+    assert CN.strip_clock(None) == ""
+    assert CN.strip_clock(_clock(1)) == ""                                            # فقط ساعت ⇒ خالی (worker نام پیش‌فرض می‌گذارد)
+
+
+def test_state_json_atomic_roundtrip(tmp_path):
+    p = str(tmp_path / "sub" / "auto_replies.json")
+    assert CN.load_json(p, {}) == {}
+    assert CN.save_json(p, {"سلام": "علیک"})
+    assert CN.load_json(p, {}) == {"سلام": "علیک"}
+    assert Path(p).stat().st_mode & 0o777 == 0o600
+    Path(p).write_text("{broken")
+    assert CN.load_json(p, {}) == {}                                                   # خراب ⇒ پیش‌فرض، بدون کرش
+    Path(p).write_text("[1,2]")
+    assert CN.load_json(p, {}) == {}                                                   # نوع اشتباه ⇒ پیش‌فرض
+    assert not list((tmp_path / "sub").glob("*.tmp"))
+
+
+def test_restart_scenario_does_not_stack_clock():
+    """شبیه‌سازی: نام اصلی ذخیره می‌شود؛ حتی اگر ذخیره نباشد، ساعتِ داخل نام حذف می‌شود."""
+    stored_base = "Ali"
+    name_on_telegram = f"{stored_base} {_clock(2, '08:15')}"          # worker قبل از ری‌استارت این را گذاشته
+    for _ in range(3):                                                # سه ری‌استارت
+        base = stored_base or CN.strip_clock(name_on_telegram) or "SelfSaz"
+        name_on_telegram = f"{base} {_clock(2, '08:16')}"
+    assert name_on_telegram == f"Ali {_clock(2, '08:16')}"
+    lost = CN.strip_clock(name_on_telegram)                           # ذخیره‌ای نبود ⇒ از خود نام
+    assert lost == "Ali"
