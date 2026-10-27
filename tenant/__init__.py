@@ -2333,6 +2333,7 @@ def apply_discount(price: int, percent: int) -> int:
 BTN_TADMIN = "🛠 پنل مدیریت"
 # نامِ جدیدِ دکمهٔ «آموزش اتصال به کانفیگ» (شفاف‌تر) — در «دکمه‌ها و تنظیمات»
 BTN_CFG_GUIDE = "📖 دکمه آموزش اتصال چسبیده به کانفیگ خریداری‌شده"
+TRIAL_GUIDE_SOURCE = "trial"        # PATCH_TRIAL_GUIDE_SOURCE_V1: منبعِ آموزشِ مخصوصِ تست (کلیدهایِ cfg_guide_*_trial)
 BTN_BACK_MENU = "⬅️ بازگشت به منو"
 BTN_BACK_LEVEL = "◀️ بازگشت"
 BTN_SUPPORT_ROW = "💬 پشتیبانی این بخش"
@@ -9230,8 +9231,9 @@ async def _trial_stock_markup(bot_id: int, cfg_vol, category) -> "InlineKeyboard
     قبلاً فقط مسیرِ خرید این دکمه را می‌گرفت و تحویلِ تست بی‌دکمه بود."""
     try:
         rows = []
-        gr = await _cfg_guide_row(bot_id, "unlimited" if not cfg_vol else "manual",
-                                  category=category)
+        # === PATCH_TRIAL_GUIDE_SOURCE_V1 === آموزشِ اختصاصیِ «سرویس‌های تست» اولویت دارد؛ نبود ⇒ آموزشِ همین روشِ فروش
+        gr = (await _cfg_guide_row(bot_id, TRIAL_GUIDE_SOURCE)) or await _cfg_guide_row(
+            bot_id, "unlimited" if not cfg_vol else "manual", category=category)
         if gr:
             rows.append(gr)
         br = await inline_back_row(bot_id)
@@ -33047,6 +33049,8 @@ async def ref_banner_save(msg: Message, bot: Bot, state: FSMContext):
 _CFG_GUIDE_SOURCES = [
     ("manual", "📦 کانفیگ‌های دستی (عادی)"),
     ("unlimited", "♾️ کانفیگ‌های نامحدود (انبار دستی)"),
+    # === PATCH_TRIAL_GUIDE_SOURCE_V1 === (MidnightSoul) آموزش/لینکِ جداگانه برایِ سرویس‌هایِ تست
+    (TRIAL_GUIDE_SOURCE, "🎁 سرویس‌های تست رایگان"),
 ]
 _CFG_GUIDE_LABELS = dict(_CFG_GUIDE_SOURCES)
 
@@ -33078,7 +33082,7 @@ async def _cfgguide_get(bot_id: int, source: str) -> tuple[bool, str]:
         _base = source.split("#", 1)[0]
         enabled_raw = await get_setting(bot_id, f"cfg_guide_enabled_{_base}", "")
         text_val = await get_setting(bot_id, f"cfg_guide_text_{_base}", "")
-    if not enabled_raw and not text_val:
+    if not enabled_raw and not text_val and source != TRIAL_GUIDE_SOURCE:
         legacy_enabled = await get_setting(bot_id, "cfg_guide_enabled", "0")
         legacy_text = await get_setting(bot_id, "cfg_guide_text", "")
         return legacy_enabled == "1", legacy_text

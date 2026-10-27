@@ -106,9 +106,40 @@ async def test_trial_stock_markup_has_guide_button(env, monkeypatch):
     async def fake_guide(bot_id, source="manual", category=None):
         seen.update(source=source, category=category)
         return [InlineKeyboardButton(text="📖 آموزش اتصال", callback_data="cfgguide:show:manual")]
-    monkeypatch.setattr(tenant, "_cfg_guide_row", fake_guide)
+    async def only_manual(bot_id, source="manual", category=None):       # آموزشِ اختصاصیِ تست تنظیم نشده
+        return None if source == "trial" else await fake_guide(bot_id, source, category)
+    monkeypatch.setattr(tenant, "_cfg_guide_row", only_manual)
     kb = await tenant._trial_stock_markup(1, 10, "دسته ۱")
     flat = [b.callback_data for r in kb.inline_keyboard for b in r]
-    assert "cfgguide:show:manual" in flat and seen == {"source": "manual", "category": "دسته ۱"}
+    assert "cfgguide:show:manual" in flat and seen == {"source": "manual", "category": "دسته ۱"}   # بازگشت به آموزشِ روشِ فروش
     await tenant._trial_stock_markup(1, 0, None)
     assert seen["source"] == "unlimited"
+
+
+@pytest.mark.asyncio
+async def test_trial_has_its_own_guide_source_with_priority_and_no_legacy_leak(env, monkeypatch):
+    """MidnightSoul: برای سرویس‌هایِ تست آموزش/لینکِ جدا بشود؛ نبودش ⇒ همان آموزشِ روشِ فروش."""
+    maker, bid = env
+    import tenant.bots.vpn.vpn_admin as VA
+    monkeypatch.setattr(VA, "Session", maker)
+    assert tenant.TRIAL_GUIDE_SOURCE == "trial" and ("trial", "🎁 سرویس‌های تست رایگان") in tenant._CFG_GUIDE_SOURCES
+    await tenant.set_setting(bid, "cfg_guide_enabled", "1")                 # آموزشِ عمومیِ قدیمی
+    await tenant.set_setting(bid, "cfg_guide_text", "قدیمی")
+    assert await tenant._cfgguide_get(bid, "trial") == (False, "")           # به تست نشت نمی‌کند
+    assert await tenant._cfg_guide_row(bid, "trial") is None
+    kb = await tenant._trial_stock_markup(bid, 10, None)                     # فقط آموزشِ «دستی» (قدیمی) می‌ماند
+    assert kb is None or all("trial" not in (b.callback_data or "") for r in kb.inline_keyboard for b in r)
+    await tenant.set_setting(bid, "cfg_guide_enabled_trial", "1")
+    await tenant.set_setting(bid, "cfg_guide_text_trial", '<a href="https://t.me/x/1">آموزش اندروید</a>')
+    row = await tenant._cfg_guide_row(bid, "trial")
+    assert row and row[0].callback_data == "cfgguide:show:trial"
+    kb = await tenant._trial_stock_markup(bid, 10, "دسته ۱")
+    assert "cfgguide:show:trial" in [b.callback_data for r in kb.inline_keyboard for b in r]
+    from aiogram.types import InlineKeyboardMarkup
+    body, picker = await tenant._cfgguide_picker_content(bid)
+    cbs = [b.callback_data for r in picker.inline_keyboard for b in r]
+    assert "tadm:cfgguide:pick:trial" in cbs and any("✅" in b.text and "تست" in b.text for r in picker.inline_keyboard for b in r)
+    text, kb2 = await tenant._cfgguide_panel(bid, "trial")
+    assert "سرویس‌های تست" in text and "آموزش اندروید" in text
+    await tenant.set_setting(bid, "cfg_guide_enabled_trial", "0")            # غیرفعال ⇒ دوباره آموزشِ روشِ فروش
+    assert await tenant._cfg_guide_row(bid, "trial") is None

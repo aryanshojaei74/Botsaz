@@ -22,6 +22,7 @@ Gemini مستقیم، OCR.space، Tesseract محلی) را به‌ترتیب ا�
 import html   # === PATCH_AUTO_RECEIPT_ESCAPE_ERR_BODY_V1 === (escape قبل از ورود به پیامِ HTML-mode)
 import random  # === PATCH_ARVAN_MULTI_KEY_ROTATION_V1 ===
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -315,10 +316,10 @@ def _receipt_ai_autonomous_prompt(expected_amount_toman: int,
 
 
 # === PATCH_AUTO_RECEIPT_IMAGE_SHRINK_V1 ===
-_ARVAN_MAX_IMG_BYTES = 900_000     # حدودِ ۱٫۲ مگابایت بعد از base64
+_ARVAN_MAX_IMG_BYTES = 600_000     # حدودِ ۸۰۰ کیلوبایت بعد از base64 (کوچک‌تر ⇒ آپلود/استنتاجِ سریع‌تر؛ متنِ رسید خوانا می‌ماند)
 
 
-def _shrink_receipt_image(raw: bytes, max_w: int = 1600, max_bytes: int = _ARVAN_MAX_IMG_BYTES) -> bytes:
+def _shrink_receipt_image(raw: bytes, max_w: int = 1400, max_bytes: int = _ARVAN_MAX_IMG_BYTES) -> bytes:
     """عکسِ رسید را تا حدِ خوانا کوچک می‌کند.
 
     عکسِ خامِ گوشی گاهی ۵ مگابایت است؛ فرستادنش هم کند است هم گران، و
@@ -408,14 +409,25 @@ async def _arvan_autonomous_call(prompt: str, image_bytes: bytes | None,
         # شکستِ نهایی بود، پس یک پاسخِ کندِ لحظه‌ای کافی بود رسید به تاییدِ دستی برود. حالا هر تلاش سقفِ کوتاه‌تری دارد
         # (نصفِ ARVAN_AI_TIMEOUT، حداقل ۲۰ ثانیه)، تایم‌اوت هم مثلِ خطایِ موقتِ سرور تلاشِ بعدی را (با کلیدِ دیگر و
         # عکسِ کوچک‌ترِ ۱۱۰۰ پیکسلی) امتحان می‌کند.
-        _attempt_secs = max(20, ARVAN_AI_TIMEOUT_SECONDS // 2)
+        # === PATCH_ARVAN_ESCALATING_TIMEOUT_V1 === (MidnightSoul: «آروان در ۳۰ ثانیه جواب نداد (تلاش ۳)» بارها)
+        # اگر هر سه تلاش با همان سقفِ ۳۰ثانیه تایم‌اوت شود، یعنی سرویس/مدل آن لحظه کند است و تلاشِ مجدد با همان سقف
+        # فایده ندارد؛ پس سقفِ هر تلاش بیشتر می‌شود (۳۰ ← ۴۰ ← ۵۰ ← ۶۰ثانیه) و یک تلاشِ چهارم هم داریم (ARVAN_AI_ATTEMPTS).
+        _base_secs = max(20, ARVAN_AI_TIMEOUT_SECONDS // 2)
+        _attempt_secs = _base_secs
         timeout = aiohttp.ClientTimeout(total=_attempt_secs)
         last_err = None
+        _t_start = time.monotonic()
         # === PATCH_ARVAN_MULTI_KEY_ROTATION_V1 ===
         # با چند کلید، تعدادِ تلاش‌ها رو به تعدادِ کلیدها (حداقل ۳) می‌رسونیم
         # تا واقعاً فرصتِ رفتن سراغِ هر کلید رو داشته باشیم.
-        max_attempts = max(3, len(_keys))
+        try:
+            _want = int(_os_ar.getenv("ARVAN_AI_ATTEMPTS", "4"))
+        except (ValueError, NameError):
+            _want = 4
+        max_attempts = max(3, _want, len(_keys))
         for attempt in range(max_attempts):
+            _attempt_secs = min(ARVAN_AI_TIMEOUT_SECONDS, _base_secs + 10 * attempt)
+            timeout = aiohttp.ClientTimeout(total=_attempt_secs)
             # === PATCH_ARVAN_MULTI_KEY_ROTATION_V1 ===
             # هر تلاش یه کلید رندوم از بینِ کلیدها انتخاب می‌کنه (چند اکانتِ
             # رایگان)، تا اگه یکی سهمیه‌اش تموم شده بود (۴۲۹)، تلاشِ بعدی با
@@ -441,6 +453,8 @@ async def _arvan_autonomous_call(prompt: str, image_bytes: bytes | None,
                     async with session.post(url, json=payload, headers=headers) as resp:
                         if resp.status == 200:
                             data = await resp.json(content_type=None)
+                            logger.info("[AI_RECEIPT] پاسخِ آروان در %.1f ثانیه (تلاش %s، مدل %s)",
+                                        time.monotonic() - _t_start, attempt + 1, _model)
                             break
                         body = (await resp.text())[:200]
                         if resp.status == 429:
@@ -481,7 +495,8 @@ async def _arvan_autonomous_call(prompt: str, image_bytes: bytes | None,
                                       f"{_img_note}: {html.escape(body)}")
             except asyncio.TimeoutError:
                 last_err = f"آروان در {_attempt_secs} ثانیه جواب نداد (تلاش {attempt + 1})"
-                logger.warning("auto_receipt: %s", last_err)
+                logger.warning("auto_receipt: %s [مدل=%s، کلیدها=%s، عکس=%sKB]", last_err, _model, len(_keys),
+                               (len(image_bytes) // 1024) if image_bytes else 0)
                 if _raw_image and attempt == 0:      # تلاشِ بعدی با عکسِ کوچک‌ترِ خوانا
                     try:
                         _small = _shrink_receipt_image(_raw_image, max_w=1100, max_bytes=350_000)

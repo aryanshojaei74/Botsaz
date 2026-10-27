@@ -1368,6 +1368,9 @@ async def _send_config_delivery(bot: Bot, tg_id: int, aid: int):
     try:
         from tenant import inline_back_row, _cfg_guide_row
         _gr = await _cfg_guide_row(acc_bot_id, a.panel_key or "sanai")
+        if (getattr(a, "plan_title", "") or "") == "تست رایگان":      # PATCH_TRIAL_GUIDE_SOURCE_V1
+            from tenant import TRIAL_GUIDE_SOURCE
+            _gr = (await _cfg_guide_row(acc_bot_id, TRIAL_GUIDE_SOURCE)) or _gr
         if _gr:
             kb_rows.append(_gr)
         _br = await inline_back_row(acc_bot_id)

@@ -77,3 +77,38 @@ async def test_all_attempts_timing_out_gives_clear_message(monkeypatch):
     monkeypatch.setattr(AR, "ARVAN_AI_API_KEYS", ["k1"])
     text, err = await AR._arvan_autonomous_call("p", None)
     assert text is None and "جواب نداد" in err and len(calls) >= 3
+
+
+@pytest.mark.asyncio
+async def test_timeouts_escalate_and_fourth_attempt_can_succeed(monkeypatch):
+    """MidnightSoul: «آروان در ۳۰ ثانیه جواب نداد (تلاش ۳)» — حالا سقفِ هر تلاش بیشتر می‌شود و تلاشِ چهارم هم هست."""
+    calls, totals = [], []
+    real_ct = AR.aiohttp.ClientTimeout
+
+    def ct(total=None, **k):
+        totals.append(total)
+        return real_ct(total=total, **k)
+    monkeypatch.setattr(AR.aiohttp, "ClientTimeout", ct)
+    monkeypatch.setattr(AR.aiohttp, "ClientSession", _session_factory(calls, fail_first=3))
+    monkeypatch.setattr(AR, "ARVAN_AI_BASE_URL", "https://x.test/v1")
+    monkeypatch.setattr(AR, "ARVAN_AI_API_KEYS", ["k1"])
+    monkeypatch.setattr(AR, "ARVAN_AI_TIMEOUT_SECONDS", 60)
+
+    async def no_sleep(_):
+        return None
+    monkeypatch.setattr(AR.asyncio, "sleep", no_sleep)
+    text, err = await AR._arvan_autonomous_call("p", None)
+    assert err is None and text == "تصمیم: تایید" and len(calls) == 4
+    per_attempt = totals[-4:]
+    assert per_attempt == [30, 40, 50, 60]                                  # ۳۰ ← ۴۰ ← ۵۰ ← ۶۰
+    monkeypatch.setenv("ARVAN_AI_ATTEMPTS", "2")                             # حداقل همیشه ۳ تلاش
+    calls.clear()
+    monkeypatch.setattr(AR.aiohttp, "ClientSession", _session_factory(calls, fail_first=99))
+    text, err = await AR._arvan_autonomous_call("p", None)
+    assert text is None and len(calls) == 3 and "(تلاش 3)" in err
+
+
+def test_first_attempt_image_is_smaller_now():
+    assert AR._ARVAN_MAX_IMG_BYTES == 600_000
+    import inspect
+    assert inspect.signature(AR._shrink_receipt_image).parameters["max_w"].default == 1400
