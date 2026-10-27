@@ -248,11 +248,14 @@ def test_real_spawn_passes_secret_via_stdin_only_in_own_dir(tmp_path, monkeypatc
     row = {"id": 5, "owner_id": 4242, "api_id": 777, "api_hash": "abcdef",
            "session_secret": vault.protect("THE-SESSION-STRING", KEY)}
     pid = SV.spawn_worker(row)
-    for _ in range(100):
-        if (root / "probe.json").exists():
+    probe = None
+    for _ in range(200):                                             # فایل ممکن است نیمه‌نوشته دیده شود
+        try:
+            probe = json.loads((root / "probe.json").read_text())
             break
-        time.sleep(0.05)
-    probe = json.loads((root / "probe.json").read_text())
+        except (OSError, ValueError):
+            time.sleep(0.05)
+    assert probe is not None
     assert probe["stdin"] == {"session": "THE-SESSION-STRING", "api_id": 777, "api_hash": "abcdef"}
     assert probe["cwd"] == str(root / "data" / "accounts" / "4242")
     assert (root / "data" / "accounts" / "4242").stat().st_mode & 0o777 == 0o700
