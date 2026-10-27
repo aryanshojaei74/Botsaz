@@ -16,16 +16,19 @@ grep -qE '^(export )?SELFSaz_SESSION_KEY=.{16,}' "$ROOT/.env" || { echo "❌ SEL
 echo "1) بررسی پچ (بدون تغییر)…"
 "$PY" "$KIT/apply_patches.py" "$ROOT" --dry-run
 
-echo "2) بکاپ کامل → $BACKUP"
+echo "2) توقف سرویس‌ها (برای بکاپِ سازگار؛ چند دقیقه بیشتر نمی‌شود)"
+restart_old() { systemctl start selfsaz.service selfsaz-worker.service 2>/dev/null || true; }
+trap 'echo "⚠️ خطا قبل از اعمال تغییر؛ سرویس‌ها با کد قبلی دوباره روشن می‌شوند"; restart_old' ERR
+systemctl stop selfsaz-worker.service 2>/dev/null || true
+systemctl stop selfsaz.service 2>/dev/null || true
+sleep 2
+
+echo "3) بکاپ کامل → $BACKUP"
 tar czf "$BACKUP" --exclude="$(basename "$ROOT")/.venv" -C "$(dirname "$ROOT")" "$(basename "$ROOT")"
 chmod 600 "$BACKUP"
 
-echo "3) توقف سرویس‌ها"
-systemctl stop selfsaz-worker.service 2>/dev/null || true
-systemctl stop selfsaz.service 2>/dev/null || true
-
 rollback_hint() { echo; echo "⚠️ خطا رخ داد. بازگردانی:  systemctl stop selfsaz selfsaz-worker; tar xzf $BACKUP -C $(dirname "$ROOT"); systemctl start selfsaz selfsaz-worker"; }
-trap rollback_hint ERR
+trap rollback_hint ERR   # از اینجا به بعد فایل‌ها تغییر می‌کنند؛ بازگردانی دستی با بکاپ
 
 echo "4) وابستگی‌ها (cryptography) و قفل نسخه‌ها"
 "$ROOT/.venv/bin/pip" install -q cryptography
