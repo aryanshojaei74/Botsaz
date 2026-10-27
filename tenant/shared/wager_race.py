@@ -226,4 +226,5 @@ async def twr_answer(msg: Message, bot: Bot):
     R.LIVE.pop(live["wid"], None)
     await R._edit(bot, w)
     await msg.reply(f"🏁 <b>{_html.escape(msg.from_user.full_name or str(uid))}</b> برنده شد!\n"
-                    f"🎁 {_rial(w.payout_amount)} به کیف پولش اضافه شد.", parse_mode="HTML")
+                    f"🎁 {_rial(w.payout_amount)} به کیف پولش اضافه شد.", parse_mode="HTML",
+                    reply_markup=await core.result_kb(w))

@@ -155,6 +155,36 @@ async def _row(mk, wid):
 
 
 @pytest.mark.asyncio
+async def test_platform_result_has_glass_buttons_with_both_balances_under_edit_and_winner_reply(env, monkeypatch):
+    mk = env
+    w, n, first, other = await _start_guess(mk, monkeypatch)
+    kb_seen = []
+
+    async def reply(t, **k):
+        kb_seen.append((t, k.get("reply_markup")))
+    edits = []
+
+    async def edit_message_text(text, **k):
+        edits.append(k.get("reply_markup"))
+    bot = NS(edit_message_text=edit_message_text)
+    async with mk() as s:
+        row = await s.get(models.PlatformWager, w.id)
+        row.message_id = 55
+        await s.commit()
+    msg = NS(text=str(n), chat=NS(id=CHAT), from_user=NS(id=other if other == first else first, is_bot=False, full_name="W"),
+             reply=reply, bot=bot)
+    # برنده = نفرِ نوبت‌دار
+    msg.from_user.id = first
+    await R.race_answer(msg)
+    rows = lambda kb: [[(b.text, b.callback_data) for b in r] for r in kb.inline_keyboard]
+    expected = [[("🎁 جایزهٔ برنده", "pgb:info"), ("19,000 تومان", "pgb:info")],
+                [("💎 موجودیِ برنده", "pgb:info"), ("109,000 تومان", "pgb:info")],
+                [("❌ موجودیِ بازنده", "pgb:info"), ("90,000 تومان", "pgb:info")]]
+    assert rows(edits[-1]) == expected                                   # پیامِ بازی ادیت شد
+    assert "برنده شد" in kb_seen[-1][0] and rows(kb_seen[-1][1]) == expected   # زیرِ پیامِ «برنده شد» هم
+
+
+@pytest.mark.asyncio
 async def test_guess_is_turn_based_hints_pass_turn_and_win_on_own_turn(env, monkeypatch):
     mk = env
     w, n, first, other = await _start_guess(mk, monkeypatch)

@@ -472,7 +472,7 @@ async def _expire_later(bot: Bot, wid: int, secs: int) -> None:
                 await bot.send_message(
                     w.chat_id, f"⏰ <b>{core._who(w, loser)}</b> در ۳ دقیقه حدس نزد و باخت.\n"
                                f"🏁 <b>{core._who(w, w.winner_id)}</b> برنده شد! 🎁 {_rial(w.payout_amount)} به کیف پولش اضافه شد.",
-                    parse_mode="HTML")
+                    parse_mode="HTML", reply_markup=await core.result_kb(w))
             else:
                 await bot.send_message(w.chat_id, "⌛ کسی برنده نشد؛ مبلغِ هر دو نفر برگشت. 👻")
     except Exception:  # noqa: BLE001
@@ -531,7 +531,8 @@ async def race_answer(msg: Message):
     LIVE.pop(live["wid"], None)
     await _edit(msg.bot, w)
     await msg.reply(f"🏁 <b>{_html.escape(msg.from_user.full_name or str(uid))}</b> برنده شد!\n"
-                    f"🎁 {_rial(w.payout_amount)} به کیف پولش اضافه شد.", parse_mode="HTML")
+                    f"🎁 {_rial(w.payout_amount)} به کیف پولش اضافه شد.", parse_mode="HTML",
+                    reply_markup=await core.result_kb(w))            # دکمه‌هایِ شیشه‌ایِ جایزه/موجودیِ برنده و بازنده
 
 
 async def help_section() -> str:

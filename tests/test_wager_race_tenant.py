@@ -242,9 +242,12 @@ async def test_result_message_is_edited_with_prize_and_balance_buttons_for_every
         await PW._refund_both(s, r3, "draw", "draw")
         await s.commit()
     assert await PW.result_kb(await wager(db, w3.id)) is None
-    # ربات اصلی: بدونِ تغییر
+    # ربات اصلی هم دکمه‌هایِ نتیجه را دارد (callbackِ pgb:info که در همان ربات پاسخ داده می‌شود)
     plat = SimpleNamespace(bot_id=0, status="settled", winner_id=1, creator_id=1, opponent_id=2, payout_amount=1)
-    assert await PW.result_kb(plat) is None
+    kb_plat = await PW.result_kb(plat)
+    assert kb_plat is not None and {b[1] for r in _rows(kb_plat) for b in [r[0], r[1]]} == {"pgb:info"}
+    plat_draw = SimpleNamespace(bot_id=0, status="settled", winner_id=None, creator_id=1, opponent_id=2, payout_amount=1)
+    assert await PW.result_kb(plat_draw) is None
 
 
 async def PW_new(db, amount=10_000):

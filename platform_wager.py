@@ -646,6 +646,7 @@ async def sweep_expired(bot: Bot | None = None, bot_id: int | None = 0, overdue_
             done += 1
             if bot is not None and w.message_id:
                 text, kb = render(w)
+                kb = (await result_kb(w)) or kb
                 try:
                     await bot.edit_message_text(text, chat_id=w.chat_id, message_id=w.message_id,
                                                 reply_markup=kb, parse_mode="HTML")
@@ -866,16 +867,21 @@ def render(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
 async def result_kb(w: PlatformWager):
     """=== PATCH_WAGER_RESULT_KB_V1 === (فدایی) نتیجهٔ همهٔ بازی‌هایِ ربات‌هایِ مشتری یک شکل: همان پیامِ بازی ادیت شود و زیرش
     دکمه‌هایِ شیشه‌ایِ «🎁 جایزهٔ برنده / 💎 موجودیِ برنده / ❌ موجودیِ بازنده» (مثلِ نتیجهٔ بازیِ قبلی) بیاید.
-    فقط وقتی برنده دارد و مالِ ربات مستأجر است؛ مساوی/لغو/برگشتِ پول ⇒ None (همان کیبوردِ render می‌ماند)."""
-    if not w.bot_id or w.status != "settled" or not w.winner_id:
+    ربات اصلی هم همین را دارد (فدایی). فقط وقتی برنده دارد؛ مساوی/لغو/برگشتِ پول ⇒ None (همان کیبوردِ render می‌ماند)."""
+    if w.status != "settled" or not w.winner_id:
         return None
     loser_id = w.opponent_id if w.winner_id == w.creator_id else w.creator_id
-    from models import BotUser
+    ids = [w.winner_id, loser_id]
     async with Session() as s:
-        rows = (await s.scalars(select(BotUser).where(BotUser.bot_id == w.bot_id,
-                                                      BotUser.telegram_id.in_([w.winner_id, loser_id])))).all()
+        if w.bot_id:
+            from models import BotUser
+            rows = (await s.scalars(select(BotUser).where(BotUser.bot_id == w.bot_id,
+                                                          BotUser.telegram_id.in_(ids)))).all()
+        else:
+            from models import PlatformUser
+            rows = (await s.scalars(select(PlatformUser).where(PlatformUser.telegram_id.in_(ids)))).all()
     bal = {u.telegram_id: _money(u.balance) for u in rows}
-    noop = "twg:noop"
+    noop = "twg:noop" if w.bot_id else "pgb:info"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎁 جایزهٔ برنده", callback_data=noop, style=ButtonStyle.SUCCESS),
          InlineKeyboardButton(text=_rial(w.payout_amount), callback_data=noop, style=ButtonStyle.SUCCESS)],
@@ -978,6 +984,7 @@ def help_text(enabled: dict[str, bool], bot_id: int = 0, cfg: dict | None = None
 
 async def _show(cb_or_msg, w: PlatformWager) -> None:
     text, kb = render(w)
+    kb = (await result_kb(w)) or kb                    # PATCH_WAGER_RESULT_KB_V1 (ربات اصلی هم)
     try:
         await cb_or_msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except TelegramBadRequest as e:
