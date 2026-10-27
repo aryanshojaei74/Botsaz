@@ -254,6 +254,115 @@ general_auto_reply_enabled = False'''),
                         presence_task = asyncio.create_task(keep_online(client))
                     if cfg.get('font') is not None:
                         user_fonts['me']'''),
+    # ───── پاسخ عمومی: مقایسهٔ enum، دوبار جواب، جواب به پیام‌های قدیمی بعد از ری‌استارت ─────
+    ("selfsaz_worker.py",
+     '''    if general_auto_reply_enabled and general_auto_reply_text and getattr(getattr(message, 'chat', None), 'type', None) == 'private':''',
+     '''    if general_auto_reply_enabled and general_auto_reply_text and getattr(getattr(message, 'chat', None), 'type', None) == enums.ChatType.PRIVATE and not getattr(message.from_user, 'is_bot', False) and _gr_gate.allow(message.chat.id, message.id):  # SELFSAZ_HARDENING_V1'''),
+    ("selfsaz_worker.py",
+     '''async def _general_auto_reply_private_poll_loop(client):
+    seen = {}''',
+     '''from selfsaz_service.autoreply import ReplyGate as _ReplyGate, decide as _gr_decide  # SELFSAZ_HARDENING_V1
+_gr_gate = _ReplyGate()
+
+
+async def _general_auto_reply_private_poll_loop(client):
+    seen = {}
+    try:
+        my_id = (await client.get_me()).id
+    except Exception as exc:
+        print(f'[GeneralAutoReplyPoll] identity error: {exc}', flush=True)
+        return
+    print(f'[GeneralAutoReplyPoll] started my_id={my_id}', flush=True)
+    _mirror_general_reply()  # بعد از ری‌استارت هم پنل بات وضعیت درست را ببیند
+    while True:
+        try:
+            if general_auto_reply_enabled and general_auto_reply_text:
+                async for dialog in client.get_dialogs(limit=40):
+                    chat, msg = dialog.chat, dialog.top_message
+                    if not chat or not msg or chat.type != enums.ChatType.PRIVATE or chat.id == my_id:
+                        continue
+                    sender = getattr(msg, 'from_user', None)
+                    try:
+                        age = time.time() - msg.date.timestamp()
+                    except Exception:
+                        age = None
+                    reply, seen[chat.id] = _gr_decide(seen.get(chat.id), msg.id, age, sender is None or sender.id == my_id,
+                                                      bool(getattr(sender, 'is_bot', False)), bool(msg.text or msg.caption))
+                    if reply and _gr_gate.allow(chat.id, msg.id):
+                        try:
+                            await _send_text_with_premium_emoji(client, chat.id, general_auto_reply_text, reply_to_message_id=msg.id)
+                            print(f'[GeneralAutoReplyPoll] sent chat={chat.id} source_id={msg.id}', flush=True)
+                        except FloodWait as fw:
+                            await asyncio.sleep(fw.value + 1)
+                        except Exception as exc:
+                            print(f'[GeneralAutoReplyPoll] send error chat={chat.id}: {type(exc).__name__}: {str(exc)[:160]}', flush=True)
+        except asyncio.CancelledError:
+            raise
+        except FloodWait as fw:
+            await asyncio.sleep(fw.value + 1)
+        except Exception as exc:
+            print(f'[GeneralAutoReplyPoll] loop error: {type(exc).__name__}: {str(exc)[:160]}', flush=True)
+        await asyncio.sleep(4)
+
+
+async def _general_auto_reply_private_poll_loop_legacy(client):
+    seen = {}'''),
+    # ───── دستورهای پنل که از مسیر Saved Messages اجرا نمی‌شدند + قفل‌هایی که «خاموش» نمی‌شدند ─────
+    ("selfsaz_worker.py",
+     '''    proxy = _UniversalSavedMessage(message, text.split())
+''',
+     '''    proxy = _UniversalSavedMessage(message, text.split())
+    # SELFSAZ_HARDENING_V1: «سلف دشمن …» و «سلف عملیات …» با regex ثبت شده بودند و از Saved Messages هرگز اجرا نمی‌شدند
+    for _rx, _handler in ((re.compile(r'^سلف عملیات (بن|کیک|سکوت|حذف سکوت|پین|آنپین) (-?\\d+) (.+)$'), panel_context_action),
+                          (re.compile(r'^سلف دشمن (افزودن|حذف) (.+)$'), panel_enemy_command),
+                          (re.compile(r'^سلف دشمن لیست$'), panel_enemy_list)):
+        _m = _rx.match(text)
+        if _m:
+            proxy.matches = [_m]
+            await _handler(client, proxy)
+            print(f'[SavedUniversal] handled handler={_handler.__name__} text={text[:60]!r}', flush=True)
+            return True
+    # قفل‌ها فقط با «X روشن» / «X خاموش» دقیق؛ قبلاً «همه خاموش» هم قفل را روشن می‌کرد و یادداشت «پیام فردا…» قفل پیام می‌زد
+    _locks = {'همه': (lock_all_on_command, lock_all_off_command), 'مدیا': (lock_media_on_command, lock_media_off_command),
+              'استیکر': (lock_sticker_on_command, lock_sticker_off_command), 'فوروارد': (lock_forward_on_command, lock_forward_off_command),
+              'ویس': (lock_voice_on_command, lock_voice_off_command), 'پیام': (lock_text_on_command, lock_text_off_command),
+              'فایل': (lock_file_on_command, lock_file_off_command)}
+    _parts = text.split()
+    if _parts and _parts[0] in _locks:
+        if len(_parts) == 2 and _parts[1] in ('روشن', 'خاموش'):
+            await _locks[_parts[0]][0 if _parts[1] == 'روشن' else 1](client, proxy)
+            print(f'[SavedUniversal] handled lock text={text!r}', flush=True)
+            return True
+        print(f'[SavedUniversal] ignored note text={text[:60]!r}', flush=True)
+        return False
+'''),
+    ("selfsaz_worker.py",
+     '''        if text == prefix or text.startswith(prefix + ' '):
+            await handler(client, proxy)''',
+     '''        if text == prefix or text.startswith(prefix + ' '):
+            proxy.command = [prefix] + text[len(prefix):].split()  # SELFSAZ_HARDENING_V1: مثل خودِ pyrogram (نام دستور + آرگومان‌ها)
+            await handler(client, proxy)'''),
+    # وضعیت پاسخ عمومی برای نمایش در پنل بات (فایل کنترل)
+    ("selfsaz_worker.py",
+     '''        os.replace(tmp, GENERAL_AUTO_REPLY_FILE)
+    except Exception as exc:
+        print(f'[GeneralAutoReply] save error: {exc}', flush=True)''',
+     '''        os.replace(tmp, GENERAL_AUTO_REPLY_FILE)
+        _mirror_general_reply()  # SELFSAZ_HARDENING_V1
+    except Exception as exc:
+        print(f'[GeneralAutoReply] save error: {exc}', flush=True)
+
+
+def _mirror_general_reply():
+    """وضعیت/متنِ پاسخ عمومی را در فایل کنترل می‌نویسد تا پنل بات «روشن/خاموش» را نشان بدهد."""
+    try:
+        _worker_write_control_patch({'general_reply': {'enabled': bool(general_auto_reply_enabled), 'text': str(general_auto_reply_text or '')[:500]}})
+    except Exception as exc:
+        print(f'[GeneralAutoReply] mirror error: {exc}', flush=True)'''),
+    # مقایسهٔ نوع چت با رشته در دستور «ایدی» (در pyrogram 2 نوع enum است)
+    ("selfsaz_worker.py",
+     '''chat_type = "گروه" if common_chat.type in ["group", "supergroup"] else "کانال" if common_chat.type == "channel" else "شخصی"''',
+     '''chat_type = "گروه" if common_chat.type in (enums.ChatType.GROUP, enums.ChatType.SUPERGROUP) else "کانال" if common_chat.type == enums.ChatType.CHANNEL else "شخصی"  # SELFSAZ_HARDENING_V1'''),
 ]
 
 

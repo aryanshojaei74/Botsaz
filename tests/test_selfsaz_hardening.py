@@ -433,3 +433,59 @@ def test_restart_scenario_does_not_stack_clock():
     assert name_on_telegram == f"Ali {_clock(2, '08:16')}"
     lost = CN.strip_clock(name_on_telegram)                           # ذخیره‌ای نبود ⇒ از خود نام
     assert lost == "Ali"
+
+
+# ───────────── پاسخ عمومی (autoreply) ─────────────
+from selfsaz_service import autoreply as AR  # noqa: E402
+
+
+def test_decide_first_pass_only_answers_fresh_messages():
+    assert AR.decide(None, 10, 5, False, False, True) == (True, 10)               # پیام تازه
+    assert AR.decide(None, 10, 3600, False, False, True) == (False, 10)           # قدیمی: فقط baseline
+    assert AR.decide(None, 10, None, False, False, True) == (False, 10)           # تاریخ نامعلوم ⇒ جواب نده
+    assert AR.decide(10, 10, 1, False, False, True) == (False, 10)                # قبلاً دیده شده
+    assert AR.decide(10, 11, 1, False, False, True) == (True, 11)                 # پیام جدید
+    assert AR.decide(10, 11, 1, True, False, True) == (False, 11)                 # پیام خودمان
+    assert AR.decide(10, 11, 1, False, True, True) == (False, 11)                 # بات
+    assert AR.decide(10, 11, 1, False, False, False) == (False, 11)               # بدون متن
+
+
+def test_reply_gate_once_per_message_and_cooldown():
+    t = [0.0]
+    g = AR.ReplyGate(cooldown=15, clock=lambda: t[0])
+    assert g.allow(1, 10) and not g.allow(1, 10)                                  # هر پیام یک‌بار
+    t[0] = 5
+    assert not g.allow(1, 11)                                                     # cooldown (و پیام ۱۱ «دیده» شد)
+    t[0] = 6
+    assert not g.allow(1, 11)
+    t[0] = 20
+    assert g.allow(1, 12) and g.allow(2, 1)                                       # گفتگوی دیگر مستقل
+
+
+PYBIN = os.getenv("SELFSAZ_PY")
+
+
+@pytest.mark.skipif(not (SRC and PYBIN), reason="SELFSAZ_SRC و SELFSAZ_PY (پایتونِ دارای pyrogram) لازم است")
+def test_worker_integration_every_panel_command_and_general_reply(tmp_path):
+    root = tmp_path / "selfsaz"
+    shutil.copytree(SRC, root)
+    assert AP.apply(root) == []
+    for name in ("vault.py", "guards.py", "clockname.py", "autoreply.py"):
+        shutil.copy(KIT / "files/selfsaz_service" / name, root / "selfsaz_service" / name)
+    out = subprocess.run([PYBIN, str(KIT / "tools/dispatch_harness.py"), str(root)], capture_output=True, text=True, cwd=tmp_path)
+    data = json.loads(out.stdout.strip().splitlines()[-1])
+    rows = {r["case"]: r for r in data["cases"]}
+    for case, r in rows.items():
+        if case in ("پیام فردا یادم باشه", "همه چیز خوبه"):
+            assert r["handled"] is False, case                                    # یادداشت‌های شخصی دستور نیستند
+        else:
+            assert r["handled"] is True and not r["error"], (case, r)
+    assert "اضافه شد" in rows["سلف دشمن افزودن @someone"]["out"]
+    assert "انجام شد" in rows["سلف عملیات بن -1001234567890 @user"]["out"]
+    assert "فونت زمان به شماره 2" in rows["تنظیم فونت 2"]["out"]
+    assert "غیرفعال شد" in rows["همه خاموش"]["out"] and "غیرفعال شد" in rows["مدیا خاموش"]["out"]
+    assert not any(data["locks_after"].values())                                  # هر قفل با «خاموش» واقعاً خاموش شد
+    rp = data["reply"]
+    assert rp["poll_sent_to"] == [901, 902] and rp["poll_sent_count"] == 2        # فقط پیام‌های تازه؛ نه قدیمی/خودمان/بات/گروه
+    assert rp["live_plus_poll_sent"] == 1                                         # هندلر زنده + پولینگ ⇒ یک جواب
+    assert rp["disabled_sent"] == 0

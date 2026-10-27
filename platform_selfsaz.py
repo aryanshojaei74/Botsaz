@@ -123,6 +123,42 @@ def _selfsaz_slider_kb(page: int, control: dict | None = None) -> InlineKeyboard
     rows.append([InlineKeyboardButton(text='🔴 بستن پنل', callback_data='pss:slider:close', style=ButtonStyle.DANGER)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
+def _gr_panel_text(cfg: dict) -> str:
+    gr = (cfg or {}).get('general_reply') or {}
+    on = bool(gr.get('enabled', False))
+    text = str(gr.get('text') or '').strip()
+    shown = _html_escape(text[:200]) + ('…' if len(text) > 200 else '') if text else '— تنظیم نشده —'
+    return ('💬 <b>پاسخ خودکار</b>\n\n'
+            f'پاسخ عمومی (به هر پیام تازهٔ پی‌وی): {"🟢 <b>روشن</b>" if on else "🔴 <b>خاموش</b>"}\n'
+            f'متن: {shown}\n\n'
+            '🔑 «کلمهٔ کلیدی» جدا از پاسخ عمومی کار می‌کند: وقتی پیام حاوی آن کلمه باشد جواب می‌دهد.\n'
+            'اگر وضعیت بعد از تغییر عوض نشد، «🔄 بروزرسانی» را بزنید.')
+
+
+def _gr_panel_kb(cfg: dict) -> InlineKeyboardMarkup:
+    on = bool(((cfg or {}).get('general_reply') or {}).get('enabled', False))
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=('🟢 پاسخ عمومی: روشن' if on else '🔴 پاسخ عمومی: خاموش'), callback_data='pss:slider:cmd:gr_toggle',
+                              style=(ButtonStyle.SUCCESS if on else ButtonStyle.PRIMARY))],
+        [InlineKeyboardButton(text='✏️ تنظیم متن پاسخ عمومی', callback_data='pss:slider:cmd:gr_text', style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text='🔑 افزودن پاسخ با کلمهٔ کلیدی', callback_data='pss:slider:cmd:ar_keyword', style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text='🔄 بروزرسانی', callback_data='pss:slider:cmd:auto_reply', style=ButtonStyle.PRIMARY),
+         InlineKeyboardButton(text='⬅️ بازگشت', callback_data='pss:slider:page:2', style=ButtonStyle.PRIMARY)],
+    ])
+
+
+async def _gr_wait_state(owner_id: int, want: bool, tries: int = 8) -> dict:
+    """تا چند ثانیه منتظر می‌ماند worker وضعیت را در فایل کنترل بنویسد (دستور از Saved Messages می‌گذرد)."""
+    import asyncio
+    cfg: dict = {}
+    for _ in range(tries):
+        await asyncio.sleep(1)
+        cfg = await _pss_control_get(owner_id)
+        if bool((cfg.get('general_reply') or {}).get('enabled', False)) == want:
+            break
+    return cfg
+
+
 async def _selfsaz_page_kb(page: int, owner_id: int) -> InlineKeyboardMarkup:
     """کیبوردِ هر صفحه با وضعیتِ زندهٔ کلیدها (🟢 روشن / 🔴 خاموش)."""
     if page == 2:
@@ -148,7 +184,9 @@ async def _selfsaz_tabchi_kb(owner_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=('🟢 ایموجی پریمیوم' if premium_on else '💎 ایموجی پریمیوم'), callback_data='pss:slider:cmd:premium', style=(ButtonStyle.SUCCESS if premium_on else ButtonStyle.PRIMARY)),
         ],
         [
-            InlineKeyboardButton(text='💬 پاسخ خودکار', callback_data='pss:slider:cmd:auto_reply', style=ButtonStyle.PRIMARY),
+            InlineKeyboardButton(text=('🟢 پاسخ خودکار' if (cfg.get('general_reply') or {}).get('enabled') else '💬 پاسخ خودکار'),
+                                 callback_data='pss:slider:cmd:auto_reply',
+                                 style=(ButtonStyle.SUCCESS if (cfg.get('general_reply') or {}).get('enabled') else ButtonStyle.PRIMARY)),
             InlineKeyboardButton(text='🤝 دوست و دشمن', callback_data='pss:slider:cmd:enemy', style=ButtonStyle.PRIMARY),
         ],
         [
@@ -358,15 +396,39 @@ async def selfsaz_inline_slider_callback(cb: CallbackQuery, bot: Bot, state: FSM
                 await cb.answer(f'خطا در ذخیره ایموجی پریمیوم: {_pss_friendly()}', show_alert=True)
             return
         if action == 'auto_reply':
+            cfg = await _pss_control_get(cb.from_user.id)
+            await _edit_slider_message(cb, bot, _gr_panel_text(cfg), _gr_panel_kb(cfg))
             await cb.answer()
-            await _context_prompt(cb, bot,
-                '💬 <b>پاسخ خودکار</b>\n\n'
-                'برای افزودن پاسخ، پیام را با قالب زیر بفرستید:\n'
-                '<code>کلمه کلیدی | متن پاسخ</code>\n\n'
-                'نمونه: <code>سلام | سلام، در حال حاضر پاسخ‌گو نیستم.</code>\n'
-                'برای فعال‌سازی پاسخ عمومی، عبارت <code>عمومی: متن پاسخ</code> را بفرستید.'
-            )
+            return
+        if action == 'gr_toggle':
+            cfg = await _pss_control_get(cb.from_user.id)
+            gr = cfg.get('general_reply') or {}
+            enable = not bool(gr.get('enabled', False))
+            if enable and not str(gr.get('text') or '').strip():
+                await cb.answer('ابتدا «✏️ تنظیم متن پاسخ عمومی» را بزنید و متن را بفرستید.', show_alert=True)
+                return
+            if not await _queue_selfsaz_command(cb.from_user.id, 'پاسخ عمومی روشن' if enable else 'پاسخ عمومی خاموش'):
+                await cb.answer(f'ارسال به worker ناموفق بود: {_pss_friendly()}', show_alert=True)
+                return
+            await cb.answer('⏳ در حال اعمال…')
+            cfg = await _gr_wait_state(cb.from_user.id, enable)
+            await _edit_slider_message(cb, bot, _gr_panel_text(cfg), _gr_panel_kb(cfg))
+            return
+        if action in ('gr_text', 'ar_keyword'):
             await state.set_state(SelfSazContextFSM.auto_reply)
+            await state.update_data(ar_mode='general' if action == 'gr_text' else 'keyword')
+            await cb.answer()
+            if action == 'gr_text':
+                await _context_prompt(cb, bot,
+                    '✏️ <b>متن پاسخ عمومی</b>\n\n'
+                    'متنی را بفرستید که به <b>هر پیام تازهٔ پی‌وی</b> جواب داده شود (با فاصلهٔ حداقل ۱۵ ثانیه برای هر گفتگو).\n'
+                    'با ذخیرهٔ متن، پاسخ عمومی خودکار <b>روشن</b> می‌شود.')
+            else:
+                await _context_prompt(cb, bot,
+                    '🔑 <b>پاسخ با کلمهٔ کلیدی</b>\n\n'
+                    'پیام را با قالب زیر بفرستید:\n'
+                    '<code>کلمه کلیدی | متن پاسخ</code>\n\n'
+                    'نمونه: <code>سلام | سلام، در حال حاضر پاسخ‌گو نیستم.</code>')
             return
         if action == 'enemy':
             await state.set_state(SelfSazContextFSM.enemy_operation)
@@ -589,8 +651,14 @@ async def selfsaz_context_auto_reply(msg: Message, state: FSMContext):
         await state.clear()
         await msg.answer('✅ لغو شد.')
         return
+    mode = (await state.get_data()).get('ar_mode')
+    if mode == 'general':
+        if not value:
+            await msg.answer('⚠️ متن پاسخ نباید خالی باشد.')
+            return
+        value = 'عمومی: ' + value
     if '|' not in value and not value.startswith('عمومی:'):
-        await msg.answer('⚠️ قالب صحیح: <code>کلمه کلیدی | متن پاسخ</code> یا <code>عمومی: متن پاسخ</code>')
+        await msg.answer('⚠️ قالب صحیح: <code>کلمه کلیدی | متن پاسخ</code>')
         return
     if value.startswith('عمومی:'):
         reply = value.split(':', 1)[1].strip()

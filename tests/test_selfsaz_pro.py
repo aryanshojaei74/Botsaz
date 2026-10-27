@@ -390,6 +390,67 @@ async def test_prompt_has_inline_cancel_button_and_it_works(env):
 
 
 @pytest.mark.asyncio
+async def test_auto_reply_panel_shows_state_and_toggles(env, monkeypatch):
+    control = {"general_reply": {"enabled": False, "text": ""}}
+    queued = []
+
+    async def api(method, path, payload=None):
+        env.calls.append((method, path, payload))
+        if path.endswith("/control") and method == "GET":
+            return {"control": dict(control)}
+        if path.endswith("/command"):
+            queued.append(payload["command"])
+            control["general_reply"] = {"enabled": payload["command"].endswith("روشن"), "text": "سلام"}   # worker اعمال کرد
+        return {"ok": True}
+    monkeypatch.setattr(PS, "selfsaz_api", api)
+
+    async def brand():
+        return {}
+
+    async def no_sleep(_):
+        return None
+    monkeypatch.setattr(PS, "_selfsaz_branding", brand)
+    import asyncio as _a
+    monkeypatch.setattr(_a, "sleep", no_sleep)
+    cb = FakeCB("pss:slider:cmd:auto_reply")
+    cb.inline_message_id = None
+    await PS.selfsaz_inline_slider_callback(cb, bot=None, state=StateFake())
+    text, kw = cb.message.edits[-1]
+    assert "🔴" in text and "تنظیم نشده" in text and "🔴 پاسخ عمومی: خاموش" in _texts(kw["reply_markup"])
+    # روشن‌کردن بدون متن ⇒ هشدار، چیزی ارسال نمی‌شود
+    cb2 = FakeCB("pss:slider:cmd:gr_toggle")
+    cb2.inline_message_id = None
+    await PS.selfsaz_inline_slider_callback(cb2, bot=None, state=StateFake())
+    assert cb2.alerts[-1][1] is True and not queued
+    # با متنِ ثبت‌شده: روشن می‌شود و پنل وضعیت واقعی را نشان می‌دهد
+    control["general_reply"] = {"enabled": False, "text": "سلام"}
+    cb3 = FakeCB("pss:slider:cmd:gr_toggle")
+    cb3.inline_message_id = None
+    await PS.selfsaz_inline_slider_callback(cb3, bot=None, state=StateFake())
+    assert queued == ["پاسخ عمومی روشن"]
+    text, kw = cb3.message.edits[-1]
+    assert "🟢" in text and "🟢 پاسخ عمومی: روشن" in _texts(kw["reply_markup"])
+    # دکمهٔ صفحهٔ تپچی هم وضعیت را نشان می‌دهد
+    kb = await PS._selfsaz_tabchi_kb(UID)
+    assert "🟢 پاسخ خودکار" in _texts(kb)
+
+
+@pytest.mark.asyncio
+async def test_general_reply_text_goes_out_as_general_command(env):
+    msg = FakeMsg()
+    msg.text = "سلام\nفعلاً نیستم"
+    msg.from_user = SimpleNamespace(id=UID)
+
+    class St(StateFake):
+        async def get_data(self):
+            return {"ar_mode": "general"}
+    st = St()
+    await PS.selfsaz_context_auto_reply(msg, st)
+    sent = [c for c in env.calls if c[1].endswith("/command")]
+    assert sent and sent[-1][2]["command"] == "پاسخ عمومی تنظیم سلام\nفعلاً نیستم" and st.cleared == 1
+
+
+@pytest.mark.asyncio
 async def test_clock_toggle_refreshes_buttons_and_toasts(env, monkeypatch):
     control = {"time_enabled": False}
 
