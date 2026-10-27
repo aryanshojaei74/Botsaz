@@ -319,3 +319,99 @@ async def test_watch_supervisor_stale_alert_once_and_recovery(env):
     health["supervisor_age"] = None                       # سرویس قدیمی بدون فیلد ⇒ هشدار الکی نمی‌دهد
     await PRO.watch_once(bot, api, 1, now=NOW)
     assert len(bot.sent) == 2
+
+
+# ───────────── پنل سلف: وضعیت روی دکمه‌ها + لغو ورودی ─────────────
+def _texts(kb):
+    return [b.text for r in kb.inline_keyboard for b in r]
+
+
+def test_cancel_text_variants():
+    for t in ("بازگشت", "🔴 بازگشت", " بازگشت ", "«بازگشت»", "لغو", "/cancel", "Cancel", "انصراف"):
+        assert PS._is_cancel_text(t), t
+    for t in ("علی", "بازگشتی", "", None, "Ali Reza"):
+        assert not PS._is_cancel_text(t), t
+
+
+def test_toggle_buttons_show_state_on_every_page():
+    off = PS._selfsaz_slider_kb(1, {})
+    on = PS._selfsaz_slider_kb(1, {"time_enabled": True})
+    assert "🔴 ⏰ ساعت" in _texts(off) and "🟢 ⏰ ساعت" in _texts(on)
+    assert "🎨 لوگو" in _texts(on) and "📝 اسم" in _texts(on)            # دکمه‌های غیرکلیدی دست‌نخورده
+    fmt = PS._selfsaz_slider_kb(6, {"formats": {"بولد": True}})
+    assert "🟢 بولد" in _texts(fmt) and "🔴 ایتالیک" in _texts(fmt)
+    lock = PS._selfsaz_slider_kb(7, {"locks": {"مدیا": True}})
+    assert "🟢 مدیا" in _texts(lock) and "🔴 همه" in _texts(lock)
+    act = PS._selfsaz_slider_kb(8, {"actions": {"typing": True}})
+    assert "🟢 تایپ" in _texts(act) and "🔴 پخش" in _texts(act)
+    assert "⏰ ساعت" in _texts(PS._selfsaz_slider_kb(1))                # بدون اطلاعات وضعیت ⇒ ظاهر قبلی
+    assert "🟢 روشن" in PS._selfsaz_slider_text(1) and "🟢" not in PS._selfsaz_slider_text(3)
+
+
+class StateFake:
+    def __init__(self):
+        self.cleared = 0
+
+    async def clear(self):
+        self.cleared += 1
+
+    async def set_state(self, s):
+        self.state = s
+
+
+def test_cancel_handler_is_registered_before_input_handlers():
+    order = [h.callback.__name__ for h in PS.router.message.handlers]
+    assert order.index("selfsaz_context_cancel_text") < order.index("selfsaz_context_profile_name")
+    assert order.index("selfsaz_context_cancel_text") < order.index("selfsaz_context_auto_reply")
+
+
+@pytest.mark.asyncio
+async def test_typing_bazgasht_cancels_instead_of_renaming(env):
+    msg = FakeMsg()
+    msg.text = "بازگشت"
+    st = StateFake()
+    await PS.selfsaz_context_cancel_text(msg, st)
+    assert st.cleared == 1 and "لغو" in msg.answers[-1][0]
+    assert not [c for c in env.calls if c[0] in ("POST", "PUT") and "command" in c[1]]   # چیزی به worker نرفت
+
+
+@pytest.mark.asyncio
+async def test_prompt_has_inline_cancel_button_and_it_works(env):
+    cb = FakeCB("pss:slider:cmd:name")
+    cb.inline_message_id = None
+    st = StateFake()
+    await PS.selfsaz_inline_slider_callback(cb, bot=None, state=st)
+    text, kw = cb.message.answers[-1]
+    assert "pss:slider:ctxcancel" in cbs(kw["reply_markup"])
+    cb2 = FakeCB("pss:slider:ctxcancel")
+    cb2.inline_message_id = None
+    await PS.selfsaz_inline_slider_callback(cb2, bot=None, state=st)
+    assert st.cleared == 1 and "لغو" in cb2.message.edits[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_clock_toggle_refreshes_buttons_and_toasts(env, monkeypatch):
+    control = {"time_enabled": False}
+
+    async def api(method, path, payload=None):
+        env.calls.append((method, path, payload))
+        if path.endswith("/control") and method == "GET":
+            return {"control": dict(control)}
+        if path.endswith("/control") and method == "PUT":
+            control.update(payload)
+            return {"ok": True}
+        return {"ok": True}
+    monkeypatch.setattr(PS, "selfsaz_api", api)
+
+    async def brand():
+        return {}
+    monkeypatch.setattr(PS, "_selfsaz_branding", brand)
+    cb = FakeCB("pss:slider:cmd:clock")
+    cb.inline_message_id = None
+    await PS.selfsaz_inline_slider_callback(cb, bot=None, state=StateFake())
+    text, kw = cb.message.edits[-1]
+    assert "🟢 ⏰ ساعت" in _texts(kw["reply_markup"])
+    assert cb.alerts[-1] == ("🟢 ساعت روشن شد", False)                  # toast، نه پنجرهٔ مودال
+    await PS.selfsaz_inline_slider_callback(cb, bot=None, state=StateFake())
+    assert "🔴 ⏰ ساعت" in _texts(cb.message.edits[-1][1]["reply_markup"])
+    assert cb.alerts[-1][0] == "🔴 ساعت خاموش شد"

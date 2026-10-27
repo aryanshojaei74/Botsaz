@@ -15,6 +15,7 @@ from html import escape as _html_escape
 import aiohttp
 from aiogram import F, Router, Bot
 from aiogram.enums import ButtonStyle
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo, ReplyKeyboardRemove, InlineQuery, InlineQueryResultArticle, InlineQueryResultPhoto, InlineQueryResultCachedPhoto, InputTextMessageContent
@@ -84,7 +85,19 @@ _SELFSAZ_SLIDER_PAGES = {
     8: ('⚡ <b>اکشن‌ها</b>', [('تایپ', 'action:typing'), ('آپلود عکس', 'action:upload_photo'), ('آپلود ویدیو', 'action:upload_video'), ('ضبط صدا', 'action:record_audio'), ('پخش', 'action:playing'), ('موقعیت', 'action:find_location')]),
 }
 
-def _selfsaz_slider_kb(page: int) -> InlineKeyboardMarkup:
+def _toggle_state(action: str, control: dict | None) -> bool | None:
+    """True/False برای دکمه‌های کلید (ساعت/فرمت/قفل/اکشن)، None برای دکمه‌های غیرکلیدی."""
+    if control is None:
+        return None
+    if action == 'clock':
+        return bool(control.get('time_enabled', False))
+    for prefix, key in (('format:', 'formats'), ('lock:', 'locks'), ('action:', 'actions')):
+        if action.startswith(prefix):
+            return bool((control.get(key) or {}).get(action[len(prefix):], False))
+    return None
+
+
+def _selfsaz_slider_kb(page: int, control: dict | None = None) -> InlineKeyboardMarkup:
     items = _SELFSAZ_SLIDER_PAGES.get(page, _SELFSAZ_SLIDER_PAGES[0])[1]
     rows = []
     if page == 0:
@@ -97,10 +110,29 @@ def _selfsaz_slider_kb(page: int) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(inline_keyboard=rows)
     for index in range(0, len(items), 2):
         pair = items[index:index + 2]
-        rows.append([InlineKeyboardButton(text=label, callback_data=f'pss:slider:cmd:{action}', style=ButtonStyle.PRIMARY) for label, action in pair])
+        row = []
+        for label, action in pair:
+            on = _toggle_state(action, control)
+            if on is None:
+                row.append(InlineKeyboardButton(text=label, callback_data=f'pss:slider:cmd:{action}', style=ButtonStyle.PRIMARY))
+            else:                                           # وضعیت روی خودِ دکمه دیده شود
+                row.append(InlineKeyboardButton(text=('🟢 ' if on else '🔴 ') + label, callback_data=f'pss:slider:cmd:{action}',
+                                                style=(ButtonStyle.SUCCESS if on else ButtonStyle.PRIMARY)))
+        rows.append(row)
     rows.append([InlineKeyboardButton(text='⬅️', callback_data=f'pss:slider:page:{max(1, page - 1)}', style=ButtonStyle.PRIMARY), InlineKeyboardButton(text=f'({page})', callback_data=f'pss:slider:page:{page}', style=ButtonStyle.PRIMARY), InlineKeyboardButton(text='➡️', callback_data=f'pss:slider:page:{1 if page == 8 else page + 1}', style=ButtonStyle.PRIMARY)])
     rows.append([InlineKeyboardButton(text='🔴 بستن پنل', callback_data='pss:slider:close', style=ButtonStyle.DANGER)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+async def _selfsaz_page_kb(page: int, owner_id: int) -> InlineKeyboardMarkup:
+    """کیبوردِ هر صفحه با وضعیتِ زندهٔ کلیدها (🟢 روشن / 🔴 خاموش)."""
+    if page == 2:
+        return await _selfsaz_tabchi_kb(owner_id)
+    try:
+        control = await _pss_control_get(owner_id)
+    except Exception:
+        control = {}
+    return _selfsaz_slider_kb(page, control if isinstance(control, dict) else {})
+
 
 async def _selfsaz_tabchi_kb(owner_id: int) -> InlineKeyboardMarkup:
     """Compact, two-column Tabchi settings screen with live toggle states."""
@@ -134,7 +166,8 @@ def _selfsaz_slider_text(page: int, brand: dict | None = None) -> str:
     page_text = _SELFSAZ_SLIDER_PAGES.get(page, _SELFSAZ_SLIDER_PAGES[0])[0]
     if page == 0:
         return '<b>PANEL SELF</b>'
-    return page_text + '\n\nبرای بازکردن دوباره در هرجا بنویسید: <code>پنل</code>'
+    legend = '\n\n🟢 روشن · 🔴 خاموش (روی هر دکمه با لمس عوض می‌شود)' if page in (1, 6, 7, 8) else ''
+    return page_text + legend + '\n\nبرای بازکردن دوباره در هرجا بنویسید: <code>پنل</code>'
 
 @router.inline_query(F.query == 'panel')
 @router.inline_query(F.query == 'پنل')
@@ -205,7 +238,21 @@ async def _close_slider_message(cb: CallbackQuery, bot: Bot):
                 logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
 
 
+_CANCEL_TEXTS = {'بازگشت', '🔴 بازگشت', 'لغو', 'انصراف', 'کنسل', '/cancel', 'cancel', '❌ لغو'}
+
+
+def _is_cancel_text(text: str | None) -> bool:
+    t = (text or '').strip().lower().strip('«»"\' ')
+    return t in {x.lower() for x in _CANCEL_TEXTS}
+
+
+_CTX_CANCEL_KB = InlineKeyboardMarkup(inline_keyboard=[[
+    InlineKeyboardButton(text='🔴 بازگشت', callback_data='pss:slider:ctxcancel', style=ButtonStyle.DANGER)]])
+
+
 async def _context_prompt(cb: CallbackQuery, bot: Bot, text: str, reply_markup=None):
+    if reply_markup is None:
+        reply_markup = _CTX_CANCEL_KB                       # همیشه یک راهِ خروج روی دکمه باشد
     if cb.message:
         return await cb.message.answer(text, reply_markup=reply_markup)
     return await bot.send_message(cb.from_user.id, text, reply_markup=reply_markup)
@@ -220,9 +267,18 @@ async def selfsaz_inline_slider_callback(cb: CallbackQuery, bot: Bot, state: FSM
             page = max(0, min(8, int(target.split(':', 1)[1])))
         except ValueError:
             page = 0
-        markup = await _selfsaz_tabchi_kb(cb.from_user.id) if page == 2 else _selfsaz_slider_kb(page)
+        markup = await _selfsaz_page_kb(page, cb.from_user.id)
         await _edit_slider_message(cb, bot, _selfsaz_slider_text(page, await _selfsaz_branding()), markup)
         await cb.answer()
+        return
+    if target == 'ctxcancel':
+        await state.clear()
+        try:
+            if cb.message:
+                await cb.message.edit_text('✅ لغو شد؛ چیزی تغییر نکرد.', reply_markup=None)
+        except Exception:
+            logger.exception("selfsaz ctxcancel")
+        await cb.answer('لغو شد')
         return
     if target == 'close':
         await _close_slider_message(cb, bot)
@@ -288,7 +344,7 @@ async def selfsaz_inline_slider_callback(cb: CallbackQuery, bot: Bot, state: FSM
                 await cb.answer(f'خطا در ذخیره ترجمه: {_pss_friendly()}', show_alert=True)
             return
         if action == 'animation':
-            await _edit_slider_message(cb, bot, '🎬 <b>انیمیشن و اکشن‌های رسانه</b>\n\nبرای فعال‌سازی نمایش وضعیت ارسال، از بخش «اکشن» یکی از گزینه‌های آپلود یا ضبط را روشن کنید.', _selfsaz_slider_kb(8))
+            await _edit_slider_message(cb, bot, '🎬 <b>انیمیشن و اکشن‌های رسانه</b>\n\nبرای فعال‌سازی نمایش وضعیت ارسال، از بخش «اکشن» یکی از گزینه‌های آپلود یا ضبط را روشن کنید.', await _selfsaz_page_kb(8, cb.from_user.id))
             await cb.answer()
             return
         if action == 'premium':
@@ -330,7 +386,8 @@ async def selfsaz_inline_slider_callback(cb: CallbackQuery, bot: Bot, state: FSM
             enabled = not bool(control.get('time_enabled', False))
             updated = await selfsaz_api('PUT', f'/v1/accounts/{cb.from_user.id}/control', {'time_enabled': enabled})
             if updated:
-                await cb.answer('ساعت روشن شد' if enabled else 'ساعت خاموش شد', show_alert=True)
+                await _edit_slider_message(cb, bot, _selfsaz_slider_text(1, await _selfsaz_branding()), await _selfsaz_page_kb(1, cb.from_user.id))
+                await cb.answer('🟢 ساعت روشن شد' if enabled else '🔴 ساعت خاموش شد')
             else:
                 await cb.answer(f'خطا در تنظیم ساعت: {_pss_friendly()}', show_alert=True)
             return
@@ -341,7 +398,11 @@ async def selfsaz_inline_slider_callback(cb: CallbackQuery, bot: Bot, state: FSM
             formats = control.get('formats') or {}
             enabled = not bool(formats.get(key, False))
             updated = await selfsaz_api('PUT', f'/v1/accounts/{cb.from_user.id}/control', {'formats': {key: enabled}})
-            await cb.answer(('✅ ' if enabled else '❌ ') + key + (' روشن شد' if enabled else ' خاموش شد'), show_alert=True) if updated else await cb.answer(f'خطا در حالت متن: {_pss_friendly()}', show_alert=True)
+            if updated:
+                await _edit_slider_message(cb, bot, _selfsaz_slider_text(6, await _selfsaz_branding()), await _selfsaz_page_kb(6, cb.from_user.id))
+                await cb.answer(('🟢 ' if enabled else '🔴 ') + key + (' روشن شد' if enabled else ' خاموش شد'))
+            else:
+                await cb.answer(f'خطا در حالت متن: {_pss_friendly()}', show_alert=True)
             return
         if action == 'format':
             await cb.answer('برای هر فرمت، صفحهٔ حالت متن را باز کنید.', show_alert=True)
@@ -353,7 +414,11 @@ async def selfsaz_inline_slider_callback(cb: CallbackQuery, bot: Bot, state: FSM
             locks = control.get('locks') or {}
             enabled = not bool(locks.get(key, False))
             updated = await selfsaz_api('PUT', f'/v1/accounts/{cb.from_user.id}/advanced-control', {'locks': {key: enabled}})
-            await cb.answer(('✅ قفل ' if enabled else '❌ قفل ') + key + (' فعال شد' if enabled else ' غیرفعال شد'), show_alert=True) if updated else await cb.answer(f'خطا در قفل‌ها: {_pss_friendly()}', show_alert=True)
+            if updated:
+                await _edit_slider_message(cb, bot, _selfsaz_slider_text(7, await _selfsaz_branding()), await _selfsaz_page_kb(7, cb.from_user.id))
+                await cb.answer(('🟢 قفل ' if enabled else '🔴 قفل ') + key + (' فعال شد' if enabled else ' غیرفعال شد'))
+            else:
+                await cb.answer(f'خطا در قفل‌ها: {_pss_friendly()}', show_alert=True)
             return
         if action.startswith('action:'):
             key = action.split(':', 1)[1]
@@ -362,7 +427,11 @@ async def selfsaz_inline_slider_callback(cb: CallbackQuery, bot: Bot, state: FSM
             actions = control.get('actions') or {}
             enabled = not bool(actions.get(key, False))
             updated = await selfsaz_api('PUT', f'/v1/accounts/{cb.from_user.id}/advanced-control', {'actions': {key: enabled}})
-            await cb.answer(('✅ اکشن ' if enabled else '❌ اکشن ') + key + (' فعال شد' if enabled else ' غیرفعال شد'), show_alert=True) if updated else await cb.answer(f'خطا در اکشن: {_pss_friendly()}', show_alert=True)
+            if updated:
+                await _edit_slider_message(cb, bot, _selfsaz_slider_text(8, await _selfsaz_branding()), await _selfsaz_page_kb(8, cb.from_user.id))
+                await cb.answer(('🟢 اکشن ' if enabled else '🔴 اکشن ') + key + (' فعال شد' if enabled else ' غیرفعال شد'))
+            else:
+                await cb.answer(f'خطا در اکشن: {_pss_friendly()}', show_alert=True)
             return
         await cb.answer('این قابلیت به ورودی متنی، ریپلای یا گروه هدف نیاز دارد و از همین دکمه راهنمای اجرای آن نمایش داده می‌شود.', show_alert=True)
         return
@@ -437,6 +506,13 @@ class SelfSazContextFSM(StatesGroup):
 
 async def _queue_selfsaz_command(owner_id: int, command: str) -> bool:
     return bool(await selfsaz_api('POST', f'/v1/accounts/{owner_id}/command', {'command': command}))
+
+
+@router.message(StateFilter(SelfSazContextFSM), F.text.func(_is_cancel_text))
+async def selfsaz_context_cancel_text(msg: Message, state: FSMContext):
+    """«بازگشت» (با یا بدون 🔴) در هر مرحلهٔ ورودی لغو است، نه ورودیِ کاربر (قبلاً «بازگشت» به‌عنوان نام پروفایل ثبت می‌شد)."""
+    await state.clear()
+    await msg.answer('✅ لغو شد؛ چیزی تغییر نکرد.', reply_markup=ReplyKeyboardRemove())
 
 
 @router.message(SelfSazContextFSM.enemy_operation, F.text)
