@@ -169,6 +169,7 @@ async def twr_join(cb: CallbackQuery, bot: Bot):
                           "until": time.monotonic() + R.SECS[r.w.game] + 5}
         await R._edit(bot, r.w)
         asyncio.create_task(R._expire_later(bot, r.w.id, R.SECS[r.w.game]))
+        await R._announce_turn(bot, r.w)
     elif r.w is not None:
         await R._edit(bot, r.w)
     await cb.answer(r.err or "به بازی پیوستی؛ موفق باشی!", show_alert=bool(r.err))
@@ -194,8 +195,9 @@ def _maybe_answer(m: Message) -> bool:
         return False
     now = time.monotonic()
     uid, cid = m.from_user.id, m.chat.id
-    return any(lv.get("bot") and lv.get("chat") == cid and uid in lv["players"] and lv.get("until", 0) > now
-               for lv in R.LIVE.values())
+    return (any(lv.get("bot") and lv.get("chat") == cid and uid in lv["players"] and lv.get("until", 0) > now
+                for lv in R.LIVE.values())
+            or R._digit_guess(m))                            # عددِ ۱–۱۰۰: بازیابیِ بازیِ نوبتی بعد از ری‌استارت در هندلر
 
 
 @wager_race_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_maybe_answer))
@@ -205,19 +207,17 @@ async def twr_answer(msg: Message, bot: Bot):
     if not row:
         raise SkipHandler
     live = R._match(msg, row.id)
+    if not live and R._digit_guess(msg):
+        live = await R.restore_live(msg.chat.id, msg.from_user.id, row.id)
     if not live:
         raise SkipHandler
     uid, now = msg.from_user.id, time.monotonic()
-    t = R.norm_answer(msg.text)
     if live["kind"] == "guess":
         if now - R._LAST_GUESS.get((msg.chat.id, uid), -1e9) < R.GUESS_GAP:
             return
         R._LAST_GUESS[(msg.chat.id, uid)] = now
-        n = int(t)
-        if n < live["n"]:
-            return await msg.reply("⬆️ بالاتر")
-        if n > live["n"]:
-            return await msg.reply("⬇️ پایین‌تر")
+        if await R.guess_step(bot, msg, live) != "win":
+            return
     w = await R.settle_to(live["wid"], uid)
     if w is None:
         if not await R._still_active(live["wid"]):

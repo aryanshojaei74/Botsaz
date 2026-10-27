@@ -43,6 +43,8 @@ class Feature(str, Enum):
     GATEWAY_ABANGATEWAY  = "gateway_abangateway"     # درگاهِ آبان گیت‌وی
     # === PATCH_HOOSHPAY_GATEWAY_V1 === مثلِ یونیک‌پی/آبان گیت‌وی: رشد و حرفه‌ای.
     GATEWAY_HOOSHPAY     = "gateway_hooshpay"        # درگاهِ هوش‌پی (کارت‌به‌کارتِ آنی)
+    # === PATCH_BLUPAL_TENANT_V1 === مثلِ هوش‌پی: رشد و حرفه‌ای.
+    GATEWAY_BLUPAL       = "gateway_blupal"          # درگاهِ بلوپال (کارت‌به‌کارتِ خودکار)
     GATEWAY_STARS        = "gateway_stars"          # پرداخت با استارزِ تلگرام
     GATEWAY_HESABPAY     = "gateway_hesabpay"       # درگاهِ حساب‌پی (افغانی)
     KYC_VERIFY           = "kyc_verify"             # احرازِ هویتِ کاربران
@@ -230,6 +232,7 @@ FEATURE_LABELS = {
     Feature.GATEWAY_APAY: "💳 درگاه آپی (کارت‌به‌کارت آنی)",
     Feature.GATEWAY_ABANGATEWAY: "💳 درگاه آبان گیت‌وی",
     Feature.GATEWAY_HOOSHPAY: "💳 درگاه هوش‌پی (کارت‌به‌کارت آنی)",   # PATCH_HOOSHPAY_GATEWAY_V1
+    Feature.GATEWAY_BLUPAL: "💳 درگاه بلوپال (کارت‌به‌کارت خودکار)",     # PATCH_BLUPAL_TENANT_V1
     Feature.GATEWAY_STARS: "⭐ پرداخت با استارز تلگرام",
     Feature.GATEWAY_HESABPAY: "🇦🇫 درگاه حساب‌پی",
     Feature.KYC_VERIFY: "🛡 احراز هویت کاربران",
@@ -344,6 +347,7 @@ _GROWTH_EXTRA = {
     # === PATCH_ABANGATEWAY_V1 === طبقِ خواستهٔ مدیر: رشد و حرفه‌ای.
     Feature.GATEWAY_ABANGATEWAY,
     Feature.GATEWAY_HOOSHPAY,          # PATCH_HOOSHPAY_GATEWAY_V1
+    Feature.GATEWAY_BLUPAL,            # PATCH_BLUPAL_TENANT_V1
     Feature.KYC_VERIFY, Feature.TX_LOG_CHANNEL, Feature.BULK_WALLET,
     Feature.TRIAL_REPORT_CHANNEL,      # PATCH_TRIAL_REPORT_CHANNEL_V1 — رشد و حرفه‌ای
     Feature.ESCROW,                    # PATCH_ESCROW_V1 — رشد و حرفه‌ای
@@ -382,6 +386,7 @@ _PARTNER = {
     # === PATCH_ABANGATEWAY_V1 ===
     Feature.GATEWAY_ABANGATEWAY,
     Feature.GATEWAY_HOOSHPAY,          # PATCH_HOOSHPAY_GATEWAY_V1
+    Feature.GATEWAY_BLUPAL,            # PATCH_BLUPAL_TENANT_V1
     Feature.BULK_WALLET, Feature.PHONE_VERIFY,
     Feature.AUTO_APPROVE_RECEIPT, Feature.WALLET_RECEIPT_BTNS,
     Feature.BOT_BACKUP, Feature.ONBOARDING_WIZARD,

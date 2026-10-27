@@ -123,35 +123,104 @@ async def test_non_player_cannot_win_and_answers_are_matched_in_memory(env):
     assert await R.settle_to(w.id, 9) is None                                              # غیرِ بازیکن هرگز
 
 
-@pytest.mark.asyncio
-async def test_guess_flow_hints_and_win_via_handler(env, monkeypatch):
-    mk = env
-    w = await make(mk, "guess")
-    r = await R.join_race(w.id, (2, "u2", None))
-    n = json.loads(r.w.state)["n"]
-    monkeypatch.setattr(R, "GUESS_GAP", 0.0)
-    R.LIVE[w.id] = {"wid": w.id, "chat": CHAT, "kind": "guess", "players": {1, 2}, "answer": None, "n": n, "until": 10 ** 12}
-    sent = []
-
+def _gmsg(sent, uid, text):
     async def reply(t, **k):
         sent.append(t)
 
     async def edit_message_text(*a, **k):
         return None
     bot = NS(edit_message_text=edit_message_text)
+    return NS(text=text, chat=NS(id=CHAT), from_user=NS(id=uid, is_bot=False, full_name=f"u{uid}"), reply=reply, bot=bot)
 
-    def msg(text, uid):
-        return NS(text=text, chat=NS(id=CHAT), from_user=NS(id=uid, is_bot=False, full_name=f"u{uid}"), reply=reply, bot=bot)
-    low = 1 if n > 1 else 2
-    if n > 1:
-        await R.race_answer(msg(str(n - 1), 1))
-        assert sent[-1] == "⬆️ بالاتر"
-    if n < 100:
-        await R.race_answer(msg(str(n + 1), 2))
-        assert sent[-1] == "⬇️ پایین‌تر"
-    await R.race_answer(msg(str(n), 2))
+
+async def _start_guess(mk, monkeypatch):
+    monkeypatch.setattr(R, "GUESS_GAP", 0.0)
+
+    async def no_timer(*a, **k):
+        return None
+    monkeypatch.setattr(R, "_expire_later", no_timer)
+    w = await make(mk, "guess")
+    r = await R.join_race(w.id, (2, "u2", None))
+    n = json.loads(r.w.state)["n"]
+    first = r.w.turn_id
+    assert first in (1, 2)                                              # قرعه: یکی از دو نفر
+    other = 2 if first == 1 else 1
+    R.LIVE[w.id] = {"wid": w.id, "chat": CHAT, "bot": 0, "kind": "guess", "players": {1, 2}, "answer": None, "n": n, "until": 10 ** 12}
+    return w, n, first, other
+
+
+async def _row(mk, wid):
+    async with mk() as s:
+        return await s.get(models.PlatformWager, wid)
+
+
+@pytest.mark.asyncio
+async def test_guess_is_turn_based_hints_pass_turn_and_win_on_own_turn(env, monkeypatch):
+    mk = env
+    w, n, first, other = await _start_guess(mk, monkeypatch)
+    sent = []
+    wrong = n - 1 if n > 1 else n + 1
+    await R.race_answer(_gmsg(sent, other, str(wrong)))                  # نوبتِ او نیست
+    assert "نوبتِ" in sent[-1] and (await _row(mk, w.id)).turn_id == first
+    sent.clear()
+    await R.race_answer(_gmsg(sent, other, str(wrong)))                  # پشتِ سر هم ⇒ اخطارِ تکراری ساکت (۸ ثانیه)
+    assert sent == []
+    await R.race_answer(_gmsg(sent, first, str(wrong)))                  # حدسِ غلطِ نوبت‌دار ⇒ نوبت می‌رود به حریف
+    assert sent[-1].startswith("⬆️ بالاتر" if wrong < n else "⬇️ پایین‌تر") and "۳ دقیقه" in sent[-1]
+    row = await _row(mk, w.id)
+    assert row.turn_id == other and 170 <= (row.expires_at - W._now()).total_seconds() <= 180   # مهلتِ تازهٔ ۳ دقیقه‌ای
+    await R.race_answer(_gmsg(sent, first, str(n)))                      # دیگر نوبتِ او نیست ⇒ حتی حدسِ درست بی‌اثر
+    assert (await _row(mk, w.id)).status == "playing"
+    await R.race_answer(_gmsg(sent, other, str(n)))                      # نوبتِ او + حدسِ درست
     assert "برنده شد" in sent[-1] and w.id not in R.LIVE
-    assert await bal(mk, 2) == 90000 + 19000
+    done = await _row(mk, w.id)
+    assert done.status == "settled" and done.winner_id == other
+    assert await bal(mk, other) == 90000 + 19000
+
+
+@pytest.mark.asyncio
+async def test_guess_idle_turn_holder_forfeits_and_money_is_conserved(env, monkeypatch):
+    mk = env
+    w, n, first, other = await _start_guess(mk, monkeypatch)
+    async with mk() as s:
+        row = await s.get(models.PlatformWager, w.id)
+        row.expires_at = W._now() - timedelta(seconds=1)               # ۳ دقیقه گذشت و نوبت‌دار حدس نزد
+        await s.commit()
+    done = await W.expire_one(w.id)
+    assert done.status == "settled" and done.end_reason == "forfeit" and done.winner_id == other
+    assert await bal(mk, other) == 90000 + 19000 and await bal(mk, first) == 90000
+    assert await bal(mk, 1) + await bal(mk, 2) == 200000 - 1000
+    text, _ = R.render_race(done)
+    assert "در مهلتِ نوبتش حدس نزد" in text and "برنده" in text
+    # بازیِ قدیمی بدونِ نوبت (قبل از آپدیت) همچنان برگشتِ هر دو است
+    R.LIVE.clear()                                                     # بازیِ اول تمام شده؛ حافظهٔ زنده خالی
+    w2 = await make(mk, "guess")
+    assert (await R.join_race(w2.id, (2, "u2", None))).err is None
+    before = (await bal(mk, 1), await bal(mk, 2))                      # هر دو ۱۰۰۰۰ رزرو کرده‌اند
+    async with mk() as s:
+        row = await s.get(models.PlatformWager, w2.id)
+        row.turn_id, row.expires_at = None, W._now() - timedelta(seconds=1)
+        await s.commit()
+    legacy = await W.expire_one(w2.id)
+    assert legacy.status == "expired" and (await bal(mk, 1), await bal(mk, 2)) == (before[0] + 10000, before[1] + 10000)
+
+
+@pytest.mark.asyncio
+async def test_guess_resumes_from_db_after_restart(env, monkeypatch):
+    mk = env
+    w, n, first, other = await _start_guess(mk, monkeypatch)
+    R.LIVE.clear()                                                       # ری‌استارتِ ربات: حافظه پاک
+    R._NO_RACE.clear()
+    sent = []
+    ok = _gmsg(sent, first, str(n))
+    assert R._is_answer(ok)                                              # عددِ ۱–۱۰۰ از فیلتر رد می‌شود
+    await R.race_answer(ok)                                              # از DB بازسازی و برنده می‌شود
+    assert "برنده شد" in sent[-1] and (await _row(mk, w.id)).winner_id == first
+    # کسی که بازیِ زنده ندارد ⇒ SkipHandler (پیام به هندلرِ بعدی می‌رسد) و کشِ منفی
+    from aiogram.dispatcher.event.bases import SkipHandler
+    with pytest.raises(SkipHandler):
+        await R.race_answer(_gmsg([], 7, "50"))
+    assert R._NO_RACE[(CHAT, 7, 0)] > 0
 
 
 @pytest.mark.asyncio

@@ -31,6 +31,7 @@ async def check_imports() -> tuple[bool, str]:
         import tenant.shared.panel_clients.rickpanel_panel  # noqa: F401
         import tenant.shared.panel_clients.solidlayer_panel  # noqa: F401
         import tenant.gateways.hooshpay_admin  # noqa: F401
+        import tenant.gateways.blupal_admin  # noqa: F401
         import tenant.shared.panel_clients.marzban_panel  # noqa: F401
         import tenant.shared.panel_clients.marzneshin_panel  # noqa: F401
         import models  # noqa: F401

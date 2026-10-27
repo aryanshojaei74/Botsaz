@@ -1652,6 +1652,28 @@ class HooshPayCharge(Base):
     paid_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
+# === PATCH_BLUPAL_TENANT_V1 ===
+class BluPalCharge(Base):
+    """شارژ کیف پولِ رباتِ مشتری با درگاهِ کارت‌به‌کارتِ خودکارِ «بلوپال» (blupal.top)."""
+    __tablename__ = "blupal_charges"
+    __table_args__ = (UniqueConstraint("order_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    user_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    order_id: Mapped[str] = mapped_column(String(40), index=True)             # شناسهٔ ما
+    invoice_id: Mapped[int | None] = mapped_column(BigInteger, index=True)    # invoice_id از بلوپال
+    amount_toman: Mapped[int] = mapped_column(Integer, default=0)             # مبلغی که کیف پول شارژ می‌شود
+    amount_rial: Mapped[int] = mapped_column(BigInteger, default=0)           # amount در API (ریال)
+    final_amount_rial: Mapped[int | None] = mapped_column(BigInteger)         # مبلغِ دقیقِ واریز (با عددِ تصادفیِ ۰–۹۹۹)
+    card_number: Mapped[str | None] = mapped_column(String(32))
+    tracking_code: Mapped[str | None] = mapped_column(String(64))             # transaction_id
+    payer_name: Mapped[str | None] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(20), default="waiting")        # waiting/paid/cancelled/expired
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 # === PATCH_APAY_GATEWAY_V1 ===
 class ApayCharge(Base):
     """شارژ کیف پول با درگاهِ کارت‌به‌کارتِ آنیِ «آپی» (apaygate.shop)."""
@@ -3704,7 +3726,7 @@ TENANT_OWNED_MODELS += [
     Bet, BetLedger,                        # شرط‌بندیِ گروهی
     KycRequest, RefPointWallet,
     SmmPanel, SmmCategory,
-    HesabPayCharge, TonDirectCharge, UniquePayCharge, ApayCharge, AbanGatewayCharge, HooshPayCharge,
+    HesabPayCharge, TonDirectCharge, UniquePayCharge, ApayCharge, AbanGatewayCharge, HooshPayCharge, BluPalCharge,
     CommunityChat, BotCustomDomain, TenantPremiumEmoji,
     TenantGroupBan, TenantGroupWarn, TenantGroupEvent, TenantGroupCaptcha,
     AdminWebSession, ResellerTrialLog, VpnPartner,

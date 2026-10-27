@@ -45,7 +45,7 @@ CHARGE_KINDS = [
     "charge", "aqp_charge", "swap_charge", "crypto_charge", "nowpay_charge",
     "tonpays_charge", "zarinpal_charge", "zibal_charge", "idpay_charge",
     "hesabpay_charge", "abangateway_charge", "abangateway_manual_admin", "abangw_manual",
-    "uniquepay_charge", "apay_charge", "hooshpay_charge", "ton_direct", "tron_direct", "admin",
+    "uniquepay_charge", "apay_charge", "hooshpay_charge", "blupal_charge", "ton_direct", "tron_direct", "admin",
 ]
 
 

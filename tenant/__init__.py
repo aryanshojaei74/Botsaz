@@ -205,6 +205,9 @@ tenant_router.include_router(uniquepay_router)
 # === PATCH_HOOSHPAY_GATEWAY_V1 ===
 from tenant.gateways.hooshpay_admin import hooshpay_router
 tenant_router.include_router(hooshpay_router)
+# === PATCH_BLUPAL_TENANT_V1 ===
+from tenant.gateways.blupal_admin import blupal_router
+tenant_router.include_router(blupal_router)
 # === PATCH_APAY_GATEWAY_V1 ===
 from tenant.gateways.apay_admin import apay_router
 tenant_router.include_router(apay_router)
@@ -3837,6 +3840,7 @@ GATEWAY_LABELS: dict[str, tuple[str, str]] = {
     "zibal":     ("زیبال",            "zibal_display_name"),
     "uniquepay": ("یونیک‌پی",         "uniquepay_display_name"),
     "hooshpay":  ("هوش‌پی",           "hooshpay_display_name"),     # PATCH_HOOSHPAY_GATEWAY_V1
+    "blupal":    ("بلوپال",           "blupal_display_name"),       # PATCH_BLUPAL_TENANT_V1
     "apay":      ("آپی",              "apay_display_name"),
     "swap":      ("سواپ‌ولت",         "swap_display_name"),
     "crypto":    ("ارز دیجیتال",      "crypto_display_name"),
@@ -4030,6 +4034,15 @@ async def wallet_topup_rows(bot_id: int, colored: bool = False,
                 text=await gw_btn(bot_id, 'hooshpay', 'شارژ با', '💳'), callback_data="w:hooshpay", style=succ)])
     except Exception:
         logger.exception("بررسیِ دسترسیِ هوش‌پی ناموفق بود")
+    # === PATCH_BLUPAL_TENANT_V1 ===
+    try:
+        from tenant.gateways.blupal import is_available as _bp_ok
+        _bp_show = (not in_purchase) or await get_setting(bot_id, "blupal_show_purchase", "1") == "1"
+        if _bp_show and await _bp_ok(bot_id):
+            rows.append([InlineKeyboardButton(
+                text=await gw_btn(bot_id, 'blupal', 'شارژ با', '💳'), callback_data="w:blupal", style=succ)])
+    except Exception:
+        logger.exception("بررسیِ دسترسیِ بلوپال ناموفق بود")
 
     # === PATCH_APAY_GATEWAY_V1 ===
     try:
@@ -4148,6 +4161,14 @@ async def pay_method_kb_full(bot_id: int, oid: int) -> InlineKeyboardMarkup:
                 text=await gw_btn(bot_id, 'hooshpay', 'پرداخت با', '💳'), callback_data="w:hooshpay")])
     except Exception:
         logger.exception("بررسیِ دسترسیِ هوش‌پی ناموفق بود")
+    # === PATCH_BLUPAL_TENANT_V1 ===
+    try:
+        from tenant.gateways.blupal import is_available as _bp_ok2
+        if await get_setting(bot_id, "blupal_show_purchase", "1") == "1" and await _bp_ok2(bot_id):
+            rows.append([InlineKeyboardButton(
+                text=await gw_btn(bot_id, 'blupal', 'پرداخت با', '💳'), callback_data="w:blupal")])
+    except Exception:
+        logger.exception("بررسیِ دسترسیِ بلوپال ناموفق بود")
 
     # === PATCH_APAY_GATEWAY_V1 ===
     try:
@@ -6932,6 +6953,14 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         await _ho_menu(_FakeCb(msg), bot, state)
         return
 
+    # === PATCH_BLUPAL_TENANT_V1 ===
+    if (msg.text and msg.text.strip().startswith("💳 درگاهِ بلوپال")
+            and await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id)):
+        from tenant.gateways.blupal_admin import bp_menu as _bp_menu
+        await state.clear()
+        await _bp_menu(_FakeCb(msg), bot, state)
+        return
+
     # === PATCH_APAY_GATEWAY_V1 ===
     if (msg.text and msg.text.strip().startswith("💳 درگاهِ آپی")
             and await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id)):
@@ -7609,6 +7638,11 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         from tenant.gateways.hooshpay_admin import hou_start
         await hou_start(_FakeCb(msg), bot, state)
         return
+    # === PATCH_BLUPAL_TENANT_V1 ===
+    if msg.text and msg.text in await gw_label_set(bot_id, "blupal", "💳 شارژ با"):
+        from tenant.gateways.blupal_admin import bpu_start
+        await bpu_start(_FakeCb(msg), bot, state)
+        return
     # === PATCH_APAY_GATEWAY_V1 ===
     if msg.text and (msg.text == "💳 شارژ کارت‌به‌کارت آنی (آپی)"
                      or msg.text in await gw_label_set(bot_id, "apay", "💳 شارژ با")):
@@ -8082,6 +8116,15 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
                             "w:hooshpay", succ))
     except Exception:
         logger.exception("بررسیِ دسترسیِ هوش‌پی ناموفق بود")
+    # === PATCH_BLUPAL_TENANT_V1 ===
+    try:
+        from tenant.gateways.blupal import is_available as _bp_ok3
+        if await _bp_ok3(bot_id) and await get_setting(bot_id, "blupal_show_wallet", "1") == "1":
+            from tenant.gateways.gateway_layout import gw_custom_label as _gwcl_bp
+            options.append((await _gwcl_bp(bot_id, "blupal", "💳 شارژ با بلوپال (کارت‌به‌کارت خودکار)"),
+                            "w:blupal", succ))
+    except Exception:
+        logger.exception("بررسیِ دسترسیِ بلوپال ناموفق بود")
     # === PATCH_APAY_GATEWAY_V1 ===
     try:
         from tenant.gateways.apay import is_available as _ap_ok3
@@ -12015,6 +12058,11 @@ async def _sec_finance_opts(bot_id: int, plan: str) -> list[tuple[str, str]]:
     if ok(Feature.GATEWAY_HOOSHPAY):
         opts.append(("💳 درگاهِ هوش‌پی (کارت‌به‌کارت آنی): " + ("✅ فعال" if _hp_on else "❌ خاموش"),
                      "set:hooshpay"))
+    # === PATCH_BLUPAL_TENANT_V1 ===
+    _bp_on = await get_setting(bot_id, "blupal_enabled", "0") == "1"
+    if ok(Feature.GATEWAY_BLUPAL):
+        opts.append(("💳 درگاهِ بلوپال (کارت‌به‌کارت خودکار): " + ("✅ فعال" if _bp_on else "❌ خاموش"),
+                     "set:blupal"))
     # === PATCH_APAY_GATEWAY_V1 ===
     _ap_on = await get_setting(bot_id, "apay_enabled", "0") == "1"
     if ok(Feature.GATEWAY_APAY):
@@ -21718,7 +21766,7 @@ async def tadm_stats(cb: CallbackQuery, bot: Bot):
                 "charge", "aqp_charge", "swap_charge", "crypto_charge", "nowpay_charge",
                 "tonpays_charge", "zarinpal_charge", "zibal_charge", "idpay_charge",
                 "hesabpay_charge", "abangateway_charge", "abangateway_manual_admin", "abangw_manual",
-                "uniquepay_charge", "apay_charge", "hooshpay_charge", "ton_direct", "tron_direct", "admin",
+                "uniquepay_charge", "apay_charge", "hooshpay_charge", "blupal_charge", "ton_direct", "tron_direct", "admin",
             ]))) or 0
         # کل تخفیفِ استفاده‌شده (تعداد کاربر یکتا + مجموع مبلغ صرفه‌جویی‌شده)
         discount_users = await s.scalar(
@@ -34460,6 +34508,7 @@ _ADMIN_MODULE_SECTION = {
     "tenant.gateways.swap_admin": "finance",
     "tenant.gateways.uniquepay_admin": "finance",
     "tenant.gateways.hooshpay_admin": "finance",
+    "tenant.gateways.blupal_admin": "finance",
     "tenant.gateways.apay_admin": "finance",
     "tenant.gateways.abangateway_admin": "finance",
     "tenant.gateways.wallet_limits_admin": "finance",

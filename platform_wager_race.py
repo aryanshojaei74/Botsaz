@@ -30,7 +30,7 @@ from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.enums import ButtonStyle, ChatType
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 import platform_wager as core
 from config import Session
@@ -81,6 +81,9 @@ def player_race(chat_id: int, uid: int, bot_id: int = 0) -> dict | None:
             return lv
     return None
 _LAST_GUESS: dict[tuple[int, int], float] = {}
+_LAST_NOTE: dict[tuple[int, int], float] = {}       # «نوبتِ تو نیست» حداکثر هر ۸ ثانیه برایِ هر نفر
+_NO_RACE: dict[tuple[int, int, int], float] = {}    # کشِ منفیِ بازیابیِ مسابقه از دیتابیس
+TURN_SECS = 180                                      # حدس عدد نوبتی: مهلتِ هر نوبت (نکردن = باخت)
 
 
 # ───────────────────────── منطقِ خالص ─────────────────────────
@@ -120,7 +123,8 @@ async def enabled() -> bool:
 # ───────────────────────── نمایش ─────────────────────────
 
 def _rule(w: PlatformWager) -> str:
-    return {"guess": "عددی بین ۱ تا ۱۰۰؛ هر دو نفر حدس می‌زنید (ربات بالاتر/پایین‌تر می‌گوید). اولین حدسِ دقیق برنده است.",
+    return {"guess": "عددی بین ۱ تا ۱۰۰؛ <b>به‌نوبت</b> حدس می‌زنید (ربات بالاتر/پایین‌تر می‌گوید). هر نوبت ۳ دقیقه مهلت دارد؛ "
+                     "نوبتی که حدس نزند می‌بازد. اولین حدسِ دقیق برنده است.",
             "speed": "ربات یک کلمه می‌فرستد؛ اولین نفری که دقیقاً همان را بنویسد برنده است.",
             "math": "ربات یک محاسبه می‌فرستد؛ اولین جوابِ درست برنده است."}[w.game]
 
@@ -154,13 +158,17 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
     if w.status == "playing":
         q = ""
         if w.game == "guess":
-            q = "🔢 عددی بین <b>۱ تا ۱۰۰</b> انتخاب شد؛ عددت را در گروه بنویس."
+            q = ("🔢 عددی بین <b>۱ تا ۱۰۰</b> انتخاب شد؛ <b>به‌نوبت</b> حدس بزنید.\n"
+                 + (f"🎯 نوبتِ: <b>{core._who(w, w.turn_id)}</b> — عددت را در گروه بنویس." if w.turn_id
+                    else "عددت را در گروه بنویس."))
         elif w.game == "speed":
             q = f"✍️ این را دقیقاً بنویس:\n\n👉 <b>{_html.escape(str(st.get('q', '')))}</b>"
         else:
             q = f"🧮 جواب چیست؟\n\n👉 <b>{_html.escape(str(st.get('q', '')))} = ؟</b>"
+        foot = ("⏱ هر نوبت ۳ دقیقه مهلت دارد؛ در مهلت حدس نزنی می‌بازی." if w.game == "guess" and w.turn_id
+                else f"⏱ مهلت: {core._mins_left(w)}؛ کسی برنده نشد ⇒ مبلغِ هر دو برمی‌گردد.")
         text = (f"{head}\n\n{core._who(w, w.creator_id)}  ⚔️  {core._who(w, w.opponent_id)}\n{core._money_lines(w)}\n\n"
-                f"{q}\n\n⏱ مهلت: {core._mins_left(w)}؛ کسی برنده نشد ⇒ مبلغِ هر دو برمی‌گردد.")
+                f"{q}\n\n{foot}")
         return text, InlineKeyboardMarkup(inline_keyboard=[])
     lines = [head, ""]
     if w.status == "cancelled":
@@ -172,6 +180,9 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
         ans = st.get("n") if w.game == "guess" else st.get("q")
         shown = f"عدد: <b>{ans}</b>" if w.game == "guess" else (f"جواب: <b>{_html.escape(str(st.get('a', '')))}</b>"
                                                               if w.game == "math" else f"کلمه: <b>{_html.escape(str(ans))}</b>")
+        if w.end_reason == "forfeit":
+            loser = w.opponent_id if w.winner_id == w.creator_id else w.creator_id
+            lines += [f"⏰ <b>{core._who(w, loser)}</b> در مهلتِ نوبتش حدس نزد."]
         lines += [shown, "", f"🏁 برنده: <b>{core._who(w, w.winner_id)}</b>",
                   f"🎁 دریافتی برنده: <b>{_rial(w.payout_amount)}</b> (کارمزد {_rial(w.fee_amount)})"]
     else:
@@ -212,6 +223,8 @@ async def join_race(wid: int, user: tuple, bot_id: int = 0):
         st = new_question(w.game)
         w.state = json.dumps(st, ensure_ascii=False)
         w.expires_at = core._now() + timedelta(seconds=SECS[w.game])
+        if w.game == "guess":                                  # نوبتی: قرعه برایِ نفرِ اول
+            w.turn_id = secrets.choice([w.creator_id, uid])
         await s.commit()
         return core._res(w=w)
 
@@ -230,6 +243,79 @@ async def settle_to(wid: int, uid: int):
             await core._settle_win(s, w, uid, "win")
             await s.commit()
             return w
+
+
+# ───────────────────────── حدس عدد نوبتی ─────────────────────────
+
+async def guess_step(bot: Bot, msg: Message, live: dict) -> str:
+    """یک حدس در بازیِ نوبتی. خروجی: «win» (حدسِ دقیق؛ فراخوان تسویه کند) یا «done» (پاسخ داده شد/نادیده).
+
+    فقط نفری که نوبتش است حدس می‌زند؛ حدسِ غلط نوبت را به حریف می‌دهد و مهلتِ ۳دقیقه‌ایِ تازه شروع می‌شود (در DB:
+    turn_id/expires_at). نوبتی که در مهلت حدس نزند در هستهٔ platform_wager (_timeout_locked) می‌بازد."""
+    uid, now = msg.from_user.id, time.monotonic()
+    n = int(norm_answer(msg.text))
+    wid = live["wid"]
+    note = None
+    async with core._wlock(wid):
+        async with Session() as s:
+            w = await s.get(PlatformWager, wid, with_for_update=True)
+            if not w or w.status != "playing":
+                LIVE.pop(wid, None)
+                return "done"
+            if w.expires_at and w.expires_at <= core._now():
+                return "done"                                 # تسویه با مهلت (تایمر/حلقهٔ هسته)
+            if w.turn_id and w.turn_id != uid:
+                note = f"⏳ نوبتِ <b>{core._who(w, w.turn_id)}</b> است؛ منتظر بمان."
+                hint = None
+            elif n == live["n"]:
+                return "win"
+            else:
+                hint = "⬆️ بالاتر" if n < live["n"] else "⬇️ پایین‌تر"
+                if w.turn_id:
+                    w.turn_id = w.opponent_id if uid == w.creator_id else w.creator_id
+                    w.expires_at = core._now() + timedelta(seconds=TURN_SECS)
+                    await s.commit()
+                    live["until"] = now + TURN_SECS + 10
+                    note = (f"{hint}\n🎯 نوبتِ <b>{core._who(w, w.turn_id)}</b> — ۳ دقیقه مهلت داری.")
+                else:                                         # بازیِ قدیمیِ هم‌زمان (قبل از نوبتی‌شدن)
+                    note = hint
+    if hint is None:                                          # حدس از نفرِ بی‌نوبت
+        if now - _LAST_NOTE.get((msg.chat.id, uid), -1e9) < 8:
+            return "done"
+        _LAST_NOTE[(msg.chat.id, uid)] = now
+        await msg.reply(note, parse_mode="HTML")
+        return "done"
+    await msg.reply(note, parse_mode="HTML")
+    if w.turn_id:
+        asyncio.create_task(_expire_later(bot, wid, TURN_SECS))
+        await _edit(bot, w)
+    return "done"
+
+
+async def restore_live(chat_id: int, uid: int, bot_id: int = 0) -> dict | None:
+    """بعد از ری‌استارتِ ربات، بازیِ حدس عددِ جاری از DB دوباره ساخته می‌شود (عددِ مخفی در state ذخیره است)."""
+    key, now = (chat_id, uid, bot_id), time.monotonic()
+    if _NO_RACE.get(key, 0) > now:
+        return None
+    async with Session() as s:
+        w = await s.scalar(select(PlatformWager).where(
+            PlatformWager.chat_id == chat_id, func.coalesce(PlatformWager.bot_id, 0) == bot_id,
+            PlatformWager.game == "guess", PlatformWager.status == "playing",
+            or_(PlatformWager.creator_id == uid, PlatformWager.opponent_id == uid)))
+    st = core._st(w) if w else {}
+    if not w or not w.expires_at or w.expires_at <= core._now() or "n" not in st:
+        _NO_RACE[key] = now + 20
+        return None
+    left = max(5.0, (w.expires_at - core._now()).total_seconds() + 5)
+    lv = {"wid": w.id, "chat": chat_id, "bot": bot_id, "kind": "guess", "players": {w.creator_id, w.opponent_id},
+          "answer": None, "n": st["n"], "until": now + left}
+    LIVE[w.id] = lv
+    return lv
+
+
+def _digit_guess(m: Message) -> bool:
+    t = norm_answer(m.text) if m.text else ""
+    return bool(m.from_user and t.isdigit() and len(t) <= 3 and 1 <= int(t) <= 100)
 
 
 # ───────────────────────── هندلرها ─────────────────────────
@@ -354,13 +440,22 @@ async def race_join(cb: CallbackQuery):
                         "answer": st.get("a"), "n": st.get("n"),
                         "until": time.monotonic() + SECS[r.w.game] + 5}
         await _edit(cb.bot, r.w)
-        if r.w.game != "guess":
-            asyncio.create_task(_expire_later(cb.bot, r.w.id, SECS[r.w.game]))
-        else:
-            asyncio.create_task(_expire_later(cb.bot, r.w.id, SECS["guess"]))
+        asyncio.create_task(_expire_later(cb.bot, r.w.id, SECS[r.w.game]))
+        await _announce_turn(cb.bot, r.w)
     elif r.w is not None:
         await _edit(cb.bot, r.w)
     await cb.answer(r.err or "به مسابقه پیوستی؛ موفق باشی!", show_alert=bool(r.err))
+
+
+async def _announce_turn(bot: Bot, w: PlatformWager) -> None:
+    """حدس عدد نوبتی: بعد از پیوستنِ حریف، نفرِ اول (قرعه) را در گروه صدا بزن."""
+    if w.game != "guess" or not w.turn_id:
+        return
+    try:
+        await bot.send_message(w.chat_id, f"🎲 قرعه‌کشی شد: نوبتِ <b>{core._who(w, w.turn_id)}</b> است؛ عددی بین ۱ تا ۱۰۰ بنویس "
+                                          "(هر نوبت ۳ دقیقه مهلت؛ حدس نزنی می‌بازی).", parse_mode="HTML")
+    except Exception:  # noqa: BLE001
+        logger.info("race: turn announcement skipped")
 
 
 async def _expire_later(bot: Bot, wid: int, secs: int) -> None:
@@ -372,7 +467,14 @@ async def _expire_later(bot: Bot, wid: int, secs: int) -> None:
         if w is not None:
             LIVE.pop(w.id, None)
             await _edit(bot, w)
-            await bot.send_message(w.chat_id, "⌛ کسی برنده نشد؛ مبلغِ هر دو نفر برگشت. 👻")
+            if w.status == "settled" and w.end_reason == "forfeit":      # حدس عددِ نوبتی: نوبتِ‌دارِ ساکت باخت
+                loser = w.opponent_id if w.winner_id == w.creator_id else w.creator_id
+                await bot.send_message(
+                    w.chat_id, f"⏰ <b>{core._who(w, loser)}</b> در ۳ دقیقه حدس نزد و باخت.\n"
+                               f"🏁 <b>{core._who(w, w.winner_id)}</b> برنده شد! 🎁 {_rial(w.payout_amount)} به کیف پولش اضافه شد.",
+                    parse_mode="HTML")
+            else:
+                await bot.send_message(w.chat_id, "⌛ کسی برنده نشد؛ مبلغِ هر دو نفر برگشت. 👻")
     except Exception:  # noqa: BLE001
         logger.exception("race expire #%s failed", wid)
 
@@ -404,25 +506,23 @@ def _match(m: Message, bot_id: int = 0) -> dict | None:
 
 
 def _is_answer(m: Message) -> bool:
-    return _match(m) is not None
+    return _match(m) is not None or _digit_guess(m)       # عددِ ۱–۱۰۰ هم رد می‌شود؛ بازیابیِ بعد از ری‌استارت در هندلر
 
 
 @platform_wager_race_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_answer))
 async def race_answer(msg: Message):
     live = _match(msg)
+    if not live and msg.from_user and _digit_guess(msg):
+        live = await restore_live(msg.chat.id, msg.from_user.id)
     if not live:
         raise SkipHandler
     uid, now = msg.from_user.id, time.monotonic()
-    t = norm_answer(msg.text)
     if live["kind"] == "guess":
         if now - _LAST_GUESS.get((msg.chat.id, uid), -1e9) < GUESS_GAP:
             return
         _LAST_GUESS[(msg.chat.id, uid)] = now
-        n = int(t)
-        if n < live["n"]:
-            return await msg.reply("⬆️ بالاتر")
-        if n > live["n"]:
-            return await msg.reply("⬇️ پایین‌تر")
+        if await guess_step(msg.bot, msg, live) != "win":
+            return
     w = await settle_to(live["wid"], uid)
     if w is None:
         if not await _still_active(live["wid"]):
@@ -445,7 +545,8 @@ async def help_section() -> str:
            else "کارمزدی ندارد.")
     return "\n".join([
         "💰 <b>مسابقه‌هایِ پولیِ دونفره (با کیف پول)</b>",
-        f"🎯 <b>حدس عدد</b>: «شرطبندی حدس عدد {ex}» — عددی بین ۱ تا ۱۰۰؛ اولین حدسِ دقیق برنده است.",
+        f"🎯 <b>حدس عدد</b>: «شرطبندی حدس عدد {ex}» — عددی بین ۱ تا ۱۰۰؛ <b>به‌نوبت</b> حدس می‌زنید، هر نوبت ۳ دقیقه مهلت "
+        "دارد (حدس نزنی می‌بازی)؛ اولین حدسِ دقیق برنده است.",
         f"⚡️ <b>سرعت</b>: «شرطبندی سرعت {ex}» — اولین نفری که کلمهٔ ربات را دقیق بنویسد برنده است.",
         f"🧮 <b>ریاضی</b>: «شرطبندی ریاضی {ex}» — اولین جوابِ درست برنده است.",
         "ℹ️ اگر فقط «حدس عدد» / «سرعت» / «ریاضی» (بدونِ «شرطبندی» و مبلغ) بنویسی، بازیِ رایگان با شیرینی شروع می‌شود.",

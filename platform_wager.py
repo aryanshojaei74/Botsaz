@@ -333,6 +333,9 @@ async def _timeout_locked(s, w: PlatformWager) -> None:
         loser = w.turn_id
         winner = w.opponent_id if loser == w.creator_id else w.creator_id
         await _settle_win(s, w, winner, "forfeit")
+    elif w.game == "guess" and w.turn_id:               # حدس عدد نوبتی: نوبتِ‌دارِ ساکت می‌بازد
+        winner = w.opponent_id if w.turn_id == w.creator_id else w.creator_id
+        await _settle_win(s, w, winner, "forfeit")
     elif w.game == "rps":
         await _forfeit_or_refund(s, w, st.get("picks") or {})
     else:
@@ -929,7 +932,8 @@ def help_text(enabled: dict[str, bool], bot_id: int = 0, cfg: dict | None = None
                   "را می‌زند (تاس را خود تلگرام می‌اندازد). عدد مساوی = برگشت پول.", ""]
     if bot_id:                                    # === PATCH_WAGER_RACE_TENANT_V1 === مسابقه‌هایِ سرعتیِ ربات‌هایِ مشتری
         _race = [("guess", "🎯 <b>حدس عدد</b>: «حدس عدد ۱۰۰۰۰»",
-                  "عددی بین ۱ تا ۱۰۰؛ هر دو نفر حدس می‌زنید و ربات بالاتر/پایین‌تر می‌گوید. اولین حدسِ دقیق برنده است."),
+                  "عددی بین ۱ تا ۱۰۰؛ به‌نوبت حدس می‌زنید (هر نوبت ۳ دقیقه؛ حدس نزنی می‌بازی) و ربات بالاتر/پایین‌تر می‌گوید. "
+                  "اولین حدسِ دقیق برنده است."),
                  ("speed", "⚡️ <b>سرعت</b>: «سرعت ۱۰۰۰۰»",
                   "ربات یک کلمه می‌فرستد؛ اولین نفری که دقیقاً همان را بنویسد برنده است."),
                  ("math", "🧮 <b>ریاضی</b>: «ریاضی ۱۰۰۰۰»",

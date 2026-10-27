@@ -138,6 +138,11 @@ async def test_guess_hints_and_game_switch_and_hint_for_missing_amount(db, monke
 @pytest.mark.asyncio
 async def test_guess_flow_between_two_players(db, monkeypatch):
     await setup(db, monkeypatch)
+    monkeypatch.setattr(R, "GUESS_GAP", 0.0)
+
+    async def no_timer(*a, **k):
+        return None
+    monkeypatch.setattr(R, "_expire_later", no_timer)
     m, _ = _msg("حدس عدد 5000", uid=U1)
     await WR.twr_create(m, FakeBot())
     async with db() as s:
@@ -145,13 +150,18 @@ async def test_guess_flow_between_two_players(db, monkeypatch):
     edits = []
     await WR.twr_join(_cb(f"twr:join:{w.id}", U2, edits), FakeBot())
     n = R.LIVE[w.id]["n"]
-    hi, rp = _msg(str(min(100, n + 1)) if n < 100 else "100", uid=U1)
-    if n < 100:
-        await WR.twr_answer(hi, FakeBot())
-        assert rp[-1] == "⬇️ پایین‌تر"
-    ok, rp2 = _msg(str(n), uid=U2)
+    first = (await wager(db, w.id)).turn_id
+    other = U2 if first == U1 else U1
+    wrong = str(n - 1) if n > 1 else str(n + 1)
+    bad, rp0 = _msg(wrong, uid=other)                                    # نوبتِ او نیست
+    await WR.twr_answer(bad, FakeBot())
+    assert "نوبتِ" in rp0[-1] and (await wager(db, w.id)).status == "playing"
+    miss, rp = _msg(wrong, uid=first)                                    # حدسِ غلط ⇒ نوبت می‌رود به حریف
+    await WR.twr_answer(miss, FakeBot())
+    assert ("⬆️" in rp[-1] or "⬇️" in rp[-1]) and (await wager(db, w.id)).turn_id == other
+    ok, rp2 = _msg(str(n), uid=other)
     await WR.twr_answer(ok, FakeBot())
-    assert (await wager(db, w.id)).winner_id == U2 and "برنده شد" in rp2[-1]
+    assert (await wager(db, w.id)).winner_id == other and "برنده شد" in rp2[-1]
 
 
 @pytest.mark.asyncio

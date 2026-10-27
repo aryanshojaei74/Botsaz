@@ -58,6 +58,8 @@ from tenant.shared.panel_clients.panel_watchdog import panel_watchdog_loop as _p
 from tenant.gateways.uniquepay import uniquepay_poll_loop as _uniquepay_loop
 # === PATCH_HOOSHPAY_GATEWAY_V1 ===
 from tenant.gateways.hooshpay import hooshpay_poll_loop as _hooshpay_loop
+# === PATCH_BLUPAL_TENANT_V1 ===
+from tenant.gateways.blupal import blupal_poll_loop as _blupal_loop
 # === PATCH_APAY_GATEWAY_V1 ===
 from tenant.gateways.apay import apay_poll_loop as _apay_loop
 # === PATCH_SMM_PRICE_AUTOSYNC_V1 ===
@@ -139,6 +141,7 @@ async def _worker_startup():
         _panel_watchdog_loop(),
         _uniquepay_loop(),
         _hooshpay_loop(),   # PATCH_HOOSHPAY_GATEWAY_V1
+        _blupal_loop(),     # PATCH_BLUPAL_TENANT_V1
         _apay_loop(),
         _smm_price_sync_loop(),
         _repair_manual_once(),
