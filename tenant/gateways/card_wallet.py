@@ -573,6 +573,8 @@ async def _auto_approve_wallet_charge(bot: Bot, row, oid: int, check, file_id: s
     _photo_fp = photo_fingerprint(file_unique_id)
     # PATCH_RECEIPT_CLAIM_ATOMIC_V1: ثبتِ اتمیکِ رسید *قبل* از شارژ (تکراری ⇒ تأییدِ دستی)
     _fps = [_photo_fp, _dup_fp]
+    if not _dup_fp:   # PATCH_RECEIPT_REQUIRE_FP_V1: بدونِ پیگیری/تاریخ‌وساعت تکراری‌بودن سنجیدنی نیست ⇒ بررسیِ دستی
+        return False
     if not await claim_receipts(_dup_scope, _fps):
         return False
     async with Session() as s:

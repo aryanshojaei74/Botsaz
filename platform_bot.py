@@ -11368,12 +11368,27 @@ async def _try_auto_approve_platform_charge(bot: Bot, cid: int) -> tuple[bool, s
         return False, check.reason
 
     # جلوگیری از رسیدِ تکراری: اثرِ انگشتِ رسید (شمارهٔ پیگیری یا تاریخ+ساعت+مبلغ)
-    from tenant.gateways.auto_receipt import receipt_fingerprint, claim_receipts, release_receipts
+    from tenant.gateways.auto_receipt import (receipt_fingerprint, photo_fingerprint,
+                                              claim_receipts, release_receipts)
     fp = receipt_fingerprint(check)
+    # PATCH_RECEIPT_REQUIRE_FP_V1: رسیدی که نه شمارهٔ پیگیری دارد نه تاریخ/ساعتِ خواندنی (مثلاً عکسِ برش‌خورده)
+    # را نمی‌شود از تکراری‌بودن سنجید؛ قبلاً بدونِ هیچ چکی پذیرفته می‌شد و همان رسید بی‌نهایت بار کیف‌پول را
+    # شارژ می‌کرد. حالا به بررسیِ دستیِ ادمین می‌رود.
+    if not fp:
+        return False, ("رسید شمارهٔ پیگیری یا تاریخ/ساعتِ قابل‌خواندن ندارد؛ برایِ جلوگیری از استفادهٔ "
+                       "تکراری به بررسیِ دستی رفت.")
+    _fps = [fp]
+    if file_id:                                       # اثرِ انگشتِ خودِ عکس هم (مثلِ ربات‌هایِ مستأجر)
+        try:
+            _pf = photo_fingerprint((await bot.get_file(file_id)).file_unique_id)
+            if _pf:
+                _fps.append(_pf)
+        except Exception:  # noqa: BLE001
+            logger.exception("platform receipt: file_unique_id خوانده نشد")
     # PATCH_RECEIPT_CLAIM_ATOMIC_V1: ثبتِ اتمیک *پیش* از شارژ — قبلاً چک و ثبت جدا بودند و
     # یک رسید در دو درخواستِ هم‌زمان دو بار کیف‌پولِ پلتفرم را شارژ می‌کرد.
-    if fp and not await claim_receipts("platform", [fp], amount=int(expected_amount),
-                                       user_telegram_id=user_tg):
+    if not await claim_receipts("platform", _fps, amount=int(expected_amount),
+                                user_telegram_id=user_tg):
         return False, ("این رسید قبلاً استفاده و شارژ شده است "
                        + (f"(پیگیری {check.tracking_no})" if check.tracking_no
                           else f"(تاریخ/ساعت {check.date_jalali or ''} {check.time_str or ''})")
@@ -11383,7 +11398,7 @@ async def _try_auto_approve_platform_charge(bot: Bot, cid: int) -> tuple[bool, s
     async with Session() as s:
         ch = await s.get(WalletCharge, cid, with_for_update=True)
         if not ch or ch.status != "pending":
-            await release_receipts("platform", [fp])
+            await release_receipts("platform", _fps)
             return False, "درخواست همزمان رسیدگی شد."
         ch.status = "approved"
         u = await get_user(s, user_tg, for_update=True)

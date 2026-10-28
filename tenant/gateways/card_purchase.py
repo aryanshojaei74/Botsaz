@@ -773,6 +773,8 @@ async def _auto_approve_config_order(bot: Bot, row, oid: int, check, file_id: st
     _dup_fp = receipt_fingerprint(check)
     _photo_fp = photo_fingerprint(file_unique_id)
     _fps = [_photo_fp, _dup_fp]
+    if not _dup_fp:   # PATCH_RECEIPT_REQUIRE_FP_V1: بدونِ پیگیری/تاریخ‌وساعت تکراری‌بودن سنجیدنی نیست ⇒ بررسیِ دستی
+        return False
     if not await claim_receipts(_dup_scope, _fps):
         return False
     _receipt_done = False   # PATCH_RECEIPT_CLAIM_ATOMIC_V1

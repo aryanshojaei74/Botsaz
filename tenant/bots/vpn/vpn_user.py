@@ -7824,6 +7824,8 @@ async def auto_approve_vpn_card_order(bot: Bot, row, oid: int, check, file_id: s
     # ثبت می‌شد و دو سفارشِ هم‌زمان با یک رسید هر دو تحویل می‌گرفتند). هر مسیری که
     # تحویل را انجام ندهد (False) رسید را آزاد می‌کند تا تأییدِ دستی ممکن بماند.
     _fps = [_photo_fp, _dup_fp]
+    if not _dup_fp:   # PATCH_RECEIPT_REQUIRE_FP_V1: بدونِ پیگیری/تاریخ‌وساعت تکراری‌بودن سنجیدنی نیست ⇒ بررسیِ دستی
+        return False
     if not await claim_receipts(_dup_scope, _fps):
         return False
     ok = False
