@@ -179,11 +179,19 @@ async def settle_charge(order_id: str) -> tuple[bool, str, int]:
     if code != 200 or not isinstance(res, dict):
         return False, AP.err_text(code, res), 0
     pay = res.get("payment") or {}
-    if not res.get("verified") or str(pay.get("status")) != "paid":
+    # === PATCH_APAY_MANUAL_CONFIRM_V1 === تأییدِ دستیِ فروشنده در رباتِ آپی («بدونِ پیامک») هم «paid» است؛
+    # قبلاً verified=false ⇒ «هنوز پرداختی ثبت نشده» و شارژ نمی‌شد. حالا با «paid» + تطبیقِ order_id و مبلغ پذیرفته
+    # می‌شود و پاسخِ آپی برایِ بررسی لاگ می‌شود.
+    if str(pay.get("status")) != "paid":
         return False, ("مهلتِ این فاکتور تمام شده و پرداختی ثبت نشد."
                        if str(pay.get("status")) == "expired" else "هنوز پرداختی ثبت نشده است."), 0
+    if not res.get("verified"):
+        logger.warning("platform apay: status=paid ولی verified=false (تأییدِ دستیِ فروشنده؟) — با تطبیقِ order/مبلغ "
+                       "پذیرفته می‌شود (order=%s): %s", order_id, pay)
     if str(pay.get("order_id")) != order_id or int(pay.get("amount") or 0) != expected * 10:
         logger.error("platform apay: عدمِ تطابقِ پرداخت (order=%s): %s", order_id, pay)
+        await alert_blocked(order_id, f"آپی پرداخت را «paid» اعلام کرده ولی اطلاعاتش با فاکتور نمی‌خواند "
+                            f"(order={pay.get('order_id')}، مبلغ={pay.get('amount')} ریال؛ انتظار {expected * 10:,} ریال).")
         return False, "اطلاعاتِ پرداخت با فاکتور نمی‌خواند؛ با پشتیبانی تماس بگیر.", 0
 
     if purpose == "partner_order":      # === PATCH_PARTNER_APAY_V1 ===
@@ -210,6 +218,80 @@ async def settle_charge(order_id: str) -> tuple[bool, str, int]:
     await _drop_admin_ask(ask_chat, ask_msg)
     await _after_paid(tg_id, credit, new_bal, uname, ufull, chat_id, msg_id)
     return True, "پرداخت تأیید و کیف پول شارژ شد.", credit
+
+
+_BLOCK_ALERTED: set[str] = set()
+
+
+async def _charge_ctx(order_id: str):
+    from models import PlatformUser
+    async with Session() as s:
+        ch = await s.scalar(select(PlatformApayCharge).where(PlatformApayCharge.order_id == order_id))
+        if not ch:
+            return None, None
+        u = await s.scalar(select(PlatformUser).where(PlatformUser.telegram_id == ch.user_telegram_id))
+    who = ("@" + u.username) if u and u.username else ((u.full_name if u else "") or "—")
+    if (ch.purpose or "wallet") == "partner_order":
+        who += f" — 🛒 خریدِ عمدهٔ همکار (سفارش #{ch.ref_id})"
+    return ch, who
+
+
+async def alert_blocked(order_id: str, reason: str) -> None:
+    """=== PATCH_APAY_EXPIRY_NOTICE_V1 === آپی «paid» گفته ولی شارژِ خودکار انجام نشد ⇒ فوراً (یک‌بار) به مدیر خبر بده
+    با دکمهٔ «واریز شد — شارژ کن»؛ قبلاً هیچ‌کس خبردار نمی‌شد."""
+    if order_id in _BLOCK_ALERTED:
+        return
+    _BLOCK_ALERTED.add(order_id)
+    try:
+        from config import PLATFORM_ADMIN_ID
+        from main_platform import platform_bot
+        ch, who = await _charge_ctx(order_id)
+        if not ch or not PLATFORM_ADMIN_ID or ch.status == "paid":
+            return
+        await platform_bot.send_message(PLATFORM_ADMIN_ID, AP.admin_ask_text(
+            who=who, tg_id=ch.user_telegram_id, amount=ch.amount_toman, fee=ch.fee_toman or 0,
+            pay_rial=ch.pay_amount_rial, order_id=ch.order_id, status=ch.status, created=ch.created_at,
+            note="⚠️ " + reason), reply_markup=AP.admin_ask_kb("papadm", ch.id))
+    except Exception:
+        logger.exception("platform apay: هشدارِ «پرداخت شده ولی شارژ نشد» ارسال نشد (order=%s)", order_id)
+
+
+async def notify_expired(order_id: str, ask_chat, ask_msg) -> None:
+    """=== PATCH_APAY_EXPIRY_NOTICE_V1 === فاکتور بدونِ لغوِ کاربر منقضی شد: به کاربر بگو، و مدیر را با نتیجهٔ نهایی
+    خبر کن (پرسشِ بی‌پاسخ پاک نمی‌شود؛ همان پیام «منقضی شد» می‌شود و دکمهٔ شارژِ دستی را نگه می‌دارد)."""
+    try:
+        from config import PLATFORM_ADMIN_ID
+        from main_platform import platform_bot
+        ch, who = await _charge_ctx(order_id)
+        if not ch or ch.status != "expired":
+            return
+        if (ch.purpose or "wallet") == "wallet":
+            try:
+                await platform_bot.send_message(int(ch.user_telegram_id), AP.expiry_user_text(ch.amount_toman, ch.order_id))
+            except Exception:
+                logger.info("platform apay: اطلاعِ انقضا به کاربر ممکن نشد")
+        if ch.chat_id and ch.msg_id:
+            try:
+                await platform_bot.edit_message_reply_markup(chat_id=int(ch.chat_id), message_id=int(ch.msg_id), reply_markup=None)
+            except Exception:
+                logger.debug("platform apay: دکمه‌هایِ فاکتورِ منقضی برداشته نشد")
+        if PLATFORM_ADMIN_ID:
+            text = AP.admin_ask_text(
+                who=who, tg_id=ch.user_telegram_id, amount=ch.amount_toman, fee=ch.fee_toman or 0,
+                pay_rial=ch.pay_amount_rial, order_id=ch.order_id, status="expired", created=ch.created_at,
+                note="⌛️ فاکتور بدونِ لغوِ کاربر منقضی شد و تا آخر هیچ پرداختی برایش در آپی ثبت نشد.")
+            kb = AP.admin_ask_kb("papadm", ch.id)
+            done = False
+            if ask_chat and ask_msg:
+                try:
+                    await platform_bot.edit_message_text(text, chat_id=int(ask_chat), message_id=int(ask_msg), reply_markup=kb)
+                    done = True
+                except Exception:
+                    logger.debug("platform apay: ویرایشِ پرسشِ قبلیِ مدیر ممکن نشد")
+            if not done:
+                await platform_bot.send_message(PLATFORM_ADMIN_ID, text, reply_markup=kb)
+    except Exception:
+        logger.exception("platform apay: اطلاعِ انقضا ناموفق بود (order=%s)", order_id)
 
 
 async def _drop_admin_ask(chat_id, msg_id) -> None:
@@ -421,8 +503,8 @@ async def poll_pending_once() -> int:
                 await s.commit()
                 if ex.rowcount:     # PATCH_PARTNER_APAY_V1 — سفارشِ خریدِ عمدهٔ پرداخت‌نشده رد می‌شود
                     ch = await s.scalar(select(PlatformApayCharge).where(PlatformApayCharge.order_id == oid))
-                    if ch is not None:       # PATCH_APAY_ASK_CLEANUP_V2 — منقضی و پرداخت‌نشده ⇒ پرسش بی‌پاسخ مدیر پاک شود
-                        await _drop_admin_ask(ch.admin_ask_chat, ch.admin_ask_msg)
+                    if ch is not None:       # PATCH_APAY_EXPIRY_NOTICE_V1 — منقضی و پرداخت‌نشده ⇒ به کاربر و مدیر بگو
+                        await notify_expired(oid, ch.admin_ask_chat, ch.admin_ask_msg)
                     if ch and ch.purpose == "partner_order" and ch.ref_id:
                         from models import PartnerStockOrder
                         await s.execute(sa_update(PartnerStockOrder).where(
@@ -873,8 +955,7 @@ async def ask_admin_pending() -> int:
             ch = await s.get(PlatformApayCharge, cid)
             from models import PlatformUser
             u = await s.scalar(select(PlatformUser).where(PlatformUser.telegram_id == ch.user_telegram_id))
-        if int(ch.user_telegram_id) == int(PLATFORM_ADMIN_ID):
-            continue
+        # PATCH_APAY_EXPIRY_NOTICE_V1: خودِ مدیر هم اگر پرداخت کند پرسیده می‌شود (تستِ مدیر)
         who = ("@" + u.username) if u and u.username else ((u.full_name if u else "") or "—")
         if (ch.purpose or "wallet") == "partner_order":
             who += f" — 🛒 خریدِ عمدهٔ همکار (سفارش #{ch.ref_id})"

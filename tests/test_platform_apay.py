@@ -489,9 +489,9 @@ async def test_expiry_removes_unanswered_ask_but_answered_ask_is_kept(db, monkey
     maker, _st, _p = db
     dropped = []
 
-    async def drop(chat, msg):
-        dropped.append((chat, msg))
-    monkeypatch.setattr(PA, "_drop_admin_ask", drop)
+    async def notify(oid, chat, msg):                       # PATCH_APAY_EXPIRY_NOTICE_V1: دیگر پاک نمی‌شود؛ «منقضی شد» اعلام می‌شود
+        dropped.append((oid, chat, msg))
+    monkeypatch.setattr(PA, "notify_expired", notify)
     async with maker() as s:
         s.add(models.PlatformApayCharge(user_telegram_id=42, order_id="pbold", payment_id="pay_o", amount_toman=50_000,
                                         status="waiting", created_at=datetime.utcnow() - timedelta(minutes=45),
@@ -504,7 +504,7 @@ async def test_expiry_removes_unanswered_ask_but_answered_ask_is_kept(db, monkey
         return 200, {"verified": False, "payment": {"status": "expired"}}
     monkeypatch.setattr(AP, "verify_payment", v)
     await PA.poll_pending_once()
-    assert dropped == [(777, 111)]                                             # منقضی‌شده و پرداخت‌نشده ⇒ پرسش پاک شد
+    assert dropped == [("pbold", 777, 111)]                                   # منقضی‌شده و پرداخت‌نشده ⇒ به کاربر/مدیر اعلام می‌شود
 
     # مدیر جواب بدهد ⇒ شناسه‌ها فراموش می‌شوند و پیام نتیجه هرگز پاک نمی‌شود
     async with maker() as s:
@@ -529,3 +529,102 @@ async def test_expiry_removes_unanswered_ask_but_answered_ask_is_kept(db, monkey
     async with maker() as s:
         ch = await s.get(models.PlatformApayCharge, cid)
     assert ch.admin_ask_chat is None and ch.admin_ask_msg is None and "واریز نشده" in edits[0]
+
+
+# ───────────── تأییدِ دستیِ آپی / هشدارِ «paid ولی شارژ نشد» / اعلامِ انقضا ─────────────
+@pytest.mark.asyncio
+async def test_manual_seller_confirmation_without_sms_is_credited(db, monkeypatch):
+    """مدیر در رباتِ آپی «تأییدِ دستی (بدونِ پیامک)» کرد: status=paid ولی verified=false ⇒ باید شارژ شود."""
+    maker, _st, paid = db
+
+    async def v(tok, pid):
+        return _vr(verified=False)
+    monkeypatch.setattr(AP, "verify_payment", v)
+    ok, _m, credit = await PA.settle_charge("pbx1")
+    assert ok and credit == 100_000
+    assert await _state(maker) == (100_000, "paid", 1) and paid == [(42, 100_000, 100_000)]
+
+
+@pytest.mark.asyncio
+async def test_paid_but_mismatch_alerts_admin_once_with_charge_button(db, monkeypatch):
+    maker, _st, paid = db
+    import config
+    import sys
+    import types
+    sent = []
+
+    class Bot:
+        async def send_message(self, chat, text, reply_markup=None, **k):
+            sent.append((chat, text, reply_markup))
+    monkeypatch.setitem(sys.modules, "main_platform", types.SimpleNamespace(platform_bot=Bot()))
+    monkeypatch.setattr(config, "PLATFORM_ADMIN_ID", 777)
+    PA._BLOCK_ALERTED.clear()
+
+    async def v(tok, pid):
+        return _vr(amount=9_999_990)
+    monkeypatch.setattr(AP, "verify_payment", v)
+    assert not (await PA.settle_charge("pbx1"))[0]
+    assert not (await PA.settle_charge("pbx1"))[0]                      # دوباره ⇒ پیامِ تکراری نمی‌رود
+    assert len(sent) == 1 and sent[0][0] == 777
+    assert "paid" in sent[0][1] and "نمی‌خواند" in sent[0][1] and "pbx1" in sent[0][1]
+    cbs = [b.callback_data for r in sent[0][2].inline_keyboard for b in r]
+    assert any(c.startswith("papadm:ok:") for c in cbs) and await _state(maker) == (0, "waiting", 0)
+
+
+@pytest.mark.asyncio
+async def test_expiry_tells_user_and_turns_admin_question_into_expired_notice(db, monkeypatch):
+    maker, _st, _p = db
+    import config
+    import sys
+    import types
+    sent, edits, markups = [], [], []
+
+    class Bot:
+        async def send_message(self, chat, text, reply_markup=None, **k):
+            sent.append((chat, text, reply_markup))
+
+        async def edit_message_text(self, text, chat_id=None, message_id=None, reply_markup=None, **k):
+            edits.append((chat_id, message_id, text, reply_markup))
+
+        async def edit_message_reply_markup(self, chat_id=None, message_id=None, reply_markup=None, **k):
+            markups.append((chat_id, message_id))
+    monkeypatch.setitem(sys.modules, "main_platform", types.SimpleNamespace(platform_bot=Bot()))
+    monkeypatch.setattr(config, "PLATFORM_ADMIN_ID", 777)
+    async with maker() as s:
+        ch = await s.scalar(select(models.PlatformApayCharge))
+        ch.created_at = datetime.utcnow() - timedelta(minutes=45)
+        ch.chat_id, ch.msg_id, ch.admin_ask_chat, ch.admin_ask_msg = 42, 9, 777, 555
+        await s.commit()
+
+    async def v(tok, pid):
+        return 200, {"verified": False, "payment": {"status": "expired"}}
+    monkeypatch.setattr(AP, "verify_payment", v)
+    await PA.poll_pending_once()
+    assert (await _state(maker))[1] == "expired"
+    user_msg = [t for c, t, _k in sent if c == 42]
+    assert user_msg and "منقضی شد" in user_msg[0] and "pbx1" in user_msg[0]       # به کاربر گفته شد
+    assert markups == [(42, 9)]                                                    # دکمه‌هایِ فاکتورِ مرده برداشته شد
+    assert edits and edits[0][:2] == (777, 555) and "منقضی شد" in edits[0][2]     # پرسشِ مدیر «منقضی شد» شد، پاک نشد
+    assert any(b.callback_data.startswith("papadm:ok:") for r in edits[0][3].inline_keyboard for b in r)
+
+
+@pytest.mark.asyncio
+async def test_admin_who_pays_is_also_asked(db, monkeypatch):
+    """مدیر با حسابِ خودش تست می‌کند: قبلاً «واریز شد؟» برایش نمی‌آمد."""
+    maker, _st, _p = db
+    import config
+    import sys
+    import types
+    sent = []
+
+    class Bot:
+        async def send_message(self, chat, text, reply_markup=None, **k):
+            sent.append(chat)
+            return types_ns(message_id=5)
+    monkeypatch.setitem(sys.modules, "main_platform", types.SimpleNamespace(platform_bot=Bot()))
+    monkeypatch.setattr(config, "PLATFORM_ADMIN_ID", 42)               # پرداخت‌کننده = مدیر
+    async with maker() as s:
+        ch = await s.scalar(select(models.PlatformApayCharge))
+        ch.created_at = datetime.utcnow() - timedelta(minutes=AP.ASK_AFTER_MIN + 1)
+        await s.commit()
+    assert await PA.ask_admin_pending() == 1 and sent == [42]

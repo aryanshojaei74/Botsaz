@@ -431,13 +431,21 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
     if code != 200 or not isinstance(res, dict):
         return False, err_text(code, res), 0
     pay = res.get("payment") or {}
-    if not res.get("verified") or str(pay.get("status")) != "paid":
+    # === PATCH_APAY_MANUAL_CONFIRM_V1 === (تأییدِ دستیِ فروشنده در رباتِ آپی «بدونِ پیامک»)
+    # وضعیتِ پرداخت «paid» است حتی اگر پیامکی تطبیق نخورده باشد؛ قبلاً verified=false ⇒ «هنوز پرداختی ثبت نشده» و
+    # شارژ نمی‌شد. حالا با «paid» + تطبیقِ order_id و مبلغِ فاکتور (پایین) پذیرفته می‌شود و پاسخ برایِ بررسی لاگ می‌شود.
+    if str(pay.get("status")) != "paid":
         st = str(pay.get("status") or "")
         return False, ("مهلتِ این فاکتور تمام شده و پرداختی ثبت نشد." if st == "expired"
                        else "هنوز پرداختی ثبت نشده است."), 0
+    if not res.get("verified"):
+        logger.warning("apay: status=paid ولی verified=false (تأییدِ دستیِ فروشنده؟) — با تطبیقِ order/مبلغ پذیرفته می‌شود "
+                       "(bot=%s order=%s): %s", bot_id, order_id, pay)
     # تطبیق با سفارشِ خودمان — هرگز به مبلغِ اعلامی اعتماد نمی‌کنیم
     if str(pay.get("order_id")) != order_id or int(pay.get("amount") or 0) != expected * 10:
         logger.error("apay: عدمِ تطابقِ پرداخت (bot=%s order=%s): %s", bot_id, order_id, pay)
+        await alert_blocked(bot_id, order_id, f"آپی پرداخت را «paid» اعلام کرده ولی اطلاعاتش با فاکتور نمی‌خواند "
+                            f"(order={pay.get('order_id')}، مبلغ={pay.get('amount')} ریال؛ انتظار {expected * 10:,} ریال).")
         return False, "اطلاعاتِ پرداخت با فاکتور نمی‌خواند؛ با پشتیبانی تماس بگیر.", 0
     # === PATCH_APAY_PAID_AMOUNT_GUARD_V1 ===
     # گزارشِ مالک: «مشتری کارت‌به‌کارتِ عادی با مبلغِ رند زد (نه مبلغِ دقیقِ فاکتورِ آپی) و آپی شارژش کرد».
@@ -446,6 +454,7 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
     mism = paid_amount_mismatch(pay, expected_pay_rial=pay_rial_stored, expected_rial=expected * 10)
     if mism:
         logger.error("apay: مبلغِ واریزشده با فاکتور نمی‌خواند (bot=%s order=%s): %s | %s", bot_id, order_id, mism, pay)
+        await alert_blocked(bot_id, order_id, f"آپی «paid» گفته ولی مبلغِ واریزشده با فاکتور یکی نیست ({mism}).")
         return False, ("مبلغِ واریزشده با مبلغِ فاکتور یکی نیست (" + mism + ")؛ برایِ جلوگیری از شارژِ اشتباه "
                        "خودکار شارژ نشد — ادمین باید دستی بررسی کند."), 0
 
@@ -656,8 +665,18 @@ async def handle_webhook(bot_id: int, raw: bytes, ts: str, sig: str) -> int:
 ASK_AFTER_MIN = 5
 
 
+def expiry_user_text(amount: int, order_id: str) -> str:
+    """=== PATCH_APAY_EXPIRY_NOTICE_V1 === فاکتور بدونِ لغوِ کاربر منقضی شد؛ تکلیفش را به کاربر بگو."""
+    return ("⌛️ <b>فاکتورِ شارژ منقضی شد</b>\n\n"
+            f"💰 مبلغ: <b>{int(amount):,} تومان</b>\n"
+            f"🆔 کد: <code>{order_id}</code>\n\n"
+            "تا لحظهٔ انقضا هیچ پرداختی برایِ این فاکتور ثبت نشد.\n"
+            "• اگر واریز نکرده‌ای: دوباره فاکتورِ جدید بساز.\n"
+            "• اگر واریز کرده‌ای: همین کد را برایِ پشتیبانی بفرست تا بررسی و در صورتِ واریز شارژ شود.")
+
+
 def admin_ask_text(*, who: str, tg_id: int, amount: int, fee: int, pay_rial: int | None,
-                   order_id: str, status: str, created=None) -> str:
+                   order_id: str, status: str, created=None, note: str = "") -> str:
     st = {"waiting": "⏳ در انتظارِ پرداخت", "cancelled": "🚫 کاربر لغو کرد",
           "expired": "⌛️ منقضی شد"}.get(status, status)
     return ("🔔 <b>درخواستِ شارژِ پرداخت‌نشده (کارت‌به‌کارتِ آنی)</b>\n\n"
@@ -668,8 +687,8 @@ def admin_ask_text(*, who: str, tg_id: int, amount: int, fee: int, pay_rial: int
             + f"🆔 فاکتور: <code>{order_id}</code>\n"
             + _created_line(created)
             + f"📌 وضعیت: {st}\n\n"
-            f"⏱ {ASK_AFTER_MIN} دقیقه گذشته و پرداختی ثبت نشده.\n"
-            "<b>آیا این کاربر واقعاً واریز کرده است؟</b>\n"
+            + (f"{note}\n\n" if note else f"⏱ {ASK_AFTER_MIN} دقیقه گذشته و پرداختی ثبت نشده.\n")
+            + "<b>آیا این کاربر واقعاً واریز کرده است؟</b>\n"
             "با «تأیید» کیف پولِ کاربر همین الان شارژ می‌شود.")
 
 
@@ -714,7 +733,7 @@ async def ask_admin_pending() -> int:
             brow = await s.get(BotRow, ch.bot_id)
             u = await s.scalar(select(BotUser).where(
                 BotUser.bot_id == ch.bot_id, BotUser.telegram_id == ch.user_telegram_id))
-        if not brow or not brow.owner_id or int(brow.owner_id) == int(ch.user_telegram_id):
+        if not brow or not brow.owner_id:       # PATCH_APAY_EXPIRY_NOTICE_V1: مالک هم اگر خودش پرداخت کند پرسیده می‌شود (تست)
             continue
         who = ("@" + u.username) if u and u.username else ((u.full_name if u else "") or "—")
         try:
@@ -742,6 +761,81 @@ async def _send_owner(brow, text: str, kb):
         return await tbot.send_message(int(brow.owner_id), text, reply_markup=kb)
     finally:
         await tbot.session.close()
+
+
+_BLOCK_ALERTED: set[tuple[int, str]] = set()
+
+
+async def _charge_ctx(bot_id: int, order_id: str):
+    async with Session() as s:
+        ch = await s.scalar(select(ApayCharge).where(ApayCharge.bot_id == bot_id, ApayCharge.order_id == order_id))
+        if not ch:
+            return None, None, None
+        brow = await s.get(BotRow, ch.bot_id)
+        u = await s.scalar(select(BotUser).where(BotUser.bot_id == ch.bot_id, BotUser.telegram_id == ch.user_telegram_id))
+    who = ("@" + u.username) if u and u.username else ((u.full_name if u else "") or "—")
+    return ch, brow, who
+
+
+async def alert_blocked(bot_id: int, order_id: str, reason: str) -> None:
+    """=== PATCH_APAY_EXPIRY_NOTICE_V1 === آپی «paid» گفته ولی شارژِ خودکار انجام نشد ⇒ فوراً (یک‌بار) به مالک خبر بده
+    با دکمهٔ «واریز شد — شارژ کن»؛ قبلاً هیچ‌کس خبردار نمی‌شد."""
+    key = (int(bot_id), order_id)
+    if key in _BLOCK_ALERTED:
+        return
+    _BLOCK_ALERTED.add(key)
+    try:
+        ch, brow, who = await _charge_ctx(bot_id, order_id)
+        if not ch or not brow or not brow.owner_id or ch.status == "paid":
+            return
+        await _send_owner(brow, admin_ask_text(
+            who=who, tg_id=ch.user_telegram_id, amount=ch.amount_toman, fee=ch.fee_toman or 0,
+            pay_rial=ch.pay_amount_rial, order_id=ch.order_id, status=ch.status, created=ch.created_at,
+            note="⚠️ " + reason), admin_ask_kb("apadm", ch.id))
+    except Exception:
+        logger.exception("apay: هشدارِ «پرداخت شده ولی شارژ نشد» ارسال نشد (order=%s)", order_id)
+
+
+async def notify_expired(bot_id: int, order_id: str, ask_chat, ask_msg) -> None:
+    """=== PATCH_APAY_EXPIRY_NOTICE_V1 === فاکتور بدونِ لغوِ کاربر منقضی شد: به کاربر بگو، و مالک را با نتیجهٔ نهایی
+    خبر کن (پرسشِ بی‌پاسخ پاک نمی‌شود؛ همان پیام به «منقضی شد» تبدیل می‌شود و دکمهٔ شارژِ دستی را نگه می‌دارد)."""
+    try:
+        ch, brow, who = await _charge_ctx(bot_id, order_id)
+        if not ch or not brow or ch.status != "expired":
+            return
+        from aiogram import Bot
+        from aiogram.client.default import DefaultBotProperties
+        from aiogram.enums import ParseMode
+        tbot = Bot(token=brow.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        try:
+            try:
+                await tbot.send_message(int(ch.user_telegram_id), expiry_user_text(ch.amount_toman, ch.order_id))
+            except Exception:
+                logger.info("apay: اطلاعِ انقضا به کاربر ممکن نشد")
+            if ch.chat_id and ch.msg_id:                 # دکمه‌هایِ پیامِ فاکتورِ مرده برداشته شود
+                try:
+                    await tbot.edit_message_reply_markup(chat_id=int(ch.chat_id), message_id=int(ch.msg_id), reply_markup=None)
+                except Exception:
+                    logger.debug("apay: دکمه‌هایِ فاکتورِ منقضی برداشته نشد")
+            if brow.owner_id:
+                text = admin_ask_text(
+                    who=who, tg_id=ch.user_telegram_id, amount=ch.amount_toman, fee=ch.fee_toman or 0,
+                    pay_rial=ch.pay_amount_rial, order_id=ch.order_id, status="expired", created=ch.created_at,
+                    note="⌛️ فاکتور بدونِ لغوِ کاربر منقضی شد و تا آخر هیچ پرداختی برایش در آپی ثبت نشد.")
+                kb = admin_ask_kb("apadm", ch.id)
+                done = False
+                if ask_chat and ask_msg:
+                    try:
+                        await tbot.edit_message_text(text, chat_id=int(ask_chat), message_id=int(ask_msg), reply_markup=kb)
+                        done = True
+                    except Exception:
+                        logger.debug("apay: ویرایشِ پرسشِ قبلیِ مالک ممکن نشد")
+                if not done:
+                    await tbot.send_message(int(brow.owner_id), text, reply_markup=kb)
+        finally:
+            await tbot.session.close()
+    except Exception:
+        logger.exception("apay: اطلاعِ انقضا ناموفق بود (order=%s)", order_id)
 
 
 async def _drop_admin_ask(bot_id: int, chat_id, msg_id) -> None:
@@ -850,8 +944,11 @@ async def poll_pending() -> int:
                 from tenant.gateways.apay_log import log_event as _alog
                 await _alog(bid, "expired", user_tg=exp_info[0], amount_toman=exp_info[1],
                             pay_rial=exp_info[2], fee_toman=exp_info[3], order_id=oid)
-            # === PATCH_APAY_ASK_CLEANUP_V2 === منقضی و پرداخت‌نشده ⇒ پرسش بی‌پاسخ مالک پاک شود
-            await _drop_admin_ask(bid, ask_chat, ask_msg)
+            # === PATCH_APAY_EXPIRY_NOTICE_V1 === منقضی و پرداخت‌نشده ⇒ به کاربر و مالک بگو (پرسش پاک نمی‌شود، «منقضی شد» می‌شود)
+            if exp_info:
+                await notify_expired(bid, oid, ask_chat, ask_msg)
+            else:
+                await _drop_admin_ask(bid, ask_chat, ask_msg)
     return n
 
 

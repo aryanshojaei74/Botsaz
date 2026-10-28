@@ -631,9 +631,9 @@ async def test_tenant_expiry_removes_unanswered_ask_but_answered_ask_is_kept(db,
     AA = _patch_admin(monkeypatch, maker)
     dropped = []
 
-    async def drop(bot_id, chat, msg):
-        dropped.append((bot_id, chat, msg))
-    monkeypatch.setattr(AP, "_drop_admin_ask", drop)
+    async def notify(bot_id, oid, chat, msg):               # PATCH_APAY_EXPIRY_NOTICE_V1: دیگر پاک نمی‌شود؛ «منقضی شد» اعلام می‌شود
+        dropped.append((bot_id, oid, chat, msg))
+    monkeypatch.setattr(AP, "notify_expired", notify)
     async with maker() as s:
         ch = await s.scalar(select(models.ApayCharge))
         ch.created_at = datetime.utcnow() - timedelta(minutes=45)
@@ -644,7 +644,7 @@ async def test_tenant_expiry_removes_unanswered_ask_but_answered_ask_is_kept(db,
         return 200, {"verified": False, "payment": {"status": "expired"}}
     monkeypatch.setattr(AP, "verify_payment", v)
     await AP.poll_pending()
-    assert dropped == [(5, 1, 111)]                                            # منقضی‌شده و پرداخت‌نشده ⇒ پرسش پاک شد
+    assert dropped == [(5, "bsabc", 1, 111)]                                   # منقضی‌شده و پرداخت‌نشده ⇒ به کاربر/مالک اعلام می‌شود
     async with maker() as s:
         assert (await s.scalar(select(models.ApayCharge))).status == "expired"
 
