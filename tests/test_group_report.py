@@ -326,8 +326,32 @@ async def _sent_report(db, bot, reason="دلیل"):
     return row.id
 
 
+def _datas(markup):
+    return [b.callback_data for row in markup.inline_keyboard for b in row]
+
+
+def _admin_reply(text, prompt_id, uid=ADMIN):
+    out = []
+
+    async def reply(t, **kw):
+        out.append(t)
+    return SimpleNamespace(text=text, from_user=_user(uid), chat=SimpleNamespace(id=uid, type="private"),
+                           reply_to_message=SimpleNamespace(message_id=prompt_id), reply=reply), out
+
+
+def _last_prompt(bot):
+    p = [c for c in bot.of("send", ADMIN) if isinstance(c[3].get("reply_markup"), ForceReply)]
+    return p[-1]
+
+
+def _group_notice(bot):
+    return [c for c in bot.of("send", CHAT)][-1]
+
+
 @pytest.mark.asyncio
-async def test_admin_warn_mute_delete_and_keyboard_shrinks(db):
+async def test_warn_asks_reason_then_announces_in_group_with_glass_counters(db):
+    """PATCH_REPORT_ACTION_REASON_V1: اخطار ⇒ پرسیدنِ علت ⇒ اجرا ⇒ اعلام در گروه + دکمه‌هایِ شیشه‌ایِ اخطار/تا بن/گزارش‌ها."""
+    PR._PENDING.clear()
     bot = FakeBot()
     rid = await _sent_report(db, bot)
     cb, answers, edits = _cb(f"grpa:warn:{rid}", 999)
@@ -335,49 +359,120 @@ async def test_admin_warn_mute_delete_and_keyboard_shrinks(db):
     assert answers[-1][1] is True and not edits                                              # غیر مدیر
     cb, answers, edits = _cb(f"grpa:warn:{rid}", ADMIN)
     await PR.report_admin_action(cb, bot)
-    assert "اخطار ثبت شد (1/3)" in answers[-1][0]
+    async with db.maker() as s:
+        assert await s.scalar(select(models.GroupGuardWarn)) is None                          # هنوز اجرا نشده؛ منتظرِ علت
+    assert f"grpa:go:{rid}:warn:0" in _datas(edits[-1][1]) and f"grpa:back:{rid}" in _datas(edits[-1][1])
+    prompt = _last_prompt(bot)
+    assert "علتِ اخطار" in prompt[2] and prompt[1] == ADMIN
+    m, out = _admin_reply("فحاشی در گروه", bot._n)                                           # آخرین شناسهٔ ساخته‌شده = پیامِ prompt
+    await PR.report_admin_reason_reply(m, bot)
     async with db.maker() as s:
         w = await s.scalar(select(models.GroupGuardWarn))
-        assert w.count == 1 and w.user_id == TARGET and f"گزارش #{rid}" in w.last_reason
-    datas = [b.callback_data for row in edits[-1][1].inline_keyboard for b in row]
-    assert f"grpa:warn:{rid}" not in datas and f"grpa:mute:{rid}" in datas                   # اقدام انجام‌شده از کیبورد رفت
-    assert "اخطار" in edits[-1][0] and "انجام‌شده" in edits[-1][0]
-    cb, answers, edits = _cb(f"grpa:warn:{rid}", ADMIN)                                      # تکراری: دوباره ثبت نمی‌شود
-    await PR.report_admin_action(cb, bot)
-    assert answers[-1][1] is True
-    async with db.maker() as s:
-        assert (await s.scalar(select(models.GroupGuardWarn))).count == 1
-    cb, answers, _ = _cb(f"grpa:mute:{rid}", ADMIN)
-    await PR.report_admin_action(cb, bot)
-    r = bot.of("restrict")[0]
-    assert r[1] == CHAT and r[2] == TARGET and r[3]["permissions"].can_send_messages is False
-    cb, answers, _ = _cb(f"grpa:del:{rid}", ADMIN)
-    await PR.report_admin_action(cb, bot)
-    assert (("delete", CHAT, 33)) in bot.calls
-    assert (await rows(db))[0].actions == "warn,mute,del" and (await rows(db))[0].status == "sent"
+        assert w.count == 1 and "فحاشی در گروه" in w.last_reason and f"گزارش #{rid}" in w.last_reason
+    assert out and "اخطار ثبت شد (1/3)" in out[-1]
+    n = _group_notice(bot)
+    assert n[1] == CHAT and "اخطار داده شد" in n[2] and "گزارش #" in n[2] and "علتِ تخلف: فحاشی در گروه" in n[2]
+    labels = [b.text for row in n[3]["reply_markup"].inline_keyboard for b in row]
+    assert any("اخطارها: ۱ از ۳" in x for x in labels) and any("گزارش‌ها: ۱" in x for x in labels)
+    assert any("تا بن: ۲ اخطارِ دیگر" in x for x in labels)
+    assert set(_datas(n[3]["reply_markup"])) == {"grpn:noop"}                                 # نمایشی
+    assert n[3]["reply_parameters"].message_id == 33                                         # ریپلای به پیامِ متخلف
+    assert (await rows(db))[0].admin_reason == "فحاشی در گروه"
+    assert f"grpa:warn:{rid}" not in _datas(bot.of("edit", ADMIN)[-1][4]["reply_markup"])     # اقدام از کیبورد رفت
+    assert "علتِ اقدام: فحاشی در گروه" in bot.of("edit", ADMIN)[-1][3]
+    assert PR._PENDING == {}
 
 
 @pytest.mark.asyncio
-async def test_admin_ban_needs_confirmation_and_closes(db):
+async def test_mute_picks_duration_then_reason_skip_uses_reporter_reason(db):
+    PR._PENDING.clear()
+    bot = FakeBot()
+    rid = await _sent_report(db, bot, reason="اسپم")
+    cb, answers, edits = _cb(f"grpa:mute:{rid}", ADMIN)
+    await PR.report_admin_action(cb, bot)
+    assert _datas(edits[-1][1])[:4] == [f"grpa:dur:{rid}:{m}" for m in (10, 60, 360, 1440)]
+    assert bot.of("restrict") == []                                                          # هنوز سکوتی نیست
+    cb, answers, edits = _cb(f"grpa:dur:{rid}:999", ADMIN)                                   # مدتِ نامعتبر
+    await PR.report_admin_action(cb, bot)
+    assert answers[-1][1] is True and bot.of("restrict") == []
+    cb, answers, edits = _cb(f"grpa:dur:{rid}:60", ADMIN)
+    await PR.report_admin_action(cb, bot)
+    assert f"grpa:go:{rid}:mute:60" in _datas(edits[-1][1]) and "سکوتِ ۶۰ دقیقه" in _last_prompt(bot)[2]
+    cb, answers, edits = _cb(f"grpa:go:{rid}:mute:60", ADMIN)                                # «بدون دلیل»
+    await PR.report_admin_action(cb, bot)
+    r = bot.of("restrict")[0]
+    assert r[1] == CHAT and r[2] == TARGET and r[3]["permissions"].can_send_messages is False
+    delta = (r[3]["until_date"] - datetime.now()).total_seconds() / 60
+    assert 59 <= delta <= 61
+    n = _group_notice(bot)
+    assert "به مدتِ <b>۶۰ دقیقه</b> سکوت شد" in n[2] and "علتِ تخلف: اسپم" in n[2]               # علتِ گزارش‌دهنده جایگزین
+    assert PR._PENDING == {}                                                                 # پیامِ prompt پاک شد
+    assert (await rows(db))[0].actions == "mute" and (await rows(db))[0].admin_reason is None
+
+
+@pytest.mark.asyncio
+async def test_mute_default_duration_without_choice_is_not_used_and_delete_is_immediate(db):
+    bot = FakeBot()
+    rid = await _sent_report(db, bot)
+    cb, answers, _ = _cb(f"grpa:del:{rid}", ADMIN)
+    await PR.report_admin_action(cb, bot)
+    assert (("delete", CHAT, 33)) in bot.calls and not bot.of("send", CHAT)                  # حذفِ پیام: بدونِ علت و اعلام
+    assert (await rows(db))[0].actions == "del" and (await rows(db))[0].status == "sent"
+
+
+@pytest.mark.asyncio
+async def test_ban_asks_reason_and_announces_banned(db):
+    PR._PENDING.clear()
     bot = FakeBot()
     rid = await _sent_report(db, bot)
     cb, answers, edits = _cb(f"grpa:ban:{rid}", ADMIN)
     await PR.report_admin_action(cb, bot)
-    assert bot.of("ban") == []                                                               # فقط تأیید خواسته شد
-    assert [b.callback_data for row in edits[-1][1].inline_keyboard for b in row] == [f"grpa:banyes:{rid}", f"grpa:back:{rid}"]
-    cb, answers, edits = _cb(f"grpa:back:{rid}", ADMIN)
-    await PR.report_admin_action(cb, bot)
-    assert f"grpa:ban:{rid}" in [b.callback_data for row in edits[-1][1].inline_keyboard for b in row]
-    cb, answers, edits = _cb(f"grpa:banyes:{rid}", ADMIN)
-    await PR.report_admin_action(cb, bot)
-    assert bot.of("ban") == [("ban", CHAT, TARGET)] and "بن شد" in answers[-1][0]
+    assert bot.of("ban") == [] and f"grpa:go:{rid}:ban:0" in _datas(edits[-1][1])
+    prompt_id = bot._n
+    m, out = _admin_reply("تبلیغ مزاحم", prompt_id)
+    await PR.report_admin_reason_reply(m, bot)
+    assert bot.of("ban") == [("ban", CHAT, TARGET)] and "بن شد" in out[-1]
     async with db.maker() as s:
         b = await s.scalar(select(models.GroupGuardBan))
-        assert b.user_id == TARGET and b.banned_by == ADMIN and f"گزارش #{rid}" in b.reason
-    assert edits[-1][1] is None and (await rows(db))[0].status == "closed"                  # کیبورد برداشته شد
+        assert b.user_id == TARGET and b.banned_by == ADMIN and f"گزارش #{rid}" in b.reason and "تبلیغ مزاحم" in b.reason
+    n = _group_notice(bot)
+    assert "از گروه بن شد" in n[2] and "علتِ تخلف: تبلیغ مزاحم" in n[2]
+    assert any("بن‌شده" in b.text for row in n[3]["reply_markup"].inline_keyboard for b in row)
+    assert (await rows(db))[0].status == "closed"
     cb, answers, _ = _cb(f"grpa:warn:{rid}", ADMIN)
     await PR.report_admin_action(cb, bot)
     assert answers[-1][1] is True                                                            # بسته است
+
+
+@pytest.mark.asyncio
+async def test_back_cancels_pending_prompt_and_nothing_happens(db):
+    PR._PENDING.clear()
+    bot = FakeBot()
+    rid = await _sent_report(db, bot)
+    cb, _a, _e = _cb(f"grpa:ban:{rid}", ADMIN)
+    await PR.report_admin_action(cb, bot)
+    pid = bot._n
+    assert pid in PR._PENDING
+    cb, answers, edits = _cb(f"grpa:back:{rid}", ADMIN)
+    await PR.report_admin_action(cb, bot)
+    assert PR._PENDING == {} and ("delete", ADMIN, pid) in bot.calls and bot.of("ban") == []
+    assert f"grpa:ban:{rid}" in _datas(edits[-1][1])
+    m, out = _admin_reply("دیر رسید", pid)                                                    # ریپلای به prompt منقضی‌شده ⇒ نادیده
+    assert PR._is_admin_reason(m) is False
+    m2, _o = _admin_reply("x", 5, uid=999)
+    assert PR._is_admin_reason(m2) is False
+
+
+@pytest.mark.asyncio
+async def test_reason_reply_from_non_admin_is_ignored(db):
+    PR._PENDING.clear()
+    bot = FakeBot()
+    rid = await _sent_report(db, bot)
+    cb, _a, _e = _cb(f"grpa:warn:{rid}", ADMIN)
+    await PR.report_admin_action(cb, bot)
+    pid = bot._n
+    m, _o = _admin_reply("من ادمین نیستم", pid, uid=999)
+    assert PR._is_admin_reason(m) is False
 
 
 @pytest.mark.asyncio
@@ -394,15 +489,19 @@ async def test_failed_ban_changes_nothing(db):
 
 
 @pytest.mark.asyncio
-async def test_warn_reaching_threshold_auto_bans_and_closes(db):
+async def test_warn_reaching_threshold_auto_bans_announces_ban_and_closes(db):
+    PR._PENDING.clear()
     bot = FakeBot()
     db.store["group_guard_warn_threshold"] = "1"
     rid = await _sent_report(db, bot)
-    cb, answers, edits = _cb(f"grpa:warn:{rid}", ADMIN)
+    cb, answers, edits = _cb(f"grpa:go:{rid}:warn:0", ADMIN)
     await PR.report_admin_action(cb, bot)
     assert "بن شد" in answers[-1][0] and bot.of("ban") == [("ban", CHAT, TARGET)]
     r = (await rows(db))[0]
     assert r.status == "closed" and "ban" in r.actions
+    n = _group_notice(bot)
+    assert "به‌خاطر رسیدن به سقفِ اخطارها" in n[2]
+    assert any("بن‌شده" in b.text for row in n[3]["reply_markup"].inline_keyboard for b in row)
 
 
 @pytest.mark.asyncio

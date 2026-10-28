@@ -3409,6 +3409,7 @@ class GroupReport(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
     submitted_at: Mapped[datetime | None] = mapped_column(DateTime)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    admin_reason: Mapped[str | None] = mapped_column(Text)                   # PATCH_REPORT_ACTION_REASON_V1: علتِ اقدامِ مدیر
 
 
 # === PATCH_TENANT_GROUP_GUARD_V1 ===

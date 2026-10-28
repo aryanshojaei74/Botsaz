@@ -9,6 +9,10 @@
   ۳) گزارش با دلیل (یا ۵ دقیقه بعد بدون دلیل) در پیوی مدیر اصلی می‌آید: مشخصات، متن پیام، لینک، دلیل، سوابق، و
      دکمه‌های ⚠️ اخطار / 🔇 سکوت / 🗑 حذف پیام / 🚫 بن (با تأیید) / ✅ رد گزارش — اخطار و بن همان سامانهٔ محافظ گروه
      (شمارندهٔ خطا، سقف و بن خودکار، لاگ) را به کار می‌گیرند.
+=== PATCH_REPORT_ACTION_REASON_V1 === (گزارش حاج‌عمیر/مهدی): مدیر روی «اخطار / سکوت / بن» که بزند، علت را می‌پرسد (ریپلای به
+پیامِ «دلیل را بنویس» یا «بدون دلیل»)؛ برایِ سکوت مدت هم انتخاب می‌شود. بعد از اقدام، ربات در همان گروه اعلام می‌کند: چه کسی، چه
+اقدامی و چند دقیقه، بابتِ کدام گزارش، علتِ تخلف — و زیرش با دکمه‌هایِ شیشه‌ایِ غیرفعال: اخطارها (n/سقف)، «تا بن چند اخطارِ دیگر» و
+تعدادِ گزارش‌هایِ علیه او.
 حفاظ‌ها: فقط در گروه متصل روشن محافظ؛ ادمین/ربات/خود را نمی‌شود گزارش کرد؛ هر نفر ساعتی حداکثر ۵ گزارش؛ گزارش
 تکراری همان پیام پذیرفته نمی‌شود؛ هر گزارش فقط یک بار به مدیر می‌رسد. کلید: pset platform_group_report_enabled (پیش‌فرض روشن).
 """
@@ -40,6 +44,9 @@ REASON_WINDOW_SECS = 300          # بعد از این مدت بدون دلیل 
 MAX_REASON = 500
 MAX_PER_HOUR = 5                  # گزارش‌های هر نفر در یک ساعت
 SNIPPET = 300
+MAX_ACTION_REASON = 300
+MUTE_CHOICES = (10, 60, 360, 1440)       # دقیقه؛ دکمه‌هایِ انتخابِ مدتِ سکوت
+_PENDING: dict[int, dict] = {}           # شناسهٔ پیامِ «دلیل را بنویس» (در پیوی مدیر) → {"rid","act","minutes"}
 ACTION_FA = {"warn": "⚠️ اخطار", "mute": "🔇 سکوت", "del": "🗑 حذف پیام", "ban": "🚫 بن", "ok": "✅ رد شد"}
 
 _ZW = dict.fromkeys(map(ord, "‌‍‎‏"), None)
@@ -68,6 +75,17 @@ def message_link(chat_id: int, message_id: int) -> str | None:
     if message_id and s.startswith("-100"):
         return f"https://t.me/c/{s[4:]}/{message_id}"
     return None
+
+
+def dur_fa(minutes: int) -> str:
+    """۶۰ ⇒ «۶۰ دقیقه»، ۳۶۰ ⇒ «۶ ساعت»، ۲۸۸۰ ⇒ «۲ روز»."""
+    from fa_num import fa_digits
+    m = int(minutes)
+    if m >= 2880 and m % 1440 == 0:
+        return f"{fa_digits(m // 1440)} روز"
+    if m >= 120 and m % 60 == 0:
+        return f"{fa_digits(m // 60)} ساعت"
+    return f"{fa_digits(m)} دقیقه"
 
 
 def _acts(row: GroupReport) -> list[str]:
@@ -126,16 +144,24 @@ def admin_text(row: GroupReport, prev: int, warns: int, banned: bool) -> str:
     done = [ACTION_FA[a] for a in _acts(row) if a in ACTION_FA]
     if done:
         lines += ["", "✅ انجام‌شده: " + "، ".join(done)]
+    if row.admin_reason:
+        lines.append(f"🗒 علتِ اقدام: {html.escape(row.admin_reason)}")
     return "\n".join(lines)
 
 
-def admin_kb(row: GroupReport, confirm_ban: bool = False) -> InlineKeyboardMarkup | None:
+def admin_kb(row: GroupReport, mode=None) -> InlineKeyboardMarkup | None:
+    """mode: None = دکمه‌هایِ اصلی | ("mute",) = انتخابِ مدتِ سکوت | ("reason", act, minutes) = منتظرِ علتِ اقدام."""
     if row.status == "closed":
         return None
-    if confirm_ban:
+    if mode and mode[0] == "mute":
+        btns = [InlineKeyboardButton(text="🔇 " + dur_fa(m), callback_data=f"grpa:dur:{row.id}:{m}") for m in MUTE_CHOICES]
+        return InlineKeyboardMarkup(inline_keyboard=[btns[:2], btns[2:],
+                                                     [InlineKeyboardButton(text="↩️ انصراف", callback_data=f"grpa:back:{row.id}")]])
+    if mode and mode[0] == "reason":
         return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="✅ بله، بن کن", callback_data=f"grpa:banyes:{row.id}", style=ButtonStyle.DANGER),
-            InlineKeyboardButton(text="↩️ نه", callback_data=f"grpa:back:{row.id}")]])
+            InlineKeyboardButton(text="⏩ بدون دلیل", callback_data=f"grpa:go:{row.id}:{mode[1]}:{int(mode[2] or 0)}",
+                                 style=ButtonStyle.DANGER),
+            InlineKeyboardButton(text="↩️ انصراف", callback_data=f"grpa:back:{row.id}")]])
     done = set(_acts(row))
     first = [InlineKeyboardButton(text=ACTION_FA[a], callback_data=f"grpa:{a}:{row.id}") for a in ("warn", "mute") if a not in done]
     second = [InlineKeyboardButton(text=ACTION_FA[a], callback_data=f"grpa:{a}:{row.id}") for a in ("del", "ban") if a not in done]
@@ -371,23 +397,29 @@ async def report_sweep_loop(platform_bot=None, interval_sec: int = 30):
 
 # ───────────────────────── مدیر: اقدام‌ها ─────────────────────────
 
-async def _do_action(bot: Bot, row: GroupReport, act: str, admin_id: int) -> tuple[str, bool]:
-    """اقدام را اجرا می‌کند؛ (متن کوتاه نتیجه، آیا کاربر بن شد). در صورت شکست استثنا می‌اندازد (چیزی ثبت نمی‌شود)."""
+async def _do_action(bot: Bot, row: GroupReport, act: str, admin_id: int, note: str | None = None,
+                     minutes: int | None = None) -> tuple[str, bool, dict]:
+    """اقدام را اجرا می‌کند؛ (متن کوتاه نتیجه، آیا کاربر بن شد، اطلاعاتِ اعلامِ گروه). در شکست استثنا می‌اندازد (چیزی ثبت نمی‌شود)."""
     from platform_group_guard import _apply_warn, _ban_and_verify, _log_action
-    reason = f"گزارش #{row.id}" + (f": {row.reason}" if row.reason else "")
+    why = (note or row.reason or "").strip()
+    reason = f"گزارش #{row.id}" + (f": {why}" if why else "")
     u = SimpleNamespace(id=row.target_id, full_name=row.target_name or str(row.target_id), username=row.target_username)
+    info: dict = {}
     if act == "warn":
         cnt, th, auto = await _apply_warn(bot, row.chat_id, u, reason[:250], admin_id)
-        return f"⚠️ اخطار ثبت شد ({cnt}/{th})" + (" و به‌خاطر رسیدن به سقف بن شد" if auto else ""), bool(auto)
+        info.update(cnt=cnt, th=th, auto=bool(auto))
+        return f"⚠️ اخطار ثبت شد ({cnt}/{th})" + (" و به‌خاطر رسیدن به سقف بن شد" if auto else ""), bool(auto), info
     if act == "mute":
-        minutes = int(await _pset("group_guard_mute_default_min", "10") or "10")
+        minutes = int(minutes or int(await _pset("group_guard_mute_default_min", "10") or "10"))
         await bot.restrict_chat_member(row.chat_id, row.target_id, permissions=ChatPermissions(can_send_messages=False),
                                        until_date=datetime.now() + timedelta(minutes=minutes))
-        await _log_action(f"🔇 <b>سکوت</b> ({minutes} دقیقه) از گزارش #{row.id}\n👤 {html.escape(u.full_name)} (<code>{u.id}</code>)")
-        return f"🔇 {minutes} دقیقه سکوت شد", False
+        await _log_action(f"🔇 <b>سکوت</b> ({minutes} دقیقه) از گزارش #{row.id}\n👤 {html.escape(u.full_name)} (<code>{u.id}</code>)"
+                          + (f"\n📝 {html.escape(why)}" if why else ""))
+        info.update(minutes=minutes)
+        return f"🔇 {minutes} دقیقه سکوت شد", False, info
     if act == "del":
         await bot.delete_message(row.chat_id, row.target_message_id)
-        return "🗑 پیام حذف شد", False
+        return "🗑 پیام حذف شد", False, info
     if act == "ban":
         ok, err = await _ban_and_verify(bot, row.chat_id, row.target_id)
         if not ok:
@@ -400,18 +432,163 @@ async def _do_action(bot: Bot, row: GroupReport, act: str, admin_id: int) -> tup
             b.full_name, b.username, b.reason = u.full_name, u.username, reason[:250]
             b.banned_by, b.banned_at = admin_id, datetime.now()
             await s.commit()
-        await _log_action(f"🚫 <b>بن</b> از گزارش #{row.id}\n👤 {html.escape(u.full_name)} (<code>{u.id}</code>)")
-        return "🚫 بن شد", True
-    return "✅ بسته شد", False
+        await _log_action(f"🚫 <b>بن</b> از گزارش #{row.id}\n👤 {html.escape(u.full_name)} (<code>{u.id}</code>)"
+                          + (f"\n📝 {html.escape(why)}" if why else ""))
+        return "🚫 بن شد", True, info
+    return "✅ بسته شد", False, info
 
 
-async def _render_admin(cb: CallbackQuery, row: GroupReport, confirm_ban: bool = False) -> None:
+async def _announce(bot: Bot, row: GroupReport, act: str, why: str, info: dict, banned: bool) -> None:
+    """اعلامِ اقدام در گروه + دکمه‌هایِ شیشه‌ایِ غیرفعال (اخطارها / تا بن / تعدادِ گزارش‌ها)."""
+    from fa_num import fa_digits
+    from premium_emoji import hx_button
+    who = _mention(row.target_id, row.target_name, row.target_username)
+    if act == "mute":
+        head = f"🔇 {who} به مدتِ <b>{dur_fa(info.get('minutes') or 10)}</b> سکوت شد."
+    elif act == "warn":
+        head = (f"🚫 {who} به‌خاطر رسیدن به سقفِ اخطارها از گروه بن شد." if info.get("auto")
+                else f"⚠️ به {who} اخطار داده شد.")
+    else:
+        head = f"🚫 {who} از گروه بن شد."
+    lines = [head, "", f"📌 بابتِ گزارش #{row.id}"]
+    if row.message_text:
+        lines.append(f"💬 پیام: «{html.escape(row.message_text[:120])}»")
+    if why:
+        lines.append(f"📝 علتِ تخلف: {html.escape(why)}")
+    prev, warns, _b = await _stats(row)
+    th = int(await _pset("group_guard_warn_threshold", "3") or "3")
+    cnt = int(info.get("cnt") or warns)
+    noop = {"callback_data": "grpn:noop", "style": ButtonStyle.PRIMARY}
+    rows = [[hx_button(f"⚠️ اخطارها: {fa_digits(cnt)} از {fa_digits(th)}", **noop),
+             hx_button(f"📊 گزارش‌ها: {fa_digits(prev + 1)}", **noop)]]
+    if banned:
+        rows.append([hx_button("🚫 بن‌شده", callback_data="grpn:noop", style=ButtonStyle.DANGER)])
+    else:
+        left = max(th - cnt, 0)
+        rows.append([hx_button(f"⏳ تا بن: {fa_digits(left)} اخطارِ دیگر", callback_data="grpn:noop", style=ButtonStyle.DANGER)])
+    try:
+        await bot.send_message(row.chat_id, "\n".join(lines), parse_mode="HTML", disable_web_page_preview=True,
+                               reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+                               reply_parameters=ReplyParameters(message_id=row.target_message_id, allow_sending_without_reply=True)
+                               if row.target_message_id else None)
+    except Exception:  # noqa: BLE001 — اعلام شکست خورد؛ خودِ اقدام انجام شده
+        logger.exception("group report #%s: group announcement failed", row.id)
+
+
+async def _execute(bot: Bot, rid: int, act: str, admin_id: int, note: str | None = None, minutes: int | None = None):
+    """اقدام را (اتمیک) اجرا می‌کند. خروجی: (خطا یا None، متنِ نتیجه، ردیفِ به‌روز، آیا alert باشد)."""
+    note = (note or "").strip()[:MAX_ACTION_REASON] or None
+    async with Session() as s:
+        row = await s.get(GroupReport, rid, with_for_update=True)
+        if row is None or row.status not in ("sent", "closed"):
+            return "گزارش پیدا نشد.", "", None
+        if row.status == "closed":
+            await s.commit()
+            return "این گزارش بسته شده است.", "", row
+        if act not in ACTION_FA:
+            await s.commit()
+            return "", "", row
+        done = _acts(row)
+        if act in done and act != "ok":
+            await s.commit()
+            return "این اقدام قبلا انجام شده.", "", row
+        try:
+            result, banned_now, info = await _do_action(bot, row, act, admin_id, note, minutes)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("group report #%s: action %s failed", rid, act)
+            await s.commit()
+            return f"❌ انجام نشد: {str(e)[:150]}", "", row
+        done.append(act)
+        if banned_now and "ban" not in done:                # اخطار منجر به بن خودکار
+            done.append("ban")
+        row.actions = ",".join(done)
+        row.handled_by = admin_id
+        if note:
+            row.admin_reason = note
+        if act in ("ban", "ok") or "ban" in done:
+            row.status, row.closed_at = "closed", datetime.utcnow()
+        await s.commit()
+    if act in ("warn", "mute", "ban"):
+        await _announce(bot, row, act, note or (row.reason or ""), info, banned_now or act == "ban")
+    return None, result, row
+
+
+async def _render_admin(cb: CallbackQuery, row: GroupReport, mode=None, extra: str = "") -> None:
     prev, warns, banned = await _stats(row)
     try:
-        await cb.message.edit_text(admin_text(row, prev, warns, banned), reply_markup=admin_kb(row, confirm_ban),
+        await cb.message.edit_text(admin_text(row, prev, warns, banned) + extra, reply_markup=admin_kb(row, mode),
                                    parse_mode="HTML", disable_web_page_preview=True)
     except Exception as e:  # noqa: BLE001 — بدون تغییر
         logger.info("group report #%s: admin edit skipped: %s", row.id, e)
+
+
+async def _render_admin_by_id(bot: Bot, row: GroupReport) -> None:
+    """بعد از اقدام با ریپلایِ علت (کلیکی در کار نیست): پیامِ گزارشِ مدیر را با شناسه‌اش به‌روز کن."""
+    if not row.admin_message_id:
+        return
+    prev, warns, banned = await _stats(row)
+    try:
+        await bot.edit_message_text(admin_text(row, prev, warns, banned), chat_id=PLATFORM_ADMIN_ID,
+                                    message_id=row.admin_message_id, reply_markup=admin_kb(row),
+                                    parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as e:  # noqa: BLE001
+        logger.info("group report #%s: admin edit skipped: %s", row.id, e)
+
+
+async def _drop_pending(bot: Bot, rid: int) -> None:
+    """پیام‌هایِ «دلیل را بنویس»ِ باز برایِ این گزارش را پاک و از حافظه برمی‌دارد."""
+    for mid, p in [(m, p) for m, p in _PENDING.items() if p.get("rid") == rid]:
+        _PENDING.pop(mid, None)
+        try:
+            await bot.delete_message(PLATFORM_ADMIN_ID, mid)
+        except Exception as e:  # noqa: BLE001
+            logger.info("group report #%s: prompt delete skipped: %s", rid, e)
+
+
+async def _ask_reason(cb: CallbackQuery, bot: Bot, row: GroupReport, act: str, minutes: int = 0) -> None:
+    await _drop_pending(bot, row.id)
+    what = {"warn": "اخطار", "mute": f"سکوتِ {dur_fa(minutes)}" if minutes else "سکوت", "ban": "بن"}[act]
+    try:
+        sent = await bot.send_message(
+            PLATFORM_ADMIN_ID, f"✍️ علتِ {what} را به همین پیام ریپلای کن و بفرست (حداکثر {MAX_ACTION_REASON} کاراکتر).\n"
+                               "این علت در گروه هم اعلام می‌شود. اگر نمی‌خواهی علتی بنویسی، روی «⏩ بدون دلیل» بزن.",
+            reply_markup=ForceReply(input_field_placeholder="علتِ تخلف…"))
+    except Exception:  # noqa: BLE001
+        logger.exception("group report #%s: reason prompt failed", row.id)
+        await cb.answer("❌ ارسال پیام ناموفق بود.", show_alert=True)
+        return
+    _PENDING[sent.message_id] = {"rid": row.id, "act": act, "minutes": int(minutes or 0)}
+    await _render_admin(cb, row, ("reason", act, minutes), extra=f"\n\n⏳ منتظرِ علتِ {what}…")
+    await cb.answer("علت را ریپلای کن یا «بدون دلیل» بزن")
+
+
+def _is_admin_reason(m: Message) -> bool:
+    r = m.reply_to_message
+    return bool(m.text and m.from_user and m.from_user.id == PLATFORM_ADMIN_ID and r and r.message_id in _PENDING)
+
+
+@platform_group_report_router.message(F.chat.type == ChatType.PRIVATE, F.func(_is_admin_reason))
+async def report_admin_reason_reply(msg: Message, bot: Bot):
+    p = _PENDING.pop(msg.reply_to_message.message_id, None)
+    if not p:
+        raise SkipHandler
+    err, result, row = await _execute(bot, p["rid"], p["act"], msg.from_user.id, msg.text, p["minutes"])
+    try:
+        await bot.delete_message(PLATFORM_ADMIN_ID, msg.reply_to_message.message_id)
+    except Exception as e:  # noqa: BLE001
+        logger.info("group report #%s: prompt delete skipped: %s", p["rid"], e)
+    if err:
+        await msg.reply(err)
+        return
+    await _drop_pending(bot, p["rid"])
+    await _render_admin_by_id(bot, row)
+    await msg.reply(result)
+
+
+@platform_group_report_router.callback_query(F.data == "grpn:noop")
+async def report_notice_noop(cb: CallbackQuery):
+    """دکمه‌هایِ شیشه‌ایِ زیرِ اعلامِ گروه فقط نمایشی‌اند."""
+    await cb.answer()
 
 
 @platform_group_report_router.callback_query(F.data.startswith("grpa:"))
@@ -422,48 +599,60 @@ async def report_admin_action(cb: CallbackQuery, bot: Bot):
     parts = (cb.data or "").split(":")
     act, rid = parts[1], _rid(cb)
     async with Session() as s:
-        row = await s.get(GroupReport, rid, with_for_update=True)
-        if row is None or row.status not in ("sent", "closed"):
-            await cb.answer("گزارش پیدا نشد.", show_alert=True)
-            return
-        if row.status == "closed":
-            await s.commit()
-            await cb.answer("این گزارش بسته شده است.", show_alert=True)
-            return
-        if act == "ban":                                   # اول تأیید بگیر
-            await s.commit()
-            await _render_admin(cb, row, confirm_ban=True)
-            await cb.answer("مطمئنی؟")
-            return
-        if act == "back":
-            await s.commit()
-            await _render_admin(cb, row)
-            await cb.answer()
-            return
-        act = "ban" if act == "banyes" else act
-        if act not in ACTION_FA:
-            await s.commit()
-            await cb.answer()
-            return
-        done = _acts(row)
-        if act in done and act != "ok":
-            await s.commit()
-            await cb.answer("این اقدام قبلا انجام شده.", show_alert=True)
-            return
+        row = await s.get(GroupReport, rid)
+    if row is None or row.status not in ("sent", "closed"):
+        await cb.answer("گزارش پیدا نشد.", show_alert=True)
+        return
+    if row.status == "closed":
+        await cb.answer("این گزارش بسته شده است.", show_alert=True)
+        return
+    done = _acts(row)
+    if act in ("warn", "mute", "ban", "dur") and (act if act != "dur" else "mute") in done:
+        await cb.answer("این اقدام قبلا انجام شده.", show_alert=True)
+        return
+    if act in ("warn", "ban"):                              # PATCH_REPORT_ACTION_REASON_V1: اول علت را بپرس
+        await _ask_reason(cb, bot, row, act)
+        return
+    if act == "mute":                                       # اول مدت
+        await _render_admin(cb, row, ("mute",))
+        await cb.answer("مدتِ سکوت را انتخاب کن")
+        return
+    if act == "dur":
         try:
-            result, banned_now = await _do_action(bot, row, act, cb.from_user.id)
-        except Exception as e:  # noqa: BLE001
-            logger.exception("group report #%s: action %s failed", rid, act)
-            await s.commit()
-            await cb.answer(f"❌ انجام نشد: {str(e)[:150]}", show_alert=True)
+            minutes = int(parts[3])
+        except (IndexError, ValueError):
+            await cb.answer()
             return
-        done.append(act)
-        if banned_now and "ban" not in done:                # اخطار منجر به بن خودکار
-            done.append("ban")
-        row.actions = ",".join(done)
-        row.handled_by = cb.from_user.id
-        if act in ("ban", "ok") or "ban" in done:
-            row.status, row.closed_at = "closed", datetime.utcnow()
-        await s.commit()
-    await _render_admin(cb, row)
+        if minutes not in MUTE_CHOICES:
+            await cb.answer("مدتِ نامعتبر.", show_alert=True)
+            return
+        await _ask_reason(cb, bot, row, "mute", minutes)
+        return
+    if act == "back":
+        await _drop_pending(bot, rid)
+        await _render_admin(cb, row)
+        await cb.answer()
+        return
+    minutes = None
+    note = None
+    if act == "go":                                         # «بدون دلیل»
+        try:
+            act, minutes = parts[3], int(parts[4])
+        except (IndexError, ValueError):
+            await cb.answer()
+            return
+        if act not in ("warn", "mute", "ban"):
+            await cb.answer()
+            return
+    elif act == "banyes":                                   # دکمهٔ قدیمیِ پیام‌هایِ پیشین
+        act = "ban"
+    err, result, row2 = await _execute(bot, rid, act, cb.from_user.id, note, minutes or None)
+    if err:
+        await cb.answer(err, show_alert=True)
+        return
+    if not result:
+        await cb.answer()
+        return
+    await _drop_pending(bot, rid)
+    await _render_admin(cb, row2)
     await cb.answer(result)
