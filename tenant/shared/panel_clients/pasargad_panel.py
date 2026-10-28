@@ -104,7 +104,9 @@ class PasarGuardPanelClient(MarzbanPanelClient):
                 res = await self._request("GET", path)
             except PanelError as e:
                 if "HTTP 403" in str(e) or "HTTP 401" in str(e):
-                    _notes.append(f"{path}: دسترسی رد شد (ادمین sudo نیست؟)")
+                    # PATCH_PASARGUARD_PERM_HINT_V1: نامِ دسترسیِ گم‌شده (مثلاً «Permission denied: groups.read») را هم نشان بده
+                    _m = re.search(r"Permission denied:?\s*([\w.:-]+)", str(e))
+                    _notes.append(f"{path}: دسترسی رد شد (ادمین sudo نیست؟" + (f" دسترسیِ «{_m.group(1)}» لازم است" if _m else "") + ")")
                     continue
                 raise
             if res is None:

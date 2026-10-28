@@ -237,3 +237,31 @@ def test_successful_relogin_still_waits_but_clears_error(monkeypatch):
 
     assert asyncio.run(_run(app, 8884, go)) is True
     assert ("http://127.0.0.1:8884", "u") not in M._LAST_LOGIN_ERR
+
+
+def test_forbidden_diag_names_the_missing_permission():
+    """PATCH_PASARGUARD_PERM_HINT_V1: «Permission denied: groups.read» ⇒ در علتِ نمایش‌داده‌شده نامِ دسترسی آمده باشد."""
+    _reset()
+    calls = []
+
+    async def token(_):
+        return web.json_response({"access_token": _jwt()})
+
+    async def deny(_):
+        calls.append("g")
+        return web.json_response({"detail": "Permission denied: groups.read"}, status=403)
+    app = web.Application()
+    app.router.add_post("/api/admin/token", token)
+    app.router.add_get("/api/groups", deny)
+    app.router.add_get("/api/groups/simple", deny)
+
+    async def go():
+        c = PG.PasarGuardPanelClient("http://127.0.0.1:18993", "u", "p")
+        try:
+            await c.login()
+            out = await c.list_groups()
+            return out, c._groups_diag
+        finally:
+            await c.close()
+    out, diag = asyncio.run(_run(app, 18993, go))
+    assert out == [] and "groups.read" in diag and "sudo" in diag
