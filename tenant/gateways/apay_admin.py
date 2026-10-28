@@ -796,11 +796,14 @@ async def apu_check(cb: CallbackQuery, bot: Bot):
         return await cb.answer("این فاکتور پیدا نشد.", show_alert=True)
     if ch.status == "paid":
         return await cb.answer("✅ این فاکتور پرداخت و کیف پولت شارژ شده است.", show_alert=True)
-    await cb.answer("در حالِ استعلام…")
+    # PATCH_GATEWAY_INPLACE_V1: «هنوز پرداخت نشده» اعلانِ بالایِ صفحه است نه پیامِ جدید
     ok, msg_, _credit = await AP.settle_charge(row.id, oid)
     if not ok:
-        await cb.message.answer("ℹ️ " + msg_)
-    # در صورتِ موفقیت، settle_charge خودش رسیدِ شارژ را برایِ کاربر فرستاده است.
+        from tenant.gateways import inplace as IP
+        await IP.toast(cb, "ℹ️ " + msg_)
+    else:
+        await cb.answer("✅ پرداخت تأیید شد.")
+    # در صورتِ موفقیت، settle_charge خودش رسیدِ شارژ را برایِ کاربر فرستاده و فاکتور را پاک می‌کند.
 
 
 @apay_router.callback_query(F.data.startswith("apu:cancel:"))
@@ -850,12 +853,14 @@ async def apu_cancel(cb: CallbackQuery, bot: Bot):
         except Exception:
             logger.debug("apay: دکمه‌های پیام اصلی فاکتور برداشته نشد")
     from tenant import inline_back_kb
-    await cb.message.answer(
-        ("❌ فاکتور لغو شد.\n\nاگر قبل از لغو واریز کرده بودی، رسیدت را برایِ پشتیبانی بفرست تا دستی شارژ شود."
+    from tenant.gateways import inplace as IP               # PATCH_GATEWAY_INPLACE_V1: همان پیام «لغو شد» می‌شود
+    await IP.show(
+        cb,
+        ("❌ <b>فاکتور لغو شد.</b>\n\nاگر قبل از لغو واریز کرده بودی، رسیدت را برایِ پشتیبانی بفرست تا دستی شارژ شود."
          if remote == "cancelled" else
-         "❌ فاکتور لغو شد.\n\nاگر قبل از لغو واریز کرده بودی نگران نباش؛ "
+         "❌ <b>فاکتور لغو شد.</b>\n\nاگر قبل از لغو واریز کرده بودی نگران نباش؛ "
          "به‌محضِ تأییدِ بانک کیف پولت خودکار شارژ می‌شود."),
-        reply_markup=await inline_back_kb(row.id))
+        await inline_back_kb(row.id))
 
 
 # === PATCH_APAY_ADMIN_ASK_V1 === پاسخِ ادمین به «واریز شد؟» (بعد از ۵ دقیقه)

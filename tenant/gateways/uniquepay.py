@@ -173,7 +173,7 @@ async def validate_token(bot_id: int, token: str,
     return False, msgs.get(code, res.get("message") or "پاسخِ نامشخص از درگاه")
 
 
-async def settle_charge(bot_id: int, hash_id: str) -> tuple[bool, str, int]:
+async def settle_charge(bot_id: int, hash_id: str, notify: bool = True) -> tuple[bool, str, int]:
     """استعلامِ یک فاکتور و در صورتِ پرداخت، شارژِ کیفِ پول.
 
     خروجی: (شارژ شد؟, پیام, مبلغِ شارژ‌شده به تومان)
@@ -229,7 +229,7 @@ async def settle_charge(bot_id: int, hash_id: str) -> tuple[bool, str, int]:
         await _ac(bot_id, _kyc_uid)
 
     # ── اطلاع به کاربر (چون شاید خودش دکمه‌ای نزده باشد) ──
-    if _uid:
+    if _uid and notify:        # notify=False: کلیکِ «بررسی»؛ همان پیامِ فاکتور ویرایش می‌شود (PATCH_GATEWAY_INPLACE_V1)
         try:
             await _notify_paid(bot_id, _uid, credit, _bal)
         except Exception:

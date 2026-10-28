@@ -359,23 +359,14 @@ async def upu_check(cb: CallbackQuery, bot: Bot):
     if not row:
         return await cb.answer()
     hid = cb.data.split(":", 2)[2]
-    await cb.answer("در حالِ استعلام…")
-    ok, msg_, credit = await UP.settle_charge(row.id, hid)
+    # PATCH_GATEWAY_INPLACE_V1: نتیجه بدونِ پیامِ جدید (اعلانِ بالا یا ویرایشِ همان فاکتور)
+    from tenant.gateways import inplace as IP
+    ok, msg_, credit = await UP.settle_charge(row.id, hid, notify=False)
     if ok:
-        from tenant.gateways.wallet_receipt import build_wallet_charge_message_for_bot
-        async with Session() as s:
-            u = await s.scalar(select(BotUser).where(
-                BotUser.bot_id == row.id,
-                BotUser.telegram_id == cb.from_user.id))
-        bal = float(u.balance) if u else credit
-        try:
-            t, k = await build_wallet_charge_message_for_bot(
-                row.id, credit, bal, "card")
-            await cb.message.answer(t, reply_markup=k)
-        except Exception:
-            await cb.message.answer(f"✅ {credit:,} تومان به کیفِ پولت اضافه شد.")
+        await cb.answer("✅ پرداخت تأیید و کیف پولت شارژ شد.")
+        await IP.show_paid(cb, row.id, credit, cb.from_user.id, Session)
     else:
-        await cb.message.answer("ℹ️ " + msg_)
+        await IP.toast(cb, "ℹ️ " + msg_)
 
 
 # === PATCH_UNIQUEPAY_CANCEL_BACK_V1 ===
@@ -404,12 +395,6 @@ async def upu_cancel(cb: CallbackQuery, bot: Bot):
         ch.status = "cancelled"
         await s.commit()
     await cb.answer("فاکتور لغو شد.")
-    try:
-        await cb.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        logger.debug("تمیزکاریِ ظاهریِ پیام ناموفق بود (بی‌اهمیت)")
     from tenant import inline_back_kb
-    await cb.message.answer(
-        "❌ فاکتور لغو شد.\n\nاگه واریز کردی ولی اینجا لغو زدی، نگران نباش؛ "
-        "به پشتیبانیِ ربات بگو با همین کدِ پیگیری بررسیش کنه.",
-        reply_markup=await inline_back_kb(row.id))
+    from tenant.gateways import inplace as IP               # PATCH_GATEWAY_INPLACE_V1: همان پیام «لغو شد» می‌شود
+    await IP.show(cb, IP.CANCELLED_TEXT, await inline_back_kb(row.id))

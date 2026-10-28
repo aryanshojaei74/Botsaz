@@ -152,7 +152,7 @@ def _is_paid(res: dict) -> bool:
     return bool(res.get("paid") is True or str(res.get("status") or d.get("status") or "").lower() == "paid")
 
 
-async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
+async def settle_charge(bot_id: int, order_id: str, notify: bool = True) -> tuple[bool, str, int]:
     """استعلامِ یک فاکتور و در صورتِ پرداخت، شارژِ کیفِ پول. خروجی: (شارژ شد؟، پیام، مبلغِ شارژ‌شده به تومان)."""
     api_key = await _get(bot_id, "hooshpay_api_key", "")
     if not api_key:
@@ -212,7 +212,7 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
     if _kyc_uid:
         from tenant.shared.kyc import after_charge as _ac
         await _ac(bot_id, _kyc_uid)
-    if _uid:
+    if _uid and notify:        # notify=False: کلیکِ «بررسی»؛ همان پیامِ فاکتور ویرایش می‌شود (PATCH_GATEWAY_INPLACE_V1)
         try:
             from tenant.gateways.uniquepay import _notify_paid
             await _notify_paid(bot_id, _uid, credit, _bal)

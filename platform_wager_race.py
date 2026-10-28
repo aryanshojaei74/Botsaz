@@ -102,13 +102,13 @@ def norm_answer(t: str | None) -> str:
     return (t or "").strip().translate(_AR).replace("‌", "").replace(" ", "").lower()
 
 
-def new_question(kind: str) -> dict:
+def new_question(kind: str, scope: tuple = (0, 0)) -> dict:
     """پرسش و پاسخِ تازه برایِ هر نوع (state ذخیره‌شده در ردیفِ شرط)."""
     if kind == "guess":
         return {"n": 1 + secrets.randbelow(100), "tries": {}}
     if kind == "speed":
-        from platform_group_game import WORDS
-        word = secrets.choice(WORDS)
+        from platform_group_game import pick_word      # PATCH_SPEED_WORDS_V1: در همین گروه تکراری نمی‌آید
+        word = pick_word(scope)
         return {"q": word, "a": norm_answer(word)}
     from platform_group_game import make_math
     q, a = make_math()
@@ -220,7 +220,7 @@ async def join_race(wid: int, user: tuple, bot_id: int = 0):
         core._add_txn(s, bot_id, opp, -_money(w.amount), "wager_stake", f"پیوستن به {{bet}} #{w.id}")
         w.opponent_id, w.opponent_name, w.opponent_username = uid, uname or "", uuser or None
         w.status = "playing"
-        st = new_question(w.game)
+        st = new_question(w.game, (w.bot_id or 0, w.chat_id))
         w.state = json.dumps(st, ensure_ascii=False)
         w.expires_at = core._now() + timedelta(seconds=SECS[w.game])
         if w.game == "guess":                                  # نوبتی: قرعه برایِ نفرِ اول

@@ -355,3 +355,17 @@ async def test_paid_prefix_without_amount_asks_for_amount_and_plain_name_is_free
     assert G._is_start(msg("حدس عدد")) and G._is_start(msg("بازی حدس عدد"))
     assert G._is_speed(msg("بازی سرعت")) and G._is_math(msg("بازی ریاضی"))
     assert R._is_create(msg("شرطبندی حدس عدد 10000")) and not G._is_start(msg("شرطبندی حدس عدد 10000"))
+
+
+def test_speed_words_do_not_repeat_in_the_same_chat():
+    """PATCH_SPEED_WORDS_V1 (فدایی): کلمه‌هایِ سرعت تکراری می‌آمد."""
+    import platform_group_game as G
+    assert len(G.WORDS) >= 200 and len(set(G.WORDS)) == len(G.WORDS)
+    G._RECENT_WORDS.clear()
+    first = [G.pick_word((0, 111)) for _ in range(150)]
+    assert len(set(first)) == 150                                   # تا ۱۵۰ بار پشتِ‌هم هیچ تکراری نیست
+    other = {G.pick_word((0, 222)) for _ in range(30)}              # گروهِ دیگر حافظهٔ جدا دارد
+    assert len(other) == 30
+    G._RECENT_WORDS.clear()
+    qs = [R.new_question("speed", (7, 333))["q"] for _ in range(100)]
+    assert len(set(qs)) == 100                                      # مسیرِ مسابقهٔ پولی هم همان را می‌خواند

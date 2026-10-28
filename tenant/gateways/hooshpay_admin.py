@@ -329,20 +329,14 @@ async def hou_check(cb: CallbackQuery, bot: Bot):
         ch = await s.scalar(select(HooshPayCharge).where(HooshPayCharge.bot_id == row.id, HooshPayCharge.order_id == oid))
     if not ch or ch.user_telegram_id != cb.from_user.id:
         return await cb.answer("این فاکتور پیدا نشد.", show_alert=True)
-    await cb.answer("در حالِ استعلام…")
-    ok, msg_, credit = await HP.settle_charge(row.id, oid)
+    # PATCH_GATEWAY_INPLACE_V1: نتیجه بدونِ پیامِ جدید (اعلانِ بالا یا ویرایشِ همان فاکتور)
+    from tenant.gateways import inplace as IP
+    ok, msg_, credit = await HP.settle_charge(row.id, oid, notify=False)
     if ok:
-        from tenant.gateways.wallet_receipt import build_wallet_charge_message_for_bot
-        async with Session() as s:
-            u = await s.scalar(select(BotUser).where(BotUser.bot_id == row.id, BotUser.telegram_id == cb.from_user.id))
-        bal = float(u.balance) if u else credit
-        try:
-            t, k = await build_wallet_charge_message_for_bot(row.id, credit, bal, "card")
-            await cb.message.answer(t, reply_markup=k)
-        except Exception:
-            await cb.message.answer(f"✅ {credit:,} تومان به کیفِ پولت اضافه شد.")
+        await cb.answer("✅ پرداخت تأیید و کیف پولت شارژ شد.")
+        await IP.show_paid(cb, row.id, credit, cb.from_user.id, Session)
     else:
-        await cb.message.answer("ℹ️ " + msg_)
+        await IP.toast(cb, "ℹ️ " + msg_)
 
 
 @hooshpay_router.callback_query(F.data.startswith("hou:cancel:"))
@@ -379,10 +373,5 @@ async def hou_cancel(cb: CallbackQuery, bot: Bot):
         except Exception:
             logger.exception("hooshpay: لغوِ فاکتور سمتِ درگاه ناموفق بود (بی‌اهمیت)")
     await cb.answer("فاکتور لغو شد.")
-    try:
-        await cb.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        logger.debug("تمیزکاریِ ظاهریِ پیام ناموفق بود (بی‌اهمیت)")
-    await cb.message.answer(
-        "❌ فاکتور لغو شد.\n\nاگر واریز کردی ولی اینجا لغو زدی، نگران نباش؛ به پشتیبانیِ ربات بگو با همین کدِ پیگیری بررسیش کنه.",
-        reply_markup=await inline_back_kb(row.id))
+    from tenant.gateways import inplace as IP               # PATCH_GATEWAY_INPLACE_V1: همان پیام «لغو شد» می‌شود
+    await IP.show(cb, IP.CANCELLED_TEXT, await inline_back_kb(row.id))

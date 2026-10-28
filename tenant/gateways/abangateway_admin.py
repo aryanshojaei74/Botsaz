@@ -810,19 +810,16 @@ async def abu_check(cb: CallbackQuery, bot: Bot):
     if not row:
         return await cb.answer()
     oid = cb.data.split(":", 2)[2]
-    await cb.answer("در حالِ استعلام…")
+    # PATCH_GATEWAY_INPLACE_V1: settle_charge خودش پیامِ «شارژ شد» (یا دکمهٔ تکمیلِ خرید) را می‌فرستد؛ اینجا پیامِ
+    # تکراری نمی‌فرستیم — فقط اعلانِ بالا و برداشتنِ دکمه‌هایِ فاکتورِ مرده.
+    from tenant.gateways import inplace as IP
     ok, msg_, credit = await AG.settle_charge(row.id, oid)
     if ok:
-        from tenant.gateways.wallet_receipt import build_wallet_charge_message_for_bot
-        async with Session() as s:
-            u = await s.scalar(select(BotUser).where(
-                BotUser.bot_id == row.id, BotUser.telegram_id == cb.from_user.id))
-        bal = float(u.balance) if u else credit
+        await cb.answer("✅ پرداخت تأیید و کیف پولت شارژ شد.")
         try:
-            t, k = await build_wallet_charge_message_for_bot(row.id, credit, bal, "card")
-            await cb.message.answer(t, reply_markup=k)
-        except Exception:
-            await cb.message.answer(f"✅ {credit:,} تومان به کیفِ پولت اضافه شد.")
+            await cb.message.edit_reply_markup(reply_markup=None)
+        except Exception:  # noqa: BLE001
+            logger.debug("abangateway: برداشتنِ دکمه‌هایِ فاکتور ممکن نشد")
     else:
         # === PATCH_ABANGATEWAY_ADMIN_NOTIFY_V1 ===
         # کاربر ادعا کرد پرداخت کرده ولی هنوز تأیید نشده — اگه بعدِ چند
@@ -831,7 +828,7 @@ async def abu_check(cb: CallbackQuery, bot: Bot):
             await AG.mark_claimed(row.id, oid)
         except Exception:
             logger.exception("abangateway: ثبتِ ادعایِ پرداخت ناموفق بود")
-        await cb.message.answer("ℹ️ " + msg_)
+        await IP.toast(cb, "ℹ️ " + msg_)
 
 
 @abangateway_router.callback_query(F.data.startswith("abu:cancel:"))
@@ -866,15 +863,9 @@ async def abu_cancel(cb: CallbackQuery, bot: Bot):
         except Exception:
             logger.exception("abangateway: لغوِ فاکتور رویِ درگاه ناموفق بود (بی‌اهمیت)")
     await cb.answer("فاکتور لغو شد.")
-    try:
-        await cb.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        logger.debug("تمیزکاریِ ظاهریِ پیام ناموفق بود (بی‌اهمیت)")
     from tenant import inline_back_kb
-    await cb.message.answer(
-        "❌ فاکتور لغو شد.\n\nاگه واریز کردی ولی اینجا لغو زدی، نگران نباش؛ "
-        "به پشتیبانیِ ربات بگو با همین کدِ پیگیری بررسیش کنه.",
-        reply_markup=await inline_back_kb(row.id))
+    from tenant.gateways import inplace as IP               # PATCH_GATEWAY_INPLACE_V1: همان پیام «لغو شد» می‌شود
+    await IP.show(cb, IP.CANCELLED_TEXT, await inline_back_kb(row.id))
 
 
 # ═════════════════ تصمیمِ ادمین رویِ ادعایِ پرداختِ تأییدنشده ═════════════════
