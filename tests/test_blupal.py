@@ -529,28 +529,36 @@ async def test_cancel_edits_the_invoice_message_in_place(env, monkeypatch):
 async def test_preset_buttons_and_fixed_amount_flow(env, monkeypatch):
     maker, fb, notified = env
     await _patch_flow(monkeypatch)
-    shown = []
+    shown, edited = [], []
     c = CBq("w:blupal")
 
     async def ans(t, **k):
         shown.append((t, k.get("reply_markup")))
-    c.message.answer = ans
+
+    async def edit(t, **k):
+        edited.append((t, k.get("reply_markup")))
+    c.message.answer, c.message.edit_text = ans, edit
     await BA.bpu_start(c, SimpleNamespace(), St())
-    kb = shown[-1][1]
+    assert not shown and edited                                          # PATCH_BLUPAL_UX_V3: همان پیام ویرایش شد، پیامِ جدید نه
+    kb = edited[-1][1]
     cbs = [b.callback_data for r in kb.inline_keyboard for b in r]
     assert "bpu:amt:50000" in cbs and "bpu:custom" in cbs and "w:back" in cbs
     c2 = CBq("bpu:amt:50000")
-    out = []
+    out, edits2 = [], []
 
     async def ans2(t, **k):
-        out.append((t, k.get("reply_markup")))
-        return _Sent(SimpleNamespace(out=out), len(out))
-    c2.message.answer = ans2
+        out.append(t)
+
+    async def edit2(t, **k):
+        edits2.append((t, k.get("reply_markup")))
+    c2.message.answer, c2.message.edit_text = ans2, edit2
     await BA.bpu_fixed_amount(c2, SimpleNamespace(), St())
-    assert any("فاکتورِ شارژِ کیف پول" in t for t, _k in out) and fb.invoices[101]["amount"] == 500_000
+    assert not out                                                       # هیچ پیامِ جدیدی؛ پیامِ «مبلغ را انتخاب کن» فاکتور شد
+    assert len(edits2) == 1 and "فاکتورِ شارژِ کیف پول" in edits2[0][0] and fb.invoices[101]["amount"] == 500_000
     async with maker() as s:
         ch = await s.scalar(select(models.BluPalCharge))
     assert ch.user_telegram_id == 777 and ch.amount_toman == 50_000                  # پرداخت‌کننده = کسی که دکمه را زد
+    assert (ch.chat_id, ch.msg_id) == (777, 901)                                      # همان پیامِ ویرایش‌شده برایِ تبدیل‌هایِ بعدی ثبت شد
 
 
 @pytest.mark.asyncio

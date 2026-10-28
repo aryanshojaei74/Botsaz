@@ -361,6 +361,7 @@ def test_speed_words_do_not_repeat_in_the_same_chat():
     """PATCH_SPEED_WORDS_V1 (فدایی): کلمه‌هایِ سرعت تکراری می‌آمد."""
     import platform_group_game as G
     assert len(G.WORDS) >= 200 and len(set(G.WORDS)) == len(G.WORDS)
+    assert all(5 <= G._wlen(w) <= 10 for w in G.WORDS)                 # فدایی: حداقل ۵ حرف
     G._RECENT_WORDS.clear()
     first = [G.pick_word((0, 111)) for _ in range(150)]
     assert len(set(first)) == 150                                   # تا ۱۵۰ بار پشتِ‌هم هیچ تکراری نیست

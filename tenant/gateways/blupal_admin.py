@@ -267,9 +267,9 @@ async def bpu_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await state.clear()
     mn, mx = await BP.get_min_amount(row.id), await BP.effective_max(row.id)
     presets = [p for p in (await _wl.allowed_presets(row.id, "blupal", WALLET_PRESETS)) if mn <= p <= mx]
-    await cb.message.answer(
-        f"💳 مبلغِ شارژِ کیف پول را انتخاب کن یا «✏️ مبلغ دلخواه» را بزن.\n(حداقل {mn:,} و حداکثر {mx:,} تومان)",
-        reply_markup=_amount_kb(presets))
+    from tenant.gateways import inplace as IP               # PATCH_BLUPAL_UX_V3 (فدایی): همان پیامِ قبلی ویرایش شود، پیامِ جدید نه
+    await IP.show(cb, f"💳 مبلغِ شارژِ کیف پول را انتخاب کن یا «✏️ مبلغ دلخواه» را بزن.\n(حداقل {mn:,} و حداکثر {mx:,} تومان)",
+                  _amount_kb(presets))
     await cb.answer()
 
 
@@ -295,8 +295,9 @@ async def bpu_fixed_amount(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return await cb.answer("مبلغ نامعتبر است.", show_alert=True)
     await state.clear()
     await cb.answer()
-    # cb.message پیامِ خودِ *ربات* است؛ پرداخت‌کننده کسی است که دکمه را زده
-    await _issue(cb.message, bot, amount, cb.from_user)
+    # cb.message پیامِ خودِ *ربات* است؛ پرداخت‌کننده کسی است که دکمه را زده.
+    # target=cb.message: همان پیامِ «مبلغ را انتخاب کن» به فاکتور تبدیل می‌شود (نه پیامِ جدید).
+    await _issue(cb.message, bot, amount, cb.from_user, target=cb.message)
 
 
 @blupal_router.message(BpFSM.amount, F.text)
@@ -309,7 +310,7 @@ async def bpu_amount(msg: Message, bot: Bot, state: FSMContext):
         await state.clear()
 
 
-async def _issue(message: Message, bot: Bot, amount: int, payer, from_text: bool = False) -> bool:
+async def _issue(message: Message, bot: Bot, amount: int, payer, from_text: bool = False, target=None) -> bool:
     """فاکتور را می‌سازد و می‌فرستد. خروجی True یعنی کارِ این مبلغ تمام شد (برایِ پاک‌کردنِ حالتِ مبلغ)."""
     from models import alloc_tracking_in
     from tenant import get_bot_row
@@ -342,7 +343,7 @@ async def _issue(message: Message, bot: Bot, amount: int, payer, from_text: bool
         return True
     oid = BP.new_order_id()
     amount_rial = BP.to_rial(amount)
-    wait = await message.answer("⏳ در حالِ ساختِ فاکتور…")
+    wait = target if target is not None else await message.answer("⏳ در حالِ ساختِ فاکتور…")
     res = await BP.create_invoice(key, amount_rial)
     if not res.get("success") or not res.get("invoice_id") or not res.get("payment_link"):
         text = "❌ ساختِ فاکتور ناموفق بود.\n" + BP._err(res)
