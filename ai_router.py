@@ -142,7 +142,7 @@ class Router:
         return [r for r in ready if r.name not in PAID] + [r for r in ready if r.name in PAID] + cooling
 
     async def chat(self, system: str, user: str, *, max_tokens: int = 600,
-                   temperature: float = 0.0) -> tuple[str, dict, str]:
+                   temperature: float = 0.0, timeout: float | None = None) -> tuple[str, dict, str]:
         """(متن، usage، برچسبِ مسیر). اگر همهٔ مسیرها شکست خوردند RuntimeError."""
         import httpx
         errors: list[str] = []
@@ -150,7 +150,7 @@ class Router:
                         "messages": [{"role": "system", "content": system},
                                      {"role": "user", "content": user}]}
         kw = {"transport": self.transport} if self.transport is not None else {}
-        async with httpx.AsyncClient(timeout=httpx.Timeout(ATTEMPT_TIMEOUT, connect=5.0),
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout or ATTEMPT_TIMEOUT, connect=5.0),
                                      headers={"Accept-Encoding": "identity"}, **kw) as client:
             for r in self._order():
                 resp = None

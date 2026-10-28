@@ -15343,6 +15343,10 @@ async def _vip_app_screen(app_id: int, cb_user_id: int = 0):
                   style=ButtonStyle.PRIMARY),
         hx_button("🗑 حذفِ کامل", callback_data=f"vipctl:delask:{app_id}",
                   style=ButtonStyle.DANGER)])
+    # === PATCH_HOSTED_AI_FIX_V1 === بررسیِ هوشمندِ پروژه + اصلاح با هوش مصنوعی (Grok)
+    rows.append([
+        hx_button("🔍 بررسیِ هوشمند", callback_data=f"vipfix:chk:{app_id}", style=ButtonStyle.PRIMARY),
+        hx_button("🛠 اصلاح با هوش مصنوعی", callback_data=f"vipfix:plan:{app_id}", style=ButtonStyle.SUCCESS)])
     rows.append([hx_button("✉️ ارسال پیام به مالک",
                            callback_data=f"vipapp:msg:{app_id}",
                            style=ButtonStyle.PRIMARY)])
@@ -15724,6 +15728,103 @@ async def vip_ctl_action(cb: CallbackQuery, bot: Bot):
         txt, kb = await _vip_users_screen(0)
         await cb.message.answer(txt, reply_markup=kb)
         return
+
+
+# === PATCH_HOSTED_AI_FIX_V1 ===
+# «بررسی» ⇒ گزارشِ مشکل (همهٔ فایل‌ها با پایتونِ ایمیجِ اپ کامپایل می‌شود) | «اصلاح با هوش مصنوعی» ⇒ طرحِ اصلاح + diff
+# (Grok؛ فقط بخشِ خراب و بدونِ توکن/کلید) ⇒ «اعمال و ری‌استارت» (پشتیبان + نوشتنِ تأییدشده + بررسیِ لاگ).
+_FIX_PLANS: dict = {}          # (admin_id, app_id) → (FixPlan, نامِ اپ، زمان)
+_FIX_BUSY: set = set()
+_FIX_PLAN_TTL = 1800
+
+
+def _fix_kb(app_id: int, fixable: bool = False, apply: bool = False):
+    rows = []
+    if apply:
+        rows.append([hx_button("✅ اعمال و ری‌استارت", callback_data=f"vipfix:apply:{app_id}", style=ButtonStyle.SUCCESS),
+                     hx_button("❌ رد", callback_data=f"vipfix:drop:{app_id}", style=ButtonStyle.DANGER)])
+    elif fixable:
+        rows.append([hx_button("🛠 اصلاح با هوش مصنوعی", callback_data=f"vipfix:plan:{app_id}", style=ButtonStyle.SUCCESS)])
+    rows.append([hx_button("⬅️ بازگشت", callback_data=f"vip:app:{app_id}", style=ButtonStyle.PRIMARY)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data.startswith("vipfix:"))
+async def vip_fix_action(cb: CallbackQuery, bot: Bot):
+    if not await has_perm(cb.from_user.id, "adm:settings"):
+        await cb.answer("دسترسی نداری", show_alert=True)
+        return
+    import hosted_ai_fix as _hf
+    parts = cb.data.split(":")
+    action, app_id = parts[1], int(parts[2])
+    client = _hf.VipClient(base=VIP_API_BASE)
+    key = (cb.from_user.id, app_id)
+
+    if action == "drop":
+        _FIX_PLANS.pop(key, None)
+        await cb.answer("رد شد")
+        txt, kb = await _vip_app_screen(app_id, cb.from_user.id)
+        if txt:
+            await cb.message.answer(txt, reply_markup=kb)
+        return
+
+    if action == "apply":
+        item = _FIX_PLANS.pop(key, None)
+        if not item or time.time() - item[2] > _FIX_PLAN_TTL:
+            await cb.answer("طرحِ اصلاح منقضی شده؛ دوباره «اصلاح با هوش مصنوعی» را بزن.", show_alert=True)
+            return
+        if app_id in _FIX_BUSY:
+            await cb.answer("یک اصلاح برایِ این اپ در جریان است.", show_alert=True)
+            return
+        _FIX_BUSY.add(app_id)
+        try:
+            await cb.answer("در حال اعمال…")
+            await cb.message.answer("⏳ در حال نوشتن فایل‌ها و ری‌استارت… (حدود نیم دقیقه)")
+            ok, msgs = await _hf.apply_fix(client, app_id, item[0], item[1])
+        finally:
+            _FIX_BUSY.discard(app_id)
+        await cb.message.answer(("✅ <b>اصلاح اعمال شد</b>\n\n" if ok else "⚠️ <b>اصلاح کامل نشد</b>\n\n")
+                                + "\n".join(_html.escape(m) for m in msgs), reply_markup=_fix_kb(app_id))
+        return
+
+    if app_id in _FIX_BUSY:
+        await cb.answer("یک اصلاح برایِ این اپ در جریان است.", show_alert=True)
+        return
+    _FIX_BUSY.add(app_id)
+    try:
+        if action == "chk":
+            await cb.answer("در حال بررسی…")
+            rep, _texts = await _hf.diagnose(client, app_id)
+            await cb.message.answer(rep.text(), reply_markup=_fix_kb(app_id, fixable=rep.fixable),
+                                    disable_web_page_preview=True)
+            return
+        if action == "plan":
+            await cb.answer("در حال تحلیل با Grok… ممکن است تا یک دقیقه طول بکشد")
+            wait = await cb.message.answer("🤖 در حالِ بررسیِ فایل‌ها و گرفتنِ پیشنهادِ اصلاح…")
+            rep, texts = await _hf.diagnose(client, app_id)
+            if rep.ok:
+                await wait.edit_text(rep.text(), reply_markup=_fix_kb(app_id))
+                return
+            plan = await _hf.plan_fix(client, app_id, report=rep, texts=texts)
+            lines = [f"🛠 <b>طرحِ اصلاحِ {_html.escape(rep.name)}</b>", ""]
+            lines += [_html.escape(n) for n in plan.notes]
+            for p in plan.patches:
+                lines += ["", f"📄 <b>{_html.escape(p.path)}</b>" + (f" — {_html.escape(p.explanation)}" if p.explanation else ""),
+                          f"<pre>{_html.escape(p.diff(40)[:1400])}</pre>"]
+            if plan.remaining:
+                lines += ["", f"❌ {len(plan.remaining)} مشکل با این روش حل نشد:"]
+                lines += [f"• {_html.escape((i.path or '') + ':' + str(i.line or ''))} {_html.escape(i.message[:120])}" for i in plan.remaining[:4]]
+            if plan.patches:
+                _FIX_PLANS[key] = (plan, rep.name, time.time())
+                lines += ["", "اگر مناسب است «اعمال و ری‌استارت» را بزن (نسخهٔ اصلی پشتیبان می‌شود)."]
+            text = "\n".join(lines)[:3900]
+            await wait.edit_text(text, reply_markup=_fix_kb(app_id, apply=bool(plan.patches)))
+            return
+    except Exception:
+        logger.exception("hosted ai fix failed (app=%s)", app_id)
+        await cb.message.answer("❌ خطایِ غیرمنتظره در بررسی/اصلاح؛ لاگِ سرور را ببین.")
+    finally:
+        _FIX_BUSY.discard(app_id)
 
 
 @router.callback_query(F.data.startswith("vip:app:"))
