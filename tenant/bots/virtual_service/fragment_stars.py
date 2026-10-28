@@ -483,6 +483,33 @@ async def fragment_connect_tonapi(msg: Message, bot: Bot, state: FSMContext):
     await msg.answer(text, reply_markup=kb)
 
 
+# === PATCH_FRAGMENT_HINTS_V1 === (گزارشِ مشتری: «هش و کوکی‌ها را بلاک می‌کند و خرید انجام نمی‌شود»)
+# pyfragment «هش» را خودش از صفحهٔ fragment.com (با همان کوکی‌ها) می‌خواند؛ مالک هیچ هشی وارد نمی‌کند. اگر کوکی‌ها لاگین/معتبر
+# نباشند یا فرگمنت درخواستِ سرور را رد کند، خطایِ «نشد هش را بخوانم» برمی‌گردد. این تابع علتِ محتمل و راهِ حل را فارسی می‌گوید.
+def fragment_hint(e: Exception) -> str | None:
+    try:
+        import pyfragment as _pf
+    except ImportError:
+        return "کتابخانهٔ pyfragment روی سرور نصب نیست."
+    table = (
+        (_pf.CookieError, "کوکی‌ها ناقص یا منقضی‌اند. باید هر چهار کوکیِ stel_ssid / stel_dt / stel_token / stel_ton_token "
+                          "را از مرورگری که <b>همین حالا</b> در fragment.com لاگین است (و کیف‌پولِ TON وصل کرده) بگیری."),
+        (_pf.FragmentPageError, "فرگمنت صفحه/«هش» را به ربات نداد. دو دلیلِ رایج: ۱) کوکی‌ها منقضی شده یا لاگین نیستند — "
+                                "دوباره در مرورگر لاگین کن، بلافاصله کوکیِ تازه را در «ویرایشِ اتصال» بفرست و در مرورگر «خروج» نزن "
+                                "(خروج کوکی را باطل می‌کند)؛ ۲) فرگمنت موقتاً درخواستِ سرور را محدود کرده — چند دقیقه صبر کن و دوباره امتحان کن."),
+        (_pf.UserNotFoundError, "فرگمنت این یوزرنیم را پیدا نکرد (اشتباه یا غیرقابلِ دریافت)."),
+        (_pf.VerificationError, "فرگمنت برایِ این حساب احرازِ هویت (KYC) می‌خواهد؛ باید در خودِ fragment.com تکمیل شود."),
+        (_pf.WalletError, "ولتِ TONِ ربات مشکل دارد (معمولاً موجودی کافی نیست)؛ شارژش کن."),
+        (_pf.TransactionError, "ساخت/ارسالِ تراکنش ناموفق بود؛ قبل از تلاشِ دوباره موجودی و تراکنش‌هایِ ولت را ببین."),
+        (_pf.ConfigurationError, "تنظیماتِ اتصال (کوکی/کلیدِ TonAPI) ناقص است؛ دوباره وصل کن."),
+        (_pf.FragmentAPIError, "فرگمنت درخواست را نپذیرفت (معمولاً هشِ کهنه یا نشستِ منقضی)؛ کوکیِ تازه بده و دوباره امتحان کن."),
+    )
+    for cls, msg in table:
+        if isinstance(e, cls):
+            return msg
+    return None
+
+
 async def _get_fragment_client(wallet: FragmentWallet):
     """کلاینتِ pyfragment رو با اعتبارنامه‌هایِ رمزگشایی‌شده می‌سازه.
     خطای import یعنی هنوز رو سرور نصب نشده (pip install pyfragment)."""
@@ -556,10 +583,12 @@ async def fragment_testbuy_amount(msg: Message, bot: Bot, state: FSMContext):
             "ادمینِ فنی باید <code>pip install pyfragment</code> رو بزنه.")
     except Exception as e:
         logger.exception("fragment_stars: خرید ناموفق")
+        hint = fragment_hint(e)
         await wait_msg.edit_text(
-            f"❌ خرید ناموفق بود: {type(e).__name__}: {e}\n\n"
-            "دلایلِ محتمل: کوکی‌ها منقضی شدن (دوباره وصل کن)، موجودیِ کیف‌پول "
-            "کافی نیست، یا یوزرنیم/شرایطِ گیرنده مشکل داره.")
+            f"❌ خرید ناموفق بود: {type(e).__name__}: {str(e)[:300]}\n\n"
+            + (f"🔎 <b>علت:</b> {hint}" if hint else
+               "دلایلِ محتمل: کوکی‌ها منقضی شدن (دوباره وصل کن)، موجودیِ کیف‌پول "
+               "کافی نیست، یا یوزرنیم/شرایطِ گیرنده مشکل داره."))
 
 
 # ═══════════════════ برداشتِ TON از کیف‌پولِ ربات ═══════════════════
