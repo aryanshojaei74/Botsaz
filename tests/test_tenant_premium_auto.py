@@ -43,3 +43,8 @@ def test_auto_off_keeps_manual_only(monkeypatch):
     monkeypatch.setattr(pe, "Session", lambda: FakeSess())
     pe._PMAP_CACHE.clear()
     assert asyncio.run(pe.get_premium_map(6)) == {}
+
+
+def test_pack_name_parsing():
+    assert pe._pack_name("https://t.me/addemoji/Foo_bar?x=1") == "Foo_bar"
+    assert pe._pack_name("  Foo ") == "Foo"

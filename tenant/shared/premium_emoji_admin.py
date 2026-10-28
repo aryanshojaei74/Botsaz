@@ -80,6 +80,7 @@ _TOKEN_CACHE_TTL = 300.0
 class PremiumEmojiFSM(StatesGroup):
     wait_normal = State()
     wait_premium = State()
+    wait_pack = State()
 
 
 # ─────────────── کمک‌توابعِ عمومی (مالک/تنظیمات) ───────────────
@@ -186,6 +187,8 @@ async def _render_menu(target, bot_id: int, offset: int, plan: str = "", *, edit
         text=("🔴 خاموش کردن قابلیت" if enabled else "🟢 روشن کردن قابلیت"),
         callback_data=f"pemj:toggle:{offset}",
         style=(ButtonStyle.DANGER if enabled else ButtonStyle.SUCCESS))])
+    kb_rows.append([InlineKeyboardButton(
+        text="📦 وارد کردن یکجا از پکِ ایموجی", callback_data="pemj:pack", style=ButtonStyle.PRIMARY)])
     auto_on = await _auto_enabled(bot_id)
     kb_rows.append([InlineKeyboardButton(
         text=("🤖 تبدیلِ خودکارِ ایموجی‌ها: روشن" if auto_on else "🤖 تبدیلِ خودکارِ ایموجی‌ها: خاموش"),
@@ -310,6 +313,59 @@ async def pemj_cancel(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # ─────────────── مرحلهٔ ۱: افزودنِ ایموجیِ جدید ───────────────
+
+def _pack_name(text: str) -> str:
+    t = (text or "").strip()
+    for pre in ("https://t.me/addemoji/", "http://t.me/addemoji/", "t.me/addemoji/",
+                "https://t.me/addstickers/", "t.me/addstickers/"):
+        if t.startswith(pre):
+            t = t[len(pre):]
+            break
+    return t.split("?")[0].strip().strip("/")
+
+
+@premium_emoji_admin_router.callback_query(F.data == "pemj:pack")
+async def pemj_pack_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    await state.set_state(PremiumEmojiFSM.wait_pack)
+    await cb.message.answer(
+        "📦 لینکِ پکِ ایموجیِ پرمیوم را بفرست (مثلاً <code>https://t.me/addemoji/نام</code>).\n\n"
+        "همهٔ ایموجی‌هایِ پک یکجا با ایموجیِ معمولیِ متناظرشان ثبت می‌شوند؛ "
+        "ثبت‌هایِ قبلیِ همان ایموجی جایگزین می‌شود.",
+        reply_markup=cancel_kb(), parse_mode="HTML")
+    await cb.answer()
+
+
+@premium_emoji_admin_router.message(PremiumEmojiFSM.wait_pack, F.text)
+async def pemj_pack_receive(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner_msg(msg, bot)
+    if not row:
+        return
+    name = _pack_name(msg.text)
+    try:
+        sset = await bot.get_sticker_set(name)
+    except Exception:
+        return await msg.answer("❌ این پک پیدا نشد. لینکِ درست (t.me/addemoji/...) بفرست.",
+                                reply_markup=cancel_kb())
+    n = 0
+    seen: set[str] = set()
+    for st in sset.stickers:
+        if getattr(st, "type", "") != "custom_emoji" or not st.custom_emoji_id or not st.emoji:
+            continue
+        base = st.emoji
+        if base in seen:          # هر ایموجیِ معمولی فقط یک نگاشت؛ اولی برنده
+            continue
+        seen.add(base)
+        await _upsert(row.id, base, st.custom_emoji_id, base)
+        n += 1
+    await state.clear()
+    if not n:
+        return await msg.answer("⚠️ این پک ایموجیِ پرمیومی نداشت.")
+    await msg.answer(f"✅ {n} ایموجی از پکِ «{sset.title}» ثبت شد. از «⭐ افزودن ایموجی پرمیوم» می‌توانی ببینی.")
+
 
 @premium_emoji_admin_router.callback_query(F.data == "pemj:add")
 async def pemj_add_start(cb: CallbackQuery, bot: Bot, state: FSMContext):

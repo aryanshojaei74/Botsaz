@@ -3017,7 +3017,7 @@ def _nav_find_revisit(hist: list, text, plain) -> int | None:
     return None
 
 
-def _nav_inject(mk, has_hist: bool, prev_is_home: bool = False):
+def _nav_inject(mk, has_hist: bool, prev_is_home: bool = False, no_prev: bool = False):
     if not isinstance(mk, InlineKeyboardMarkup) or not mk.inline_keyboard:
         return mk
     cbs = [(b, getattr(b, "callback_data", None) or "") for r in mk.inline_keyboard for b in r]
@@ -3029,7 +3029,7 @@ def _nav_inject(mk, has_hist: bool, prev_is_home: bool = False):
                    and c != "mbtn:home" for b, c in cbs)
     # درخواستِ Fadayi: صفحهٔ سطحِ دوم (که مستقیم از منوی اصلی باز شده) «بازگشت به منوی قبل» نمی‌خواهد
     # (قبل = همان منوی اصلی)؛ فقط از سطحِ سوم به بعد.
-    add_prev = has_hist and not has_prev and not own_back and not prev_is_home
+    add_prev = has_hist and not has_prev and not own_back and not prev_is_home and not no_prev
     add_home = (not has_home) and has_hist
     if not add_prev and not add_home:
         return mk
@@ -3349,8 +3349,14 @@ def _nav_install(bot) -> None:
                 _prev_home = bool(_pc) and _sig <= _pc and len(_pc - _sig) <= 3
         except Exception:
             _prev_home = False
+        _no_prev = False
+        try:
+            _rowp = await get_bot_row(bot_)
+            _no_prev = bool(_rowp) and await get_setting(_rowp.id, "nav_prev_off", "0") == "1"
+        except Exception:
+            _no_prev = False
         m2 = method.model_copy(update={"reply_markup": plain if _is_home else _nav_inject(
-            plain, bool(ent["hist"]), _prev_home)})
+            plain, bool(ent["hist"]), _prev_home, _no_prev)})
         try:
             res = await orig(bot_, m2, timeout=timeout)
         except Exception as e:
@@ -7567,6 +7573,13 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         await set_setting(row.id, "nav_kb_only", new)
         await msg.answer("✅ از این‌به‌بعد «بازگشت به منو» و «بازگشت به خانه» فقط در کیبوردِ پایینِ چت است." if new == "1"
                          else "دکمه‌هایِ بازگشت دوباره زیرِ پیام‌ها هم نمایش داده می‌شود.",
+                         reply_markup=await _sec_settings_kb(row.id, row.plan, "reply", row.status == "paused"))
+        return
+    if (msg.text or "").startswith("↩️ بازگشت به منوی قبل:") and await is_owner_or_admin(bot_id, msg.from_user.id, row.owner_id):
+        new = "0" if await get_setting(row.id, "nav_prev_off", "0") == "1" else "1"
+        await set_setting(row.id, "nav_prev_off", new)
+        await msg.answer("🔴 دکمهٔ «بازگشت به منوی قبل» از زیرِ پیام‌ها حذف شد." if new == "1"
+                         else "🟢 دکمهٔ «بازگشت به منوی قبل» دوباره نمایش داده می‌شود.",
                          reply_markup=await _sec_settings_kb(row.id, row.plan, "reply", row.status == "paused"))
         return
     if msg.text == "🎛 نوع منو: ⌨️ کیبورد" and await is_owner_or_admin(bot_id, msg.from_user.id, row.owner_id):
@@ -12570,6 +12583,8 @@ async def _sec_settings_kb(bot_id: int, plan: str, menu_mode_v: str, bot_paused:
         if menu_mode_v != "inline":     # PATCH_NAV_KB_ONLY_V1
             _nko = await get_setting(bot_id, "nav_kb_only", "0") == "1"
             opts.append(("↩️ دکمه‌هایِ بازگشت: " + ("⌨️ فقط در کیبورد" if _nko else "💠 زیرِ پیام‌ها هم"), "set:nav_kb_only"))
+    _npo = await get_setting(bot_id, "nav_prev_off", "0") == "1"
+    opts.append(("↩️ بازگشت به منوی قبل: " + ("🔴 خاموش" if _npo else "🟢 روشن"), "set:nav_prev"))
     pause_lbl = "🤖 ربات: " + ("🔴 خاموش — بزن روشن شود" if bot_paused else "🟢 روشن — بزن خاموش شود")
     opts.append((pause_lbl, "set:bot_toggle"))
     opts.append(("🛡 آنتی‌اسپم", "set:antispam"))
@@ -30953,6 +30968,24 @@ async def set_nav_kb_only(cb: CallbackQuery, bot: Bot):
             reply_markup=await _sec_settings_kb(row.id, row.plan, "reply", row.status == "paused"))
     except Exception:
         logger.debug("nav_kb_only: بازسازیِ منویِ تنظیمات ممکن نشد")
+
+
+@tenant_router.callback_query(F.data == "set:nav_prev")
+async def set_nav_prev(cb: CallbackQuery, bot: Bot):
+    """خاموش/روشن‌کردنِ دکمهٔ تزریق‌شدهٔ «⬅️ بازگشت به منوی قبل» (دکمهٔ «🏠 منوی اصلی» می‌ماند)."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    new = "0" if await get_setting(row.id, "nav_prev_off", "0") == "1" else "1"
+    await set_setting(row.id, "nav_prev_off", new)
+    await cb.answer("🔴 دکمهٔ «بازگشت به منوی قبل» حذف شد." if new == "1"
+                    else "🟢 دکمهٔ «بازگشت به منوی قبل» دوباره نمایش داده می‌شود.", show_alert=True)
+    try:
+        mm = await get_setting(row.id, "menu_mode", "reply")
+        await cb.message.edit_reply_markup(
+            reply_markup=await _sec_settings_kb(row.id, row.plan, mm, row.status == "paused"))
+    except Exception:
+        logger.debug("nav_prev: بازسازیِ منویِ تنظیمات ممکن نشد")
 
 
 @tenant_router.callback_query(F.data == "set:menu_mode")
