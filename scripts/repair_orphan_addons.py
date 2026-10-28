@@ -19,6 +19,28 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 
+async def move_wagers(old: int, new: int, apply: bool) -> int:
+    """بازی‌هایِ بازِ یتیمِ رباتِ قدیم را به رباتِ جدید وصل می‌کند تا سویِ‌پِ انقضا مبلغِ رزروشده را به کیف‌پولِ بازیکن‌ها برگرداند."""
+    from sqlalchemy import select, update
+    from config import Session
+    from models import Bot, PlatformWager
+    async with Session() as s:
+        if not await s.get(Bot, new) or await s.get(Bot, old):
+            print("❌ شناسهٔ جدید باید ربات باشد و شناسهٔ قدیم نباید دیگر ربات باشد؛ چیزی تغییر نکرد.")
+            return 1
+        rows = (await s.scalars(select(PlatformWager).where(PlatformWager.bot_id == old))).all()
+        for w in rows:
+            print(f"  بازی #{w.id} وضعیت={w.status} مبلغ={int(w.amount):,} سازنده={w.creator_id} حریف={w.opponent_id or '-'}")
+        print(f"{len(rows)} بازی از bot_id={old}")
+        if apply and rows:
+            await s.execute(update(PlatformWager).where(PlatformWager.bot_id == old).values(bot_id=new))
+            await s.commit()
+            print(f"✅ به bot_id={new} منتقل شد؛ باز‌های منقضی در چرخهٔ بعدیِ سویِ‌پ برگشت می‌خورند.")
+        elif not apply:
+            print("(فقط گزارش؛ برایِ اعمال: --apply)")
+    return 0
+
+
 async def main(apply: bool) -> int:
     from sqlalchemy import func, select
     from config import Session
@@ -56,4 +78,9 @@ async def main(apply: bool) -> int:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
-    raise SystemExit(asyncio.run(main(ap.parse_args().apply)))
+    ap.add_argument("--move-wagers", metavar="OLD:NEW", help="بازی‌هایِ یتیمِ رباتِ قدیم را به رباتِ جدید وصل کن (مثلاً 1170:1607)")
+    a = ap.parse_args()
+    if a.move_wagers:
+        o, n = a.move_wagers.split(":")
+        raise SystemExit(asyncio.run(move_wagers(int(o), int(n), a.apply)))
+    raise SystemExit(asyncio.run(main(a.apply)))
