@@ -6158,6 +6158,28 @@ async def _render_reply_submenu(msg: Message, bot_id: int, btn: "MainButton", st
         await msg.answer("🗂 این زیرمنو هنوز دکمه‌ای ندارد.")
 
 
+class _RenderedBtn:
+    """پروکسیِ فقط‌خواندنیِ دکمه با «message»ِ رندرشده (متغیرهایِ {{...}} جایگزین شده)
+    تا ردیفِ ذخیره‌شدهٔ دکمه در دیتابیس دست نخورد."""
+    __slots__ = ("_b", "message")
+
+    def __init__(self, btn, message):
+        self._b = btn
+        self.message = message
+
+    def __getattr__(self, name):
+        return getattr(self._b, name)
+
+
+async def _btn_with_vars(btn, bot_id, u):
+    msg_txt = getattr(btn, "message", None)
+    if not msg_txt or "{" not in msg_txt:
+        return btn
+    from tenant.shared.text_vars import render_text as _render_vars
+    new = await _render_vars(msg_txt, bot_id=bot_id, user=u)
+    return btn if new == msg_txt else _RenderedBtn(btn, new)
+
+
 async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=None):
     """اجرای عملکردِ یک دکمه بر اساس action داده‌شده.
 
@@ -6165,6 +6187,7 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
     شرطِ زیرمجموعه، همان عملکرد اصلیِ دکمه (keep_action) را اجرا کند. `action`
     صراحتاً پاس داده می‌شود (ممکن است با btn.action فرق کند).
     """
+    btn = await _btn_with_vars(btn, bot_id, u)
     support_enabled = getattr(btn, "support_btn", False)
     support_contact = (getattr(btn, "support_contact", None) or "").strip() or None
     effective_has_action = bool(action)
@@ -7977,6 +8000,7 @@ async def _vpn_panel_off_text(bot_id: int, panel_key: str, panel, *, staff: bool
 
 async def _mbtn_proceed(cb, bot, state, row, u, bot_id, btn):
     """اجرایِ دکمهٔ منویِ شیشه‌ای بعد از گذراندنِ قوانین (مشترک بینِ mbtn_tap و پذیرشِ قوانین)."""
+    btn = await _btn_with_vars(btn, bot_id, u)
     if btn.action == "submenu":
         # === PATCH_SUBMENU_DESC_INLINE_V1 ===
         skb = await submenu_inline_kb(bot_id, btn.id)

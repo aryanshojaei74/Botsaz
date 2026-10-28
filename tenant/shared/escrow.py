@@ -318,7 +318,8 @@ async def show_menu(msg: Message, bot: Bot, bot_id: int, header: str = "") -> No
            "هر دو طرف باید ربات را استارت کرده باشند و طرفِ مقابل درخواست را بپذیرد.")
     await msg.answer(txt, reply_markup=_kb([
         [_btn("➕ درخواستِ معاملهٔ جدید", "esc:new", ButtonStyle.SUCCESS)],
-        [_btn("📂 معاملاتِ من", "esc:mine", ButtonStyle.PRIMARY)]]))
+        [_btn("📂 معاملاتِ من", "esc:mine", ButtonStyle.PRIMARY)],
+        [_btn("⬅️ بازگشت به منوی اصلی", "mbtn:home", ButtonStyle.DANGER)]]))
 
 
 @escrow_router.message(F.text == "/escrow")
