@@ -9291,23 +9291,30 @@ async def _reserve_button_trial_claim(bot_id: int, user_telegram_id: int, ctx: d
     mb_id, limit, gen = ctx["mb_id"], ctx["limit"], ctx["gen"]
     if await _trial_exempt(bot_id, user_telegram_id):
         return True, ""
-    async with Session() as s:
-        row = await s.scalar(select(ButtonTrialClaim).where(
-            ButtonTrialClaim.mb_id == mb_id,
-            ButtonTrialClaim.user_telegram_id == user_telegram_id))
-        if row:
-            if row.gen != gen:
-                row.gen = gen
-                row.count = 0
-            if limit and row.count >= limit:
-                return False, (f"⛔️ شما سقفِ مجازِ دریافتِ این تست را استفاده کرده‌اید "
-                               f"({row.count} از {limit}).")
-            row.count += 1
-        else:
-            s.add(ButtonTrialClaim(bot_id=bot_id, mb_id=mb_id,
-                                   user_telegram_id=user_telegram_id,
-                                   gen=gen, count=1))
-        await s.commit()
+    from sqlalchemy.exc import IntegrityError
+    # PATCH_TRIAL_CLAIM_LOCK_V1: قفلِ ردیف؛ بدونِ آن دو تپِ هم‌زمان هر دو count قبلی را می‌خواندند و
+    # هر دو رد می‌شدند (دو تستِ رایگان بعد از «ریست برای همه» یا با سقفِ بیش از ۱). ساختِ اولین ردیف
+    # هم با UniqueConstraint محافظت می‌شود؛ بازندهٔ آن مسابقه «سقف پر شد» می‌گیرد.
+    try:
+        async with Session() as s:
+            row = await s.scalar(select(ButtonTrialClaim).where(
+                ButtonTrialClaim.mb_id == mb_id,
+                ButtonTrialClaim.user_telegram_id == user_telegram_id).with_for_update())
+            if row:
+                if row.gen != gen:
+                    row.gen = gen
+                    row.count = 0
+                if limit and row.count >= limit:
+                    return False, (f"⛔️ شما سقفِ مجازِ دریافتِ این تست را استفاده کرده‌اید "
+                                   f"({row.count} از {limit}).")
+                row.count += 1
+            else:
+                s.add(ButtonTrialClaim(bot_id=bot_id, mb_id=mb_id,
+                                       user_telegram_id=user_telegram_id,
+                                       gen=gen, count=1))
+            await s.commit()
+    except IntegrityError:
+        return False, "⏳ درخواستِ قبلیِ شما در حال پردازش است؛ چند لحظه صبر کنید."
     return True, ""
 
 
