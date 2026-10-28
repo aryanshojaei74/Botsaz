@@ -369,7 +369,7 @@ async def _issue(message: Message, bot: Bot, amount: int, payer, from_text: bool
     card_line = f"🏦 شمارهٔ کارتِ مقصد: <code>{card}</code>\n" if card else ""
     text = (
         "🧾 <b>فاکتورِ شارژِ کیف پول</b>\n➖➖➖➖➖➖➖➖➖➖\n\n"
-        f"💵 مبلغِ شارژ: <b>{amount:,}</b> تومان\n"
+        # PATCH_BLUPAL_UX_V2 (فدایی): «مبلغِ شارژ» نمایش داده نمی‌شود؛ فقط مبلغِ دقیقِ واریز تا کاربر عدد را اشتباه نزند
         f"💳 <b>مبلغِ دقیقِ واریز: {final_rial:,} ریال</b>\n"
         f"{card_line}"
         f"🔑 کدِ پیگیری: <code>{seq}</code>\n\n"

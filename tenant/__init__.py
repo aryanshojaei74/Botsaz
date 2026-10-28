@@ -3001,6 +3001,22 @@ def _nav_seed(event) -> None:
         logger.debug("nav seed failed (بی‌اهمیت)")
 
 
+def _nav_find_revisit(hist: list, text, plain) -> int | None:
+    """PATCH_NAV_REVISIT_POPS_V1: اگر صفحهٔ تازه (متن + مجموعهٔ دکمه‌ها) عیناً یکی از صفحه‌هایِ تاریخچه است، شاخصش را
+    برمی‌گرداند (آخرین تطابق)؛ وگرنه None."""
+    def _sig(mk):
+        if not isinstance(mk, InlineKeyboardMarkup):
+            return frozenset()
+        return frozenset(getattr(b, "callback_data", None) for r in mk.inline_keyboard for b in r
+                         if getattr(b, "callback_data", None) and b.callback_data != "nav:back")
+    new = _sig(plain)
+    for i in range(len(hist) - 1, -1, -1):
+        h = hist[i]
+        if h[0] == text and _sig(h[4]) == new:
+            return i
+    return None
+
+
 def _nav_inject(mk, has_hist: bool, prev_is_home: bool = False):
     if not isinstance(mk, InlineKeyboardMarkup) or not mk.inline_keyboard:
         return mk
@@ -3311,10 +3327,19 @@ def _nav_install(bot) -> None:
         _cur_is_gate = bool(ent["cur"] and isinstance(ent["cur"][4], InlineKeyboardMarkup) and any(
             str(getattr(b, "callback_data", "") or "").startswith(("thbtn:ok:", "vso:accept"))
             for r in ent["cur"][4].inline_keyboard for b in r))
+        _hist_before = None
         if (not back) and ent["cur"] and ent["cur"][0] != method.text and not _cur_is_gate:
-            ent["hist"].append(ent["cur"])
-            del ent["hist"][:-_NAV_MAX_HIST]
-            pushed = True
+            # === PATCH_NAV_REVISIT_POPS_V1 === (Fadayi) صفحه‌ای که با دکمهٔ «بازگشتِ خودِ صفحه» (مثلاً smopen:) دوباره باز می‌شود
+            # همان صفحه‌ای است که قبلاً در تاریخچه بود؛ برگشت است نه ورود به صفحهٔ تازه. قبلاً صفحهٔ فعلی (سطحِ ۳) هم push می‌شد و
+            # «بازگشت به منوی قبل»ِ سطحِ ۲ دوباره به سطحِ ۳ می‌رفت به‌جایِ صفحهٔ اصلی.
+            _at = _nav_find_revisit(ent["hist"], method.text, plain)
+            if _at is not None:
+                _hist_before = list(ent["hist"])
+                del ent["hist"][_at:]
+            else:
+                ent["hist"].append(ent["cur"])
+                del ent["hist"][:-_NAV_MAX_HIST]
+                pushed = True
         _prev_home = False
         try:
             if _sig and ent["hist"] and isinstance(ent["hist"][-1][4], InlineKeyboardMarkup):
@@ -3331,6 +3356,8 @@ def _nav_install(bot) -> None:
         except Exception as e:
             if pushed:
                 ent["hist"].pop()
+            elif _hist_before is not None:        # PATCH_NAV_REVISIT_POPS_V1: ویرایش نشد ⇒ تاریخچه همان قبلی بماند
+                ent["hist"] = _hist_before
             if "not modified" in str(e).lower():
                 ent["cur"] = ent["cur"] or (method.text, method.parse_mode, method.entities,
                                             method.link_preview_options, plain)
