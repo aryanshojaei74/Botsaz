@@ -1129,5 +1129,28 @@ async def redirect_all_bot_id_references(old_bot_id: int, new_bot_id: int) -> No
                         failed.append(f"{getattr(M, '__name__', M)}.{attr_name}")
                         print(f"redirect_all_bot_id_references: skip "
                               f"{getattr(M, '__name__', M)}.{attr_name}:", e)
+    # === PATCH_TOKEN_SWAP_NONFK_V1 === (SINA: بعد از تعویضِ توکن «بازی‌هایِ گروهی» که پولی خریده بود غیرفعال شد)
+    # BotAddon و PlatformWager ستونِ bot_id دارند ولی ForeignKey ندارند؛ حلقهٔ بالا (فقط FK) و migrate_bot_data
+    # (فقط TENANT_OWNED_MODELS) هر دو از آن‌ها رد می‌شدند ⇒ افزونهٔ پولی و بازی‌هایِ بازِ ربات به ردیفِ حذف‌شده می‌ماند.
+    # BotAuditLog عمداً جابه‌جا نمی‌شود (سابقهٔ همان رباتِ قدیم است).
+    try:
+        from sqlalchemy import select as _select, delete as _delete
+        from models import BotAddon, PlatformWager
+        async with Session() as s:
+            have = set((await s.scalars(_select(BotAddon.addon).where(BotAddon.bot_id == new_bot_id))).all())
+            if have:                                          # افزونه‌ایِ که رباتِ جدید از قبل دارد دوباره منتقل نشود (UniqueConstraint)
+                await s.execute(_delete(BotAddon).where(BotAddon.bot_id == old_bot_id, BotAddon.addon.in_(have)))
+            await s.execute(_update(BotAddon).where(BotAddon.bot_id == old_bot_id).values(bot_id=new_bot_id))
+            await s.execute(_update(PlatformWager).where(PlatformWager.bot_id == old_bot_id).values(bot_id=new_bot_id))
+            await s.commit()
+        try:
+            import bot_addons as _ba
+            _ba.invalidate(old_bot_id)
+            _ba.invalidate(new_bot_id)
+        except Exception:  # noqa: BLE001
+            print("redirect_all_bot_id_references: پاک‌کردنِ کشِ افزونه ممکن نشد")
+    except Exception as e:  # noqa: BLE001
+        failed.append("BotAddon/PlatformWager")
+        print("redirect_all_bot_id_references: افزونه/بازی منتقل نشد:", e)
     if failed:
         print(f"redirect_all_bot_id_references: منتقل نشدن: {failed}")
