@@ -48,6 +48,7 @@ _FIXED_AMOUNT = {
     "w:charge": ("card", "wcamt:{a}"),
     "w:zarinpal": ("zarinpal", "wzp:amt:{a}"),
     "w:zibal": ("zibal", "wzb:amt:{a}"),
+    "w:blupal": ("blupal", "bpu:amt:{a}"),      # PATCH_BLUPAL_UX_V1: مبلغِ کسری روی دکمه و فاکتورِ مستقیم
 }
 
 
@@ -65,12 +66,12 @@ async def charge_btn_enabled(bot_id: int) -> bool:
 
 async def card_pay_allowed(bot_id: int) -> bool:
     """همان شرطِ pay_method_kb_full: کارت‌به‌کارتِ فعال، فعال در بخشِ خرید، و جایگزینِ آبان‌گیت‌وی نشده."""
-    from tenant import _ab_replaces_card, get_setting
+    from tenant import _card_replaced, get_setting
     if (await get_setting(bot_id, "card_enabled", "1")) != "1":
         return False
     if (await get_setting(bot_id, "card_purchase_enabled", "1")) != "1":
         return False
-    return not await _ab_replaces_card(bot_id)
+    return not await _card_replaced(bot_id)
 
 
 # ───────────────────────── ذخیرهٔ فاکتورها ─────────────────────────

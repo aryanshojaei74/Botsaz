@@ -103,6 +103,63 @@ async def get_display_name(bot_id: int) -> str:
     return (await _get(bot_id, "blupal_display_name", "")).strip() or "بلوپال"
 
 
+async def replaces_card(bot_id: int) -> bool:
+    """PATCH_BLUPAL_UX_V1: آیا بلوپال باید *جایگزینِ* کارت‌به‌کارتِ دستی شود؟ (مثلِ آبان گیت‌وی)
+    وقتی روشن و درگاه فعال است، دکمهٔ «کارت‌به‌کارتِ دستی» در همهٔ صفحه‌هایِ پرداخت پنهان می‌شود و بلوپال همه‌جا
+    می‌آید. درگاه غیرفعال ⇒ بی‌اثر (مالک هیچ‌وقت بدونِ روشِ پرداخت نمی‌ماند)."""
+    if await _get(bot_id, "blupal_replace_card", "0") != "1":
+        return False
+    return await is_available(bot_id)
+
+
+# ─────────────────── ویرایشِ همان پیامِ فاکتور (به‌جای پیامِ جدید) ───────────────────
+
+async def edit_invoice_message(bot_id: int, chat_id, msg_id, text: str, kb=None) -> bool:
+    """پیامِ فاکتور را با توکنِ خودِ همان ربات ویرایش می‌کند. True اگر ویرایش شد."""
+    if not chat_id or not msg_id:
+        return False
+    from aiogram import Bot
+    from aiogram.client.default import DefaultBotProperties
+    from aiogram.enums import ParseMode
+    from models import Bot as BotRow
+    async with Session() as s:
+        brow = await s.get(BotRow, bot_id)
+    if not brow:
+        return False
+    tbot = Bot(token=brow.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    try:
+        await tbot.edit_message_text(text, chat_id=int(chat_id), message_id=int(msg_id), reply_markup=kb)
+        return True
+    except Exception as e:  # noqa: BLE001 — پیام پاک شده/تغییرنکرده: بی‌اهمیت؛ بالادست پیامِ جدید می‌فرستد
+        logger.debug("blupal: ویرایشِ پیامِ فاکتور ممکن نشد: %s", e)
+        return False
+    finally:
+        try:
+            await tbot.session.close()
+        except Exception:  # noqa: BLE001
+            logger.debug("blupal: بستنِ نشستِ ربات ناموفق")
+
+
+def code_of(ch) -> str:
+    """کدِ پیگیریِ نمایشی: شمارهٔ ترتیبیِ ربات؛ برایِ فاکتورهایِ قدیمی همان order_id."""
+    return str(getattr(ch, "seq_code", None) or getattr(ch, "order_id", "") or "")
+
+
+def closed_text(ch_amount: int, code: str, status: str) -> str:
+    if status == "cancelled":
+        return (f"❌ <b>فاکتور لغو شد.</b>\n\n🔑 کدِ پیگیری: <code>{code}</code>\n💵 مبلغ: {int(ch_amount):,} تومان\n\n"
+                "اگر واریز کردی ولی اینجا لغو شد، نگران نباش؛ تا ۲۴ ساعت اگر واریز برسد خودکار شارژ می‌شود، "
+                "یا به پشتیبانی بگو با همین کدِ پیگیری بررسی کند.")
+    return (f"⏳ <b>فاکتور منقضی شد.</b>\n\n🔑 کدِ پیگیری: <code>{code}</code>\n💵 مبلغ: {int(ch_amount):,} تومان\n\n"
+            "اگر واریز کرده‌ای نگران نباش؛ تا ۲۴ ساعت بررسی می‌شود و در صورتِ رسیدنِ واریز کیفِ پولت خودکار شارژ می‌شود. "
+            "در غیرِ این صورت فاکتورِ تازه بساز.")
+
+
+def closed_kb():
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="➕ فاکتورِ تازه", callback_data="bpu:start")]])
+
+
 # ─────────────────────────── API ───────────────────────────
 
 async def _api(api_key: str, method: str, path: str, body: dict | None = None) -> dict:
@@ -186,6 +243,7 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
             return False, "این فاکتور قبلاً تسویه شده است.", 0
         inv_id, credit = ch.invoice_id, int(ch.amount_toman or 0)
         want_rial, want_final = int(ch.amount_rial or 0), int(ch.final_amount_rial or 0)
+        prev_status, chat_id, msg_id, code = ch.status, ch.chat_id, ch.msg_id, code_of(ch)
     if not inv_id:
         return False, "این فاکتور شناسهٔ درگاه ندارد.", 0
 
@@ -201,6 +259,11 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
                 if ch:
                     ch.status = "expired" if st == "EXPIRED" else "cancelled"
                     await s.commit()
+                    new_status = ch.status
+                else:
+                    new_status = None
+            if new_status and prev_status == "waiting":          # فقط لحظهٔ تغییرِ وضعیت؛ هر دورِ استعلام پیام را دست نمی‌زند
+                await edit_invoice_message(bot_id, chat_id, msg_id, closed_text(credit, code, new_status), closed_kb())
             return False, "مهلتِ این فاکتور تمام شده یا لغو شده است.", 0
         return False, "هنوز پرداختی ثبت نشده است.", 0
     # مبلغِ فاکتور باید با رکوردِ خودمان بخواند
@@ -230,16 +293,26 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
             _uid, _bal, _kyc_uid = u.telegram_id, float(u.balance), u.id
         else:
             _uid = _bal = _kyc_uid = None
+        _chat, _msg = ch.chat_id, ch.msg_id
         await s.commit()
     if _kyc_uid:
         from tenant.shared.kyc import after_charge as _ac
         await _ac(bot_id, _kyc_uid)
     if _uid:
+        # PATCH_BLUPAL_UX_V1: همان پیامِ فاکتور به «پرداخت شد» تبدیل می‌شود؛ فقط اگر ویرایش ممکن نبود پیامِ جدید می‌رود
+        edited = False
         try:
-            from tenant.gateways.uniquepay import _notify_paid
-            await _notify_paid(bot_id, _uid, credit, _bal)
+            from tenant.gateways.wallet_receipt import build_wallet_charge_message_for_bot
+            _t, _k = await build_wallet_charge_message_for_bot(bot_id, credit, _bal, "card")
+            edited = await edit_invoice_message(bot_id, _chat, _msg, _t, _k)
         except Exception:
-            logger.exception("blupal: اطلاع به کاربر ناموفق بود")
+            logger.exception("blupal: ساختِ پیامِ موفقیت ناموفق بود")
+        if not edited:
+            try:
+                from tenant.gateways.uniquepay import _notify_paid
+                await _notify_paid(bot_id, _uid, credit, _bal)
+            except Exception:
+                logger.exception("blupal: اطلاع به کاربر ناموفق بود")
         try:
             from tenant.gateways.payment_page import _tx_log_tenant
             await _tx_log_tenant(bot_id, _uid, credit, _bal, "blupal")
@@ -275,7 +348,12 @@ async def poll_pending(bot_id: int | None = None, include_closed: bool = True) -
                                                                BluPalCharge.status == "waiting").with_for_update())
                 if ch:
                     ch.status = "expired"
+                    _x = (ch.chat_id, ch.msg_id, int(ch.amount_toman or 0), code_of(ch))
                     await s.commit()
+                else:
+                    _x = None
+            if _x:                                              # PATCH_BLUPAL_UX_V1: همان پیامِ فاکتور «منقضی» می‌شود
+                await edit_invoice_message(bid, _x[0], _x[1], closed_text(_x[2], _x[3], "expired"), closed_kb())
     return n
 
 

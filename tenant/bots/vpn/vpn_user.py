@@ -2663,9 +2663,9 @@ async def _build_buy_summary(bot: Bot, bot_id: int, plan_id: int,
     # === PATCH_ABANGATEWAY_REPLACE_CARD_V1 ===
     # اگر ادمین آبان گیت‌وی را «به‌جایِ کارت‌به‌کارتِ دستی» گذاشته، این دکمه پنهان
     # می‌شود و پایین‌تر دکمهٔ آبان گیت‌وی (همیشه، نه فقط با موجودیِ کم) می‌آید.
-    from tenant import _ab_replaces_card
+    from tenant import _ab_replaces_card, _card_replaced
     _ab_repl = await _ab_replaces_card(bot_id)
-    if card_enabled and not _ab_repl:
+    if card_enabled and not await _card_replaced(bot_id):      # PATCH_BLUPAL_UX_V1
         kb_rows.append([InlineKeyboardButton(text="💳 پرداخت کارت‌به‌کارت",
                         callback_data=f"vpay:card:{plan_id}")])
     # === PATCH_WALLET_TOPUP_ROWS_V1 ===
@@ -5248,8 +5248,8 @@ async def _vc_preinvoice(bot: Bot, bot_id: int, telegram_id: int, gb: int, days:
                if await _wpay_on2(bot_id) else [])
     # === PATCH_ABANGATEWAY_REPLACE_CARD_V1 === (در خریدِ دلخواه، آبان گیت‌وی از مسیرِ
     # «شارژِ کیف‌پول» زیر می‌آید؛ تکمیلِ خودکارِ خرید فقط برایِ پلن‌هایِ آماده است)
-    from tenant import _ab_replaces_card
-    if card_enabled and not await _ab_replaces_card(bot_id):
+    from tenant import _ab_replaces_card, _card_replaced
+    if card_enabled and not await _card_replaced(bot_id):      # PATCH_BLUPAL_UX_V1
         kb_rows.append([InlineKeyboardButton(text="💳 پرداخت کارت‌به‌کارت",
                         callback_data=f"vc:cardpay:{gb}:{days}:{count}")])
     # === PATCH_ABANGATEWAY_VC_DIRECT_V1 ===

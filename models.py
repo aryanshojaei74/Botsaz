@@ -1672,6 +1672,10 @@ class BluPalCharge(Base):
     status: Mapped[str] = mapped_column(String(20), default="waiting")        # waiting/paid/cancelled/expired
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     paid_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # === PATCH_BLUPAL_UX_V1 === کدِ پیگیریِ ترتیبیِ همان ربات (مثلِ سفارش‌ها) + پیامِ فاکتور تا همان‌جا ویرایش شود
+    seq_code: Mapped[str | None] = mapped_column(String(20), index=True)
+    chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    msg_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
 # === PATCH_APAY_GATEWAY_V1 ===

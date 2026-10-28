@@ -115,6 +115,15 @@ async def _state(maker):
         return float(u.balance), [c.status for c in ch], [t.kind for t in txns]
 
 
+class _Sent:
+    """پیامِ فرستاده‌شدهٔ ربات؛ ویرایشش هم در out ثبت می‌شود (فاکتور همان پیامِ «در حالِ ساخت» است)."""
+    def __init__(self, parent, n):
+        self.p, self.chat, self.message_id = parent, SimpleNamespace(id=777), 900 + n
+
+    async def edit_text(self, text, **kw):
+        self.p.out.append((text, kw.get("reply_markup")))
+
+
 class Msg:
     def __init__(self, text, uid=777):
         self.text = text
@@ -123,6 +132,7 @@ class Msg:
 
     async def answer(self, text, **kw):
         self.out.append((text, kw.get("reply_markup")))
+        return _Sent(self, len(self.out))
 
 
 class St:
@@ -360,3 +370,266 @@ async def test_wallet_page_lists_blupal_only_when_available_and_visible(env):
     m = M()
     await tenant.show_wallet(m, 5, u)
     assert not any(has(x) for x in m.sent)
+
+
+# ───────────── PATCH_BLUPAL_UX_V1: کدِ پیگیریِ ترتیبی، ویرایشِ همان پیام، مبلغِ آماده، جایگزینیِ کارت ─────────────
+class CBq:
+    def __init__(self, data, uid=777):
+        self.data = data
+        self.from_user = SimpleNamespace(id=uid)
+        self.answers = []
+        self.message = SimpleNamespace(chat=SimpleNamespace(id=777), message_id=901)
+
+    async def answer(self, t="", show_alert=False):
+        self.answers.append((t, show_alert))
+
+
+async def _patch_flow(monkeypatch):
+    import tenant as T
+
+    async def row(bot):
+        return SimpleNamespace(id=5, username="x", owner_id=1)
+
+    async def okc(*a, **k):
+        return True, ""
+    monkeypatch.setattr(T, "fa_to_int", lambda t: int(str(t).replace(",", "")))
+    monkeypatch.setattr(T, "get_bot_row", row)
+    import tenant.shared.kyc as kyc
+    monkeypatch.setattr(kyc, "check_charge", okc)
+
+
+@pytest.mark.asyncio
+async def test_invoice_uses_sequential_tracking_code_and_remembers_its_message(env, monkeypatch):
+    maker, fb, notified = env
+    await _patch_flow(monkeypatch)
+    m1, m2 = Msg("100000"), Msg("50000")
+    await BA.bpu_amount(m1, SimpleNamespace(), St())
+    await BA.bpu_amount(m2, SimpleNamespace(), St())
+    t1, t2 = m1.out[-1][0], m2.out[-1][0]
+    assert "کدِ پیگیری: <code>1</code>" in t1 and "کدِ پیگیری: <code>2</code>" in t2     # نه «bpc64d…» تصادفی
+    async with maker() as s:
+        chs = (await s.scalars(select(models.BluPalCharge).order_by(models.BluPalCharge.id))).all()
+    assert [c.seq_code for c in chs] == ["1", "2"] and all(c.msg_id and c.chat_id == 777 for c in chs)
+    assert BP.code_of(chs[0]) == "1" and BP.code_of(SimpleNamespace(order_id="bpold", seq_code=None)) == "bpold"
+
+
+@pytest.mark.asyncio
+async def test_check_not_paid_is_a_toast_and_paid_edits_the_invoice_message(env, monkeypatch):
+    maker, fb, notified = env
+    await _patch_flow(monkeypatch)
+    m = Msg("100000")
+    await BA.bpu_amount(m, SimpleNamespace(), St())
+    async with maker() as s:
+        oid = (await s.scalar(select(models.BluPalCharge))).order_id
+    edits = []
+
+    async def fake_edit(bot_id, chat, msg, text, kb=None):
+        edits.append((chat, msg, text))
+        return True
+
+    async def fake_msg(bot_id, amount, bal, method):
+        return f"✅ {int(amount):,} تومان شارژ شد", None
+    monkeypatch.setattr(BP, "edit_invoice_message", fake_edit)
+    import tenant.gateways.wallet_receipt as WR
+    monkeypatch.setattr(WR, "build_wallet_charge_message_for_bot", fake_msg)
+    c = CBq(f"bpu:check:{oid}")
+    await BA.bpu_check(c, SimpleNamespace())
+    assert c.answers[-1] == ("ℹ️ هنوز پرداختی ثبت نشده است.", False) and not edits and not notified   # اعلانِ بالا؛ پیامِ جدید نه
+    fb.invoices[101]["status"] = "PAID"
+    c = CBq(f"bpu:check:{oid}")
+    await BA.bpu_check(c, SimpleNamespace())
+    assert "شارژ شد" in c.answers[-1][0] or "تأیید" in c.answers[-1][0]
+    assert len(edits) == 1 and edits[0][:2] == (777, 901) and not notified        # همان فاکتور ویرایش شد، پیامِ تکراری نرفت
+    assert (await _state(maker))[0] == 100_000.0
+    c = CBq(f"bpu:check:{oid}")                                                    # دوباره زدن ⇒ شارژِ دوباره نه، پیامِ جدید هم نه
+    await BA.bpu_check(c, SimpleNamespace())
+    assert len(edits) == 1 and (await _state(maker))[0] == 100_000.0
+
+
+@pytest.mark.asyncio
+async def test_edit_failure_falls_back_to_a_new_message(env, monkeypatch):
+    maker, fb, notified = env
+    await BP.create_invoice(KEY, 1_000_000)
+    await _add_charge(maker, "bpe", 101)
+    fb.invoices[101]["status"] = "PAID"
+
+    async def bad_edit(*a, **k):
+        return False
+    monkeypatch.setattr(BP, "edit_invoice_message", bad_edit)
+    ok, _m, _c = await BP.settle_charge(5, "bpe")
+    assert ok and notified == [(777, 100_000, 100_000.0)]
+
+
+@pytest.mark.asyncio
+async def test_expiry_and_cancel_by_gateway_edit_invoice_once(env, monkeypatch):
+    maker, fb, notified = env
+    await BP.create_invoice(KEY, 1_000_000)
+    async with maker() as s:
+        s.add(models.BluPalCharge(bot_id=5, user_telegram_id=777, order_id="bpx1", invoice_id=101, amount_toman=100_000,
+                                  amount_rial=1_000_000, final_amount_rial=1_000_123, status="waiting", seq_code="7",
+                                  chat_id=777, msg_id=55))
+        await s.commit()
+    edits = []
+
+    async def fake_edit(bot_id, chat, msg, text, kb=None):
+        edits.append((chat, msg, text))
+        return True
+    monkeypatch.setattr(BP, "edit_invoice_message", fake_edit)
+    fb.invoices[101]["status"] = "EXPIRED"
+    await BP.settle_charge(5, "bpx1")
+    await BP.settle_charge(5, "bpx1")                                                # دورِ بعدیِ استعلام: دوباره ویرایش نمی‌شود
+    assert len(edits) == 1 and "منقضی" in edits[0][2] and "<code>7</code>" in edits[0][2]
+
+
+@pytest.mark.asyncio
+async def test_time_based_expiry_in_poll_edits_invoice(env, monkeypatch):
+    maker, fb, notified = env
+    await BP.create_invoice(KEY, 1_000_000)
+    async with maker() as s:
+        s.add(models.BluPalCharge(bot_id=5, user_telegram_id=777, order_id="bpt", invoice_id=101, amount_toman=100_000,
+                                  amount_rial=1_000_000, final_amount_rial=1_000_123, status="waiting", seq_code="9",
+                                  chat_id=777, msg_id=66, created_at=datetime.utcnow() - timedelta(minutes=100)))
+        await s.commit()
+    edits = []
+
+    async def fake_edit(bot_id, chat, msg, text, kb=None):
+        edits.append((msg, text))
+        return True
+    monkeypatch.setattr(BP, "edit_invoice_message", fake_edit)
+    await BP.poll_pending(include_closed=False)
+    assert (await _state(maker))[1] == ["expired"] and len(edits) == 1 and edits[0][0] == 66 and "منقضی" in edits[0][1]
+
+
+@pytest.mark.asyncio
+async def test_cancel_edits_the_invoice_message_in_place(env, monkeypatch):
+    maker, fb, notified = env
+    await _patch_flow(monkeypatch)
+    import tenant as T
+
+    async def back(bid):
+        return None
+    monkeypatch.setattr(T, "inline_back_kb", back)
+    m = Msg("100000")
+    await BA.bpu_amount(m, SimpleNamespace(), St())
+    async with maker() as s:
+        oid = (await s.scalar(select(models.BluPalCharge))).order_id
+    c = CBq(f"bpu:cancel:{oid}")
+    edited = []
+
+    async def edit_text(t, **k):
+        edited.append(t)
+    c.message.edit_text = edit_text
+    await BA.bpu_cancel(c, SimpleNamespace())
+    assert edited and "لغو شد" in edited[0] and "<code>1</code>" in edited[0]
+    assert (await _state(maker))[1] == ["cancelled"]
+
+
+@pytest.mark.asyncio
+async def test_preset_buttons_and_fixed_amount_flow(env, monkeypatch):
+    maker, fb, notified = env
+    await _patch_flow(monkeypatch)
+    shown = []
+    c = CBq("w:blupal")
+
+    async def ans(t, **k):
+        shown.append((t, k.get("reply_markup")))
+    c.message.answer = ans
+    await BA.bpu_start(c, SimpleNamespace(), St())
+    kb = shown[-1][1]
+    cbs = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert "bpu:amt:50000" in cbs and "bpu:custom" in cbs and "w:back" in cbs
+    c2 = CBq("bpu:amt:50000")
+    out = []
+
+    async def ans2(t, **k):
+        out.append((t, k.get("reply_markup")))
+        return _Sent(SimpleNamespace(out=out), len(out))
+    c2.message.answer = ans2
+    await BA.bpu_fixed_amount(c2, SimpleNamespace(), St())
+    assert any("فاکتورِ شارژِ کیف پول" in t for t, _k in out) and fb.invoices[101]["amount"] == 500_000
+    async with maker() as s:
+        ch = await s.scalar(select(models.BluPalCharge))
+    assert ch.user_telegram_id == 777 and ch.amount_toman == 50_000                  # پرداخت‌کننده = کسی که دکمه را زد
+
+
+@pytest.mark.asyncio
+async def test_shortfall_chooser_shows_amount_on_blupal_button(env):
+    from tenant.shared import vs_pay
+    rows = await vs_pay.chooser_rows(5, 226_450, False)
+    btn = [b for r in rows for b in r if (b.callback_data or "").startswith("bpu:amt:")]
+    assert btn and btn[0].callback_data == "bpu:amt:226450" and "226,450" in btn[0].text
+
+
+@pytest.mark.asyncio
+async def test_replace_card_hides_manual_card_everywhere_and_forces_blupal(env):
+    maker, fb, notified = env
+    await tenant.set_setting(5, "card_number", "6037991111111111")
+    await tenant.set_setting(5, "card_enabled", "1")
+    await tenant.set_setting(5, "blupal_show_purchase", "0")
+    cbs = lambda rows: [b.callback_data for r in rows for b in r]                    # noqa: E731
+    assert "w:charge" in cbs(await tenant.wallet_topup_rows(5, in_purchase=True))
+    assert "w:blupal" not in cbs(await tenant.wallet_topup_rows(5, in_purchase=True))
+    assert await BP.replaces_card(5) is False
+    await tenant.set_setting(5, "blupal_replace_card", "1")
+    rows = await tenant.wallet_topup_rows(5, in_purchase=True)
+    assert "w:charge" not in cbs(rows) and "w:blupal" in cbs(rows)                   # کارتِ دستی رفت، بلوپال (حتی با تیکِ خرید خاموش) آمد
+    assert await tenant._card_replaced(5) is True
+    from tenant.shared import vs_pay
+    assert await vs_pay.card_pay_allowed(5) is False
+    await tenant.set_setting(5, "blupal_enabled", "0")                               # درگاه غیرفعال ⇒ اثری ندارد
+    assert await BP.replaces_card(5) is False and await tenant._card_replaced(5) is False
+    assert "w:charge" in cbs(await tenant.wallet_topup_rows(5, in_purchase=True))
+
+
+@pytest.mark.asyncio
+async def test_admin_search_finds_blupal_charge_by_tracking_code(env, monkeypatch):
+    maker, fb, notified = env
+    await _patch_flow(monkeypatch)
+    import tenant as T
+    m = Msg("100000")
+    await BA.bpu_amount(m, SimpleNamespace(), St())
+
+    async def owner(msg, bot):
+        return SimpleNamespace(id=5)
+    monkeypatch.setattr(T, "_owner_ok_msg", owner)
+    q = Msg("1", uid=1)
+    await T.tadm_order_search_exec(q, SimpleNamespace(), St())
+    text = q.out[-1][0]
+    assert "شارژ با بلوپال" in text and "100,000" in text and "در انتظار" in text and "یافت نشد" not in text
+    q2 = Msg("999", uid=1)
+    await T.tadm_order_search_exec(q2, SimpleNamespace(), St())
+    assert "یافت نشد" in q2.out[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_orders_page_lists_paid_blupal_charges_and_detail_opens(env, monkeypatch):
+    maker, fb, notified = env
+    import tenant as T
+    async with maker() as s:
+        s.add(models.BluPalCharge(bot_id=5, user_telegram_id=777, order_id="bpd", invoice_id=1, amount_toman=100_000,
+                                  amount_rial=1_000_000, final_amount_rial=1_000_123, status="paid", seq_code="12",
+                                  tracking_code="456", paid_at=datetime.utcnow()))
+        s.add(models.BluPalCharge(bot_id=5, user_telegram_id=777, order_id="bpw", invoice_id=2, amount_toman=50_000,
+                                  amount_rial=500_000, final_amount_rial=500_123, status="waiting", seq_code="13"))
+        await s.commit()
+
+    async def owner(cb, bot):
+        return SimpleNamespace(id=5, plan="pro")
+    monkeypatch.setattr(T, "_owner_ok", owner)
+    shown = []
+
+    async def safe_edit(cb, txt, reply_markup=None, **k):
+        shown.append(reply_markup)
+    monkeypatch.setattr(T, "_safe_edit", safe_edit)
+    c = CBq("tadm:orders")
+    await T.tadm_orders(c, SimpleNamespace())
+    btns = [b for r in shown[-1].inline_keyboard for b in r if (b.callback_data or "").startswith("tadm:bpl:")]
+    assert len(btns) == 1 and "12" in btns[0].text and "100,000" in btns[0].text            # فقط پرداخت‌شده‌ها
+    out = []
+    c2 = CBq(btns[0].callback_data)
+
+    async def ans(t, **k):
+        out.append(t)
+    c2.message.answer = ans
+    await BA.bpl_detail(c2, SimpleNamespace())
+    assert "<code>12</code>" in out[-1] and "456" in out[-1] and "پرداخت‌شده" in out[-1]

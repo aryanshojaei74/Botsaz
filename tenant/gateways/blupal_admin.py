@@ -35,6 +35,7 @@ async def _menu_content(bot_id: int):
     on = await BP._get(bot_id, "blupal_enabled", "0") == "1"
     show_wallet = await BP._get(bot_id, "blupal_show_wallet", "1") == "1"
     show_purchase = await BP._get(bot_id, "blupal_show_purchase", "1") == "1"
+    repl = await BP._get(bot_id, "blupal_replace_card", "0") == "1"
     mn, mx = await BP.get_min_amount(bot_id), await BP.get_max_amount(bot_id)
     masked = (key[:9] + "…" + key[-4:]) if key and len(key) > 16 else (key or "—")
     mode = {"sandbox": " (حالتِ تست)", "live": " (اصلی)"}.get(BP.key_mode(key), "") if key else ""
@@ -45,7 +46,8 @@ async def _menu_content(bot_id: int):
            f"🔽 حداقلِ مبلغ: <b>{mn:,}</b> تومان\n"
            f"🔼 حداکثرِ مبلغ: <b>{(f'{mx:,}' if mx else f'{BP.CEIL_AMOUNT:,} (سقفِ درگاه)')}</b> تومان\n"
            f"👛 نمایش در کیف پول: {'✅' if show_wallet else '❌'}\n"
-           f"🛒 نمایش موقعِ پرداختِ محصول: {'✅' if show_purchase else '❌'}\n\n"
+           f"🛒 نمایش موقعِ پرداختِ محصول: {'✅' if show_purchase else '❌'}\n"
+           f"🔁 جایگزینِ کارت‌به‌کارتِ دستی: {'✅' if repl else '❌'}\n\n"
            "ℹ️ بازهٔ درگاه ۱۰٬۰۰۰ تا ۵۰٬۰۰۰٬۰۰۰ تومان است. مبلغِ فاکتور تا ۹۹۹ ریال (کمتر از ۱۰۰ تومان) با عددِ تصادفی "
            "تفاوت دارد تا واریزها از هم تشخیص داده شوند؛ کیفِ پولِ مشتری <b>کامل</b> به‌اندازهٔ مبلغِ شارژ پر می‌شود. "
            "کلیدِ API را از داشبوردِ بلوپال ← «مدیریت API Key» بردار (کلیدِ <code>blu_live_…</code> برایِ اصلی، "
@@ -62,6 +64,8 @@ async def _menu_content(bot_id: int):
         [InlineKeyboardButton(text=f"🛒 نمایش موقعِ پرداختِ محصول: {'✅' if show_purchase else '❌'}",
                               callback_data="bpl:show_purchase",
                               style=(ButtonStyle.SUCCESS if show_purchase else ButtonStyle.DANGER))],
+        [InlineKeyboardButton(text=f"🔁 جایگزینِ کارت‌به‌کارتِ دستی: {'✅' if repl else '❌'}", callback_data="bpl:replace",
+                              style=(ButtonStyle.SUCCESS if repl else ButtonStyle.DANGER))],
         [InlineKeyboardButton(text="🧪 تستِ اتصال", callback_data="bpl:test", style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:finance", style=ButtonStyle.DANGER)],
     ]
@@ -116,6 +120,21 @@ async def _flip(cb: CallbackQuery, bot: Bot, key: str, label: str):
 @blupal_router.callback_query(F.data == "bpl:show_wallet")
 async def bp_show_wallet(cb: CallbackQuery, bot: Bot):
     await _flip(cb, bot, "blupal_show_wallet", "در کیف پول")
+
+
+@blupal_router.callback_query(F.data == "bpl:replace")
+async def bp_replace(cb: CallbackQuery, bot: Bot):
+    """PATCH_BLUPAL_UX_V1: بلوپال به‌جایِ «کارت‌به‌کارتِ دستی» (شمارهٔ کارتِ ثابت + رسید) نمایش داده شود."""
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cur = await BP._get(row.id, "blupal_replace_card", "0") == "1"
+    if not cur and not await BP.is_available(row.id):
+        return await cb.answer("اول درگاه را فعال کن (کلیدِ API + روشن).", show_alert=True)
+    await BP._set(row.id, "blupal_replace_card", "0" if cur else "1")
+    await cb.answer("کارت‌به‌کارتِ دستی دوباره نمایش داده می‌شود." if cur else "بلوپال جایگزینِ کارت‌به‌کارتِ دستی شد.", show_alert=not cur)
+    await _show(cb, row.id)
 
 
 @blupal_router.callback_query(F.data == "bpl:show_purchase")
@@ -226,13 +245,39 @@ async def bp_test(cb: CallbackQuery, bot: Bot):
 
 
 # ═════════════════ جریانِ کاربر ═════════════════
+def _amount_kb(presets) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=f"{x:,} تومان", callback_data=f"bpu:amt:{x}", style=ButtonStyle.SUCCESS)
+             for x in presets[i:i + 2]] for i in range(0, len(presets), 2)]
+    rows.append([InlineKeyboardButton(text="✏️ مبلغ دلخواه", callback_data="bpu:custom", style=ButtonStyle.PRIMARY)])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="w:back", style=ButtonStyle.DANGER)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 @blupal_router.callback_query(F.data.in_({"bpu:start", "w:blupal"}))
 async def bpu_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
-    from tenant import get_bot_row, smart_cancel_kb
+    """PATCH_BLUPAL_UX_V1: مثلِ زرین‌پال/کارت — دکمه‌هایِ مبلغِ آماده + «مبلغ دلخواه»."""
+    from tenant import get_bot_row
+    from tenant.gateways import wallet_limits as _wl
+    from tenant.gateways.card_wallet import WALLET_PRESETS
     row = await get_bot_row(bot)
     if not row:
         return await cb.answer()
     if not await BP.is_available(row.id):
+        return await cb.answer("این درگاه فعال نیست.", show_alert=True)
+    await state.clear()
+    mn, mx = await BP.get_min_amount(row.id), await BP.effective_max(row.id)
+    presets = [p for p in (await _wl.allowed_presets(row.id, "blupal", WALLET_PRESETS)) if mn <= p <= mx]
+    await cb.message.answer(
+        f"💳 مبلغِ شارژِ کیف پول را انتخاب کن یا «✏️ مبلغ دلخواه» را بزن.\n(حداقل {mn:,} و حداکثر {mx:,} تومان)",
+        reply_markup=_amount_kb(presets))
+    await cb.answer()
+
+
+@blupal_router.callback_query(F.data == "bpu:custom")
+async def bpu_custom(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import get_bot_row, smart_cancel_kb
+    row = await get_bot_row(bot)
+    if not row or not await BP.is_available(row.id):
         return await cb.answer("این درگاه فعال نیست.", show_alert=True)
     mn, mx = await BP.get_min_amount(row.id), await BP.effective_max(row.id)
     await state.set_state(BpFSM.amount)
@@ -242,91 +287,132 @@ async def bpu_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await cb.answer()
 
 
+@blupal_router.callback_query(F.data.startswith("bpu:amt:"))
+async def bpu_fixed_amount(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    try:
+        amount = int(cb.data.rsplit(":", 1)[1])
+    except (TypeError, ValueError):
+        return await cb.answer("مبلغ نامعتبر است.", show_alert=True)
+    await state.clear()
+    await cb.answer()
+    # cb.message پیامِ خودِ *ربات* است؛ پرداخت‌کننده کسی است که دکمه را زده
+    await _issue(cb.message, bot, amount, cb.from_user)
+
+
 @blupal_router.message(BpFSM.amount, F.text)
 async def bpu_amount(msg: Message, bot: Bot, state: FSMContext):
-    from tenant import fa_to_int, get_bot_row
+    from tenant import fa_to_int
+    amount = fa_to_int(msg.text)
+    if not amount:
+        return await msg.answer("❌ مبلغ نامعتبر است؛ یک عدد به تومان بفرست.")
+    if await _issue(msg, bot, amount, msg.from_user, from_text=True):
+        await state.clear()
+
+
+async def _issue(message: Message, bot: Bot, amount: int, payer, from_text: bool = False) -> bool:
+    """فاکتور را می‌سازد و می‌فرستد. خروجی True یعنی کارِ این مبلغ تمام شد (برایِ پاک‌کردنِ حالتِ مبلغ)."""
+    from models import alloc_tracking_in
+    from tenant import get_bot_row
     row = await get_bot_row(bot)
     if not row:
-        return
-    amount = fa_to_int(msg.text)
+        return True
     mn, mx = await BP.get_min_amount(row.id), await BP.effective_max(row.id)
-    if not amount or amount < mn:
-        return await msg.answer(f"حداقلِ مبلغ {mn:,} تومان است. دوباره بفرست.")
+    if amount < mn:
+        await message.answer(f"حداقلِ مبلغ {mn:,} تومان است." + (" دوباره بفرست." if from_text else ""))
+        return not from_text
     if amount > mx:
-        return await msg.answer(f"حداکثرِ مبلغ {mx:,} تومان است. دوباره بفرست.")
-    await state.clear()
+        await message.answer(f"حداکثرِ مبلغ {mx:,} تومان است." + (" دوباره بفرست." if from_text else ""))
+        return not from_text
+    if not await BP.is_available(row.id):
+        await message.answer("این درگاه فعال نیست.")
+        return True
     try:                                                    # سقفِ احرازِ هویت
         from tenant.shared.kyc import check_charge
         async with Session() as s:
-            u = await s.scalar(select(BotUser).where(BotUser.bot_id == row.id, BotUser.telegram_id == msg.from_user.id))
+            u = await s.scalar(select(BotUser).where(BotUser.bot_id == row.id, BotUser.telegram_id == payer.id))
         ok, why = await check_charge(row.id, u, amount)
         if not ok:
-            return await msg.answer(why)
+            await message.answer(why)
+            return True
     except Exception:
         logger.exception("blupal: بررسیِ سقف ناموفق بود")
     key = await BP._get(row.id, "blupal_api_key", "")
     if not key:
-        return await msg.answer("درگاه تنظیم نشده است.")
+        await message.answer("درگاه تنظیم نشده است.")
+        return True
     oid = BP.new_order_id()
     amount_rial = BP.to_rial(amount)
-    await msg.answer("⏳ در حالِ ساختِ فاکتور…")
+    wait = await message.answer("⏳ در حالِ ساختِ فاکتور…")
     res = await BP.create_invoice(key, amount_rial)
     if not res.get("success") or not res.get("invoice_id") or not res.get("payment_link"):
-        return await msg.answer("❌ ساختِ فاکتور ناموفق بود.\n" + BP._err(res))
+        text = "❌ ساختِ فاکتور ناموفق بود.\n" + BP._err(res)
+        try:
+            await wait.edit_text(text)
+        except Exception:  # noqa: BLE001
+            await message.answer(text)
+        return True
     final_rial = int(res.get("final_amount") or amount_rial)
     card = str(res.get("card_number") or "")[:32]
     async with Session() as s:
-        s.add(BluPalCharge(bot_id=row.id, user_telegram_id=msg.from_user.id, order_id=oid, invoice_id=int(res["invoice_id"]),
-                           amount_toman=int(amount), amount_rial=amount_rial, final_amount_rial=final_rial,
-                           card_number=card or None, status="waiting"))
+        seq = await alloc_tracking_in(s, row.id)            # همان شمارندهٔ ترتیبیِ سفارش‌ها
+        ch = BluPalCharge(bot_id=row.id, user_telegram_id=payer.id, order_id=oid, invoice_id=int(res["invoice_id"]),
+                          amount_toman=int(amount), amount_rial=amount_rial, final_amount_rial=final_rial,
+                          card_number=card or None, status="waiting", seq_code=seq)
+        s.add(ch)
         await s.commit()
+        cid = ch.id
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💳 صفحهٔ پرداخت", url=str(res["payment_link"]))],
         [InlineKeyboardButton(text="🔍 بررسیِ پرداخت", callback_data=f"bpu:check:{oid}", style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="❌ لغو و بازگشت", callback_data=f"bpu:cancel:{oid}", style=ButtonStyle.DANGER)],
     ])
     card_line = f"🏦 شمارهٔ کارتِ مقصد: <code>{card}</code>\n" if card else ""
-    await msg.answer(
+    text = (
         "🧾 <b>فاکتورِ شارژِ کیف پول</b>\n➖➖➖➖➖➖➖➖➖➖\n\n"
         f"💵 مبلغِ شارژ: <b>{amount:,}</b> تومان\n"
         f"💳 <b>مبلغِ دقیقِ واریز: {final_rial:,} ریال</b>\n"
         f"{card_line}"
-        f"🔑 کدِ پیگیری: <code>{oid}</code>\n\n"
+        f"🔑 کدِ پیگیری: <code>{seq}</code>\n\n"
         "⚠️ <b>دقیقاً همین مبلغ (به ریال، با همین رقم‌های آخر)</b> را کارت‌به‌کارت کن؛ کم‌وزیاد یا رند، خودکار تأیید نمی‌شود. "
         "مبلغ را در اپِ بانک به‌صورت ریال وارد کن و اگر شک داشتی، از «صفحهٔ پرداخت» مبلغِ دقیق را کپی کن.\n\n"
         "📋 <b>مراحل:</b>\n"
         "۱. روی «💳 صفحهٔ پرداخت» بزن و مبلغ/کارت را ببین.\n"
         "۲. واریز کن، بعد «🔍 بررسیِ پرداخت» را بزن (خودکار هم بررسی می‌شود).\n"
         "۳. کیفِ پولت شارژ می‌شود. ✅\n\n"
-        "⏳ اگر منصرف شدی، «❌ لغو و بازگشت» را بزن.",
-        reply_markup=kb, parse_mode="HTML")
+        "⏳ اگر منصرف شدی، «❌ لغو و بازگشت» را بزن.")
+    try:                                                    # «در حال ساخت» همان پیامِ فاکتور می‌شود (نه پیامِ اضافه)
+        await wait.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        sent = wait
+    except Exception:  # noqa: BLE001
+        sent = await message.answer(text, reply_markup=kb, parse_mode="HTML")
+    async with Session() as s:
+        ch = await s.get(BluPalCharge, cid)
+        if ch:
+            ch.chat_id, ch.msg_id = sent.chat.id, sent.message_id
+            await s.commit()
+    return True
 
 
 @blupal_router.callback_query(F.data.startswith("bpu:check:"))
 async def bpu_check(cb: CallbackQuery, bot: Bot):
+    """PATCH_BLUPAL_UX_V1: نتیجه بدونِ پیامِ جدید — «هنوز پرداخت نشده» اعلانِ بالایِ صفحه است؛ پرداخت‌شد ⇒ همان فاکتور ویرایش می‌شود."""
     from tenant import get_bot_row
     row = await get_bot_row(bot)
     if not row:
         return await cb.answer()
     oid = cb.data.split(":", 2)[2]
     async with Session() as s:
-        ch = await s.scalar(select(BluPalCharge).where(BluPalCharge.bot_id == row.id, BluPalCharge.order_id == oid))
-    if not ch or ch.user_telegram_id != cb.from_user.id:
-        return await cb.answer("این فاکتور پیدا نشد.", show_alert=True)
-    await cb.answer("در حالِ استعلام…")
-    ok, msg_, credit = await BP.settle_charge(row.id, oid)
+        ch = await s.scalar(select(BluPalCharge).where(BluPalCharge.bot_id == row.id, BluPalCharge.order_id == oid).with_for_update())
+        if not ch or ch.user_telegram_id != cb.from_user.id:
+            return await cb.answer("این فاکتور پیدا نشد.", show_alert=True)
+        if not ch.msg_id and cb.message:                    # فاکتورِ قدیمی: همین پیام را برایِ ویرایش ثبت کن
+            ch.chat_id, ch.msg_id = cb.message.chat.id, cb.message.message_id
+            await s.commit()
+    ok, msg_, _credit = await BP.settle_charge(row.id, oid)
     if ok:
-        from tenant.gateways.wallet_receipt import build_wallet_charge_message_for_bot
-        async with Session() as s:
-            u = await s.scalar(select(BotUser).where(BotUser.bot_id == row.id, BotUser.telegram_id == cb.from_user.id))
-        bal = float(u.balance) if u else credit
-        try:
-            t, k = await build_wallet_charge_message_for_bot(row.id, credit, bal, "card")
-            await cb.message.answer(t, reply_markup=k)
-        except Exception:
-            await cb.message.answer(f"✅ {credit:,} تومان به کیفِ پولت اضافه شد.")
+        await cb.answer("✅ پرداخت تأیید و کیف پولت شارژ شد.")
     else:
-        await cb.message.answer("ℹ️ " + msg_)
+        await cb.answer("ℹ️ " + msg_, show_alert=False)
 
 
 @blupal_router.callback_query(F.data.startswith("bpu:cancel:"))
@@ -343,7 +429,7 @@ async def bpu_cancel(cb: CallbackQuery, bot: Bot):
             return await cb.answer("این فاکتور پیدا نشد.", show_alert=True)
         if ch.status == "paid":
             return await cb.answer("این فاکتور قبلاً پرداخت شده و قابلِ لغو نیست.", show_alert=True)
-    # اگر همین لحظه پرداخت شده بود، به‌جایِ لغو شارژ کن (پولِ واریزشده نسوزد)
+    # اگر همین لحظه پرداخت شده بود، به‌جایِ لغو شارژ کن (پولِ واریزشده نسوزد)؛ settle خودش پیام را به «پرداخت شد» ویرایش می‌کند
     ok_paid, _m, credit = await BP.settle_charge(row.id, oid)
     if ok_paid:
         return await cb.answer(f"✅ پرداختت رسیده بود و {credit:,} تومان به کیف پولت اضافه شد.", show_alert=True)
@@ -352,12 +438,50 @@ async def bpu_cancel(cb: CallbackQuery, bot: Bot):
         if not ch or ch.status == "paid":
             return await cb.answer("این فاکتور قبلاً پرداخت شده و قابلِ لغو نیست.", show_alert=True)
         ch.status = "cancelled"
+        amt, code = int(ch.amount_toman or 0), BP.code_of(ch)
         await s.commit()
     await cb.answer("فاکتور لغو شد.")
+    text = BP.closed_text(amt, code, "cancelled")
+    try:                                                    # همان پیامِ فاکتور به «لغو شد» تبدیل می‌شود
+        await cb.message.edit_text(text, reply_markup=await inline_back_kb(row.id), parse_mode="HTML")
+    except Exception:  # noqa: BLE001
+        await cb.message.answer(text, reply_markup=await inline_back_kb(row.id), parse_mode="HTML")
+
+
+def _detail_text(ch) -> str:
+    st = {"paid": "✅ پرداخت‌شده", "waiting": "⏳ در انتظار پرداخت", "expired": "⌛️ منقضی", "cancelled": "❌ لغوشده"}.get(ch.status, ch.status)
+    jd = ""
     try:
-        await cb.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        logger.debug("تمیزکاریِ ظاهریِ پیام ناموفق بود (بی‌اهمیت)")
-    await cb.message.answer(
-        "❌ فاکتور لغو شد.\n\nاگر واریز کردی ولی اینجا لغو زدی، نگران نباش؛ به پشتیبانیِ ربات بگو با همین کدِ پیگیری بررسیش کنه.",
-        reply_markup=await inline_back_kb(row.id))
+        from tenant import _jalali_date_time
+        jd = "\n📅 " + " ".join(_jalali_date_time(ch.paid_at or ch.created_at))
+    except Exception:  # noqa: BLE001
+        logger.debug("blupal: تاریخِ جلالی ساخته نشد")
+    return ("💳 <b>شارژ با بلوپال</b>\n┈┅━━⊷⊰✨⊱⊶━━┅┈\n"
+            f"🆔 کدِ پیگیری: <code>{BP.code_of(ch)}</code>\n"
+            f"👤 کاربر: <code>{ch.user_telegram_id}</code>\n"
+            f"💰 مبلغِ شارژ: {int(ch.amount_toman or 0):,} تومان\n"
+            f"💳 مبلغِ دقیقِ واریز: {int(ch.final_amount_rial or 0):,} ریال\n"
+            f"📊 وضعیت: {st}"
+            + (f"\n🏦 شمارهٔ تراکنشِ بانکی: <code>{ch.tracking_code}</code>" if ch.tracking_code else "")
+            + (f"\n🙍 واریزکننده: {ch.payer_name}" if ch.payer_name else "")
+            + f"\n🧷 شناسهٔ داخلی: <code>{ch.order_id}</code>" + jd)
+
+
+@blupal_router.callback_query(F.data.startswith("tadm:bpl:"))
+async def bpl_detail(cb: CallbackQuery, bot: Bot):
+    """جزئیاتِ یک شارژِ بلوپال برایِ مالک (از «سفارش‌ها و رسیدها»)."""
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    try:
+        cid = int(cb.data.rsplit(":", 1)[1])
+    except (TypeError, ValueError):
+        return await cb.answer()
+    async with Session() as s:
+        ch = await s.get(BluPalCharge, cid)
+    if not ch or ch.bot_id != row.id:
+        return await cb.answer("پیدا نشد.", show_alert=True)
+    await cb.message.answer(_detail_text(ch), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:orders", style=ButtonStyle.DANGER)]]))
+    await cb.answer()

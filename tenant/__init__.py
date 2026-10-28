@@ -3902,6 +3902,22 @@ async def _ab_replaces_card(bot_id: int) -> bool:
         return False
 
 
+# === PATCH_BLUPAL_UX_V1 ===
+async def _bp_replaces_card(bot_id: int) -> bool:
+    """پوششِ امن روی blupal.replaces_card (خطا ⇒ «نه»، تا کارت‌به‌کارتِ دستی بی‌دلیل ناپدید نشود)."""
+    try:
+        from tenant.gateways.blupal import replaces_card
+        return await replaces_card(bot_id)
+    except Exception:
+        logger.exception("بررسیِ جایگزینیِ کارت‌به‌کارت با بلوپال ناموفق بود")
+        return False
+
+
+async def _card_replaced(bot_id: int) -> bool:
+    """کارت‌به‌کارتِ دستی باید پنهان شود؟ (آبان گیت‌وی یا بلوپال جایگزینش شده)"""
+    return await _ab_replaces_card(bot_id) or await _bp_replaces_card(bot_id)
+
+
 # === PATCH_WALLET_CHARGE_BTN_V1 ===
 # گزارشِ #159 (Jahan Service): تنظیمِ «🔋 شارژ کیف‌پول در صفحهٔ خرید» روشن بود ولی مشتری هیچ دکمهٔ
 # شارژی نمی‌دید. علت: این تیک فقط دکمه‌هایِ «ارز دیجیتال/سواپ‌ولت» را کنترل می‌کرد؛ رباتی که این دو
@@ -3950,7 +3966,8 @@ async def wallet_topup_rows(bot_id: int, colored: bool = False,
     card_purchase_on = (not in_purchase) or force_card or \
         await get_setting(bot_id, "card_purchase_enabled", "1") == "1"
     _ab_repl = await _ab_replaces_card(bot_id)   # === PATCH_ABANGATEWAY_REPLACE_CARD_V1 ===
-    if bool(card_num) and card_on and card_purchase_on and not skip_card and not _ab_repl:
+    _bp_repl = await _bp_replaces_card(bot_id)   # === PATCH_BLUPAL_UX_V1 ===
+    if bool(card_num) and card_on and card_purchase_on and not skip_card and not (_ab_repl or _bp_repl):
         rows.append([InlineKeyboardButton(
             text="💳 شارژ کارت‌به‌کارت", callback_data="w:charge", style=succ)])
 
@@ -4038,7 +4055,7 @@ async def wallet_topup_rows(bot_id: int, colored: bool = False,
     # === PATCH_BLUPAL_TENANT_V1 ===
     try:
         from tenant.gateways.blupal import is_available as _bp_ok
-        _bp_show = (not in_purchase) or await get_setting(bot_id, "blupal_show_purchase", "1") == "1"
+        _bp_show = (not in_purchase) or _bp_repl or await get_setting(bot_id, "blupal_show_purchase", "1") == "1"
         if _bp_show and await _bp_ok(bot_id):
             rows.append([InlineKeyboardButton(
                 text=await gw_btn(bot_id, 'blupal', 'شارژ با', '💳'), callback_data="w:blupal", style=succ)])
@@ -4101,7 +4118,8 @@ async def pay_method_kb_full(bot_id: int, oid: int) -> InlineKeyboardMarkup:
     card_enabled = await get_setting(bot_id, "card_enabled", "1")
     card_purchase_enabled = await get_setting(bot_id, "card_purchase_enabled", "1")
     _ab_repl_o = await _ab_replaces_card(bot_id)   # === PATCH_ABANGATEWAY_REPLACE_CARD_V1 ===
-    if card_enabled == "1" and card_purchase_enabled == "1" and not _ab_repl_o:
+    _bp_repl_o = await _bp_replaces_card(bot_id)   # === PATCH_BLUPAL_UX_V1 ===
+    if card_enabled == "1" and card_purchase_enabled == "1" and not (_ab_repl_o or _bp_repl_o):
         rows.append([InlineKeyboardButton(text="💳 کارت‌به‌کارت",
                                           callback_data=f"pay:card:{oid}")])
 
@@ -4165,7 +4183,7 @@ async def pay_method_kb_full(bot_id: int, oid: int) -> InlineKeyboardMarkup:
     # === PATCH_BLUPAL_TENANT_V1 ===
     try:
         from tenant.gateways.blupal import is_available as _bp_ok2
-        if await get_setting(bot_id, "blupal_show_purchase", "1") == "1" and await _bp_ok2(bot_id):
+        if (_bp_repl_o or await get_setting(bot_id, "blupal_show_purchase", "1") == "1") and await _bp_ok2(bot_id):
             rows.append([InlineKeyboardButton(
                 text=await gw_btn(bot_id, 'blupal', 'پرداخت با', '💳'), callback_data="w:blupal")])
     except Exception:
@@ -8056,7 +8074,8 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
     # تنظیمِ ربات فرق می‌کند — تا چیزی بینِ دو حالت ناهماهنگ نشود.
     options: list[tuple[str, str, object]] = []  # (برچسب, callback_data, استایل)
     _ab_repl_w = await _ab_replaces_card(bot_id)   # === PATCH_ABANGATEWAY_REPLACE_CARD_V1 ===
-    if card_enabled == "1" and not _ab_repl_w:
+    _bp_repl_w = await _bp_replaces_card(bot_id)   # === PATCH_BLUPAL_UX_V1 ===
+    if card_enabled == "1" and not (_ab_repl_w or _bp_repl_w):
         from tenant.gateways.gateway_layout import gw_custom_label as _gwcl_card   # PATCH_CARD_RENAME_COLOR_V1
         options.append((await _gwcl_card(bot_id, "card", "💳 شارژ کارت‌به‌کارت"), "w:charge", succ))
     if is_free:
@@ -8120,7 +8139,7 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
     # === PATCH_BLUPAL_TENANT_V1 ===
     try:
         from tenant.gateways.blupal import is_available as _bp_ok3
-        if await _bp_ok3(bot_id) and await get_setting(bot_id, "blupal_show_wallet", "1") == "1":
+        if await _bp_ok3(bot_id) and (_bp_repl_w or await get_setting(bot_id, "blupal_show_wallet", "1") == "1"):
             from tenant.gateways.gateway_layout import gw_custom_label as _gwcl_bp
             options.append((await _gwcl_bp(bot_id, "blupal", "💳 شارژ با بلوپال (کارت‌به‌کارت خودکار)"),
                             "w:blupal", succ))
@@ -27732,6 +27751,11 @@ async def tadm_orders(cb: CallbackQuery, bot: Bot):
             select(Order).where(Order.bot_id == row.id, Order.status == "paid")
             .order_by(Order.created_at.desc(), Order.id.desc()).limit(10)
         )).all()
+        # === PATCH_BLUPAL_UX_V1 === شارژهایِ بلوپال هم در همین فهرست دیده شوند (قبلاً هیچ‌جا نبودند)
+        from models import BluPalCharge as _BpC
+        bp_recent = (await s.scalars(
+            select(_BpC).where(_BpC.bot_id == row.id, _BpC.status == "paid")
+            .order_by(_BpC.paid_at.desc(), _BpC.id.desc()).limit(8))).all()
         # آمار کلی
         total_sales = await s.scalar(
             select(func.coalesce(func.sum(Order.amount), 0))
@@ -27755,6 +27779,11 @@ async def tadm_orders(cb: CallbackQuery, bot: Bot):
         else:
             btn_txt = f"📦 {trk} — {rial(o.amount)} — {jdate}"
         order_btns.append([InlineKeyboardButton(text=btn_txt, callback_data=f"tadm:order_detail:{o.id}", style=ButtonStyle.PRIMARY)])
+    for _bp in bp_recent:                                       # PATCH_BLUPAL_UX_V1
+        _bd, _bt = _jalali_date_time(_bp.paid_at or _bp.created_at)
+        order_btns.append([InlineKeyboardButton(
+            text=f"💳 بلوپال {_bp.seq_code or _bp.order_id} — {rial(_bp.amount_toman)} — {_bd}",
+            callback_data=f"tadm:bpl:{_bp.id}", style=ButtonStyle.PRIMARY)])
     # === PATCH_PARTNER_SETTINGS_BACK_FIX_V1 ===
     _ord_back_cb = "pp:settings" if row.plan == "partner" else "tadm:sec:finance"
     kb = InlineKeyboardMarkup(inline_keyboard=(
@@ -27932,6 +27961,15 @@ async def tadm_order_search_exec(msg: Message, bot: Bot, state: FSMContext):
                         ProductOrder.bot_id == row.id, ProductOrder.tracking_code == q))
                     if po:
                         _extra = (f"🛍 سفارشِ محصولِ دیجیتال\n💰 {rial(po.amount)}\n📊 وضعیت: {po.status}")
+                    else:
+                        # === PATCH_BLUPAL_UX_V1 === شارژِ بلوپال: با کدِ پیگیری، شناسهٔ داخلی یا شمارهٔ تراکنشِ بانکی
+                        from models import BluPalCharge as _Bpc
+                        bp = await s.scalar(select(_Bpc).where(
+                            _Bpc.bot_id == row.id,
+                            (_Bpc.seq_code == q) | (func.upper(_Bpc.order_id) == q) | (func.upper(_Bpc.tracking_code) == q)))
+                        if bp:
+                            from tenant.gateways.blupal_admin import _detail_text as _bp_detail
+                            _extra = "💳 <b>شارژ با بلوپال</b>\n" + _bp_detail(bp).split("┈┅━━⊷⊰✨⊱⊶━━┅┈\n", 1)[-1]
             if _extra:
                 await msg.answer(f"🔍 <b>نتیجه جستجو</b>\n\n🆔 کد پیگیری: <code>{q}</code>\n"
                                  "┈┅━━⊷⊰✨⊱⊶━━┅┈\n" + _extra,
