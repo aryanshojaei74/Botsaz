@@ -186,6 +186,11 @@ async def _render_menu(target, bot_id: int, offset: int, plan: str = "", *, edit
         text=("🔴 خاموش کردن قابلیت" if enabled else "🟢 روشن کردن قابلیت"),
         callback_data=f"pemj:toggle:{offset}",
         style=(ButtonStyle.DANGER if enabled else ButtonStyle.SUCCESS))])
+    auto_on = await _auto_enabled(bot_id)
+    kb_rows.append([InlineKeyboardButton(
+        text=("🤖 تبدیلِ خودکارِ ایموجی‌ها: روشن" if auto_on else "🤖 تبدیلِ خودکارِ ایموجی‌ها: خاموش"),
+        callback_data=f"pemj:auto:{offset}",
+        style=(ButtonStyle.SUCCESS if auto_on else ButtonStyle.DANGER))])
     # === PATCH_TENANT_PREMIUM_EMOJI_BACK_FIX_V1 ===
     # مسیرِ صحیحِ بازگشت بسته به پلن فرق دارد: ربات‌های عادیِ حرفه‌ای از
     # «tadm:sec:settings» (زیرمنویِ دکمه‌ها و تنظیمات) به این‌جا می‌آیند،
@@ -206,6 +211,9 @@ async def _render_menu(target, bot_id: int, offset: int, plan: str = "", *, edit
         "هر ایموجیِ معمولی که اینجا ثبتش کنی، هرجایِ این ربات که قرار باشد "
         "همان ایموجی نمایش داده شود، به‌جایش نسخهٔ پرمیومِ ثبت‌شده نمایش "
         "داده می‌شود.\n\n"
+        "🤖 با «تبدیلِ خودکار»، ایموجی‌هایِ رایج (✅ ❌ 💰 🔗 ...) بدونِ ثبتِ دستی "
+        "پرمیوم می‌شوند؛ ثبتِ دستیِ شما همیشه اولویت دارد. (نیازمندِ پرمیوم "
+        "بودنِ اکانتِ مالکِ ربات)\n\n"
         "➕ برایِ افزودنِ ایموجیِ جدید روی دکمهٔ زیر بزن؛ اول ایموجیِ معمولی "
         "(مثلاً ❤️) را می‌فرستی، بعد ایموجیِ پرمیومِ متناظرش را (باید از "
         "اکانتِ پرمیوم ارسال شود)."
@@ -266,6 +274,20 @@ async def pemj_toggle(cb: CallbackQuery, bot: Bot):
     _PMAP_CACHE.pop(row.id, None)
     await _render_menu(cb, row.id, offset, row.plan, edit=True)
     await cb.answer("✅ قابلیت " + ("فعال شد" if new == "1" else "غیرفعال شد"))
+
+
+@premium_emoji_admin_router.callback_query(F.data.startswith("pemj:auto:"))
+async def pemj_auto(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    from tenant import set_setting
+    offset = int(cb.data.split(":")[2])
+    new = "0" if await _auto_enabled(row.id) else "1"
+    await set_setting(row.id, AUTO_KEY, new)
+    _PMAP_CACHE.pop(row.id, None)
+    await _render_menu(cb, row.id, offset, row.plan, edit=True)
+    await cb.answer("✅ تبدیلِ خودکار " + ("روشن شد" if new == "1" else "خاموش شد"))
 
 
 @premium_emoji_admin_router.callback_query(F.data == "pemj:close")
@@ -460,6 +482,42 @@ async def pemj_del_ok(cb: CallbackQuery, bot: Bot):
 
 # ─────────────── ابزارِ نگاشت (کش‌شده) + جایگزینیِ متن ───────────────
 
+AUTO_KEY = "premium_emoji_auto"
+_PLAT_CACHE: tuple[dict, float] | None = None
+
+
+async def _auto_enabled(bot_id: int) -> bool:
+    from tenant import get_setting
+    return (await get_setting(bot_id, AUTO_KEY, "1")) == "1"
+
+
+async def _platform_defaults() -> dict[str, tuple[str, str]]:
+    """نگاشتِ پیش‌فرضِ پلتفرم: ثابتِ premium_emoji.PREMIUM_EMOJI_IDS +
+    جدولِ PlatformPremiumEmoji (مدیریت‌شده توسطِ مدیرِ اصلی)."""
+    global _PLAT_CACHE
+    now = time.monotonic()
+    if _PLAT_CACHE and _PLAT_CACHE[1] > now:
+        return _PLAT_CACHE[0]
+    out: dict[str, tuple[str, str]] = {}
+    try:
+        from premium_emoji import PREMIUM_EMOJI_IDS
+        for k, v in PREMIUM_EMOJI_IDS.items():
+            if v and k.strip("\ufe0f"):
+                out[k] = (v, k)
+    except Exception:
+        logger.exception("خطای نادیده‌گرفته‌شده (نگاشتِ ثابتِ پلتفرم)")
+    try:
+        from models import PlatformPremiumEmoji
+        async with Session() as s:
+            rows = (await s.scalars(select(PlatformPremiumEmoji))).all()
+        for r in rows:
+            out[r.normal_emoji] = (r.premium_emoji_id, r.premium_display)
+    except Exception:
+        logger.exception("خطای نادیده‌گرفته‌شده (جدولِ پرمیومِ پلتفرم)")
+    _PLAT_CACHE = (out, now + _PMAP_CACHE_TTL)
+    return out
+
+
 async def get_premium_map(bot_id: int) -> dict[str, tuple[str, str]]:
     """نگاشتِ {normal_emoji: (premium_emoji_id, premium_display)} این ربات
     را برمی‌گرداند؛ اگر قابلیت خاموش باشد، دیکشنریِ خالی. نتیجه تا
@@ -475,6 +533,10 @@ async def get_premium_map(bot_id: int) -> dict[str, tuple[str, str]]:
             rows = (await s.scalars(select(TenantPremiumEmoji).where(
                 TenantPremiumEmoji.bot_id == bot_id))).all()
         mapping = {r.normal_emoji: (r.premium_emoji_id, r.premium_display) for r in rows}
+        if await _auto_enabled(bot_id):
+            # نگاشتِ پیش‌فرضِ پلتفرم زیرِ نگاشتِ دستیِ ربات؛ ثبتِ دستی برنده است
+            for k, v in (await _platform_defaults()).items():
+                mapping.setdefault(k, v)
     _PMAP_CACHE[bot_id] = (mapping, now + _PMAP_CACHE_TTL)
     return mapping
 
