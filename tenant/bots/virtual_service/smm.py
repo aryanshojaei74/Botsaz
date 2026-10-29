@@ -219,6 +219,7 @@ async def ensure_smm_columns(force: bool = False):
 
 
 class SmmFSM(StatesGroup):
+    mysvc_search = State()       # جستجوی محصول در «مدیریتِ محصولات (سرویس‌هایِ من)» (شناسه یا اسم)
     premium_frag_usd = State()   # PATCH_PREMIUM_FRAGMENT_PRICE_V1
     api_url = State()
     api_key = State()
@@ -4694,12 +4695,17 @@ async def _smm_myservices_groups_content(bot_id: int) -> tuple[str, InlineKeyboa
     for v in svcs:
         p, _t = _svc_platform_type(v)
         tree[p] = tree.get(p, 0) + 1
-    rows = []
+    # جستجو و دسته‌هایِ خودِ ادمین: با صدها محصول، پیمایشِ صفحه‌به‌صفحه کافی نیست (درخواستِ سینا)
+    rows = [[InlineKeyboardButton(text="🔎 جستجوی محصول (شناسه یا اسم)", callback_data="smm:mysvc:search",
+                                  style=ButtonStyle.PRIMARY)],
+            [InlineKeyboardButton(text="📁 دسته‌هایِ من (محصولاتِ هر دسته)", callback_data="smm:mysvc:cats",
+                                  style=ButtonStyle.SUCCESS)]]
     for pkey in sorted(tree.keys(), key=lambda k: -tree[k]):
         rows.append([InlineKeyboardButton(
             text=f"{smm_api.platform_label(pkey)} ({tree[pkey]})", callback_data=f"smm:mysvc:plat:{pkey}")])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="smm:products:menu", style=ButtonStyle.DANGER)])
-    text = f"🗂 <b>مدیریتِ محصولات (سرویس‌هایِ من)</b>\n\nمجموعاً {len(svcs)} سرویس — اول پلتفرم را انتخاب کن:"
+    text = (f"🗂 <b>مدیریتِ محصولات (سرویس‌هایِ من)</b>\n\nمجموعاً {len(svcs)} سرویس — جستجو کن، یکی از دسته‌هایِ خودت را "
+            "بزن، یا پلتفرم را انتخاب کن:")
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -4756,6 +4762,8 @@ async def smm_mysvc_typ(cb: CallbackQuery, bot: Bot):
     # لیست» معنیش می‌مونه، فقط خودِ لیست از قبل فیلتر شده.
     await _set_setting(row.id, "smm_mysvc_filter_plat", pkey)
     await _set_setting(row.id, "smm_mysvc_filter_type", tkey)
+    await _set_setting(row.id, "smm_mysvc_filter_cat", "")
+    await _set_setting(row.id, "smm_mysvc_filter_q", "")
     text, kb = await _smm_myservices_list_content(row.id, 1)
     try:
         await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -4785,10 +4793,21 @@ async def _smm_myservices_list_content(bot_id: int, page: int = 1) -> tuple[str,
     page = max(1, page)
     filt_plat = await _get_setting(bot_id, "smm_mysvc_filter_plat", "")
     filt_type = await _get_setting(bot_id, "smm_mysvc_filter_type", "")
+    filt_cat = await _get_setting(bot_id, "smm_mysvc_filter_cat", "")
+    filt_q = await _get_setting(bot_id, "smm_mysvc_filter_q", "")
     async with Session() as s:
         all_svcs = (await s.scalars(select(SmmService).where(
             SmmService.bot_id == bot_id).order_by(SmmService.id))).all()
-    if filt_plat:
+    if filt_q:
+        svcs_all = [v for v in all_svcs if _mysvc_match(v, filt_q)]
+        back_target = "smm:myservices"
+        header = f"🔎 نتیجهٔ جستجوی «{_html_escape(filt_q[:40])}»"
+    elif filt_cat != "" and filt_cat.lstrip("-").isdigit():
+        _cid = int(filt_cat)
+        svcs_all = [v for v in all_svcs if int(v.category_pk or 0) == _cid]
+        back_target = "smm:mysvc:cats"
+        header = "📁 " + await _mysvc_cat_label(bot_id, _cid)
+    elif filt_plat:
         svcs_all = [v for v in all_svcs if _svc_platform_type(v) == (filt_plat, filt_type)]
         back_target = f"smm:mysvc:plat:{filt_plat}"
         header = f"{smm_api.platform_label(filt_plat)} — {smm_api.service_type_label(filt_type)}"
@@ -4903,6 +4922,119 @@ async def _smm_myservice_detail_content(bot_id: int, svc_id: int, back_page: int
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _mysvc_norm(t: str) -> str:
+    return (t or "").replace("ي", "ی").replace("ك", "ک").replace("\u200c", " ").casefold().strip()
+
+
+def _mysvc_match(v, q: str) -> bool:
+    """جستجو: عددِ خالص ⇒ شمارهٔ محصول یا شناسهٔ سرویسِ پنل؛ وگرنه همهٔ کلمه‌هایِ پرس‌وجو در اسم/دسته/توضیحات."""
+    q = _mysvc_norm(q)
+    if not q:
+        return False
+    if q.isdigit():
+        return str(v.id) == q or str(v.service_id or "") == q or q in _mysvc_norm(v.name)
+    hay = " ".join(_mysvc_norm(x) for x in (v.name, v.category, v.description) if x)
+    return all(w in hay for w in q.split())
+
+
+async def _mysvc_cat_label(bot_id: int, cid: int) -> str:
+    if not cid:
+        return "بدونِ دسته"
+    async with Session() as s:
+        c = await s.get(SmmCategory, cid)
+    if not c or c.bot_id != bot_id:
+        return "دستهٔ حذف‌شده"
+    return f"{await platform_label_for_bot(bot_id, c.platform)} {c.name}"
+
+
+@smm_router.callback_query(F.data == "smm:mysvc:cats")
+async def smm_mysvc_cats(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    async with Session() as s:
+        cats = (await s.scalars(select(SmmCategory).where(SmmCategory.bot_id == row.id))).all()
+        svcs = (await s.scalars(select(SmmService).where(SmmService.bot_id == row.id))).all()
+    counts: dict[int, int] = {}
+    for v in svcs:
+        k = int(v.category_pk or 0)
+        counts[k] = counts.get(k, 0) + 1
+    rows = []
+    for c in sorted(cats, key=lambda c: -counts.get(c.id, 0)):
+        if counts.get(c.id):
+            rows.append([InlineKeyboardButton(
+                text=f"📁 {await platform_label_for_bot(row.id, c.platform)} {c.name} ({counts[c.id]})"[:60],
+                callback_data=f"smm:mysvc:cat:{c.id}")])
+    if counts.get(0):
+        rows.append([InlineKeyboardButton(text=f"📂 بدونِ دسته ({counts[0]})", callback_data="smm:mysvc:cat:0")])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="smm:myservices", style=ButtonStyle.DANGER)])
+    text = ("📁 <b>دسته‌هایِ من</b>\n\nیک دسته را بزن تا فقط محصولاتِ همان دسته را ببینی و ویرایش کنی:"
+            if len(rows) > 1 else "📁 هنوز محصولی در دسته‌ای نیست.")
+    try:
+        await cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await cb.answer()
+
+
+@smm_router.callback_query(F.data.startswith("smm:mysvc:cat:"))
+async def smm_mysvc_cat(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    cid = cb.data.rsplit(":", 1)[1]
+    if not cid.lstrip("-").isdigit():
+        await cb.answer()
+        return
+    await _set_setting(row.id, "smm_mysvc_filter_plat", "")
+    await _set_setting(row.id, "smm_mysvc_filter_type", "")
+    await _set_setting(row.id, "smm_mysvc_filter_q", "")
+    await _set_setting(row.id, "smm_mysvc_filter_cat", cid)
+    text, kb = await _smm_myservices_list_content(row.id, 1)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
+
+
+@smm_router.callback_query(F.data == "smm:mysvc:search")
+async def smm_mysvc_search_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import smart_cancel_kb
+    row = await _owner(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    await state.set_state(SmmFSM.mysvc_search)
+    await cb.message.answer(
+        "🔎 شمارهٔ محصول، شناسهٔ سرویسِ پنل، یا بخشی از اسمِ محصول را بفرست.\n"
+        "مثال: <code>1234</code> یا <code>فالوور ایرانی</code>",
+        reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
+    await cb.answer()
+
+
+@smm_router.message(SmmFSM.mysvc_search, F.text)
+async def smm_mysvc_search_in(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import get_bot_row, is_owner_or_admin
+    row = await get_bot_row(bot)
+    if not row or not await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id):
+        await state.clear()
+        return
+    q = (msg.text or "").strip()
+    await state.clear()
+    if not q or len(q) > 80:
+        await msg.answer("❌ عبارتِ جستجو نامعتبر است.")
+        return
+    await _set_setting(row.id, "smm_mysvc_filter_plat", "")
+    await _set_setting(row.id, "smm_mysvc_filter_type", "")
+    await _set_setting(row.id, "smm_mysvc_filter_cat", "")
+    await _set_setting(row.id, "smm_mysvc_filter_q", q)
+    text, kb = await _smm_myservices_list_content(row.id, 1)
+    await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
 @smm_router.callback_query(F.data.startswith("smm:myservices"))
 async def smm_myservices(cb: CallbackQuery, bot: Bot):
     row = await _owner(cb, bot)
@@ -4918,6 +5050,8 @@ async def smm_myservices(cb: CallbackQuery, bot: Bot):
         # ورودیِ تازه به این بخش، یعنی فیلترِ قبلی (اگه بود) دیگه معنی نداره
         await _set_setting(row.id, "smm_mysvc_filter_plat", "")
         await _set_setting(row.id, "smm_mysvc_filter_type", "")
+        await _set_setting(row.id, "smm_mysvc_filter_cat", "")
+        await _set_setting(row.id, "smm_mysvc_filter_q", "")
         text, kb = await _smm_myservices_groups_content(row.id)
     else:
         # === PATCH_SMM_MYSERVICES_PAGE_GUARD_V1 ===
