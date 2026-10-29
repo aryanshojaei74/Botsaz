@@ -17598,6 +17598,11 @@ async def srx_show_shop(bot: Bot, target: Message, bot_id: int, state: "FSMConte
         await state.set_state(SmmFSM.srx_qty_in)
     calc_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
         text="💰 محاسبه با موجودی من", callback_data="srx:calc")]])
+    # منویِ شیشه‌ای: دکمهٔ لغو همان‌جا زیرِ پیامِ اول می‌آید و پیامِ دومی لازم نیست (گزارشِ سینا)
+    _scb = await smart_cancel_kb(bot)
+    _inline_cancel = isinstance(_scb, InlineKeyboardMarkup)
+    if _inline_cancel:
+        calc_kb = InlineKeyboardMarkup(inline_keyboard=calc_kb.inline_keyboard + _scb.inline_keyboard)
     await target.answer(
         f"⭐️ <b>ری‌اکشنِ استارزیِ پست</b>\n\n"
         "وقتی پست‌هات با ری‌اکشنِ استارزی بدرخشن!\n\n"
@@ -17614,7 +17619,8 @@ async def srx_show_shop(bot: Bot, target: Message, bot_id: int, state: "FSMConte
     # بود برای چسباندنِ کیبوردِ لغو، چون کیبوردِ ریپلای و دکمهٔ اینلاینِ
     # «محاسبه» نمی‌توانند رویِ یک پیام با هم بیایند). حالا یک متنِ واقعاً
     # مفید («عدد رو همینجا بفرست») اونجاست، نه یک ایموجیِ تنهایِ بی‌معنی.
-    await target.answer("🔢 عددِ موردنظر رو همینجا بفرست:", reply_markup=await smart_cancel_kb(bot))
+    if not _inline_cancel:
+        await target.answer("🔢 عددِ موردنظر رو همینجا بفرست:", reply_markup=_scb)
 
 
 @smm_router.callback_query(F.data == "srx:calc")

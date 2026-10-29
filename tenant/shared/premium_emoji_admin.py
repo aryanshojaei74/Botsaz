@@ -81,6 +81,7 @@ class PremiumEmojiFSM(StatesGroup):
     wait_normal = State()
     wait_premium = State()
     wait_pack = State()
+    wait_unpack = State()
 
 
 # ─────────────── کمک‌توابعِ عمومی (مالک/تنظیمات) ───────────────
@@ -189,6 +190,9 @@ async def _render_menu(target, bot_id: int, offset: int, plan: str = "", *, edit
         style=(ButtonStyle.DANGER if enabled else ButtonStyle.SUCCESS))])
     kb_rows.append([InlineKeyboardButton(
         text="📦 وارد کردن یکجا از پکِ ایموجی", callback_data="pemj:pack", style=ButtonStyle.PRIMARY)])
+    kb_rows.append([
+        InlineKeyboardButton(text="🗑 حذف با لینکِ پک", callback_data="pemj:unpack", style=ButtonStyle.DANGER),
+        InlineKeyboardButton(text="🗑 حذفِ همهٔ ایموجی‌ها", callback_data="pemj:delall", style=ButtonStyle.DANGER)])
     auto_on = await _auto_enabled(bot_id)
     kb_rows.append([InlineKeyboardButton(
         text=("🤖 تبدیلِ خودکارِ ایموجی‌ها: روشن" if auto_on else "🤖 تبدیلِ خودکارِ ایموجی‌ها: خاموش"),
@@ -365,6 +369,83 @@ async def pemj_pack_receive(msg: Message, bot: Bot, state: FSMContext):
     if not n:
         return await msg.answer("⚠️ این پک ایموجیِ پرمیومی نداشت.")
     await msg.answer(f"✅ {n} ایموجی از پکِ «{sset.title}» ثبت شد. از «⭐ افزودن ایموجی پرمیوم» می‌توانی ببینی.")
+
+
+async def _delete_ids(bot_id: int, emojis: list[str] | None) -> int:
+    """emojis=None ⇒ همه؛ وگرنه فقط نگاشت‌هایِ همین ایموجی‌هایِ معمولی. تعدادِ حذف‌شده را برمی‌گرداند."""
+    from sqlalchemy import delete
+    async with Session() as s:
+        q = delete(TenantPremiumEmoji).where(TenantPremiumEmoji.bot_id == bot_id)
+        if emojis is not None:
+            if not emojis:
+                return 0
+            q = q.where(TenantPremiumEmoji.normal_emoji.in_(emojis))
+        res = await s.execute(q)
+        await s.commit()
+    _PMAP_CACHE.pop(bot_id, None)
+    return int(res.rowcount or 0)
+
+
+@premium_emoji_admin_router.callback_query(F.data == "pemj:unpack")
+async def pemj_unpack_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    await state.set_state(PremiumEmojiFSM.wait_unpack)
+    await cb.message.answer(
+        "🗑 لینکِ پکِ ایموجی را بفرست؛ ایموجی‌هایِ همان پک از لیستِ ثبت‌شده‌هایِ ربات حذف می‌شوند.",
+        reply_markup=cancel_kb())
+    await cb.answer()
+
+
+@premium_emoji_admin_router.message(PremiumEmojiFSM.wait_unpack, F.text)
+async def pemj_unpack_receive(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner_msg(msg, bot)
+    if not row:
+        return
+    try:
+        sset = await bot.get_sticker_set(_pack_name(msg.text))
+    except Exception:
+        return await msg.answer("❌ این پک پیدا نشد. لینکِ درست (t.me/addemoji/...) بفرست.",
+                                reply_markup=cancel_kb())
+    ids = {st.custom_emoji_id for st in sset.stickers if getattr(st, "custom_emoji_id", None)}
+    async with Session() as s:
+        rows = (await s.scalars(select(TenantPremiumEmoji).where(
+            TenantPremiumEmoji.bot_id == row.id,
+            TenantPremiumEmoji.premium_emoji_id.in_(ids)))).all() if ids else []
+    names = [r.normal_emoji for r in rows]       # فقط مواردی که واقعاً از همین پک ثبت شده‌اند
+    n = await _delete_ids(row.id, names)
+    await state.clear()
+    await msg.answer(f"🗑 {n} ایموجی از پکِ «{sset.title}» حذف شد." if n
+                     else "⚠️ ایموجیِ ثبت‌شده‌ای از این پک پیدا نشد.")
+
+
+@premium_emoji_admin_router.callback_query(F.data == "pemj:delall")
+async def pemj_delall_ask(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    n = await _count(row.id)
+    await cb.message.answer(
+        f"⚠️ همهٔ {n} ایموجیِ ثبت‌شده حذف می‌شود. مطمئنی؟",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="✅ بله، حذف کن", callback_data="pemj:delall:yes", style=ButtonStyle.DANGER),
+            InlineKeyboardButton(text="✖️ نه", callback_data="pemj:cancel")]]))
+    await cb.answer()
+
+
+@premium_emoji_admin_router.callback_query(F.data == "pemj:delall:yes")
+async def pemj_delall_do(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    n = await _delete_ids(row.id, None)
+    try:
+        await cb.message.edit_text(f"🗑 {n} ایموجی حذف شد.")
+    except Exception:
+        logger.exception("خطای نادیده‌گرفته‌شده (ویرایشِ پیامِ تأییدِ حذف)")
+    await cb.answer("✅ حذف شد")
 
 
 @premium_emoji_admin_router.callback_query(F.data == "pemj:add")
