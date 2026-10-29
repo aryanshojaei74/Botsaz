@@ -443,7 +443,12 @@ async def pp_pay_wallet(cb: CallbackQuery, bot: Bot, state: FSMContext):
             return
         u.balance = float(u.balance) - total
 
-        pb = await s.get(PartnerBot, pb_id)
+        # قفلِ ردیف: بدونِ آن، فروشِ هم‌زمانِ یک ربات (که انبار را کم می‌کند) با این افزایش روی مقدارِ کهنه می‌نوشت
+        # و موجودی گم یا اضافه می‌شد. همچنین فقط انبارِ همین همکار.
+        pb = await s.get(PartnerBot, pb_id, with_for_update=True)
+        if not pb or pb.id != ok[1].id:
+            await cb.answer("سفارش نامعتبر است؛ دوباره شروع کن", show_alert=True)
+            return
         pb.stock_growth += g
         pb.stock_pro += p
         pb.bought_growth += g

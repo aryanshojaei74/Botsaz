@@ -537,6 +537,21 @@ async def ps_pay_wallet(cb: CallbackQuery, bot: Bot, state: FSMContext):
         bu = await s.scalar(select(BotUser).where(
             BotUser.bot_id == row.id,
             BotUser.telegram_id == cb.from_user.id).with_for_update())
+        # === PATCH_PARTNER_PAY_DEDUPE_V1 ===
+        # دوبارکلیکِ «پرداخت از کیف پول»: کلیکِ دوم (پس از قفلِ ردیفِ کاربر) سفارشِ تازه‌پرداخت‌شدهٔ همان پلن را می‌بیند و
+        # دوباره کسر نمی‌کند؛ همان سفارش ادامه پیدا می‌کند.
+        from models import PartnerCardOrder as _PCO
+        _recent = await s.scalar(select(_PCO).where(
+            _PCO.partner_bot_id == pb.id, _PCO.buyer_telegram_id == cb.from_user.id,
+            _PCO.plan == kind, _PCO.status == "approved", _PCO.sold_bot_id.is_(None),
+            _PCO.receipt_file_id.is_(None),
+            _PCO.decided_at > datetime.datetime.now() - datetime.timedelta(seconds=30)
+        ).order_by(_PCO.id.desc()).limit(1))
+        if _recent is not None:
+            await state.update_data(ps_paid_by="card", ps_order=_recent.id)
+            await state.set_state(PartnerSaleFSM.token)
+            await cb.answer("پرداختت قبلاً ثبت شده؛ توکن را بفرست.", show_alert=True)
+            return
         bal = int(bu.balance) if bu else 0
         if bal < price:
             await cb.answer("موجودی کیف پولت کافی نیست.", show_alert=True)
@@ -662,6 +677,19 @@ async def ps_token(msg: Message, bot: Bot, state: FSMContext):
                     reply_markup=_back_kb())
                 return
 
+            # === PATCH_PARTNER_ORDER_ONCE_V1 ===
+            # سفارشِ پرداخت‌شده فقط یک بار مصرف می‌شود: دو توکنِ هم‌زمان (دوبار ارسال/دوبارکلیک) هر دو از چکِ
+            # «sold_bot_id» در ps:mk رد می‌شدند و از یک پرداخت دو ربات ساخته می‌شد. اینجا ردیفِ سفارش قفل و دوباره چک می‌شود.
+            if paid_by == "card":
+                from models import PartnerCardOrder
+                _co = await s.get(PartnerCardOrder, card_order, with_for_update=True) if card_order else None
+                if (not _co or _co.buyer_telegram_id != uid or _co.status != "approved"
+                        or _co.sold_bot_id or _co.plan != plan):
+                    await state.clear()
+                    await msg.answer("برای این پرداخت قبلاً ربات ساخته شده یا سفارش معتبر نیست. "
+                                     "اگر ربات را نمی‌بینی از «🤖 ربات‌های من» چک کن یا به پشتیبانی پیام بده.",
+                                     reply_markup=_back_kb())
+                    return
             # === PATCH_PARTNER_V20 ===
             # اگر با کارت‌به‌کارت پرداخت شده، پول قبلاً بیرون از کیف پول
             # داده شده و همکار رسیدش را تایید کرده — دوباره کسر نکن.
@@ -971,7 +999,7 @@ async def ps_order_decide(cb: CallbackQuery, bot: Bot):
     order_id = int(raw_id)
 
     async with Session() as s:
-        o = await s.get(PartnerCardOrder, order_id)
+        o = await s.get(PartnerCardOrder, order_id, with_for_update=True)   # دوبارکلیکِ تأیید/ردِ هم‌زمان
         if not o or o.partner_bot_id != pb.id:
             await cb.answer("سفارش پیدا نشد", show_alert=True)
             return
