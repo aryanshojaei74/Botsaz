@@ -31,6 +31,10 @@ async def env(monkeypatch):
         return allowed["v"] and chat_id == -100
     monkeypatch.setattr(G, "_group_allowed", ga)
     monkeypatch.setattr(G, "GUESS_GAP", 0.0)
+
+    async def candy_on():
+        return True                                    # مودِ شیرینی روشن (حالتِ خاموش در test_candy_mode_off.py)
+    monkeypatch.setattr(PC, "candy_active", candy_on)
     yield allowed
     await eng.dispose()
 

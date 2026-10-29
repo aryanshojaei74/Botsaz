@@ -216,6 +216,8 @@ async def _award(uid: int, name: str, pts: int) -> tuple[int, int, str]:
     """سقفِ روزانه ⇒ امتیاز ⇒ جایزه؛ خروجی: (امتیازِ داده‌شده، مجموع، متنِ اضافه برایِ پیامِ برنده)."""
     import halloween as HW
     import platform_candy as C
+    if not await C.candy_active():                 # مودِ شیرینی تمام/خاموش: امتیازی داده نمی‌شود
+        return 0, await _total(uid), ""
     c = await C.cfg()
     day = HW._tehran_day()
     got = await C.apply_cap(uid, pts, day, c["cap"])
@@ -325,9 +327,14 @@ async def gg_guess(msg: Message):
     pts = points_for(now - g["t0"])
     name = msg.from_user.full_name or str(uid)
     got, total, extra = await _award(uid, name, pts)
-    await msg.reply(f"🎉 <b>{_html.escape(name)}</b> درست حدس زد: <b>{g['n']}</b>!\n"
-                    f"🍬 +{got} شیرینی (مجموع: {total}) · {g['guesses']} حدس{extra}\n\n«جدول» را بنویس تا برترین‌ها را ببینی.",
-                    parse_mode="HTML")
+    import platform_candy as _C
+    if await _C.candy_active():
+        await msg.reply(f"🎉 <b>{_html.escape(name)}</b> درست حدس زد: <b>{g['n']}</b>!\n"
+                        f"🍬 +{got} شیرینی (مجموع: {total}) · {g['guesses']} حدس{extra}\n\n«جدول» را بنویس تا برترین‌ها را ببینی.",
+                        parse_mode="HTML")
+    else:
+        await msg.reply(f"🎉 <b>{_html.escape(name)}</b> درست حدس زد: <b>{g['n']}</b>! ({g['guesses']} حدس)",
+                        parse_mode="HTML")
 
 
 @platform_group_game_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_top))
@@ -428,7 +435,9 @@ async def gg_race_answer(msg: Message):
     pts = RACE_POINTS + (RACE_FAST_BONUS if race["kind"] == "math" and now - race["t0"] <= RACE_FAST_SECS else 0)
     name = msg.from_user.full_name or str(msg.from_user.id)
     got, total, extra = await _award(msg.from_user.id, name, pts)
-    await msg.reply(f"🏁 <b>{_html.escape(name)}</b> اول شد! ({now - race['t0']:.1f} ثانیه)\n🍬 +{got} شیرینی (مجموع: {total}){extra}",
+    import platform_candy as _C
+    candy_line = f"\n🍬 +{got} شیرینی (مجموع: {total}){extra}" if await _C.candy_active() else ""
+    await msg.reply(f"🏁 <b>{_html.escape(name)}</b> اول شد! ({now - race['t0']:.1f} ثانیه){candy_line}",
                     parse_mode="HTML")
 
 
@@ -442,22 +451,33 @@ def _is_help(m: Message) -> bool:
 async def help_text(bet_games: bool = True) -> str:
     """راهنمای بازی‌هایِ رایگان + طرزِ گرفتنِ شیرینی. bet_games=False: فهرستِ xo/سنگ‌کاغذ‌قیچی/تاس حذف می‌شود
     (راهنمای شرط‌بندی خودش جدا آمده)؛ فقط بخشِ مسابقه‌هایِ پولی (حدس عدد/سرعت/ریاضی) می‌ماند."""
-    lines = ["🎮 <b>بازی‌هایِ گروه</b>\n",
-             "🆓 <b>رایگان (جایزه: شیرینی 🍬)</b>",
-             "🎯 <b>حدس عدد</b> — بنویس «حدس عدد»؛ عددی بین ۱ تا ۱۰۰ را حدس بزن، ربات می‌گوید بالاتر/پایین‌تر. اولین نفرِ درست {B} 🍬 (زیرِ ۳۰ ثانیه {BF} 🍬).",
-             "⚡️ <b>سرعت</b> — بنویس «سرعت»؛ اولین نفری که کلمهٔ ربات را دقیقاً بنویسد {R} 🍬 می‌گیرد.",
-             "🧮 <b>ریاضی</b> — بنویس «ریاضی»؛ اولین جوابِ درست {R} 🍬 (زیرِ ۱۰ ثانیه {RF} 🍬).",
-             "🏆 <b>جدول</b> — بنویس «جدول» تا ۱۰ نفرِ برترِ شیرینی‌ها را ببینی.",
-             "🍬 <b>شیرینی من</b> — شیرینی‌ها و پیشرفتِ تو تا جایزه.",
-             "",
-             "🍬 <b>شیرینی چطور گرفته می‌شود؟</b> فقط با بردنِ همین سه بازیِ رایگان (اول شدن در حدس عدد / سرعت / ریاضی). "
-             "شیرینی خرید و فروش و انتقال ندارد و از مسابقه‌هایِ پولی به دست نمی‌آید."]
-    lines = [ln.replace("{B}", str(BASE_POINTS)).replace("{BF}", str(BASE_POINTS + FAST_BONUS)).replace("{R}", str(RACE_POINTS))
-             .replace("{RF}", str(RACE_POINTS + RACE_FAST_BONUS)) for ln in lines]
+    import platform_candy as _CA
+    if not await _CA.candy_active():                 # مودِ شیرینی تمام: راهنما بدونِ شیرینی
+        lines = ["🎮 <b>بازی‌هایِ گروه</b>\n",
+                 "🆓 <b>رایگان (بدونِ جایزه — مودِ شیرینی تمام شده)</b>",
+                 "🎯 <b>حدس عدد</b> — بنویس «حدس عدد»؛ عددی بین ۱ تا ۱۰۰ را حدس بزن، ربات می‌گوید بالاتر/پایین‌تر.",
+                 "⚡️ <b>سرعت</b> — بنویس «سرعت»؛ اولین نفری که کلمهٔ ربات را دقیقاً بنویسد برنده است.",
+                 "🧮 <b>ریاضی</b> — بنویس «ریاضی»؛ اولین جوابِ درست برنده است."]
+        _candy = False
+    else:
+        _candy = True
+        lines = ["🎮 <b>بازی‌هایِ گروه</b>\n",
+                 "🆓 <b>رایگان (جایزه: شیرینی 🍬)</b>",
+                 "🎯 <b>حدس عدد</b> — بنویس «حدس عدد»؛ عددی بین ۱ تا ۱۰۰ را حدس بزن، ربات می‌گوید بالاتر/پایین‌تر. اولین نفرِ درست {B} 🍬 (زیرِ ۳۰ ثانیه {BF} 🍬).",
+                 "⚡️ <b>سرعت</b> — بنویس «سرعت»؛ اولین نفری که کلمهٔ ربات را دقیقاً بنویسد {R} 🍬 می‌گیرد.",
+                 "🧮 <b>ریاضی</b> — بنویس «ریاضی»؛ اولین جوابِ درست {R} 🍬 (زیرِ ۱۰ ثانیه {RF} 🍬).",
+                 "🏆 <b>جدول</b> — بنویس «جدول» تا ۱۰ نفرِ برترِ شیرینی‌ها را ببینی.",
+                 "🍬 <b>شیرینی من</b> — شیرینی‌ها و پیشرفتِ تو تا جایزه.",
+                 "",
+                 "🍬 <b>شیرینی چطور گرفته می‌شود؟</b> فقط با بردنِ همین سه بازیِ رایگان (اول شدن در حدس عدد / سرعت / ریاضی). "
+                 "شیرینی خرید و فروش و انتقال ندارد و از مسابقه‌هایِ پولی به دست نمی‌آید."]
+    if _candy:
+        lines = [ln.replace("{B}", str(BASE_POINTS)).replace("{BF}", str(BASE_POINTS + FAST_BONUS)).replace("{R}", str(RACE_POINTS))
+                 .replace("{RF}", str(RACE_POINTS + RACE_FAST_BONUS)) for ln in lines]
     try:
         import platform_candy as C, halloween as HW
         c = await C.cfg()
-        if c["on"] and await HW.is_on():
+        if _candy and c["on"] and await HW.is_on():
             lines += [f"💎 <b>جایزهٔ هالوین:</b> با جمع‌کردنِ {c['goal']} 🍬 مبلغِ <b>{c['amount']:,} تومان</b> خودکار به کیف پولِ ربات اصلی‌ات "
                       f"اضافه می‌شود (روزی حداکثر {c['cap']} 🍬؛ فقط {c['max']} نفرِ اول؛ هر نفر یک بار). "
                       "برای دریافت، یک بار ربات اصلی را استارت کرده باشی."]
@@ -521,6 +541,8 @@ async def gg_mycandy(msg: Message):
     await _gate(msg)
     import halloween as HW
     import platform_candy as C
+    if not await C.candy_active():
+        return await msg.reply("🍬 مودِ شیرینی تمام شده؛ بازی‌ها ادامه دارند ولی شیرینی داده نمی‌شود.")
     uid = msg.from_user.id
     c = await C.cfg()
     total = await _total(uid)

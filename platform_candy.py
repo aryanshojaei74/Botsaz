@@ -101,6 +101,16 @@ async def claimed(uid: int) -> bool:
     return bool(r and r.value == "1")
 
 
+async def candy_active() -> bool:
+    """مودِ شیرینی فعال است؟ هم کلیدِ شیرینی (pgc_on) و هم «تم هالوین» (با مهلتش) باید روشن باشند؛ وگرنه بازی‌هایِ رایگان
+    شیرینی نمی‌دهند (قبلاً فقط پرداختِ جایزهٔ پولی گیت می‌شد و امتیازِ شیرینی بعد از خاموش‌کردن هم ادامه داشت)."""
+    try:
+        import halloween as HW
+        return bool((await cfg())["on"]) and await HW.is_on()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def try_reward(uid: int, total: int) -> dict:
     """status: off | below | already | budget | no_user | paid (+ amount)."""
     c = await cfg()
