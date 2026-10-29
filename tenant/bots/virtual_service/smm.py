@@ -9022,7 +9022,9 @@ async def show_smm_services_to_user(bot: Bot, msg_or_cb, bot_id: int):
 async def show_smm_myorders_to_user(bot: Bot, msg_or_cb, bot_id: int):
     is_cb = isinstance(msg_or_cb, CallbackQuery)
     target = msg_or_cb.message if is_cb else msg_or_cb
-    tg_id = msg_or_cb.from_user.id
+    # from_user گاهی None است (مثلاً پیامِ بدونِ فرستنده)؛ در چتِ خصوصی شناسهٔ چت همان شناسهٔ کاربر است
+    _fu = getattr(msg_or_cb, "from_user", None)
+    tg_id = _fu.id if _fu is not None else msg_or_cb.chat.id if not is_cb else msg_or_cb.message.chat.id
     # === PATCH_SMM_DIRECT_ENTRY_HOME_BACK_V1 ===
     # این تابع نقطهٔ ورودِ مستقیم است (دکمهٔ صفحهٔ اصلی)، نه ناوبریِ داخلیِ
     # فروشگاه — پس «بازگشت» باید به خانهٔ واقعیِ ربات برود، نه خانهٔ فروشگاه.

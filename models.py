@@ -3780,7 +3780,12 @@ def _alloc_sync(conn, bot_id: int) -> str:
             return str(conn.execute(select(t.c.last).where(t.c.bot_id == bot_id)).scalar())
         try:
             with conn.begin_nested():
-                conn.execute(t.insert().values(bot_id=bot_id, last=0))   # اولین فاکتورِ هر رباتِ تازه = ۱
+                if conn.dialect.name == "postgresql":
+                    # هم‌زمانی: درخواستِ دیگر همین ردیف را ساخته باشد، خطایِ یکتایی در لاگ نیاید
+                    from sqlalchemy.dialects.postgresql import insert as _pg_insert
+                    conn.execute(_pg_insert(t).values(bot_id=bot_id, last=0).on_conflict_do_nothing())
+                else:
+                    conn.execute(t.insert().values(bot_id=bot_id, last=0))   # اولین فاکتورِ هر رباتِ تازه = ۱
         except Exception:
             # ردیفِ شمارنده هم‌زمان توسطِ درخواستِ دیگری ساخته شد؛ پایین‌تر UPDATE می‌شود
             pass   # هم‌زمان ساخته شد؛ دوباره UPDATE
