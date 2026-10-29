@@ -382,12 +382,16 @@ async def has_previous_purchase(bot_id: int, telegram_id: int,
             from models import SmmOrder, GiftOrder
             n3 = await s.scalar(select(func.count()).select_from(SmmOrder).where(
                 SmmOrder.bot_id == bot_id, SmmOrder.user_telegram_id == telegram_id,
-                SmmOrder.status.notin_(("rejected", "cancelled", "refunded"))))
+                SmmOrder.status.notin_(("rejected", "cancelled", "refunded", "awaiting_receipt"))))
             if n3:
                 return True
             if uid is not None:
+                # سفارشِ رهاشده/ردشده/برگشتی («در انتظارِ رسید»، ناموفق، …) خرید حساب نمی‌شود؛ وگرنه کسی که یک‌بار
+                # کارت‌به‌کارت را شروع و رها کرده بود دیگر هیچ‌وقت تخفیفِ اولین خرید را نمی‌دید.
                 n4 = await s.scalar(select(func.count()).select_from(GiftOrder).where(
-                    GiftOrder.bot_id == bot_id, GiftOrder.buyer_user_id == uid))
+                    GiftOrder.bot_id == bot_id, GiftOrder.buyer_user_id == uid,
+                    GiftOrder.status.notin_(("awaiting_receipt", "failed", "refunded", "cancelled",
+                                             "canceled", "rejected"))))
                 if n4:
                     return True
         except Exception:

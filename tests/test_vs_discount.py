@@ -234,3 +234,40 @@ async def test_fragment_auto_toggle_requires_connected_wallet(db, monkeypatch):
         w.encrypted_fragment_cookies = None
         await s.commit()
     assert await SMM._fg_auto_on(7) is False
+
+
+# ═══════════ تخفیفِ اولین خرید روی استارز (قبلاً فقط SMM/تون/پریمیوم/ری‌اکشن داشتند) ═══════════
+@pytest.mark.asyncio
+async def test_stars_wallet_first_purchase_discount_applies_once(db):
+    async with db() as s:
+        for k, v in (("firstbuy_on", "1"), ("firstbuy_type", "percent"), ("firstbuy_value", "10")):
+            s.add(models.Setting(bot_id=7, key=k, value=v))
+        (await s.get(models.BotUser, 1)).balance = 5_000_000
+        await s.commit()
+    row = await _row(db)
+    r1 = await SMM.place_stars_order(None, row, buyer_tg_id=500, buyer_name="u", buyer_username="u",
+                                     dest_id=500, qty=50)
+    r2 = await SMM.place_stars_order(None, row, buyer_tg_id=500, buyer_name="u", buyer_username="u",
+                                     dest_id=500, qty=50)
+    assert r1["price"] < r2["price"] and r1["price"] == round(r2["price"] * 0.9)     # فقط خریدِ اول
+    # قیمتِ API (override) هرگز تخفیفِ اولین خرید نمی‌گیرد
+    async with db() as s:
+        s.add(models.BotUser(id=9, bot_id=7, telegram_id=600, balance=100_000))
+        await s.commit()
+    r3 = await SMM.place_stars_order(None, row, buyer_tg_id=600, buyer_name="v", buyer_username="v",
+                                     dest_id=600, qty=50, price_override=20_000)
+    assert r3["price"] == 20_000
+
+
+@pytest.mark.asyncio
+async def test_abandoned_card_order_does_not_cancel_first_purchase_discount(db):
+    async with db() as s:
+        s.add(models.GiftOrder(bot_id=7, buyer_user_id=1, gift_id="starsell_50", star_count=50, price_toman=50000,
+                               dest_telegram_id=500, dest_label="x", status="awaiting_receipt", pay_method="card"))
+        await s.commit()
+    assert await DE.has_previous_purchase(7, 500) is False
+    async with db() as s:
+        s.add(models.GiftOrder(bot_id=7, buyer_user_id=1, gift_id="starsell_50", star_count=50, price_toman=50000,
+                               dest_telegram_id=500, dest_label="x", status="awaiting_admin", pay_method="card"))
+        await s.commit()
+    assert await DE.has_previous_purchase(7, 500) is True

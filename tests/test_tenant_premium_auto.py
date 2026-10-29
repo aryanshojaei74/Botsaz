@@ -93,3 +93,22 @@ def test_picker_title_uses_custom_cdirect_name(monkeypatch):
     monkeypatch.setattr(td, "is_available", avail)
     res = asyncio.run(td._picker_text_kb(1))
     assert res and "ارز دیجیتال من" in res[0]
+
+
+def test_button_flag_provider_off_skips_button_rewrite(monkeypatch):
+    import asyncio
+    import premium_emoji_dynamic as d
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+    from types import SimpleNamespace as NS
+
+    async def prov(tok): return {"✅": ("111", "✅")}
+    async def off(tok): return False
+    monkeypatch.setattr(d, "_PROVIDERS", [prov])
+    monkeypatch.setattr(d, "_BTN_PROVIDERS", [off])
+    btn = InlineKeyboardButton(text="✅ تایید", callback_data="x")
+    method = NS(reply_markup=InlineKeyboardMarkup(inline_keyboard=[[btn]]))
+    asyncio.run(d._PremiumEmojiMiddleware()._rewrite_buttons(NS(token="1:A"), method))
+    assert btn.text == "✅ تایید" and not btn.icon_custom_emoji_id
+    monkeypatch.setattr(d, "_BTN_PROVIDERS", [])
+    asyncio.run(d._PremiumEmojiMiddleware()._rewrite_buttons(NS(token="1:A"), method))
+    assert btn.icon_custom_emoji_id == "111"

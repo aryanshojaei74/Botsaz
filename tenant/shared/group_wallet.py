@@ -155,6 +155,31 @@ def _fa_digits_to_en(s: str) -> str:
     return s.translate(table)
 
 
+_USERNAME_RE = re.compile(r"(?<![\w@])@([A-Za-z][A-Za-z0-9_]{3,31})(?!\w)")
+
+
+def _usernames_in(m) -> list[str]:
+    """یوزرنیم‌هایِ یکتا (بدونِ @، حروفِ کوچک) در متن/کپشنِ یک پیام."""
+    txt = (getattr(m, "text", None) or getattr(m, "caption", None) or "")
+    out: list[str] = []
+    for u in _USERNAME_RE.findall(txt):
+        if u.lower() not in out:
+            out.append(u.lower())
+    return out
+
+
+async def _bot_user_by_username(bot_id: int, username: str):
+    """BotUser این ربات با این یوزرنیم؛ خروجی شبیهِ aiogram User (id/full_name/username/is_bot) یا None."""
+    from types import SimpleNamespace
+    from sqlalchemy import func as _f, select as _sel
+    async with Session() as s:
+        u = await s.scalar(_sel(BotUser).where(BotUser.bot_id == bot_id,
+                                               _f.lower(BotUser.username) == username.lower()).limit(1))
+    if not u:
+        return None
+    return SimpleNamespace(id=u.telegram_id, full_name=u.full_name or "", username=u.username, is_bot=False)
+
+
 @group_wallet_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}),
                              F.func(lambda m: (m.text or "").strip().startswith("انتقال")))
 async def group_transfer_balance(msg: Message, bot: Bot):
@@ -184,11 +209,27 @@ async def group_transfer_balance(msg: Message, bot: Bot):
     # ریپلایِ ضمنیِ تاپیکِ فوروم (= سازندهٔ تاپیک)، پستِ خودکارِ کانال (۷۷۷۰۰۰) یا پیامِ «از طرفِ
     # کانال» گیرندهٔ واقعی نیستند — قبلاً پول بی‌صدا به سازندهٔ تاپیک یا یک حسابِ بی‌صاحب می‌رفت
     _r = msg.reply_to_message
-    if (msg.sender_chat or not _r or not _r.from_user or _r.forum_topic_created
+    # === PATCH_TRANSFER_BY_USERNAME_V1 === (درخواستِ سینا؛ فقط رباتی که تنظیمِ group_transfer_by_username=1 دارد)
+    # کاربر یوزرنیمِ کسی را می‌فرستد و رویِ *پیامِ خودش* ریپلای می‌کند «انتقال ۱۰۰۰»؛ انتقال به همان یوزرنیم می‌رود.
+    # اگر پیامِ ریپلای‌شده مالِ کسِ دیگری باشد همان رفتارِ قبلی (انتقال به صاحبِ پیام) است.
+    _uname_target = None
+    if (_r and _r.from_user and msg.from_user and not msg.sender_chat and _r.from_user.id == msg.from_user.id
+            and await _gset(row.id, "group_transfer_by_username", "0") == "1"):
+        _names = _usernames_in(_r)
+        if _names:
+            if len(_names) > 1:
+                await msg.reply("❌ در پیامت بیش از یک یوزرنیم هست؛ فقط یک یوزرنیم بفرست و رویِ همان ریپلای کن.")
+                return
+            _uname_target = await _bot_user_by_username(row.id, _names[0])
+            if _uname_target is None:
+                await msg.reply(f"❌ کاربری با یوزرنیمِ @{_names[0]} در این ربات پیدا نشد "
+                                "(باید ربات را استارت کرده باشد).")
+                return
+    if _uname_target is None and (msg.sender_chat or not _r or not _r.from_user or _r.forum_topic_created
             or _r.is_automatic_forward or _r.sender_chat or _r.from_user.id == 777000):
         await msg.reply("❌ برایِ انتقالِ موجودی، رویِ پیامِ همون کاربر ریپلای کن و بنویس «انتقال [مبلغ]».")
         return
-    target = _r.from_user
+    target = _uname_target if _uname_target is not None else _r.from_user
     if target.is_bot:
         await msg.reply("❌ نمی‌شه به یه ربات موجودی انتقال داد.")
         return

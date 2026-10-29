@@ -18010,6 +18010,22 @@ async def stars_dest_username_in(msg: Message, bot: Bot, state: FSMContext):
         await _stars_show_invoice(msg, bot, 0, f"@{uname}", qty, dest_username=uname)
 
 
+async def _first_buy_price(bot_id: int, tg_id: int | None, price: int, session=None) -> tuple[int, int]:
+    """(قیمتِ بعد از تخفیفِ اولین خرید، مقدارِ تخفیف). فقط تخفیفِ خودکارِ اولین خرید؛ خطا ⇒ بدونِ تخفیف.
+    استارز و کارت‌به‌کارتِ گیفت قبلاً این تخفیف را اصلاً نمی‌گرفتند (فقط SMM/تون/پریمیوم/ری‌اکشن)."""
+    price = int(price)
+    if not tg_id or price <= 0:
+        return price, 0
+    try:
+        from tenant.gateways.discount_engine import first_purchase_discount
+        fd = await first_purchase_discount(bot_id=bot_id, telegram_id=tg_id, price=price, session=session)
+        if fd.ok and fd.discount > 0:
+            return int(fd.final_price), int(fd.discount)
+    except Exception:
+        logger.exception("[VS] تخفیفِ اولین خرید محاسبه نشد")
+    return price, 0
+
+
 async def _stars_show_invoice(target: Message, bot: Bot, dest_id: int, dest_label: str, qty: int,
                               dest_username: str = "") -> None:
     from tenant import get_bot_row
@@ -18018,6 +18034,9 @@ async def _stars_show_invoice(target: Message, bot: Bot, dest_id: int, dest_labe
         return
     rate, _, _ = await _stars_sell_settings(row.id)
     price = round(qty * rate)
+    from tenant.shared import vs_pay as _vp0
+    _full_price = price
+    price, _fb_disc = await _first_buy_price(row.id, _vp0.tg_of(target), price)
     # === PATCH_STARS_UNSTARTED_DEST_V1 ===
     # وقتی مقصد شناخته‌شده نیست (dest_id=0)، یوزرنیم را هم توی
     # callback_data می‌بریم تا مرحلهٔ پرداخت بدونِ نیاز به state بتونه
@@ -18031,14 +18050,16 @@ async def _stars_show_invoice(target: Message, bot: Bot, dest_id: int, dest_labe
                                    f"star:cardpay:{dest_id}:{qty}{uname_part}")
     kb = InlineKeyboardMarkup(inline_keyboard=[
         *_pay_rows,
-        *await vsd_rows(row.id, "stars", price),
+        *await vsd_rows(row.id, "stars", _full_price),
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="star:back_shop", style=ButtonStyle.DANGER)],
     ])
+    _price_line = (f"قیمت: <s>{_full_price:,}</s> → <b>{price:,} تومان</b>\n🎁 تخفیفِ اولین خرید: {_fb_disc:,} تومان"
+                   if _fb_disc else f"قیمت: {price:,} تومان")
     await target.answer(
         f"🧾 <b>فاکتورِ خرید</b>\n\n"
         f"کالا: ⭐ {qty:,} استارز\n"
         f"مقصد: {dest_label}\n"
-        f"قیمت: {price:,} تومان{note}\n\n"
+        f"{_price_line}{note}\n\n"
         f"روشِ پرداخت را انتخاب کن:" + ("" if _pay_rows else _vp.NO_METHOD_NOTE),
         reply_markup=kb, parse_mode="HTML")
 
@@ -18123,13 +18144,18 @@ async def place_stars_order(bot: Bot, row, *, buyer_tg_id: int, buyer_name: str,
             except VsdError as _e:
                 raise StarsOrderError(str(_e))
             await vsd_record(s, bot_id=row.id, tg_id=buyer_tg_id, code_id=_dc_id, discount=_dc_amt)
+        _fb_note = ""
+        if not disc_code and price_override is None:       # تخفیفِ اولین خرید (قیمتِ وب‌سرویس/API دست‌نخورده)
+            price, _fbd = await _first_buy_price(row.id, buyer_tg_id, price, session=s)
+            if _fbd:
+                _fb_note = f" (تخفیف اولین خرید −{_fbd:,})"
         if float(b.balance) < price:
             raise StarsOrderError(
                 f"موجودیِ کیف‌پول کافی نیست. کمبود: {price - int(b.balance):,} تومان",
                 short=price - int(b.balance), price=price)
         b.balance = float(b.balance) - price
         s.add(WalletTxn(bot_id=row.id, user_id=b.id, amount=-price, kind="purchase",
-                        note=f"خریدِ {qty:,} استارز" + (f" (کد تخفیف −{_dc_amt:,})" if _dc_amt else "")))
+                        note=f"خریدِ {qty:,} استارز" + (f" (کد تخفیف −{_dc_amt:,})" if _dc_amt else "") + _fb_note))
         from models import alloc_tracking_in as _alloc_in  # PATCH_SEQ_TRACKING_V1
         trk = await _alloc_in(s, row.id)
         # PATCH_SELF_DEST_LABEL_V1
@@ -18303,6 +18329,8 @@ async def star_cardpay_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
                 await cb.answer(f"❌ {_e}", show_alert=True)
                 return
             await vsd_record(s, bot_id=row.id, tg_id=cb.from_user.id, code_id=_dc_id, discount=_dc_amt)
+        else:
+            price, _fbd = await _first_buy_price(row.id, cb.from_user.id, price, session=s)   # تخفیفِ اولین خرید
         order = GiftOrder(bot_id=row.id, buyer_user_id=buyer.id, gift_id=f"starsell_{qty}",
                           gift_emoji="⭐", star_count=qty, price_toman=price,
                           dest_telegram_id=dest_id, dest_label=dest_label,

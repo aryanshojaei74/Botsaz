@@ -297,6 +297,26 @@ def register_emoji_map_provider(fn) -> None:
         _PROVIDERS.append(fn)
 
 
+# فلگِ «آیکونِ پرمیوم روی دکمه‌ها»: هر سرویس می‌تواند برایِ یک توکن False برگرداند تا دکمه‌ها دست نخورند
+# (ایموجیِ ساده همان‌جایِ متنِ دکمه بماند). آیکونِ دکمه همیشه در گوشهٔ دکمه می‌نشیند، نه وسطِ متن.
+_BTN_PROVIDERS: list = []
+
+
+def register_button_flag_provider(fn) -> None:
+    if fn not in _BTN_PROVIDERS:
+        _BTN_PROVIDERS.append(fn)
+
+
+async def _buttons_allowed(token: str) -> bool:
+    for fn in _BTN_PROVIDERS:
+        try:
+            if (await fn(token)) is False:
+                return False
+        except Exception:
+            logger.exception("خطای نادیده‌گرفته‌شده در providerِ فلگِ ایموجیِ دکمه")
+    return True
+
+
 async def _map_for_token(token: str) -> dict | None:
     for fn in _PROVIDERS:
         try:
@@ -411,6 +431,8 @@ class _PremiumEmojiMiddleware(BaseRequestMiddleware):
 
         mapping = await _map_for_token(bot.token)
         if not mapping:
+            return
+        if not await _buttons_allowed(bot.token):
             return
         keys = sorted(mapping.keys(), key=len, reverse=True)
 

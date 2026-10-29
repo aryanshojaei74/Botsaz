@@ -57,7 +57,7 @@ from sqlalchemy import func, select
 from config import Session
 from models import TenantPremiumEmoji
 from premium_emoji_dynamic import (
-    extract_custom_emoji, plain_apply_map, register_emoji_map_provider,
+    extract_custom_emoji, plain_apply_map, register_button_flag_provider, register_emoji_map_provider,
 )
 
 from logging_setup import get_logger as _get_logger
@@ -193,6 +193,11 @@ async def _render_menu(target, bot_id: int, offset: int, plan: str = "", *, edit
     kb_rows.append([
         InlineKeyboardButton(text="🗑 حذف با لینکِ پک", callback_data="pemj:unpack", style=ButtonStyle.DANGER),
         InlineKeyboardButton(text="🗑 حذفِ همهٔ ایموجی‌ها", callback_data="pemj:delall", style=ButtonStyle.DANGER)])
+    from tenant import get_setting as _gs
+    _btn_on = (await _gs(bot_id, "pemj_buttons", "1")) != "0"
+    kb_rows.append([InlineKeyboardButton(
+        text=("🔘 ایموجی دکمه‌ها: آیکونِ پرمیوم (گوشهٔ دکمه)" if _btn_on else "🔘 ایموجی دکمه‌ها: ساده (همان‌جایِ متن)"),
+        callback_data=f"pemj:btn:{offset}", style=(ButtonStyle.SUCCESS if _btn_on else ButtonStyle.PRIMARY))])
     auto_on = await _auto_enabled(bot_id)
     kb_rows.append([InlineKeyboardButton(
         text=("🤖 تبدیلِ خودکارِ ایموجی‌ها: روشن" if auto_on else "🤖 تبدیلِ خودکارِ ایموجی‌ها: خاموش"),
@@ -281,6 +286,19 @@ async def pemj_toggle(cb: CallbackQuery, bot: Bot):
     _PMAP_CACHE.pop(row.id, None)
     await _render_menu(cb, row.id, offset, row.plan, edit=True)
     await cb.answer("✅ قابلیت " + ("فعال شد" if new == "1" else "غیرفعال شد"))
+
+
+@premium_emoji_admin_router.callback_query(F.data.startswith("pemj:btn:"))
+async def pemj_btn(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    from tenant import get_setting, set_setting
+    offset = int(cb.data.split(":")[2])
+    new = "0" if (await get_setting(row.id, BTN_KEY, "1")) != "0" else "1"
+    await set_setting(row.id, BTN_KEY, new)
+    await _render_menu(cb, row.id, offset, row.plan, edit=True)
+    await cb.answer("🔘 ایموجیِ دکمه‌ها: " + ("آیکونِ پرمیوم" if new == "1" else "ساده، همان‌جایِ متن"))
 
 
 @premium_emoji_admin_router.callback_query(F.data.startswith("pemj:auto:"))
@@ -723,3 +741,17 @@ async def _tenant_map_provider(token: str):
 
 
 register_emoji_map_provider(_tenant_map_provider)
+
+BTN_KEY = "pemj_buttons"
+
+
+async def _buttons_flag_provider(token: str):
+    """False اگر مالکِ این ربات «آیکونِ پرمیوم روی دکمه‌ها» را خاموش کرده باشد (ایموجیِ ساده همان‌جا می‌ماند)."""
+    info = await _bot_info_for_token(token)
+    if not info:
+        return None
+    from tenant import get_setting
+    return (await get_setting(info[0], BTN_KEY, "1")) != "0"
+
+
+register_button_flag_provider(_buttons_flag_provider)
