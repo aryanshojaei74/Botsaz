@@ -279,7 +279,7 @@ async def settings_extra(bot_id: int) -> tuple[str, list[list[InlineKeyboardButt
     if not await addon_active(bot_id, WAGER_ADDON):
         return ("\n\n🔒 <b>بازی‌های گروهی</b> (ایکس‌او، سنگ‌کاغذ‌قیچی، تاس): فعال نشده.\n"
                 "فعال‌سازی: ربات اصلی بات‌ساز ← ربات‌های من ← این ربات ← «🎮 بازی‌های گروهی»."), []
-    from platform_wager_race import RACE_GAMES          # PATCH_WAGER_RACE_TENANT_V1
+    from platform_wager_race import TENANT_RACE_GAMES as RACE_GAMES          # PATCH_WAGER_RACE_TENANT_V1
     games = tuple(core.GAMES) + tuple(RACE_GAMES)
     flags = {g: await core.game_enabled(g, bot_id) for g in games}
     text = "\n\n🎮 <b>بازی‌های گروهی</b> (با کلید «وضعیت» بالا روشن/خاموش می‌شوند):\n" + "\n".join(
@@ -299,7 +299,7 @@ async def tw_game_toggle(cb: CallbackQuery, bot: Bot):
         await cb.answer()
         return
     game = (cb.data or "").split(":", 2)[2]
-    from platform_wager_race import RACE_GAMES          # PATCH_WAGER_RACE_TENANT_V1
+    from platform_wager_race import TENANT_RACE_GAMES as RACE_GAMES          # PATCH_WAGER_RACE_TENANT_V1
     if (game not in core.GAMES and game not in RACE_GAMES) or not await addon_active(row.id, WAGER_ADDON):
         await cb.answer()
         return

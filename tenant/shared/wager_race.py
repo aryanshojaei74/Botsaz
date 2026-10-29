@@ -51,6 +51,8 @@ async def _gate(msg: Message, bot: Bot, game: str | None = None):
     """(row, is_admin) اگر این ربات اجازهٔ مسابقه در این گروه را دارد؛ وگرنه None یا SkipHandler/پیامِ مناسب."""
     if not msg.from_user or msg.from_user.is_bot:
         raise SkipHandler
+    if game and game not in R.TENANT_RACE_GAMES:       # «الگو» فقط ربات اصلی
+        raise SkipHandler
     row, is_admin = await _row_and_admin(bot, msg.from_user.id)
     if not row or not wager_eligible(row.field, row.plan):
         raise SkipHandler

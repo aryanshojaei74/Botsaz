@@ -43,9 +43,10 @@ logger = _get_logger(__name__)
 
 platform_wager_race_router = Router(name="platform_wager_race")
 
-RACE_GAMES = ("guess", "speed", "math")
-RACE_FA = {"guess": "حدس عدد", "speed": "سرعت", "math": "ریاضی"}
-SECS = {"guess": 180, "speed": 45, "math": 45}
+RACE_GAMES = ("guess", "speed", "math", "pattern")
+TENANT_RACE_GAMES = ("guess", "speed", "math")       # «الگو» فعلاً فقط ربات اصلی (ربات‌هایِ مشتری خودکار آن را نمی‌گیرند)
+RACE_FA = {"guess": "حدس عدد", "speed": "سرعت", "math": "ریاضی", "pattern": "الگو"}
+SECS = {"guess": 180, "speed": 45, "math": 45, "pattern": 60}
 KEY_ON = "pgr_on"
 GUESS_GAP = 1.2
 _AMT = r"([۰-۹0-9,،]+)"
@@ -54,6 +55,7 @@ _PATTERNS = (
     ("guess", re.compile(rf"^{_PREFIX}حدس\s*عدد\s+{_AMT}$")),
     ("speed", re.compile(rf"^{_PREFIX}سرعت\s+{_AMT}$")),
     ("math", re.compile(rf"^{_PREFIX}ریاضی\s+{_AMT}$")),
+    ("pattern", re.compile(rf"^{_PREFIX}الگو\s+{_AMT}$")),
 )
 _AR = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 
@@ -102,6 +104,37 @@ def norm_answer(t: str | None) -> str:
     return (t or "").strip().translate(_AR).replace("‌", "").replace(" ", "").lower()
 
 
+def make_pattern(rnd=secrets) -> tuple[str, str]:
+    """دنبالهٔ عددیِ تولیدیِ بدونِ ابهام؛ خروجی (متنِ دنباله با «؟» آخرش، جوابِ عددی)."""
+    kind = rnd.randbelow(6)
+    if kind == 0:                                    # حسابی: +d
+        a, d = 1 + rnd.randbelow(20), 2 + rnd.randbelow(8)
+        seq = [a + d * i for i in range(5)]
+    elif kind == 1:                                  # هندسی: ×r
+        a, r = 1 + rnd.randbelow(5), 2 + rnd.randbelow(2)
+        seq = [a * r ** i for i in range(5)]
+    elif kind == 2:                                  # مربع‌ها
+        k = 1 + rnd.randbelow(6)
+        seq = [(k + i) ** 2 for i in range(5)]
+    elif kind == 3:                                  # گام‌هایِ متناوب +x، +y
+        a, x, y = 1 + rnd.randbelow(10), 2 + rnd.randbelow(4), 6 + rnd.randbelow(4)
+        seq = [a]
+        for i in range(5):
+            seq.append(seq[-1] + (x if i % 2 == 0 else y))
+    elif kind == 4:                                  # اختلاف‌هایِ افزایشی: +1، +2، +3، …
+        a = 1 + rnd.randbelow(10)
+        seq = [a]
+        for i in range(1, 5):
+            seq.append(seq[-1] + i)
+    else:                                            # فیبوناچی‌وار
+        a, b = 1 + rnd.randbelow(4), 2 + rnd.randbelow(4)
+        seq = [a, b]
+        for _ in range(3):
+            seq.append(seq[-1] + seq[-2])
+    shown, ans = seq[:-1], seq[-1]
+    return " ، ".join(str(n) for n in shown) + " ، ؟", str(ans)
+
+
 def new_question(kind: str, scope: tuple = (0, 0)) -> dict:
     """پرسش و پاسخِ تازه برایِ هر نوع (state ذخیره‌شده در ردیفِ شرط)."""
     if kind == "guess":
@@ -110,6 +143,9 @@ def new_question(kind: str, scope: tuple = (0, 0)) -> dict:
         from platform_group_game import pick_word      # PATCH_SPEED_WORDS_V1: در همین گروه تکراری نمی‌آید
         word = pick_word(scope)
         return {"q": word, "a": norm_answer(word)}
+    if kind == "pattern":
+        q, a = make_pattern()
+        return {"q": q, "a": a}
     from platform_group_game import make_math
     q, a = make_math()
     return {"q": q, "a": a}
@@ -129,7 +165,7 @@ async def game_on(game: str) -> bool:
     master = await enabled()
     v = (await core._pset(_game_key(game), "")).strip().lower()
     if not v:
-        return master
+        return master and game != "pattern"      # بازیِ تازه تا مدیر روشنش نکند خودکار فعال نمی‌شود
     return v in ("on", "1", "true") and master
 
 
@@ -148,7 +184,8 @@ def _rule(w: PlatformWager) -> str:
     return {"guess": "عددی بین ۱ تا ۱۰۰؛ <b>به‌نوبت</b> حدس می‌زنید (ربات بالاتر/پایین‌تر می‌گوید). هر نوبت ۳ دقیقه مهلت دارد؛ "
                      "نوبتی که حدس نزند می‌بازد. اولین حدسِ دقیق برنده است.",
             "speed": "ربات یک کلمه می‌فرستد؛ اولین نفری که دقیقاً همان را بنویسد برنده است.",
-            "math": "ربات یک محاسبه می‌فرستد؛ اولین جوابِ درست برنده است."}[w.game]
+            "math": "ربات یک محاسبه می‌فرستد؛ اولین جوابِ درست برنده است.",
+            "pattern": "ربات یک دنبالهٔ عددی می‌فرستد؛ اولین نفری که عددِ بعدیِ دنباله را درست بنویسد برنده است."}[w.game]
 
 
 def _kb_pending(w: PlatformWager) -> InlineKeyboardMarkup:
@@ -185,6 +222,8 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
                     else "عددت را در گروه بنویس."))
         elif w.game == "speed":
             q = f"✍️ این را دقیقاً بنویس:\n\n👉 <b>{_html.escape(str(st.get('q', '')))}</b>"
+        elif w.game == "pattern":
+            q = f"🧩 عددِ بعدیِ دنباله چیست؟\n\n👉 <b>{_html.escape(str(st.get('q', '')))}</b>"
         else:
             q = f"🧮 جواب چیست؟\n\n👉 <b>{_html.escape(str(st.get('q', '')))} = ؟</b>"
         foot = ("⏱ هر نوبت ۳ دقیقه مهلت دارد؛ در مهلت حدس نزنی می‌بازی." if w.game == "guess" and w.turn_id
@@ -201,7 +240,7 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
     if w.status == "settled":
         ans = st.get("n") if w.game == "guess" else st.get("q")
         shown = f"عدد: <b>{ans}</b>" if w.game == "guess" else (f"جواب: <b>{_html.escape(str(st.get('a', '')))}</b>"
-                                                              if w.game == "math" else f"کلمه: <b>{_html.escape(str(ans))}</b>")
+                                                              if w.game in ("math", "pattern") else f"کلمه: <b>{_html.escape(str(ans))}</b>")
         if w.end_reason == "forfeit":
             loser = w.opponent_id if w.winner_id == w.creator_id else w.creator_id
             lines += [f"⏰ <b>{core._who(w, loser)}</b> در مهلتِ نوبتش حدس نزد."]
@@ -346,7 +385,7 @@ def _is_create(m: Message) -> bool:
     return parse_race_command(m.text) is not None
 
 
-_NO_AMOUNT = re.compile(r"^شرط\s*بندی\s+(حدس\s*عدد|سرعت|ریاضی)$")
+_NO_AMOUNT = re.compile(r"^شرط\s*بندی\s+(حدس\s*عدد|سرعت|ریاضی|الگو)$")
 
 
 def _is_paid_hint(m: Message) -> bool:
@@ -360,13 +399,14 @@ async def race_paid_hint(msg: Message):
         raise SkipHandler
     if not await _group_allowed(msg.chat.id) or not await enabled() or not await _bet_enabled():
         raise SkipHandler
-    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی"}[
+    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی", "الگو": "الگو"}[
         re.sub(r"\s+", "", _NO_AMOUNT.match(core._norm(msg.text)).group(1))]
     cfg = await core.load_cfg()
     ex = core.example_amount(cfg)
     lim = (f"از {_rial(cfg['min'])} تا {_rial(cfg['max'])}" if cfg.get("max") else f"حداقل {_rial(cfg['min'])}")
     await msg.reply(f"💰 برای مسابقهٔ پولیِ <b>{game}</b> مبلغ را هم بنویس (به تومان، {lim}):\n"
-                    f"<code>شرطبندی {game} {ex}</code>\n\n🆓 بازیِ رایگان با شیرینی: فقط «{game}» را بنویس.",
+                    f"<code>شرطبندی {game} {ex}</code>"
+                    + ("" if game == "الگو" else f"\n\n🆓 بازیِ رایگان با شیرینی: فقط «{game}» را بنویس."),
                     parse_mode="HTML")
 
 
@@ -590,6 +630,7 @@ async def help_section() -> str:
         "دارد (حدس نزنی می‌بازی)؛ اولین حدسِ دقیق برنده است.",
         f"⚡️ <b>سرعت</b>: «شرطبندی سرعت {ex}» — اولین نفری که کلمهٔ ربات را دقیق بنویسد برنده است.",
         f"🧮 <b>ریاضی</b>: «شرطبندی ریاضی {ex}» — اولین جوابِ درست برنده است.",
+        f"🧩 <b>الگو</b>: «شرطبندی الگو {ex}» — ربات یک دنبالهٔ عددی می‌فرستد؛ اولین نفری که عددِ بعدی را بنویسد برنده است.",
         "ℹ️ اگر فقط «حدس عدد» / «سرعت» / «ریاضی» (بدونِ «شرطبندی» و مبلغ) بنویسی، بازیِ رایگان با شیرینی شروع می‌شود.",
         f"عددِ آخر مبلغِ هر نفر به تومان است ({lim}). هر کس بخواهد می‌تواند مسابقهٔ خودش را بسازد یا به مسابقهٔ دیگران "
         "بپیوندد؛ چند مسابقه هم‌زمان برگزار می‌شود. برای بازی با یک نفرِ مشخص، دستور را روی پیامِ او ریپلای کن.",

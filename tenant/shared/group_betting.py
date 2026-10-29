@@ -270,7 +270,7 @@ async def incomplete_bet_command(msg: Message, bot: Bot):
     from bot_addons import WAGER_ADDON, addon_active, wager_eligible
     games_on = (wager_eligible(row.field, row.plan) and await addon_active(row.id, WAGER_ADDON)
                 and await core.master_enabled(row.id))
-    from platform_wager_race import RACE_GAMES          # PATCH_WAGER_RACE_TENANT_V1
+    from platform_wager_race import TENANT_RACE_GAMES as RACE_GAMES          # PATCH_WAGER_RACE_TENANT_V1
     enabled = {g: (games_on and await core.game_enabled(g, row.id)) for g in (*core.GAMES, *RACE_GAMES)}
     await msg.reply(core.help_text(enabled, bot_id=row.id, cfg=await core.load_cfg(row.id)), parse_mode="HTML")
 

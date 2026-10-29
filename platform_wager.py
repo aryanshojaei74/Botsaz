@@ -47,7 +47,7 @@ platform_wager_router = Router(name="platform_wager")
 
 GAMES = ("xo", "rps", "dice")
 GAME_FA = {"xo": "ایکس‌او", "rps": "سنگ‌کاغذ‌قیچی", "dice": "تاس",
-           "guess": "حدس عدد", "speed": "سرعت", "math": "ریاضی"}   # PATCH_WAGER_RACE_V1: سه مسابقهٔ آخر فقط ربات اصلی‌اند (در GAMES نیستند)
+           "guess": "حدس عدد", "speed": "سرعت", "math": "ریاضی", "pattern": "الگو"}   # PATCH_WAGER_RACE_V1: سه مسابقهٔ آخر فقط ربات اصلی‌اند (در GAMES نیستند)
 ACTIVE = ("pending", "playing")
 MAX_ACTIVE = 3                 # شرط هم‌زمان هر کاربر (ساخته‌شده یا پذیرفته‌شده)
 DICE_RECLAIM_SECS = 30         # اگر پرتابی گیر کرد (قطعی پروسه) بعد از این مدت دوباره مجاز است
@@ -818,7 +818,7 @@ def _rps_playing_text(w: PlatformWager, head: str) -> str:
 
 
 def render(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
-    if w.game in ("guess", "speed", "math"):          # PATCH_WAGER_RACE_V1
+    if w.game in ("guess", "speed", "math", "pattern"):          # PATCH_WAGER_RACE_V1
         from platform_wager_race import render_race
         return render_race(w)
     st = _st(w)
