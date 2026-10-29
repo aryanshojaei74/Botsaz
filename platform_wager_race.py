@@ -44,7 +44,7 @@ logger = _get_logger(__name__)
 platform_wager_race_router = Router(name="platform_wager_race")
 
 RACE_GAMES = ("guess", "speed", "math", "pattern")
-TENANT_RACE_GAMES = ("guess", "speed", "math")       # «الگو» فعلاً فقط ربات اصلی (ربات‌هایِ مشتری خودکار آن را نمی‌گیرند)
+TENANT_RACE_GAMES = RACE_GAMES                         # ربات‌هایِ مشتری هم (فقط اگر افزونهٔ «بازی‌هایِ گروهی» را خریده باشند؛ گیتِ آن در addon_active است)
 RACE_FA = {"guess": "حدس عدد", "speed": "سرعت", "math": "ریاضی", "pattern": "الگو"}
 SECS = {"guess": 180, "speed": 45, "math": 45, "pattern": 60}
 KEY_ON = "pgr_on"

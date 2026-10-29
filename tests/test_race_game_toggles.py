@@ -58,9 +58,12 @@ def test_pattern_questions_are_valid_and_unambiguous():
     assert parse_race_command("الگو 5000") == ("pattern", 5000)
 
 
-def test_tenants_do_not_get_pattern():
+def test_tenants_get_pattern_behind_the_wager_addon():
     from platform_wager_race import RACE_GAMES, TENANT_RACE_GAMES
-    assert "pattern" in RACE_GAMES and "pattern" not in TENANT_RACE_GAMES
+    assert "pattern" in RACE_GAMES and "pattern" in TENANT_RACE_GAMES
+    import platform_wager as core
+    text = core.help_text({"pattern": True}, bot_id=5, cfg={"min": 1000, "max": 0, "fee_pct": 0})
+    assert "الگو" in text
 
 
 def test_pattern_render_playing_and_settled():

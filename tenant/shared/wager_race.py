@@ -36,7 +36,7 @@ logger = _get_logger(__name__)
 
 wager_race_router = Router(name="wager_race")
 
-_NO_AMOUNT = re.compile(r"^(?:شرط\s*بندی|بازی)\s+(حدس\s*عدد|سرعت|ریاضی)$")
+_NO_AMOUNT = re.compile(r"^(?:شرط\s*بندی|بازی)\s+(حدس\s*عدد|سرعت|ریاضی|الگو)$")
 
 
 def _is_create(m: Message) -> bool:
@@ -51,7 +51,7 @@ async def _gate(msg: Message, bot: Bot, game: str | None = None):
     """(row, is_admin) اگر این ربات اجازهٔ مسابقه در این گروه را دارد؛ وگرنه None یا SkipHandler/پیامِ مناسب."""
     if not msg.from_user or msg.from_user.is_bot:
         raise SkipHandler
-    if game and game not in R.TENANT_RACE_GAMES:       # «الگو» فقط ربات اصلی
+    if game and game not in R.TENANT_RACE_GAMES:
         raise SkipHandler
     row, is_admin = await _row_and_admin(bot, msg.from_user.id)
     if not row or not wager_eligible(row.field, row.plan):
@@ -79,7 +79,7 @@ async def twr_hint(msg: Message, bot: Bot):
     row, _adm = await _gate(msg, bot)
     if not row:
         return
-    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی"}[
+    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی", "الگو": "الگو"}[
         re.sub(r"\s+", "", _NO_AMOUNT.match(core._norm(msg.text)).group(1))]
     cfg = await core.load_cfg(row.id)
     ex = core.example_amount(cfg)

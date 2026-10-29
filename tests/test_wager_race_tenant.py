@@ -197,7 +197,7 @@ async def test_help_and_settings_show_race_games_for_tenant(db, monkeypatch):
     text, rows = await WG.settings_extra(BOT)
     assert "سرعت" in text and "ریاضی" in text and len(rows) == 2
     cbs = [b.callback_data for r in rows for b in r]
-    assert cbs == ["twg:set:xo", "twg:set:rps", "twg:set:dice", "twg:set:guess", "twg:set:speed", "twg:set:math"]
+    assert cbs == ["twg:set:xo", "twg:set:rps", "twg:set:dice", "twg:set:guess", "twg:set:speed", "twg:set:math", "twg:set:pattern"]
 
 
 def _rows(kb):
