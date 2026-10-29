@@ -112,3 +112,18 @@ def test_button_flag_provider_off_skips_button_rewrite(monkeypatch):
     monkeypatch.setattr(d, "_BTN_PROVIDERS", [])
     asyncio.run(d._PremiumEmojiMiddleware()._rewrite_buttons(NS(token="1:A"), method))
     assert btn.icon_custom_emoji_id == "111"
+
+
+def test_tonpays_need_action_notice_for_standard_gateway_with_kind():
+    from tenant.gateways import tonpays as T
+    T._LAST_STATUS.clear(); T._LAST_INFO.clear()
+    oid = "ORD123"
+    assert not T.is_custom_order(oid)
+    T._LAST_STATUS[(1, oid)] = "need_action"
+    assert T.needs_action_notice(1, oid) is False                      # عادی بدونِ kind ⇒ مثلِ قبل
+    T._LAST_INFO[(1, oid)] = {"need_action_kind": "less"}
+    assert T.needs_action_notice(1, oid) is True                       # واریزِ کمتر ⇒ مابقی را نشان بده
+    T._LAST_STATUS[(1, oid)] = "action_required_less"
+    assert T.needs_action_notice(1, oid) is True
+    T._LAST_STATUS[(1, oid)] = "pending"
+    assert T.needs_action_notice(1, oid) is False

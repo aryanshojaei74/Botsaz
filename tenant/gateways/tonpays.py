@@ -500,6 +500,19 @@ def _amount(info: dict, key: str) -> int:
         return 0
 
 
+def needs_action_notice(bot_id: int, order_id: str) -> bool:
+    """آیا باید پیامِ «مبلغِ کمتر/بیشتر / نیاز به فیش» برایِ این فاکتور فرستاد؟
+    وضعیتِ «need_action» در درگاهِ عادی قبلاً همیشه رد می‌شد؛ ولی اگر درگاه همراهش need_action_kind (less/more) داده باشد
+    (واریزِ کمتر/بیشتر) خریدار باید مابقی/عودت را ببیند — نبودنِ این پیام همان گزارشِ «برایِ مشتری فاکتورِ مابقی صادر نشد» بود."""
+    key = (bot_id, order_id)
+    st = _LAST_STATUS.get(key)
+    if st not in NEED_ACTION_STATUSES:
+        return False
+    if st != "need_action" or is_custom_order(order_id):
+        return True
+    return (_LAST_INFO.get(key) or {}).get("need_action_kind") in ("less", "more")
+
+
 def need_action_hint(info: dict) -> str:
     """توضیحِ کوتاهِ وضعیتِ «مبلغِ کمتر/بیشتر» برایِ پیامِ «پرداخت کردم»."""
     st = info.get("status")
@@ -1619,8 +1632,7 @@ async def _auto_poll(bot: Bot, bot_id: int, order_id: str, chat_id: int) -> None
                     parse_mode="HTML")
                 return
             # === PATCH_TONPAYS_CUSTOM_V1 === تأییدِ خودکار نشد ⇒ از خریدار فیش بخواه
-            if (_LAST_STATUS.get((bot_id, order_id)) in NEED_ACTION_STATUSES
-                    and (is_custom_order(order_id) or _LAST_STATUS[(bot_id, order_id)] != "need_action")
+            if (needs_action_notice(bot_id, order_id)
                     and (bot_id, order_id) not in _NEED_ACTION_NOTIFIED):
                 _NEED_ACTION_NOTIFIED.add((bot_id, order_id))
                 _t, _k = action_notice("tonp", order_id, _LAST_INFO.get((bot_id, order_id)) or {},
@@ -2121,8 +2133,7 @@ async def poll_pending_once() -> None:
             break
         await asyncio.sleep(1.1)  # حدودِ ۵۵ استعلام در دقیقه، زیرِ سقفِ ۶۰
         # === PATCH_TONPAYS_CUSTOM_V1 === need_action ⇒ یک‌بار از خریدار فیش بخواه
-        if (not ok and _LAST_STATUS.get((bot_id, order_id)) in NEED_ACTION_STATUSES
-                and (is_custom_order(order_id) or _LAST_STATUS[(bot_id, order_id)] != "need_action")
+        if (not ok and needs_action_notice(bot_id, order_id)
                 and (bot_id, order_id) not in _NEED_ACTION_NOTIFIED):
             _NEED_ACTION_NOTIFIED.add((bot_id, order_id))
             try:
