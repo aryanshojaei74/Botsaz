@@ -53,3 +53,17 @@ def test_pack_name_parsing():
 def test_direct_crypto_invoice_has_exit_buttons():
     from tenant.gateways.ton_direct import invoice_exit_row
     assert [b.callback_data for b in invoice_exit_row()] == ["tond:close", "mbtn:home"]
+
+
+def test_crypto_hub_has_wallet_name_shortcut():
+    import asyncio
+    from tenant.gateways import tron_direct as td
+    async def fake_get(*a, **k): return "1"
+    import tenant
+    orig = tenant.get_setting
+    tenant.get_setting = fake_get
+    try:
+        _t, kb = asyncio.run(td._hub(1))
+    finally:
+        tenant.get_setting = orig
+    assert "gwl:name:cdirect" in [b.callback_data for r in kb.inline_keyboard for b in r]

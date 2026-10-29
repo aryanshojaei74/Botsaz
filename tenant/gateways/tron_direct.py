@@ -692,6 +692,9 @@ async def _hub(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
         rows.append([InlineKeyboardButton(
             text=f"{ASSET_EMOJI[a]} {ASSET_LABEL[a]}",
             callback_data=f"trxd:menu:{a}", style=ButtonStyle.PRIMARY)])
+    # میان‌بُرِ تغییرِ اسمِ دکمه در صفحهٔ کیف پول (همان «🎛 نام و ترتیبِ دکمه‌ها»؛ پیشنهادِ #185)
+    rows.append([InlineKeyboardButton(text="🏷 نام دکمه در صفحهٔ کیف پول", callback_data="gwl:name:cdirect",
+                                      style=ButtonStyle.PRIMARY)])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:finance",
                                       style=ButtonStyle.DANGER)])
     return "\n".join(body), InlineKeyboardMarkup(inline_keyboard=rows)
