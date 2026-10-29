@@ -5630,8 +5630,9 @@ async def choose_plan(cb: CallbackQuery, state: FSMContext):
         await cb.message.answer(
             "🗓 مدت پلن را انتخاب کن:"
             + (f"\n\n🎁 تخفیفِ خریدِ اول ({promo_pct}٪) روی قیمت‌ها اعمال شده است." if promo_id else "")
-            + (f"\n\n{ptc_new_note}" if ptc_new_note else ""),
-            reply_markup=kb)
+            + (f"\n\n{ptc_new_note}" if ptc_new_note else "")
+            + f"\n\n{PURCHASE_TERMS}",       # قوانینِ خرید (اول تست، بعد خرید؛ عودت ندارد) قبلاً فقط در تمدید/ارتقا بود، نه خریدِ ربات تازه
+            reply_markup=kb, parse_mode="HTML")
         await cb.answer()
         return
     await state.set_state(Create.token)
