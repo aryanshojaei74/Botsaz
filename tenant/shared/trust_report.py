@@ -219,11 +219,8 @@ async def send_trust_channel_post(
                         _BU.bot_id == bot_id, _BU.telegram_id == buyer_telegram_id))
             except Exception:
                 logger.exception("خواندنِ یوزرنیمِ خریدار برایِ کانالِ اعتمادسازی ناموفق بود")
-            parts = []
-            if uname:
-                parts.append(f"@{str(uname).lstrip('@')}")
-            parts.append(f"<code>{buyer_telegram_id}</code>")
-            user_order_txt = " — ".join(parts)
+            from tenant.shared.buyer_ident import get_mode, ident_text      # پیشنهادِ #187
+            user_order_txt = ident_text(await get_mode(bot_id), uname, buyer_telegram_id)
         elif user_order_no is not None:
             user_order_txt = f"#{user_order_no}"
         elif buyer_telegram_id:
@@ -382,6 +379,11 @@ async def trust_report_menu_text_kb(bot_id: int, plan: str = ""):
             text=("🛒 نمایشِ یوزرنیم/آیدیِ خریدار: ✅ فعال" if show_buyer
                   else "🛒 نمایشِ یوزرنیم/آیدیِ خریدار: ❌ غیرفعال"),
             callback_data="trust:togglebuyer", style=ButtonStyle.DANGER)])
+        if show_buyer:
+            from tenant.shared.buyer_ident import LABELS as _BL, get_mode as _gm
+            rows.append([InlineKeyboardButton(
+                text=f"🆔 نوعِ نمایشِ خریدار: {_BL[await _gm(bot_id)]}",
+                callback_data="trust:identmode", style=ButtonStyle.PRIMARY)])
         # === PATCH_TRUST_CHANNEL_CUSTOM_TEXT_V1 ===
         # === PATCH_TRUST_TEXT_PRO_ONLY_V1 ===
         # فقط پلنِ حرفه‌ای؛ رایگان و رشد این دکمه را نمی‌بینند و متنِ
@@ -434,6 +436,23 @@ async def trust_report_menu(cb: CallbackQuery, bot: Bot):
     except Exception:
         await cb.message.answer(text, reply_markup=kb)
     await cb.answer()
+
+
+@trust_report_router.callback_query(F.data == "trust:identmode")
+async def trust_ident_mode(cb: CallbackQuery, bot: Bot):
+    from tenant import get_bot_row, is_owner_or_admin
+    from tenant.shared.buyer_ident import cycle, LABELS
+    row = await get_bot_row(bot)
+    if not row or not await is_owner_or_admin(row.id, cb.from_user.id, row.owner_id):
+        await cb.answer()
+        return
+    new = await cycle(row.id)
+    text, kb = await trust_report_menu_text_kb(row.id, row.plan)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb)
+    await cb.answer("✅ " + LABELS[new])
 
 
 # === PATCH_TRUST_HIDE_BUYER_V1 ===

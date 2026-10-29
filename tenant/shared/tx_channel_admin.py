@@ -44,6 +44,9 @@ async def _content(bot_id: int):
         rows.append([InlineKeyboardButton(text="🗑 حذفِ اتصال",
                                           callback_data="txch:clear",
                                           style=ButtonStyle.DANGER)])
+    from tenant.shared.buyer_ident import LABELS as _BL, get_mode as _gm
+    rows.append([InlineKeyboardButton(text=f"🆔 نمایشِ خریدار: {_BL[await _gm(bot_id)]}",
+                                      callback_data="txch:ident", style=ButtonStyle.PRIMARY)])
     rows.append([InlineKeyboardButton(text="🔗 اتصال / تغییرِ کانال",
                                       callback_data="txch:set",
                                       style=ButtonStyle.PRIMARY)])
@@ -120,6 +123,22 @@ async def txch_save(msg: Message, bot: Bot, state: FSMContext):
     txt, kb = await _content(row.id)
     await msg.answer("✅ ذخیره شد.")
     await msg.answer(txt, reply_markup=kb, parse_mode="HTML")
+
+
+@tx_channel_admin_router.callback_query(F.data == "txch:ident")
+async def txch_ident(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok
+    from tenant.shared.buyer_ident import cycle, LABELS
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    new = await cycle(row.id)
+    txt, kb = await _content(row.id)
+    try:
+        await cb.message.edit_text(txt, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(txt, reply_markup=kb, parse_mode="HTML")
+    await cb.answer("✅ " + LABELS[new])
 
 
 @tx_channel_admin_router.callback_query(F.data == "txch:test")

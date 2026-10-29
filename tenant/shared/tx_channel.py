@@ -110,12 +110,9 @@ async def tx_log(bot, bot_id: int, *, buyer=None, amount=0,
             lines = [f"#افزایش — <b>{_html.escape(label)}</b>", ""]
 
         if buyer is not None:
-            uname = f"@{buyer.username}" if getattr(buyer, "username", None) else "—"
-            lines += [
-                f"👤 کاربر: {_html.escape(getattr(buyer, 'full_name', None) or '—')}",
-                f"🆔 آیدی عددی: <code>{getattr(buyer, 'telegram_id', '—')}</code>",
-                f"🔗 یوزرنیم: {_html.escape(uname)}",
-            ]
+            from tenant.shared.buyer_ident import get_mode, tx_lines     # پیشنهادِ #187
+            lines += tx_lines(await get_mode(bot_id), getattr(buyer, "full_name", None),
+                              getattr(buyer, "username", None), getattr(buyer, "telegram_id", "—"))
 
         lines.append(
             f"{'➖ مبلغ کسرشده' if _is_deduct else '💰 مبلغ پرداخت'}: {_fa(_abs_amount)} تومان")
