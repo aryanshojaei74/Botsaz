@@ -383,7 +383,8 @@ async def ab_setname_save(msg: Message, bot: Bot, state: FSMContext):
     if not row:
         return
     name = (msg.text or "").strip()
-    if name in ("پیش‌فرض", "پیشفرض", "default", "-"):
+    from tenant import is_default_word
+    if is_default_word(name):
         await AG._set(row.id, "abangateway_display_name", "")
         await msg.answer(f"✅ اسمِ نمایشی به پیش‌فرض (<b>{AG.DEFAULT_DISPLAY_NAME}</b>) برگشت.", parse_mode="HTML")
     elif not name:

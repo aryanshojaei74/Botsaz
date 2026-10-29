@@ -1362,7 +1362,11 @@ async def _picker_text_kb(bot_id: int) -> tuple[str, InlineKeyboardMarkup] | Non
         return None
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="w:back",
                                       style=ButtonStyle.DANGER)])
-    text = ("💎 <b>شارژ کیف پول با واریز مستقیم ارز</b>\n\n"
+    # اسمِ سفارشیِ دکمهٔ «واریز مستقیم ارز» (🏷 نام دکمه) بالای همین صفحه هم بیاید؛ نبودنش گزارشِ #186 بود
+    import html as _html
+    _cn = (await get_setting(bot_id, "cdirect_display_name", "") or "").strip()
+    _title = (_html.escape(_cn[:64]) if _cn else "شارژ کیف پول با واریز مستقیم ارز")
+    text = (f"💎 <b>{_title}</b>\n\n"
             "با کدام ارز می‌خواهی پرداخت کنی؟\n\n"
             "مبلغ را به تومان می‌دهی، به ارز انتخابی تبدیل می‌شود و یک فاکتور "
             "با آدرس و مبلغِ دقیق برایت ساخته می‌شود. همین‌که واریز را روی "

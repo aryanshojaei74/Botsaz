@@ -418,7 +418,8 @@ async def ap_setname_save(msg: Message, bot: Bot, state: FSMContext):
     if not row:
         return
     name = (msg.text or "").strip()
-    if name in ("پیش‌فرض", "پیشفرض", "default", "-"):
+    from tenant import is_default_word
+    if is_default_word(name):
         await AP._set(row.id, "apay_display_name", "")
         await msg.answer(f"✅ اسمِ نمایشی به پیش‌فرض (<b>{DEFAULT_DISPLAY_NAME}</b>) برگشت.",
                          parse_mode="HTML")

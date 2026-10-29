@@ -417,7 +417,8 @@ async def gwl_name_save(msg: Message, bot: Bot, state: FSMContext):
         return
     txt = (msg.text or "").strip()
     _d, sk = GATEWAY_LABELS.get(key, (key, f"{key}_display_name"))
-    if txt in ("پیش‌فرض", "پیشفرض", "default", "-"):
+    from tenant import is_default_word
+    if is_default_word(txt):
         await set_setting(row.id, sk, "")
         await msg.answer("✅ به اسمِ پیش‌فرض برگشت.")
     elif not txt:

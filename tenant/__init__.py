@@ -3885,6 +3885,13 @@ GATEWAY_LABELS: dict[str, tuple[str, str]] = {
 }
 
 
+def is_default_word(txt: str) -> bool:
+    """کلمهٔ «برگرد به پیش‌فرض» با هر املایی (فاصله/نیم‌فاصله/ی عربی/حروف بزرگ). قبلاً فقط چهار شکلِ دقیق قبول می‌شد و
+    «پیش فرض» یا «پیش‌ فرض» به‌عنوانِ خودِ اسمِ دکمه ذخیره می‌شد."""
+    t = (txt or "").strip().lower().replace("\u200c", "").replace(" ", "").replace("ي", "ی").replace("ك", "ک")
+    return t in ("پیشفرض", "پیش‌فرض", "default", "-", "ریست", "reset")
+
+
 async def gw_name(bot_id: int, key: str) -> str:
     """اسمی که کاربرِ نهایی برایِ این درگاه می‌بیند."""
     default, setting_key = GATEWAY_LABELS.get(key, (key, f"{key}_display_name"))
@@ -31350,7 +31357,7 @@ async def gwname_save(msg: Message, bot: Bot, state: FSMContext):
         return
     default, skey = meta
     name = (msg.text or "").strip()
-    if name in ("پیش‌فرض", "پیشفرض", "default", "-"):
+    if is_default_word(name):
         await set_setting(row.id, skey, "")
         await msg.answer(f"✅ به اسمِ پیش‌فرض (<b>{default}</b>) برگشت.")
     elif not name:

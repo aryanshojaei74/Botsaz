@@ -67,3 +67,29 @@ def test_crypto_hub_has_wallet_name_shortcut():
     finally:
         tenant.get_setting = orig
     assert "gwl:name:cdirect" in [b.callback_data for r in kb.inline_keyboard for b in r]
+
+
+def test_default_word_accepts_spelling_variants():
+    from tenant import is_default_word
+    for w in ("پیش‌فرض", "پیشفرض", "پیش فرض", "پیش‌ فرض", " پيش فرض ", "Default", "-"):
+        assert is_default_word(w), w
+    assert not is_default_word("درگاه ارز")
+
+
+def test_picker_title_uses_custom_cdirect_name(monkeypatch):
+    import asyncio
+    import tenant
+    from tenant.gateways import tron_direct as td
+    from tenant.gateways import ton_direct as tn
+
+    async def gs(bot_id, key, default=""):
+        return "ارز دیجیتال من" if key == "cdirect_display_name" else "1"
+
+    async def avail(*a, **k):
+        return True
+    monkeypatch.setattr(tenant, "get_setting", gs)
+    monkeypatch.setattr(td, "get_setting", gs, raising=False)
+    monkeypatch.setattr(tn, "is_available", avail)
+    monkeypatch.setattr(td, "is_available", avail)
+    res = asyncio.run(td._picker_text_kb(1))
+    assert res and "ارز دیجیتال من" in res[0]
