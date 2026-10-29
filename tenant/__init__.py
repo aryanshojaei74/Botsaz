@@ -9017,7 +9017,8 @@ async def pubapi_buy_do(cb: CallbackQuery, bot: Bot):
 
 async def do_free_trial(msg, bot: "Bot", bot_id: int, u: BotUser,
                         mode_override: str | None = None,
-                        btn_cfg: dict | None = None, mb_id: int | None = None):
+                        btn_cfg: dict | None = None, mb_id: int | None = None,
+                        forced_panel_key: str | None = None):
     """اجرای اکشن تست رایگان VPN.
 
     === PATCH_TRIAL_WIZARD ===
@@ -9094,7 +9095,30 @@ async def do_free_trial(msg, bot: "Bot", bot_id: int, u: BotUser,
         # === PATCH_TRIAL_MULTI_PANEL_RANDOM_V1 ===
         # درخواستِ ادمین: بشه چند پنل رو هم‌زمان تیک زد؛ هر بار که کسی
         # تست می‌گیره، یکی‌شون رندوم انتخاب بشه (به‌جایِ همیشه یه پنلِ ثابت).
-        panel_key = await _trial_pick_panel_key(bot_id, btn_cfg)    # PATCH_TRIAL_STALE_PANEL_KEYS_V1
+        # === PATCH_TRIAL_CUSTOMER_PICKS_PANEL_V1 === مشتری خودش پنلِ تست را انتخاب کند (تیکت #892)
+        if (trial_mode == "auto" and forced_panel_key is None
+                and str(btn_cfg.get("trial_pick_panel") or "") == "1"):
+            _opts = await _trial_pick_options(bot_id, btn_cfg)
+            if len(_opts) >= 2:
+                _rows = [[InlineKeyboardButton(text=o["button"], callback_data=f"trpick:{mb_id}:{o['key']}")] for o in _opts]
+                _rows.append([InlineKeyboardButton(text="⬅️ انصراف", callback_data="trpick:cancel")])
+                await msg.answer("🎁 <b>تست رایگان</b>\n\nاز کدام سرور تست بگیری؟",
+                                 reply_markup=InlineKeyboardMarkup(inline_keyboard=_rows), parse_mode="HTML")
+                return
+        panel_key = forced_panel_key or await _trial_pick_panel_key(bot_id, btn_cfg)    # PATCH_TRIAL_STALE_PANEL_KEYS_V1
+        # حجم/مدتِ اختصاصیِ همین پنل (اگر مالک تنظیم کرده)؛ وگرنه مقدارِ دکمه
+        _pov = _trial_panel_cfg(btn_cfg, panel_key)
+        if _pov.get("gb") is not None:
+            try:
+                gb = float(_pov["gb"])
+            except (ValueError, TypeError):
+                pass
+        if _pov.get("days") is not None:
+            try:
+                days = int(_pov["days"])
+                hours = 0
+            except (ValueError, TypeError):
+                pass
         try:
             t_users = int(btn_cfg.get("trial_users", 0) or 0)
         except (ValueError, TypeError):
@@ -17257,6 +17281,40 @@ async def _trial_pick_panel_key(bot_id: int, btn_cfg: dict) -> str | None:
     return _random.choice(ok) if ok else None
 
 
+def _trial_panel_cfg(btn_cfg: dict, pkey: str | None) -> dict:
+    """تنظیماتِ اختصاصیِ یک پنل داخلِ دکمهٔ تست: {"name": اسمِ نمایشی برایِ مشتری, "gb": حجم, "days": روز}."""
+    if not pkey:
+        return {}
+    raw = (btn_cfg or {}).get("trial_panel_cfg")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = {}
+    return dict((raw or {}).get(pkey) or {}) if isinstance(raw, dict) else {}
+
+
+async def _trial_pick_options(bot_id: int, btn_cfg: dict) -> list[dict]:
+    """پنل‌هایِ قابلِ انتخابِ مشتری: تیک‌خورده‌ها ∩ فعال‌ها، با اسمِ نمایشی و حجم/مدتِ هر کدام."""
+    from tenant.bots.vpn.vpn_admin import PANEL_LABELS
+    raw = (btn_cfg.get("trial_panel_keys") or "").strip()
+    keys = [k for k in raw.split(",") if k] if raw else ([btn_cfg["trial_panel_key"]] if btn_cfg.get("trial_panel_key") else [])
+    live = set(await _trial_enabled_panel_keys(bot_id))
+    out = []
+    for k in keys:
+        if k not in live:
+            continue
+        pc = _trial_panel_cfg(btn_cfg, k)
+        name = (pc.get("name") or "").strip() or PANEL_LABELS.get(k, k)
+        extra = []
+        if pc.get("gb") is not None:
+            extra.append(_trial_gb_label(str(pc["gb"])))
+        if pc.get("days") is not None:
+            extra.append(f"{pc['days']} روز")
+        out.append({"key": k, "name": name, "button": name + (f" — {' / '.join(extra)}" if extra else "")})
+    return out
+
+
 async def _trial_prune_panel_keys(mb_id: int, bot_id: int) -> bool:
     """کلیدهایِ پنلِ حذف/غیرفعال‌شده را از تنظیماتِ دکمه پاک می‌کند. True اگر چیزی عوض شد."""
     async with Session() as s:
@@ -17346,7 +17404,10 @@ def _trial_summary_text(cfg: dict) -> str:
                 lines.append(f"پنل: <b>{PANEL_LABELS.get(pk_list[0], pk_list[0])}</b>")
             else:
                 names = "، ".join(PANEL_LABELS.get(k, k) for k in pk_list)
-                lines.append(f"پنل: 🎲 <b>رندوم بینِ {len(pk_list)} پنل</b> ({names})")
+                if str(cfg.get("trial_pick_panel") or "") == "1":
+                    lines.append(f"پنل: 👤 <b>مشتری انتخاب می‌کند ({len(pk_list)} پنل)</b> ({names})")
+                else:
+                    lines.append(f"پنل: 🎲 <b>رندوم بینِ {len(pk_list)} پنل</b> ({names})")
         else:
             pkey = cfg.get("trial_panel_key")
             lines.append(f"پنل: <b>{PANEL_LABELS.get(pkey, '— تنظیم نشده —')}</b>")
@@ -17525,6 +17586,8 @@ class _TrialBtnFSM(StatesGroup):
     max_days = State()
     step_days = State()
     claim_limit = State()  # سقفِ دفعاتِ مجازِ هر کاربر برای این دکمه
+    panel_name = State()   # اسمِ نمایشیِ یک پنل برایِ مشتری (انتخابِ سرور)
+    panel_vals = State()   # حجم و مدتِ اختصاصیِ یک پنل
 
 
 @tenant_router.callback_query(F.data.startswith("thb:trclaimask:"))
@@ -17561,6 +17624,160 @@ async def thb_trial_claim_save(msg: Message, bot: Bot, state: FSMContext):
         [InlineKeyboardButton(text="⬅️ بازگشت به تنظیمات تست",
                               callback_data=f"thb:trialmode:{mb_id}", style=ButtonStyle.DANGER)]])
     await msg.answer("✅ ذخیره شد.\n\n" + _trial_summary_text(cfg), reply_markup=kb)
+
+
+# === PATCH_TRIAL_CUSTOMER_PICKS_PANEL_V1 === (تیکت #892)
+async def _trial_panel_cfg_save(mb_id: int, pkey: str, **fields) -> dict:
+    """یک یا چند فیلدِ تنظیمِ اختصاصیِ پنل را ذخیره می‌کند؛ مقدارِ None همان فیلد را پاک می‌کند."""
+    async with Session() as s:
+        mb = await s.get(MainButton, mb_id)
+    cfg = _trial_cfg_of(mb) if mb else {}
+    allp = dict(cfg.get("trial_panel_cfg") or {}) if isinstance(cfg.get("trial_panel_cfg"), dict) else {}
+    one = dict(allp.get(pkey) or {})
+    for k, v in fields.items():
+        if v is None:
+            one.pop(k, None)
+        else:
+            one[k] = v
+    if one:
+        allp[pkey] = one
+    else:
+        allp.pop(pkey, None)
+    return await _trial_cfg_update(mb_id, trial_panel_cfg=(allp or None)) or {}
+
+
+@tenant_router.callback_query(F.data.startswith("thb:trpickt:"))
+async def thb_trial_pick_toggle(cb: CallbackQuery, bot: Bot):
+    mb_id = int(cb.data.split(":")[2])
+    mb = await _trial_fix_mb(cb, bot, mb_id)
+    if not mb:
+        return
+    cur = str(_trial_cfg_of(mb).get("trial_pick_panel") or "") == "1"
+    await _trial_cfg_update(mb_id, trial_pick_panel=(None if cur else "1"))
+    await cb.answer("👤 مشتری " + ("دیگر انتخاب نمی‌کند (رندوم)" if cur else "خودش سرور را انتخاب می‌کند"))
+    await thb_trial_auto_panels(cb, bot, _override_mb_id=mb_id)
+
+
+@tenant_router.callback_query(F.data.startswith("thb:trpcfg:"))
+async def thb_trial_panel_cfg_menu(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    mb_id = int(cb.data.split(":")[2])
+    mb = await _trial_fix_mb(cb, bot, mb_id)
+    if not mb:
+        return
+    await state.clear()
+    cfg = await _trial_fill_global(mb.bot_id, _trial_cfg_of(mb))
+    opts = await _trial_pick_options(mb.bot_id, cfg)
+    if not opts:
+        await cb.answer("اول چند پنل را تیک بزن.", show_alert=True)
+        return
+    rows = [[InlineKeyboardButton(text=("✏️ " + o["button"])[:60], callback_data=f"thb:trpcp:{mb_id}:{o['key']}",
+                                  style=ButtonStyle.PRIMARY)] for o in opts]
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"thb:tr:auto:{mb_id}", style=ButtonStyle.DANGER)])
+    await cb.message.edit_text(
+        "⚙️ <b>نام، حجم و مدتِ هر پنل</b>\n\n"
+        "روی هر پنل بزن و اسمی که مشتری می‌بیند (مثلاً «🇩🇪 آلمان») و حجم/مدتِ تستِ همان پنل را بگذار. "
+        "اگر چیزی نگذاری، همان حجم و مدتِ خودِ دکمه استفاده می‌شود. (این حجم/مدت در حالتِ رندوم هم اعمال می‌شود.)",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await cb.answer()
+
+
+@tenant_router.callback_query(F.data.startswith("thb:trpcp:"))
+async def thb_trial_panel_cfg_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    _, _, _, mb_s, pkey = cb.data.split(":", 4)
+    mb_id = int(mb_s)
+    mb = await _trial_fix_mb(cb, bot, mb_id)
+    if not mb:
+        return
+    await state.set_state(_TrialBtnFSM.panel_name)
+    await state.update_data(trial_mb_id=mb_id, trial_pkey=pkey)
+    await cb.message.answer(
+        "✏️ اسمِ این سرور برایِ مشتری را بفرست (مثلاً <code>🇩🇪 آلمان</code>).\n"
+        "برایِ استفاده از اسمِ پیش‌فرضِ پنل <code>-</code> بفرست.",
+        reply_markup=_trial_cancel_kb(mb_id), parse_mode="HTML")
+    await cb.answer()
+
+
+@tenant_router.message(_TrialBtnFSM.panel_name, F.text)
+async def thb_trial_panel_name_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner_ok_msg(msg, bot)
+    if not row:
+        await state.clear(); return
+    data = await state.get_data()
+    mb_id, pkey = data.get("trial_mb_id"), data.get("trial_pkey")
+    t = (msg.text or "").strip()
+    await _trial_panel_cfg_save(mb_id, pkey, name=(None if t in ("-", "—") else t[:30]))
+    await state.set_state(_TrialBtnFSM.panel_vals)
+    await msg.answer(
+        "📦 حجم (گیگ) و 📅 مدت (روز) تستِ این پنل را با فاصله بفرست؛ مثلاً <code>2 3</code> یعنی ۲ گیگ و ۳ روز "
+        "(برایِ مگابایت اعشار، مثل <code>0.5 1</code>).\n"
+        "برایِ استفاده از حجم/مدتِ خودِ دکمه <code>-</code> بفرست.",
+        reply_markup=_trial_cancel_kb(mb_id), parse_mode="HTML")
+
+
+@tenant_router.message(_TrialBtnFSM.panel_vals, F.text)
+async def thb_trial_panel_vals_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner_ok_msg(msg, bot)
+    if not row:
+        await state.clear(); return
+    data = await state.get_data()
+    mb_id, pkey = data.get("trial_mb_id"), data.get("trial_pkey")
+    t = (msg.text or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٫٬،", "0123456789..."))
+    if t in ("-", "—"):
+        await _trial_panel_cfg_save(mb_id, pkey, gb=None, days=None)
+    else:
+        parts = t.split()
+        try:
+            gb, days = float(parts[0]), int(float(parts[1]))
+            if len(parts) != 2 or gb <= 0 or days < 0 or gb > 100000 or days > 3650:
+                raise ValueError
+        except (ValueError, IndexError):
+            await msg.answer("❌ دو عدد بفرست: حجم و روز (مثلاً <code>2 3</code>) یا <code>-</code>.",
+                             reply_markup=_trial_cancel_kb(mb_id), parse_mode="HTML")
+            return
+        await _trial_panel_cfg_save(mb_id, pkey, gb=(int(gb) if gb == int(gb) else gb), days=days)
+    await state.clear()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text="⬅️ بازگشت به پنل‌ها", callback_data=f"thb:trpcfg:{mb_id}", style=ButtonStyle.DANGER)]])
+    await msg.answer("✅ ذخیره شد.", reply_markup=kb)
+
+
+@tenant_router.callback_query(F.data.startswith("trpick:"))
+async def trial_customer_pick(cb: CallbackQuery, bot: Bot):
+    """مشتری از میانِ پنل‌هایِ دکمهٔ تست یکی را انتخاب کرد."""
+    parts = cb.data.split(":")
+    if parts[1] == "cancel":
+        try:
+            await cb.message.delete()
+        except Exception:
+            logger.debug("trpick: پاک‌کردنِ پیامِ انتخاب ممکن نشد")
+        await cb.answer()
+        return
+    row = await get_bot_row(bot)
+    try:
+        mb_id, pkey = int(parts[1]), parts[2]
+    except (ValueError, IndexError):
+        await cb.answer()
+        return
+    async with Session() as s:
+        mb = await s.get(MainButton, mb_id)
+    if not row or not mb or mb.bot_id != row.id or mb.action != "free_trial":
+        await cb.answer("یافت نشد", show_alert=True)
+        return
+    cfg = _trial_cfg_of(mb)
+    if str(cfg.get("trial_pick_panel") or "") != "1" or cfg.get("trial_mode") != "auto":
+        await cb.answer()
+        return
+    if pkey not in {o["key"] for o in await _trial_pick_options(row.id, cfg)}:
+        await cb.answer("این سرور فعلاً در دسترس نیست.", show_alert=True)
+        return
+    u = await get_or_create_user(row.id, cb.from_user.id, cb.from_user.full_name or "", cb.from_user.username or "")
+    try:
+        await cb.message.delete()
+    except Exception:
+        logger.debug("trpick: پاک‌کردنِ پیامِ انتخاب ممکن نشد")
+    await cb.answer()
+    fake = cb.message.model_copy(update={"from_user": cb.from_user}).as_(bot)
+    await do_free_trial(fake, bot, row.id, u, btn_cfg=cfg, mb_id=mb_id, forced_panel_key=pkey)
 
 
 @tenant_router.callback_query(F.data.startswith("thb:trreset:"))
@@ -17650,6 +17867,12 @@ async def thb_trial_auto_panels(cb: CallbackQuery, bot: Bot, _override_mb_id: in
     rows.append([InlineKeyboardButton(text="🎲 انتخابِ تصادفی بینِ همه",
                                       callback_data=f"thb:trpanel:allrand:{mb_id}", style=ButtonStyle.SUCCESS)])
     if selected:
+        _pick_on = str(cfg.get("trial_pick_panel") or "") == "1"
+        rows.append([InlineKeyboardButton(
+            text=("👤 مشتری خودش سرور را انتخاب کند: ✅ روشن" if _pick_on else "👤 مشتری خودش سرور را انتخاب کند: ⬜️ خاموش"),
+            callback_data=f"thb:trpickt:{mb_id}", style=ButtonStyle.PRIMARY)])
+        rows.append([InlineKeyboardButton(text="⚙️ نام، حجم و مدتِ هر پنل", callback_data=f"thb:trpcfg:{mb_id}",
+                                          style=ButtonStyle.PRIMARY)])
         rows.append([InlineKeyboardButton(text="✅ تأیید و ذخیره",
                                           callback_data=f"thb:trpanel:done:{mb_id}", style=ButtonStyle.SUCCESS)])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"thb:trialmode:{mb_id}", style=ButtonStyle.DANGER)])
