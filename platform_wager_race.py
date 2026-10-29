@@ -116,8 +116,30 @@ def new_question(kind: str, scope: tuple = (0, 0)) -> dict:
 
 
 async def enabled() -> bool:
-    from platform_bot import get_pset
-    return (await get_pset(KEY_ON, "0")) == "1"
+    return (await core._pset(KEY_ON, "0")) == "1"
+
+
+def _game_key(game: str) -> str:
+    return f"platform_wager_{game}"
+
+
+async def game_on(game: str) -> bool:
+    """روشن‌بودنِ یک مسابقه. اگر مدیر هنوز کلیدِ اختصاصیِ آن را نزده باشد، همان کلیدِ کلیِ قبلی (pgr_on) تعیین می‌کند
+    (رفتارِ قبلی حفظ می‌شود)."""
+    master = await enabled()
+    v = (await core._pset(_game_key(game), "")).strip().lower()
+    if not v:
+        return master
+    return v in ("on", "1", "true") and master
+
+
+async def toggle_game(game: str) -> bool:
+    """روشن/خاموشِ یک مسابقه از «تنظیمات شرط‌بندی گروه»؛ روشن‌کردن کلیدِ کلیِ مسابقه‌ها را هم روشن می‌کند."""
+    new = not await game_on(game)
+    await core._set(_game_key(game), "on" if new else "off")
+    if new:
+        await core._set(KEY_ON, "1")
+    return new
 
 
 # ───────────────────────── نمایش ─────────────────────────
@@ -362,6 +384,9 @@ async def race_create(msg: Message):
         return
     cid = msg.chat.id
     game, amount = parse_race_command(msg.text)
+    if not await game_on(game):
+        await msg.reply(f"❌ مسابقهٔ {RACE_FA[game]} فعلاً فعال نیست.")
+        return
     target = _reply_target(msg)
     if target and (target.is_bot or target.id == msg.from_user.id):
         await msg.reply("❌ سازنده نباید خودش یا یک ربات را هدف بگیرد.")
@@ -533,6 +558,21 @@ async def race_answer(msg: Message):
     await msg.reply(f"🏁 <b>{_html.escape(msg.from_user.full_name or str(uid))}</b> برنده شد!\n"
                     f"🎁 {_rial(w.payout_amount)} به کیف پولش اضافه شد.", parse_mode="HTML",
                     reply_markup=await core.result_kb(w))            # دکمه‌هایِ شیشه‌ایِ جایزه/موجودیِ برنده و بازنده
+
+
+@platform_wager_race_router.callback_query(F.data.startswith("pgrset:"))
+async def race_game_toggle(cb: CallbackQuery):
+    from config import PLATFORM_ADMIN_ID
+    if cb.from_user.id != PLATFORM_ADMIN_ID:
+        await cb.answer("فقط مدیر اصلی", show_alert=True)
+        return
+    game = (cb.data or "").split(":", 1)[1]
+    if game not in RACE_GAMES:
+        await cb.answer()
+        return
+    await toggle_game(game)
+    from platform_group_money import _edit_settings
+    await _edit_settings(cb, "bet")
 
 
 async def help_section() -> str:

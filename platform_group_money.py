@@ -482,10 +482,15 @@ async def _settings_screen(kind: str, uid: int | None = None):
         flags = {g: await game_enabled(g) for g in GAMES}
         text += "\n\n🎮 بازی‌ها (در کنار شیر یا خط):\n" + "\n".join(
             f"{'✅' if flags[g] else '❌'} {GAME_FA[g]}" for g in GAMES)
+        # مسابقه‌هایِ پولیِ حدس عدد / سرعت / ریاضی (platform_wager_race) هم‌ردیفِ همین بازی‌ها
+        from platform_wager_race import RACE_FA, RACE_GAMES, game_on as _race_on
+        rflags = {g: await _race_on(g) for g in RACE_GAMES}
+        text += "\n" + "\n".join(f"{'✅' if rflags[g] else '❌'} {RACE_FA[g]}" for g in RACE_GAMES)
         back_label, back_kw = _bet_back_button(uid)
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [hx_button("🔴 خاموش‌کردن" if enabled else "🟢 روشن‌کردن", callback_data="pgbset:toggle", style=ButtonStyle.DANGER if enabled else ButtonStyle.SUCCESS)],
             [hx_button(f"{'🔴 خاموش' if flags[g] else '🟢 روشن'}: {GAME_FA[g]}", callback_data=f"pgwset:{g}") for g in GAMES],
+            [hx_button(f"{'🔴 خاموش' if rflags[g] else '🟢 روشن'}: {RACE_FA[g]}", callback_data=f"pgrset:{g}") for g in RACE_GAMES],
             [hx_button("💸 کارمزد شرط‌بندی", callback_data="pgbset:fee")],
             [hx_button("🔢 حداقل شرط", callback_data="pgbset:min"), hx_button("🔢 حداکثر شرط", callback_data="pgbset:max")],
             [hx_button("⏱ زمان انتظار", callback_data="pgbset:ttl")],
