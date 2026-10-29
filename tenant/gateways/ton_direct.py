@@ -1451,6 +1451,7 @@ async def tond_amount(msg: Message, bot: Bot, state: FSMContext):
         [InlineKeyboardButton(text="🔄 بررسی وضعیت پرداخت",
                               callback_data=f"tond:check:{memo}",
                               style=ButtonStyle.PRIMARY)],
+        invoice_exit_row(),
     ])
     sent = await msg.answer(
         "💎 <b>فاکتور پرداخت TON</b>\n\n"
@@ -1482,6 +1483,22 @@ async def tond_amount(msg: Message, bot: Bot, state: FSMContext):
             .where(TonDirectCharge.memo == memo)
             .values(invoice_chat_id=sent.chat.id, invoice_message_id=sent.message_id))
         await s.commit()
+
+
+def invoice_exit_row() -> list:
+    """راهِ خروج از فاکتورِ پرداختِ مستقیمِ ارز (TON/TRX/USDT): «بستن» فقط پیام را پاک می‌کند و فاکتور در دیتابیس می‌ماند؛
+    اگر کاربر بعداً واریز کرد (حتی بعد از مهلت)، شارژ مثلِ قبل خودکار انجام می‌شود."""
+    return [InlineKeyboardButton(text="✖️ بستن فاکتور", callback_data="tond:close", style=ButtonStyle.DANGER),
+            InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="mbtn:home", style=ButtonStyle.DANGER)]
+
+
+@ton_direct_router.callback_query(F.data == "tond:close")
+async def tond_close(cb: CallbackQuery):
+    try:
+        await cb.message.delete()
+    except Exception:
+        logger.exception("خطای نادیده‌گرفته‌شده (بستنِ فاکتورِ ارزِ مستقیم)")
+    await cb.answer("فاکتور بسته شد. اگر واریز کرده‌ای، شارژ خودکار انجام می‌شود.", show_alert=True)
 
 
 @ton_direct_router.callback_query(F.data.startswith("tond:check:"))

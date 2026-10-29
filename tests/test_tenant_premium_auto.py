@@ -48,3 +48,8 @@ def test_auto_off_keeps_manual_only(monkeypatch):
 def test_pack_name_parsing():
     assert pe._pack_name("https://t.me/addemoji/Foo_bar?x=1") == "Foo_bar"
     assert pe._pack_name("  Foo ") == "Foo"
+
+
+def test_direct_crypto_invoice_has_exit_buttons():
+    from tenant.gateways.ton_direct import invoice_exit_row
+    assert [b.callback_data for b in invoice_exit_row()] == ["tond:close", "mbtn:home"]

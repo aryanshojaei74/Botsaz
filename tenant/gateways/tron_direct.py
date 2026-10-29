@@ -1616,6 +1616,8 @@ async def trxd_amount(msg: Message, bot: Bot, state: FSMContext):
     kb_rows.append([InlineKeyboardButton(
         text="🔄 بررسی وضعیت پرداخت", callback_data=f"trxd:check:{memo}",
         style=ButtonStyle.PRIMARY)])
+    from tenant.gateways.ton_direct import invoice_exit_row
+    kb_rows.append(invoice_exit_row())
 
     net = "TRON (TRC20)" if asset == "USDT" else "TRON (TRX)"
     note = (
