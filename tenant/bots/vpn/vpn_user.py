@@ -4735,9 +4735,9 @@ async def _vc_simple_start(bot_id: int, telegram_id: int, panel_key: str, state)
     await state.set_state(VpnConfiguratorFSM.entering_manual)
     txt = (f"📌 حجمِ درخواستیِ خود را (به گیگابایت) بفرستید.\n"
            f"🔔 قیمت هر گیگ حجم {int(cfg['vc_price_gb']):,} تومان می‌باشد.\n"
-           f"🔔 حداقل حجم {mn} گیگابایت و حداکثر {mx} گیگابایت می‌باشد"
-           + (f" (مضرب {st})" if st > 1 else "") + ".\n"
-           f"⏳ مدتِ سرویس: {days} روز")
+           f"🔔 حداقل حجم {mn} گیگابایت و حداکثر {mx} گیگابایت می‌باشد.\n"
+           + (f"🔔 حجم را از {mn} گیگ به بالا و به‌صورتِ {mn}، {mn + st}، {mn + 2 * st} و … بفرستید.\n" if st > 1 else "")
+           + f"⏳ مدتِ سرویس: {days} روز")
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 بازگشت", callback_data="vc:back")]])
     return txt, kb
 
