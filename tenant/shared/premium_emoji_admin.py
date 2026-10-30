@@ -86,14 +86,32 @@ class PremiumEmojiFSM(StatesGroup):
 
 # ─────────────── کمک‌توابعِ عمومی (مالک/تنظیمات) ───────────────
 
+async def _note_owner_premium(row, user) -> None:
+    """اگر اکانتِ مالک پریمیوم نیست (و ربات هم یوزرنیمِ اضافهٔ فرگمنت ندارد)، تلگرام آیکونِ پرمیومِ دکمه را نشان نمی‌دهد
+    و ایموجیِ متنِ دکمه هم برای آیکون برداشته شده بود ⇒ دکمه بی‌ایموجی می‌شد. پس تا وقتی مالک خودش «آیکونِ پرمیوم»
+    را روشن نکرده، حالتِ «ساده (همان‌جایِ متن)» پیش‌فرض می‌شود."""
+    try:
+        if row is None or user is None or getattr(user, "is_premium", None) is not False:
+            return
+        from tenant import get_setting, set_setting
+        if (await get_setting(row.id, BTN_KEY, "")) == "":
+            await set_setting(row.id, BTN_KEY, "0")
+    except Exception:
+        logger.info("premium emoji: ثبتِ وضعیتِ پریمیومِ مالک ممکن نشد (بی‌اهمیت)")
+
+
 async def _owner(cb: CallbackQuery, bot: Bot):
     from tenant import _owner_ok
-    return await _owner_ok(cb, bot)
+    row = await _owner_ok(cb, bot)
+    await _note_owner_premium(row, getattr(cb, "from_user", None))
+    return row
 
 
 async def _owner_msg(msg: Message, bot: Bot):
     from tenant import _owner_ok_msg
-    return await _owner_ok_msg(msg, bot)
+    row = await _owner_ok_msg(msg, bot)
+    await _note_owner_premium(row, getattr(msg, "from_user", None))
+    return row
 
 
 def cancel_kb() -> InlineKeyboardMarkup:
