@@ -182,6 +182,8 @@ router.include_router(platform_dice_router)
 # === PATCH_FUNSTAT_V1 ===
 from platform_funstat import funstat_router
 router.include_router(funstat_router)
+from platform_panel_seller import panel_seller_gate_router   # === PATCH_PANEL_SELLER_V1 ===
+router.include_router(panel_seller_gate_router)
 # === PATCH_STATS_SHARE_V1 ===
 from platform_stats_share import stats_share_router
 router.include_router(stats_share_router)
@@ -281,6 +283,7 @@ FIELDS = {
     "funstat": "🔎 Fun Stat (جست‌وجویِ آیدی/یوزرنیم)",  # === PATCH_FUNSTAT_BOT_V1 ===
     "escrow_bot": "🤝 ربات واسطه‌گری (معامله با واسطه)",  # === PATCH_ESCROW_BOT_KIND_V1 ===
     "giveaway": "🎰 ربات قرعه‌کشی (جذب ممبر و جایزه)",  # === PATCH_GIVEAWAY_BOT_V1 ===
+    "panel_seller": "🧩 ربات پنل‌فروشی — 🧪 در حال تست",  # === PATCH_PANEL_SELLER_V1 ===
 }
 
 # زمینه‌های فعال (قابل انتخاب توسط کاربر). بقیه «به‌زودی».
@@ -313,7 +316,7 @@ FIELDS["partner"] = "🤝 ربات همکار"
 # زمینه ساخته شده‌اند دست‌نخورده کار می‌کنند (FIELDS ملاکِ نمایشِ نامه، نه
 # ACTIVE_FIELDS) و مالکشان می‌تواند از «🔄 تغییر نوع ربات» به یکی از سه
 # زمینهٔ فعال سوییچ کند.
-ACTIVE_FIELDS = {"vpn_sales", "virtual_service", "ad_bot", "funstat", "escrow_bot", "giveaway"}  # PATCH_FUNSTAT_BOT_V1 / PATCH_ESCROW_BOT_KIND_V1
+ACTIVE_FIELDS = {"vpn_sales", "virtual_service", "ad_bot", "funstat", "escrow_bot", "giveaway", "panel_seller"}  # PATCH_FUNSTAT_BOT_V1 / PATCH_ESCROW_BOT_KIND_V1
 
 # قیمت پلن‌ها به تومان (بعداً از تنظیمات قابل ویرایش می‌شود)
 PLAN_PRICE = {Plan.GROWTH.value: 5_000_000, Plan.PRO.value: 15_000_000}
@@ -670,7 +673,21 @@ GIVEAWAY_TEMPLATE_PITCH = (
     "💡 همهٔ صفحه‌ها با ادیتِ درجا و دکمهٔ بازگشت."
 )
 
+# === PATCH_PANEL_SELLER_V1 ===
+PANEL_SELLER_TEMPLATE_PITCH = (
+    "🧩 <b>ربات پنل‌فروشی</b> — <i>🧪 در حال تست</i>\n\n"
+    "پنلِ خودت را وصل کن و به مشتری‌ها «ادمینِ پنل» بفروش:\n"
+    "• 📦 بسته‌هایِ دلخواه: حجم، تعدادِ کاربر و مدت (روز) + قیمت\n"
+    "• 💳 پرداخت با کیف‌پول؛ شارژ با کارت‌به‌کارت و همهٔ درگاه‌هایِ ربات\n"
+    "• 👤 ساختِ خودکارِ ادمین (بدونِ sudo) روی پنلِ خودت و تحویلِ آدرس/نام‌کاربری/رمز\n"
+    "• 🔁 تمدید، 🔑 رمزِ تازه و ⏯ خاموش/روشنِ اشتراک‌ها — هر کدام فقط اگر تو اجازه بدهی\n"
+    "• 🔄 ریستارتِ پنل، تعلیقِ خودکار با پایانِ مهلت یا حجم، و هشدار به مشتری\n\n"
+    "💡 فقط <b>پلنِ حرفه‌ای</b> و فقط برایِ کسانی که مدیر اجازهٔ تست داده باشد. "
+    "پنل‌هایِ پشتیبانی‌شده: خانوادهٔ مرزبان (مرزبان، ربکا، پاسارگادِ قدیمی، ریک‌پنل)."
+)
+
 FIELD_PITCH = {
+    "panel_seller": PANEL_SELLER_TEMPLATE_PITCH,  # PATCH_PANEL_SELLER_V1
     "giveaway": GIVEAWAY_TEMPLATE_PITCH,  # PATCH_GIVEAWAY_BOT_V1
     "escrow_bot": ESCROW_BOT_TEMPLATE_PITCH,  # PATCH_ESCROW_BOT_KIND_V1
     "funstat": FUNSTAT_TEMPLATE_PITCH,  # PATCH_FUNSTAT_BOT_V1
@@ -3918,6 +3935,19 @@ def _action_kb_base(field: str = "vpn_sales") -> InlineKeyboardMarkup:
         b.button(text="🧩 بعداً تنظیم می‌کنم", callback_data="act:skip")
         b.adjust(1)
         return b.as_markup()
+    # === PATCH_PANEL_SELLER_V1 ===
+    if field == "panel_seller":
+        b.button(text="🧩 خریدِ پنل", callback_data="act:psel_buy", style=ButtonStyle.SUCCESS)
+        b.button(text="🗂 پنل‌هایِ من", callback_data="act:psel_my", style=ButtonStyle.PRIMARY)
+        b.button(text="💰 کیف پول", callback_data="act:wallet")
+        b.button(text="👤 مشخصات کاربری", callback_data="act:profile")
+        b.button(text="🎫 ثبت تیکت", callback_data="act:ticket")
+        b.button(text="👥 زیرمجموعه‌گیری", callback_data="act:referral")
+        b.button(text="🗂 زیرمنو (دکمه‌های بیشتر)", callback_data="act:submenu")
+        b.button(text="📝 نمایش متن/پیام آزاد", callback_data="act:skip")
+        b.button(text="🧩 بعداً تنظیم می‌کنم", callback_data="act:skip")
+        b.adjust(1)
+        return b.as_markup()
     # === PATCH_GIVEAWAY_BOT_V1 ===
     if field == "giveaway":
         b.button(text="🎰 قرعه‌کشی‌هایِ فعال (شرکت در قرعه‌کشی)", callback_data="act:giveaway", style=ButtonStyle.SUCCESS)
@@ -4020,6 +4050,7 @@ ACTION_TITLE = {
     "show_shop": "نمایش فروشگاه", "slideshow": "اسلایدشو چندرسانه‌ای",
     "top_customers": "نفرات برتر",
     "funstat_search": "🔎 جست‌وجویِ Fun Stat",  # PATCH_FUNSTAT_BOT_V1
+    "psel_buy": "🧩 خریدِ پنل", "psel_my": "🗂 پنل‌هایِ من",  # PATCH_PANEL_SELLER_V1
     "giveaway": "🎰 قرعه‌کشی‌هایِ فعال",  # PATCH_GIVEAWAY_BOT_V1
     "giveaway_results": "🏆 نتایجِ قرعه‌کشی‌ها",  # PATCH_GIVEAWAY_BOT_V1
     "escrow": "🤝 معامله با واسطه (واسطه‌گری)",  # PATCH_ESCROW_BOT_KIND_V1
@@ -5350,6 +5381,11 @@ async def show_pitch(cb: CallbackQuery, state: FSMContext):
         from platform_funstat import create_gate
         if not await create_gate(cb):
             return
+    # === PATCH_PANEL_SELLER_V1 === مرحلهٔ تست: فقط با دسترسیِ دستیِ مدیر (و فقط پلنِ حرفه‌ای)
+    if cb.data.split(":", 1)[1] == "panel_seller":
+        from platform_panel_seller import create_gate as _ps_gate
+        if not await _ps_gate(cb):
+            return
     await state.update_data(field=cb.data.split(":", 1)[1])
     data = await state.get_data()
     is_first = data.get("is_first", True)
@@ -5357,7 +5393,10 @@ async def show_pitch(cb: CallbackQuery, state: FSMContext):
     paid = plans_paid_enabled()
     cdown = plans_countdown_text()
     at_free_cap = bool(data.get("at_free_cap"))
+    _only_pro = (data.get("field") == "panel_seller")      # PATCH_PANEL_SELLER_V1
     for plan in Plan:
+        if _only_pro and plan != Plan.PRO:
+            continue
         # === PATCH_PARTNER_PLAN_LIST_EXCLUDE_V1 ===
         # «همکار» پلنی نیست که این‌جا با پول خریده شود — فقط با
         # تاییدِ درخواستِ همکاری (نگاه کن به platform_partner.py) و
@@ -5468,6 +5507,11 @@ async def show_pitch(cb: CallbackQuery, state: FSMContext):
             "\n\n💡 <b>پلن پایه (رایگان):</b> ربات ساخته می‌شود؛ کیف پول، تیکت و پنل مدیریت فعال است.\n"
             "🔒 <b>واسطه‌گریِ خودکار</b> (ساختِ گروهِ معامله با اکانتِ واسط) در پلن رشد/حرفه‌ای باز می‌شود."
         )
+    elif field == "panel_seller":
+        # === PATCH_PANEL_SELLER_V1 ===
+        free_note = (
+            "\n\n💡 این نوعِ ربات فقط در <b>پلنِ حرفه‌ای</b> ساخته می‌شود و فعلاً در مرحلهٔ تست است."
+        )
     elif field == "giveaway":
         # === PATCH_GIVEAWAY_BOT_V1 ===
         free_note = (
@@ -5530,6 +5574,16 @@ async def choose_new_months(cb: CallbackQuery, state: FSMContext):
 @router.callback_query(Create.plan, F.data.startswith("newplan:"))
 async def choose_plan(cb: CallbackQuery, state: FSMContext):
     plan = cb.data.split(":", 1)[1]
+    # === PATCH_PANEL_SELLER_V1 === ربات پنل‌فروشی فقط حرفه‌ای (حتی با callbackِ دست‌ساز) و فقط با دسترسیِ تست
+    _fd = (await state.get_data()).get("field")
+    if _fd == "panel_seller":
+        from tenant.bots.panel_seller import gate as _ps_g
+        if plan != Plan.PRO.value:
+            await cb.answer("ربات پنل‌فروشی فقط در پلنِ حرفه‌ای ساخته می‌شود.", show_alert=True)
+            return
+        if not await _ps_g.allowed(cb.from_user.id):
+            await cb.answer("این نوعِ ربات در مرحلهٔ تست است و برایِ حسابِ تو فعال نشده.", show_alert=True)
+            return
     # === PATCH_PLAN_SALE_LOCK_V1 ===
     if await plan_sale_closed(plan):
         await cb.answer(PLAN_SALE_LOCK_MSG, show_alert=True)
@@ -7690,8 +7744,8 @@ async def edt_field_start(cb: CallbackQuery, state: FSMContext):
     for key, title in FIELDS.items():
         if key == cur_field:
             continue
-        if key == "funstat":
-            continue  # PATCH_FUNSTAT_BOT_V1: فقط از مسیرِ «ساخت ربات» (با دروازهٔ تست)
+        if key in ("funstat", "panel_seller"):
+            continue  # PATCH_FUNSTAT_BOT_V1 / PATCH_PANEL_SELLER_V1: فقط از مسیرِ «ساخت ربات» (با دروازهٔ تست)
         if key in ACTIVE_FIELDS:
             cb_data = f"edt_field_free:{bot_id}:{key}" if exempt else f"edt_field_pay:{bot_id}:{key}"
             b.button(text=title, callback_data=cb_data)
@@ -7731,7 +7785,7 @@ async def edt_field_free_apply(cb: CallbackQuery, state: FSMContext):
         if r.field in ACTIVE_FIELDS:
             await cb.answer("زمینهٔ فعلیِ این ربات هنوز فعاله؛ این تغییر رایگان نیست.", show_alert=True)
             return
-        if field_key not in ACTIVE_FIELDS or field_key not in FIELDS:
+        if field_key not in ACTIVE_FIELDS or field_key not in FIELDS or field_key == "panel_seller":   # PATCH_PANEL_SELLER_V1: فقط از «ساخت ربات»
             await cb.answer("این زمینه در دسترس نیست.", show_alert=True)
             return
         old_title = FIELDS.get(r.field, r.field)
@@ -7765,7 +7819,7 @@ async def edt_field_pay_start(cb: CallbackQuery, state: FSMContext):
                 "خریداری‌شده (نه رویِ دورهٔ تست) در دسترسه.",
                 show_alert=True)
             return
-        if field_key not in ACTIVE_FIELDS or field_key not in FIELDS:
+        if field_key not in ACTIVE_FIELDS or field_key not in FIELDS or field_key == "panel_seller":   # PATCH_PANEL_SELLER_V1: فقط از «ساخت ربات»
             await cb.answer("این زمینه در دسترس نیست.", show_alert=True)
             return
         u = await get_user(s, cb.from_user.id, cb.from_user.full_name,

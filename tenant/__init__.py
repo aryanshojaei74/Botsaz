@@ -272,6 +272,8 @@ _include(community_router, "community_mgmt")  # === PATCH_COMMUNITY_MGMT_V1 ===
 _include(funstat_bot_router, "funstat")  # === PATCH_FUNSTAT_BOT_V1 ===
 from tenant.bots.giveaway import giveaway_router  # === PATCH_GIVEAWAY_BOT_V1 ===
 _include(giveaway_router, "giveaway")
+from tenant.bots.panel_seller import panel_seller_router  # === PATCH_PANEL_SELLER_V1 ===
+_include(panel_seller_router, "panel_seller")
 tenant_router.include_router(slideshow_router)
 tenant_router.include_router(miniapp_admin_router)  # === PATCH_MINIAPP_V1 ===
 from tenant.shared.miniapp_wheel import wheel_admin_router  # PATCH_MINIAPP_WHEEL_V1
@@ -6678,6 +6680,12 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
     elif action == "track_order":
         # === PATCH_ORDER_TRACKING_V1 ===
         await track_order_ask(msg, state, bot_id)
+    elif action in ("psel_buy", "psel_my"):
+        # === PATCH_PANEL_SELLER_V1 ===
+        from tenant.bots.panel_seller.user import show_buy as _ps_buy, show_my as _ps_my
+        _row_ps = await get_bot_row(bot)
+        if _row_ps:
+            await (_ps_buy if action == "psel_buy" else _ps_my)(msg, bot, _row_ps, msg.from_user.id)
     elif action in ("giveaway", "giveaway_results"):
         # === PATCH_GIVEAWAY_BOT_V1 ===
         from tenant.bots.giveaway.user import show_list as _gw_list, show_results_list as _gw_res
@@ -15007,6 +15015,11 @@ def _thb_back_row(mb) -> list:
 _SIMPLE_ACTIONS: dict[str, tuple[str, str, frozenset | None]] = {
     # === PATCH_FUNSTAT_BOT_V1 ===
     # === PATCH_GIVEAWAY_BOT_V1 ===
+    # === PATCH_PANEL_SELLER_V1 ===
+    "psel_buy":         ("🧩 خریدِ پنل", "این دکمه حالا بسته‌هایِ فروشِ پنل را برایِ خرید نشان می‌دهد.",
+                         frozenset({"panel_seller"})),
+    "psel_my":          ("🗂 پنل‌هایِ من", "این دکمه حالا پنل‌هایِ خریده‌شدهٔ کاربر را (مصرف، تمدید، ...) نشان می‌دهد.",
+                         frozenset({"panel_seller"})),
     "giveaway":         ("🎰 قرعه‌کشی‌هایِ فعال", "این دکمه حالا قرعه‌کشی‌هایِ فعال را با دکمهٔ شرکت نشان می‌دهد.",
                          frozenset({"giveaway"})),
     "giveaway_results": ("🏆 نتایجِ قرعه‌کشی‌ها", "این دکمه حالا نتایجِ قرعه‌کشی‌هایِ پایان‌یافته را نشان می‌دهد.",

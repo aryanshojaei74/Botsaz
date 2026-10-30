@@ -161,7 +161,8 @@ def _fmt_remaining(client: dict) -> tuple[str, str, bool]:
 
 # ═══════════════════════ صفحهٔ اصلی: لیستِ پنل‌ها ═══════════════════════
 
-async def _panels_menu_content(bot_id: int, *, show_back: bool = False) -> tuple[str, InlineKeyboardMarkup]:
+async def _panels_menu_content(bot_id: int, *, show_back: bool = False,
+                               back_cb: str = "tadm:sec:products") -> tuple[str, InlineKeyboardMarkup]:
     panels = await get_all_panels(bot_id)
     rows = []
     if not panels:
@@ -185,7 +186,7 @@ async def _panels_menu_content(bot_id: int, *, show_back: bool = False) -> tuple
     # برایِ ربات‌هایِ قدیمیِ field=="panel_yar" (که این صفحه براشون خونهٔ
     # اصلیه، نه یه زیرمنو) show_back=False می‌مونه و رفتارِ قبلی حفظ می‌شه.
     if show_back:
-        rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:products",
+        rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=back_cb,
                                           style=ButtonStyle.DANGER)])
     return txt, InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -206,8 +207,9 @@ async def pyar_menu(cb: CallbackQuery, state: FSMContext):
         await cb.answer()
         return
     # === PATCH_PANEL_YAR_MOVE_V1 ===
-    show_back = (brow.field == "vpn_sales")
-    txt, kb = await _panels_menu_content(brow.id, show_back=show_back)
+    show_back = (brow.field in ("vpn_sales", "panel_seller"))
+    txt, kb = await _panels_menu_content(brow.id, show_back=show_back,
+                                         back_cb="psel:adm" if brow.field == "panel_seller" else "tadm:sec:products")   # PATCH_PANEL_SELLER_V1
     try:
         await cb.message.edit_text(txt, reply_markup=kb, parse_mode="HTML")
     except Exception:

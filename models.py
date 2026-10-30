@@ -4026,3 +4026,43 @@ class GiveawayPost(Base):
 
 # ترتیب: فرزندها اول (FK) ⇒ Winner/Post/Prize/Entry بعد Giveaway
 TENANT_OWNED_MODELS += [GiveawayWinner, GiveawayPost, GiveawayPrize, GiveawayEntry, Giveaway, GiveawayChat]
+
+
+# === PATCH_PANEL_SELLER_V1 === ربات «پنل‌فروشی»: مالک ادمینِ پنل (مرزبان‌خانواده) با سقفِ حجم/کاربر/مدت می‌فروشد
+class PanelSellerPackage(Base):
+    """بستهٔ فروشِ ادمینِ پنل. data_gb / max_users: ۰ = نامحدود. panel_id = ردیفِ VpnPanel همین ربات."""
+    __tablename__ = "panel_seller_packages"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    panel_id: Mapped[int] = mapped_column(Integer, index=True)
+    title: Mapped[str] = mapped_column(String(120))
+    data_gb: Mapped[int] = mapped_column(Integer, default=0)
+    max_users: Mapped[int] = mapped_column(Integer, default=0)
+    days: Mapped[int] = mapped_column(Integer, default=30)
+    price_toman: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class PanelSellerAccount(Base):
+    """ادمینِ فروخته‌شده روی پنل. status: active | suspended | deleted."""
+    __tablename__ = "panel_seller_accounts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    buyer_tg: Mapped[int] = mapped_column(BigInteger, index=True)
+    panel_id: Mapped[int] = mapped_column(Integer, index=True)
+    package_id: Mapped[int | None] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(120), default="")
+    admin_username: Mapped[str] = mapped_column(String(80))
+    data_gb: Mapped[int] = mapped_column(Integer, default=0)
+    max_users: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+    status: Mapped[str] = mapped_column(String(12), default="active", index=True)
+    suspend_reason: Mapped[str | None] = mapped_column(String(40))
+    price_toman: Mapped[int] = mapped_column(Integer, default=0)
+    tracking_code: Mapped[str | None] = mapped_column(String(20))
+    flags: Mapped[str | None] = mapped_column(String(120))          # هشدارهایِ ارسال‌شده (جداشده با کاما)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+TENANT_OWNED_MODELS += [PanelSellerAccount, PanelSellerPackage]
