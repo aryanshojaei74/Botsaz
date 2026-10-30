@@ -272,9 +272,21 @@ async def _gate(msg: Message) -> bool:
     return True
 
 
+async def _free_ended(msg: Message, game: str) -> bool:
+    """مودِ شیرینی تمام شده: بازیِ رایگان دیگر شروع نمی‌شود؛ به‌جایش راهِ مسابقهٔ پولی با کیف‌پول گفته می‌شود."""
+    import platform_candy as _CA
+    if await _CA.candy_active():
+        return False
+    await msg.reply(f"🎃 بازیِ رایگانِ هالوین تمام شد.\n💰 برایِ مسابقهٔ پولی با کیف‌پول بنویس: <code>شرطبندی {game}</code>",
+                    parse_mode="HTML")
+    return True
+
+
 @platform_group_game_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_start))
 async def gg_start(msg: Message):
     await _gate(msg)
+    if await _free_ended(msg, "حدس عدد"):
+        return
     cid, now = msg.chat.id, time.monotonic()
     if cid in _RACES:
         return await msg.reply("🎮 یک مسابقهٔ سرعت جریان دارد؛ بعد از تمام‌شدنش دوباره بنویس.")
@@ -340,6 +352,9 @@ async def gg_guess(msg: Message):
 @platform_group_game_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_top))
 async def gg_top(msg: Message):
     await _gate(msg)
+    import platform_candy as _CT
+    if not await _CT.candy_active():                 # جدولِ شیرینی فقط در مودِ شیرینی
+        raise SkipHandler
     rows = await top()
     medals = ["🥇", "🥈", "🥉"] + ["🔸"] * 7
     lines = ["🏆 <b>جدولِ شیرینی‌ها</b>\n"]
@@ -381,6 +396,8 @@ def _is_race_answer(m: Message) -> bool:
 
 async def _start_race(msg: Message, kind: str) -> None:
     await _gate(msg)
+    if await _free_ended(msg, "سرعت" if kind == "word" else "ریاضی"):
+        return
     cid, now = msg.chat.id, time.monotonic()
     if cid in _GAMES or cid in _RACES:
         return await msg.reply("🎮 یک بازی جریان دارد؛ بعد از تمام‌شدنش دوباره بنویس.")
@@ -453,11 +470,7 @@ async def help_text(bet_games: bool = True) -> str:
     (راهنمای شرط‌بندی خودش جدا آمده)؛ فقط بخشِ مسابقه‌هایِ پولی (حدس عدد/سرعت/ریاضی) می‌ماند."""
     import platform_candy as _CA
     if not await _CA.candy_active():                 # مودِ شیرینی تمام: راهنما بدونِ شیرینی
-        lines = ["🎮 <b>بازی‌هایِ گروه</b>\n",
-                 "🆓 <b>رایگان (بدونِ جایزه — مودِ شیرینی تمام شده)</b>",
-                 "🎯 <b>حدس عدد</b> — بنویس «حدس عدد»؛ عددی بین ۱ تا ۱۰۰ را حدس بزن، ربات می‌گوید بالاتر/پایین‌تر.",
-                 "⚡️ <b>سرعت</b> — بنویس «سرعت»؛ اولین نفری که کلمهٔ ربات را دقیقاً بنویسد برنده است.",
-                 "🧮 <b>ریاضی</b> — بنویس «ریاضی»؛ اولین جوابِ درست برنده است."]
+        lines = ["🎮 <b>بازی‌هایِ گروه</b>\n"]
         _candy = False
     else:
         _candy = True
@@ -513,7 +526,10 @@ async def help_text(bet_games: bool = True) -> str:
                           "⚠️ ریسکِ مالی دارد؛ مسئولیتش با خودِ توست."]
     except Exception:
         logger.debug("games help: بخشِ شرط‌بندی خوانده نشد")
-    lines += ["", "ℹ️ بازیِ رایگان هم‌زمان یکی است؛ مسابقه‌هایِ پولی را هر چند نفر بخواهند هم‌زمان می‌سازند."]
+    if _candy:
+        lines += ["", "ℹ️ بازیِ رایگان هم‌زمان یکی است؛ مسابقه‌هایِ پولی را هر چند نفر بخواهند هم‌زمان می‌سازند."]
+    else:
+        lines += ["", "ℹ️ مسابقه‌هایِ پولی را هر چند نفر بخواهند هم‌زمان می‌سازند."]
     return "\n".join(lines)
 
 

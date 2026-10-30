@@ -281,6 +281,11 @@ async def test_create_handler_allows_many_races_at_once_and_free_game_runs_besid
     async def noexp(*a, **k):
         return None
     monkeypatch.setattr(G, "_expire", noexp)
+    import platform_candy as _PC
+
+    async def _on():
+        return True
+    monkeypatch.setattr(_PC, "candy_active", _on)                                          # مودِ شیرینی روشن
     await G.gg_start(free)
     assert CHAT in G._GAMES                                                                # بازیِ رایگان وسطِ مسابقهٔ پولی هم شروع می‌شود
 

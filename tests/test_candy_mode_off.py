@@ -40,4 +40,33 @@ def test_award_gives_nothing_when_mode_off(monkeypatch):
 def test_help_has_no_candy_when_off(monkeypatch):
     _patch(monkeypatch, True, False)
     txt = asyncio.run(G.help_text(bet_games=False))
-    assert "🍬" not in txt and "مودِ شیرینی تمام" in txt
+    assert "🍬" not in txt and "رایگان" not in txt.replace("بازیِ رایگان", "") and "حدس عدد»؛" not in txt
+
+
+def test_free_games_and_table_stop_when_candy_off(monkeypatch):
+    """بعد از تمام‌شدنِ هالوین: «حدس عدد/ریاضی/سرعت» بازیِ رایگان شروع نمی‌کنند و راهِ شرط‌بندی را می‌گویند؛ «جدول» ساکت."""
+    import pytest
+    from aiogram.dispatcher.event.bases import SkipHandler
+    _patch(monkeypatch, True, False)
+    monkeypatch.setattr(G, "_group_allowed", lambda cid: _aw(True))
+    monkeypatch.setattr(G, "enabled", lambda: _aw(True))
+    out = []
+
+    class M:
+        text = "حدس عدد"
+        chat = type("C", (), {"id": 5})()
+        from_user = type("U", (), {"id": 1, "is_bot": False, "full_name": "u"})()
+        sender_chat = None
+
+        async def reply(self, text, **k):
+            out.append(text)
+    asyncio.run(G.gg_start(M()))
+    asyncio.run(G._start_race(M(), "math"))
+    assert len(out) == 2 and "شرطبندی حدس عدد" in out[0] and "شرطبندی ریاضی" in out[1]
+    assert 5 not in G._GAMES and 5 not in G._RACES
+    with pytest.raises(SkipHandler):
+        asyncio.run(G.gg_top(M()))
+
+
+async def _aw(v):
+    return v
