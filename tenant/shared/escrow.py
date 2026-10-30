@@ -274,7 +274,22 @@ async def _cfg(bot_id: int) -> dict:
         "min": int(_f(await get_setting(bot_id, "escrow_min", "10000"), 10000)),
         "max": int(_f(await get_setting(bot_id, "escrow_max", "0"), 0)),
         "mediators": [x.strip() for x in (await get_setting(bot_id, "escrow_mediators", "") or "").split(",") if x.strip()],
+        "need_balance": (await get_setting(bot_id, "escrow_require_balance", "0")) == "1",
     }
+
+
+async def buyer_shortfall(bot_id: int, buyer_tg: int, amount: int, percent: float, payer: str) -> int:
+    """کمبودِ کیف‌پولِ خریدار نسبت به مبلغی که باید بپردازد (۰ = کافی است)."""
+    need = calc_fee(amount, percent, payer)["buyer_pays"]
+    async with Session() as s:
+        u = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == buyer_tg))
+    have = int(u.balance or 0) if u else 0
+    return max(0, need - have)
+
+
+def _short_msg(short: int, who: str) -> str:
+    return (f"❌ موجودیِ کیف‌پولِ {who} برایِ این معامله کافی نیست؛ <b>{fmt(short)}</b> تومان کم دارد.\n"
+            "اول کیف‌پول را شارژ کنید، بعد معامله را ثبت/بپذیرید.")
 
 
 # ═══════════════════ جریانِ کاربر ═══════════════════
@@ -424,6 +439,11 @@ async def esc_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if not row or not d.get("esc_other") or not d.get("esc_amount"):
         return await cb.answer("درخواست منقضی شده؛ دوباره شروع کن.", show_alert=True)
     cfg = await _cfg(row.id)
+    if cfg["need_balance"] and d["esc_role"] == "buyer":
+        short = await buyer_shortfall(row.id, cb.from_user.id, int(d["esc_amount"]), cfg["percent"], cfg["payer"])
+        if short:
+            await cb.message.answer(_short_msg(short, "تو"))
+            return await cb.answer()
     await state.clear()
     async with Session() as s:
         n = (await s.scalar(select(func.max(EscrowDeal.number)).where(EscrowDeal.bot_id == row.id))) or 0
@@ -492,6 +512,14 @@ async def esc_accept(cb: CallbackQuery, bot: Bot):
         d = await s.get(EscrowDeal, did, with_for_update=True)
         if not d or d.counterparty_tg != cb.from_user.id or d.status != "pending":
             return await cb.answer("این درخواست دیگر قابلِ رسیدگی نیست.", show_alert=True)
+        cfg = await _cfg(d.bot_id)
+        if cfg["need_balance"]:
+            buyer_tg = roles(d)[0]
+            short = await buyer_shortfall(d.bot_id, buyer_tg, d.amount_toman, d.fee_percent, d.fee_payer)
+            if short:
+                who = "تو" if buyer_tg == cb.from_user.id else "خریدار"
+                await cb.message.answer(_short_msg(short, who))
+                return await cb.answer("موجودیِ کیف‌پولِ خریدار کافی نیست.", show_alert=True)
         d.status, d.accepted_at = "accepted", datetime.utcnow()
         await s.commit()
     try:
@@ -748,6 +776,7 @@ async def _admin_view(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
            f"وضعیت: {'✅ فعال' if cfg['enabled'] else '❌ غیرفعال'}\n"
            f"🧾 نرخِ واسطه: <b>{cfg['percent']:g}٪</b> — کارمزد را می‌پردازد: <b>{FEE_PAYERS[cfg['payer']]}</b>\n"
            f"🔽 حداقلِ مبلغ: <b>{fmt(cfg['min'])}</b> | 🔼 حداکثر: <b>{fmt(cfg['max']) if cfg['max'] else 'بدونِ سقف'}</b>\n"
+           f"💰 شرطِ موجودیِ کیف‌پولِ خریدار: {'✅ لازم است' if cfg['need_balance'] else '❌ لازم نیست'}\n"
            f"👤 اکانتِ واسط (سازندهٔ گروه): {'✅ متصل' if has_acc else '❌ تنظیم نشده'}\n"
            f"🛡 واسط‌هایِ ادمینِ گروه: {', '.join(cfg['mediators']) or '— (فقط اکانتِ واسط و ربات)'}\n"
            f"📂 معاملاتِ باز/ناموفق: <b>{open_n}</b>")
@@ -756,6 +785,7 @@ async def _admin_view(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
               ButtonStyle.DANGER if cfg["enabled"] else ButtonStyle.SUCCESS)],
         [_btn(f"🧾 نرخ: {cfg['percent']:g}٪", "esc:adm:fee"), _btn("💳 پرداخت‌کنندهٔ کارمزد", "esc:adm:payer")],
         [_btn("🔽 حداقل", "esc:adm:min"), _btn("🔼 حداکثر", "esc:adm:max")],
+        [_btn("💰 شرطِ موجودیِ کیف‌پول: " + ("روشن" if cfg["need_balance"] else "خاموش"), "esc:adm:bal")],
         [_btn("👤 اتصالِ اکانتِ واسط", "esc:adm:acc", ButtonStyle.PRIMARY),
          _btn("🧪 تستِ اتصال", "esc:adm:test")],
         [_btn("🛡 واسط‌هایِ گروه", "esc:adm:med")],
@@ -808,6 +838,18 @@ async def adm_toggle(cb: CallbackQuery, bot: Bot):
     await set_setting(row.id, "escrow_enabled", "0" if cur else "1")
     await _refresh(cb, bot)
     await cb.answer("خاموش شد" if cur else "فعال شد")
+
+
+@escrow_router.callback_query(F.data == "esc:adm:bal")
+async def adm_balance(cb: CallbackQuery, bot: Bot):
+    from tenant import get_setting, set_setting
+    row = await _gate(cb, bot)
+    if not row:
+        return
+    cur = (await get_setting(row.id, "escrow_require_balance", "0")) == "1"
+    await set_setting(row.id, "escrow_require_balance", "0" if cur else "1")
+    await _refresh(cb, bot)
+    await cb.answer("شرط خاموش شد" if cur else "روشن شد: بدونِ موجودیِ کافیِ خریدار معامله ثبت/پذیرفته نمی‌شود", show_alert=not cur)
 
 
 @escrow_router.callback_query(F.data == "esc:adm:payer")

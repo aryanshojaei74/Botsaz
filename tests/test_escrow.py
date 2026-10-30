@@ -367,3 +367,42 @@ async def test_only_mediator_can_close_not_parties_even_if_admin(env):
     assert not await can(buyer_id) and not await can(seller_id)        # طرف‌ها هرگز
     assert not await can(888)                                          # واسط‌ها تنظیم شده‌اند → ادمینِ عادی نه
     assert await can(777) and await can(1, "mediator1") and await can(500)   # واسط (آیدی/یوزرنیم) و مالک
+
+
+@pytest.mark.asyncio
+async def test_require_buyer_balance_blocks_send_and_accept(env):
+    maker, _p = env
+    bot, st = FakeBot(), St()
+    await tenant.set_setting(9, "escrow_require_balance", "1")
+    # خریدار=۱۰۰۱ (آغازگر) بدون موجودی → ثبت نمی‌شود
+    await _make_deal(bot, st, role="buyer", amount="1,000,000")
+    c = Cb("esc:send", uid=1001)
+    await ES.esc_send(c, bot, st)
+    assert "کافی نیست" in c.out[0] and "1,100,000" in c.out[0]
+    async with maker() as s:
+        assert await s.scalar(select(models.EscrowDeal)) is None
+    # شارژ → ثبت می‌شود
+    async with maker() as s:
+        u = await s.scalar(select(models.BotUser).where(models.BotUser.telegram_id == 1001))
+        u.balance = 1_100_000
+        await s.commit()
+    await _make_deal(bot, st, role="buyer", amount="1,000,000")
+    await ES.esc_send(Cb("esc:send", uid=1001), bot, st)
+    async with maker() as s:
+        d = await s.scalar(select(models.EscrowDeal))
+    assert d.status == "pending"
+    # فروشنده می‌پذیرد، ولی موجودیِ خریدار در این فاصله کم شده
+    async with maker() as s:
+        u = await s.scalar(select(models.BotUser).where(models.BotUser.telegram_id == 1001))
+        u.balance = 5
+        await s.commit()
+    c = Cb(f"esc:acc:{d.id}", uid=1002)
+    await ES.esc_accept(c, bot)
+    async with maker() as s:
+        assert (await s.get(models.EscrowDeal, d.id)).status == "pending"
+    assert "کافی نیست" in c.out[0]
+    # خاموش‌بودنِ شرط = رفتارِ قبلی
+    await tenant.set_setting(9, "escrow_require_balance", "0")
+    await ES.esc_accept(Cb(f"esc:acc:{d.id}", uid=1002), bot)
+    async with maker() as s:
+        assert (await s.get(models.EscrowDeal, d.id)).status == "group_created"
