@@ -842,12 +842,12 @@ async def panel_manage_kb(panel: VpnPanel | None, key: str, bot_id: int = 0,
         text=(f"✏️ ویرایش تنظیمات {label}" if panel else f"➕ ثبت تنظیمات {label}"),
         callback_data=f"tvpn:setup:{key}",
         style=await _ibs(bot_id, "ibtn:vpn_setup"))])
-    if panel:
-        # === PATCH_PANEL_CUSTOM_LABEL_V1 ===
-        rows.append([InlineKeyboardButton(
-            text="🏷 نام نمایشی پنل",
-            callback_data=f"tvpn:rename:{key}",
-            style=await _ibs(bot_id, "ibtn:vpn_setup"))])
+    # === PATCH_PANEL_CUSTOM_LABEL_V1 ===
+    # نامِ نمایشی قبل از اتصال هم قابلِ تنظیم است (پنلِ تازه‌ساخته: اول اسم، بعد ثبتِ تنظیمات)
+    rows.append([InlineKeyboardButton(
+        text="🏷 نام نمایشی پنل",
+        callback_data=f"tvpn:rename:{key}",
+        style=await _ibs(bot_id, "ibtn:vpn_setup"))])
     if panel:
         total, active = await _plans_count(bot_id, key)
         if active:

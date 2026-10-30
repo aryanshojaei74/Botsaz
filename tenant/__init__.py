@@ -17305,7 +17305,8 @@ async def _trial_pick_options(bot_id: int, btn_cfg: dict) -> list[dict]:
         if k not in live:
             continue
         pc = _trial_panel_cfg(btn_cfg, k)
-        name = (pc.get("name") or "").strip() or PANEL_LABELS.get(k, k)
+        from tenant.bots.vpn.vpn_admin import panel_label as _plabel
+        name = (pc.get("name") or "").strip() or await _plabel(bot_id, k)    # نامِ دلخواهِ مالک برایِ پنل هم دیده شود
         extra = []
         if pc.get("gb") is not None:
             extra.append(_trial_gb_label(str(pc["gb"])))
@@ -17388,7 +17389,16 @@ async def _trial_cfg_update(mb_id: int, **updates) -> dict | None:
         return await _trial_fill_global(mb.bot_id, cfg)
 
 
-def _trial_summary_text(cfg: dict) -> str:
+async def _trial_labels(bot_id: int) -> dict:
+    """نامِ نمایشیِ (دلخواهِ مالک یا پیش‌فرض) همهٔ پنل‌هایِ این ربات: {panel_key: label}."""
+    from models import VpnPanel
+    from tenant.bots.vpn.vpn_admin import panel_label as _plabel
+    async with Session() as s:
+        keys = [p.panel_key for p in (await s.scalars(select(VpnPanel).where(VpnPanel.bot_id == bot_id))).all()]
+    return {k: await _plabel(bot_id, k) for k in keys}
+
+
+def _trial_summary_text(cfg: dict, labels: dict | None = None) -> str:
     mode = cfg.get("trial_mode")
     if not mode:
         return "🧪 <b>تنظیمات تست این دکمه</b>\n\nهنوز پیکربندی نشده — یکی از گزینه‌های زیر را انتخاب کن:"
@@ -17401,16 +17411,16 @@ def _trial_summary_text(cfg: dict) -> str:
         if pkeys_raw:
             pk_list = [k for k in pkeys_raw.split(",") if k]
             if len(pk_list) == 1:
-                lines.append(f"پنل: <b>{PANEL_LABELS.get(pk_list[0], pk_list[0])}</b>")
+                lines.append(f"پنل: <b>{(labels or {}).get(pk_list[0]) or PANEL_LABELS.get(pk_list[0], pk_list[0])}</b>")
             else:
-                names = "، ".join(PANEL_LABELS.get(k, k) for k in pk_list)
+                names = "، ".join((labels or {}).get(k) or PANEL_LABELS.get(k, k) for k in pk_list)
                 if str(cfg.get("trial_pick_panel") or "") == "1":
                     lines.append(f"پنل: 👤 <b>مشتری انتخاب می‌کند ({len(pk_list)} پنل)</b> ({names})")
                 else:
                     lines.append(f"پنل: 🎲 <b>رندوم بینِ {len(pk_list)} پنل</b> ({names})")
         else:
             pkey = cfg.get("trial_panel_key")
-            lines.append(f"پنل: <b>{PANEL_LABELS.get(pkey, '— تنظیم نشده —')}</b>")
+            lines.append(f"پنل: <b>{(labels or {}).get(pkey) or PANEL_LABELS.get(pkey, '— تنظیم نشده —')}</b>")
         lines.append(f"حجم: <b>{_trial_gb_label(str(cfg.get('trial_gb', '—')))}</b>")
         lines.append(f"مدت: <b>{cfg.get('trial_days', '—')} روز</b>")
         _u = str(cfg.get('trial_users', 0) or 0)
@@ -17490,7 +17500,7 @@ async def _trial_top_render(cb: CallbackQuery, bot: Bot, mb_id: int):
                                           callback_data=f"thb:trclear:{mb_id}", style=ButtonStyle.DANGER)])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت به دکمه",
                                       callback_data=f"thb:pick:{mb_id}", style=ButtonStyle.DANGER)])
-    await cb.message.edit_text(_trial_summary_text(await _trial_fill_global(row.id, cfg)),
+    await cb.message.edit_text(_trial_summary_text(await _trial_fill_global(row.id, cfg), await _trial_labels(row.id)),
                                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     await cb.answer()
 
@@ -17623,7 +17633,12 @@ async def thb_trial_claim_save(msg: Message, bot: Bot, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅️ بازگشت به تنظیمات تست",
                               callback_data=f"thb:trialmode:{mb_id}", style=ButtonStyle.DANGER)]])
-    await msg.answer("✅ ذخیره شد.\n\n" + _trial_summary_text(cfg), reply_markup=kb)
+    _bid = None
+    async with Session() as _s:
+        _mb = await _s.get(MainButton, mb_id)
+        _bid = _mb.bot_id if _mb else None
+    await msg.answer("✅ ذخیره شد.\n\n" + _trial_summary_text(cfg, await _trial_labels(_bid) if _bid else None),
+                     reply_markup=kb)
 
 
 # === PATCH_TRIAL_CUSTOMER_PICKS_PANEL_V1 === (تیکت #892)
@@ -17859,10 +17874,11 @@ async def thb_trial_auto_panels(cb: CallbackQuery, bot: Bot, _override_mb_id: in
         selected = {cfg["trial_panel_key"]}
     selected &= {p.panel_key for p in panels}          # PATCH_TRIAL_STALE_PANEL_KEYS_V1 — کلیدِ پنلِ حذف‌شده دیده نمی‌شد ولی می‌ماند
     rows = []
+    from tenant.bots.vpn.vpn_admin import panel_label as _plabel
     for p in panels:
         mark = "✅ " if p.panel_key in selected else "⬜️ "
         rows.append([InlineKeyboardButton(
-            text=f"{mark}{PANEL_LABELS.get(p.panel_key, p.panel_key)}",
+            text=f"{mark}{await _plabel(row.id, p.panel_key)}",
             callback_data=f"thb:trpanel:{p.panel_key}:{mb_id}", style=ButtonStyle.PRIMARY)])
     rows.append([InlineKeyboardButton(text="🎲 انتخابِ تصادفی بینِ همه",
                                       callback_data=f"thb:trpanel:allrand:{mb_id}", style=ButtonStyle.SUCCESS)])
