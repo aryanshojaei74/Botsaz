@@ -22522,6 +22522,13 @@ async def _purchase_alert(bot: Bot, row: BotRow, *, buyer: "BotUser | None",
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
 
     try:
+        from tenant.shared.tx_channel import tx_log_purchase
+        await tx_log_purchase(bot, row.id, buyer=buyer, section=section, detail=detail, amount=amount,
+                              tracking_code=tracking_code, source=(panel_name or button_name or ""))
+    except Exception:
+        logger.exception("خطای نادیده‌گرفته‌شده در لاگِ خرید")
+
+    try:
         if await get_setting(row.id, "purchase_notify", "1") != "1":
             return
     except Exception:

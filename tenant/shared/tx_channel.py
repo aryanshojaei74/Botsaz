@@ -147,6 +147,40 @@ async def tx_log(bot, bot_id: int, *, buyer=None, amount=0,
         await _warn_owner(bot, bot_id, e)
 
 
+async def tx_log_purchase(bot, bot_id: int, *, buyer=None, section: str = "", detail: str = "", amount=0,
+                          tracking_code=None, source: str = "") -> None:
+    """پستِ لاگِ «خریدِ سرویس/محصول» در همان کانالِ لاگِ تراکنش‌ها (فقط اگر مالک «لاگِ خریدها» را روشن کرده باشد).
+    هر خطایی بی‌صدا رد می‌شود تا جلوی خودِ خرید را نگیرد."""
+    try:
+        from tenant import get_setting
+        if (await get_setting(bot_id, "tx_log_purchases", "0")) != "1":
+            return
+        ch = (await get_setting(bot_id, "tx_log_channel", "") or "").strip()
+        if not ch:
+            return
+        lines = ["#خرید — <b>" + _html.escape(section or "سرویس") + "</b>", ""]
+        if buyer is not None:
+            from tenant.shared.buyer_ident import get_mode, tx_lines
+            lines += tx_lines(await get_mode(bot_id), getattr(buyer, "full_name", None),
+                              getattr(buyer, "username", None), getattr(buyer, "telegram_id", "—"))
+        if detail:
+            lines.append(f"📦 مشخصات: {detail}")
+        if source:
+            lines.append(f"🖥 {_html.escape(source)}")
+        lines.append(f"💰 مبلغ: {_fa(amount)} تومان")
+        if tracking_code:
+            lines.append(f"🧾 کد پیگیری: <code>{_html.escape(str(tracking_code))}</code>")
+        try:
+            chat_id = int(ch)
+        except Exception:
+            chat_id = ch
+        await bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
+        _mark_ok(bot_id)
+    except Exception as e:
+        logger.warning("tx_log_purchase: ارسال ناموفق بود (bot_id=%s): %s", bot_id, e)
+        await _warn_owner(bot, bot_id, e)
+
+
 # === PATCH_TX_LOG_FAILURE_VISIBLE_V1 ===
 # برایِ اینکه اگر کانال خراب باشد، مالک با هر تراکنش یک هشدار نگیرد.
 _WARN_COOLDOWN_SEC = 3600.0

@@ -29,7 +29,8 @@ async def _content(bot_id: int):
     ch = await get_setting(bot_id, "tx_log_channel", "")
     txt = ("📊 <b>کانالِ لاگِ تراکنش‌ها</b>\n\n"
            "هر شارژِ کیفِ پول — از هر درگاهی — با مشخصاتِ کامل در این کانال "
-           "پست می‌شود: نامِ کاربر، آیدی، مبلغ، موجودیِ قبل و بعد، و کدِ پیگیری.\n\n")
+           "پست می‌شود: نامِ کاربر، آیدی، مبلغ، موجودیِ قبل و بعد، و کدِ پیگیری.\n"
+           "با «🛒 لاگِ خریدِ سرویس» می‌توانی خریدِ سرویس/محصول را هم همین‌جا ببینی.\n\n")
     if ch:
         txt += f"وضعیت: ✅ متصل به <code>{ch}</code>"
     else:
@@ -44,6 +45,10 @@ async def _content(bot_id: int):
         rows.append([InlineKeyboardButton(text="🗑 حذفِ اتصال",
                                           callback_data="txch:clear",
                                           style=ButtonStyle.DANGER)])
+    _pl = (await get_setting(bot_id, "tx_log_purchases", "0")) == "1"
+    rows.append([InlineKeyboardButton(text=("🛒 لاگِ خریدِ سرویس: روشن" if _pl else "🛒 لاگِ خریدِ سرویس: خاموش"),
+                                      callback_data="txch:purch",
+                                      style=ButtonStyle.SUCCESS if _pl else ButtonStyle.PRIMARY)])
     from tenant.shared.buyer_ident import LABELS as _BL, get_mode as _gm
     rows.append([InlineKeyboardButton(text=f"🆔 نمایشِ خریدار: {_BL[await _gm(bot_id)]}",
                                       callback_data="txch:ident", style=ButtonStyle.PRIMARY)])
@@ -123,6 +128,22 @@ async def txch_save(msg: Message, bot: Bot, state: FSMContext):
     txt, kb = await _content(row.id)
     await msg.answer("✅ ذخیره شد.")
     await msg.answer(txt, reply_markup=kb, parse_mode="HTML")
+
+
+@tx_channel_admin_router.callback_query(F.data == "txch:purch")
+async def txch_purch(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok, get_setting, set_setting
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    new = "0" if (await get_setting(row.id, "tx_log_purchases", "0")) == "1" else "1"
+    await set_setting(row.id, "tx_log_purchases", new)
+    txt, kb = await _content(row.id)
+    try:
+        await cb.message.edit_text(txt, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(txt, reply_markup=kb, parse_mode="HTML")
+    await cb.answer("🛒 لاگِ خریدِ سرویس " + ("روشن شد" if new == "1" else "خاموش شد"))
 
 
 @tx_channel_admin_router.callback_query(F.data == "txch:ident")
