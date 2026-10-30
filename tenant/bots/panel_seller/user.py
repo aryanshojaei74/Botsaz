@@ -92,7 +92,7 @@ async def buy_back(cb: CallbackQuery, bot: Bot):
 
 @psel_user_router.callback_query(F.data.regexp(r"^psel:bok:\d+$"))
 async def buy_do(cb: CallbackQuery, bot: Bot):
-    from tenant import get_or_create_user, _purchase_alert
+    from tenant import get_or_create_user
     row = await _row(bot)
     if not row:
         return await cb.answer()
@@ -103,7 +103,7 @@ async def buy_do(cb: CallbackQuery, bot: Bot):
     uid = cb.from_user.id
     await get_or_create_user(row.id, uid, cb.from_user.full_name or "", cb.from_user.username or "")
     await cb.answer("در حالِ ساختِ پنل…")
-    r = await SV.buy(row.id, uid, pid)
+    r = await SV.buy(row.id, uid, pid, bot=bot, row=row)
     st = r["status"]
     if st == "insufficient":
         from tenant.shared import vs_pay
@@ -119,15 +119,6 @@ async def buy_do(cb: CallbackQuery, bot: Bot):
             f"🔑 رمز: <code>{esc(r['password'])}</code>\n🔖 کدِ پیگیری: <code>{esc(r['tracking'])}</code>\n\n"
             "رمز را جایی امن نگه دار. وضعیتِ پنل از «🗂 پنل‌هایِ من» قابلِ مشاهده است.",
         kb([btn("🗂 پنل‌هایِ من", "psel:my", style=ButtonStyle.PRIMARY)], HOME_ROW))
-    try:
-        async with Session() as s:
-            pk = await s.get(PanelSellerPackage, pid)
-            from models import BotUser
-            buyer = await s.scalar(select(BotUser).where(BotUser.bot_id == row.id, BotUser.telegram_id == uid))
-        await _purchase_alert(bot, row, buyer=buyer, section="پنل‌فروشی", detail=_html.escape(pk.title if pk else ""),
-                              amount=pk.price_toman if pk else 0, tracking_code=r["tracking"])
-    except Exception:      # noqa: BLE001
-        logger.exception("panel_seller: اعلانِ خرید به مالک ناموفق بود")
 
 
 # ═══════════════════════ پنل‌هایِ من ═══════════════════════

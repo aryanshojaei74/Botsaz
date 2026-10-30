@@ -67,7 +67,7 @@ async def _refund(bot_id: int, tg: int, price: int, note: str) -> None:
             await s.commit()
 
 
-async def buy(bot_id: int, buyer_tg: int, package_id: int, api_factory=None) -> dict:
+async def buy(bot_id: int, buyer_tg: int, package_id: int, api_factory=None, bot=None, row=None) -> dict:
     """status: ok | no_package | no_panel | unsupported | insufficient | panel_failed (+ account/username/password/…)."""
     api_factory = api_factory or _api
     async with Session() as s:
@@ -109,6 +109,15 @@ async def buy(bot_id: int, buyer_tg: int, package_id: int, api_factory=None) -> 
         s.add(acc)
         await s.commit()
         acc_id = acc.id
+    if bot is not None and row is not None:         # اطلاعِ خرید به مالک/کانالِ اعتمادسازی/کانالِ لاگ
+        try:
+            from tenant import _purchase_alert
+            async with Session() as s:
+                buyer = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == buyer_tg))
+            await _purchase_alert(bot, row, buyer=buyer, section="پنل‌فروشی", detail=pk.title, amount=price,
+                                  tracking_code=trk)
+        except Exception:      # noqa: BLE001
+            logger.exception("panel_seller: اعلانِ خرید ناموفق بود")
     return {"status": "ok", "account_id": acc_id, "username": username, "password": password,
             "panel_url": panel.base_url, "tracking": trk}
 
