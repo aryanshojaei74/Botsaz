@@ -5,6 +5,7 @@
     python3 tonpays_recheck.py                 # فقط گزارش (چیزی شارژ نمی‌شود)
     python3 tonpays_recheck.py --hours 72      # بازهٔ بزرگ‌تر
     python3 tonpays_recheck.py --user 123456   # فقط یک کاربر (آیدی عددی تلگرام)
+    python3 tonpays_recheck.py --bot-username Nitro_Skybot   # همان، با یوزرنیمِ ربات
     python3 tonpays_recheck.py --bot-id 1607   # فقط یک ربات (برایِ دیدنِ وضعیت‌هایِ «مبلغ کمتر/بیشتر» و مابقی)
     python3 tonpays_recheck.py --apply         # اگر درگاه «پرداخت‌شده» گفت، شارژ هم می‌کند
 
@@ -16,11 +17,19 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 
 from config import Session
-from models import TonPaysCharge
+from models import Bot as BotRow, TonPaysCharge
 from tenant.gateways import tonpays as T
 
 
-async def main(hours: int, user: int | None, apply: bool, bot_id: int | None = None) -> None:
+async def main(hours: int, user: int | None, apply: bool, bot_id: int | None = None,
+               bot_username: str | None = None) -> None:
+    if bot_username and not bot_id:
+        async with Session() as s:
+            bot_id = await s.scalar(select(BotRow.id).where(BotRow.username == bot_username.lstrip("@")))
+        if not bot_id:
+            print("ربات پیدا نشد:", bot_username)
+            return
+        print(f"bot_id={bot_id}")
     cut = datetime.utcnow() - timedelta(hours=hours)
     async with Session() as s:
         q = select(TonPaysCharge).where(TonPaysCharge.status != "paid", TonPaysCharge.created_at >= cut)
@@ -54,6 +63,7 @@ if __name__ == "__main__":
     ap.add_argument("--hours", type=int, default=48)
     ap.add_argument("--user", type=int)
     ap.add_argument("--bot-id", type=int)
+    ap.add_argument("--bot-username")
     ap.add_argument("--apply", action="store_true")
     a = ap.parse_args()
-    asyncio.run(main(a.hours, a.user, a.apply, a.bot_id))
+    asyncio.run(main(a.hours, a.user, a.apply, a.bot_id, a.bot_username))
