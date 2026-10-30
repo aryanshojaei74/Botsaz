@@ -48,6 +48,7 @@ SKIP_HANDLERS = frozenset({
     "tenant.bots.virtual_service.smm.smm_svc_setcat",
     "tenant.bots.virtual_service.smm.smm_vs_retry",
     "tenant.bots.vpn.vpn_admin.vpn_followup_toggle",
+    "tenant.shared.escrow.esc_accept",
     "tenant.bots.vpn.vpn_admin.vpn_setup_authmode_pick",
     "tenant.bots.vpn.vpn_user.vpn_help_show",
     "tenant.buy_ok",
