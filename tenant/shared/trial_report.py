@@ -30,7 +30,7 @@ def _tehran_now() -> str:
 
 
 def build_report(*, user_id, username, full_name, link, volume, duration,
-                 panel, source, show_link=True) -> str:
+                 panel, source, show_link=True, ident_mode: str = "both") -> str:
     """متنِ HTMLِ گزارش (تابعِ خالص؛ قابلِ تست)."""
     lines = ["#تست_جدید", ""]
     if show_link and link:
@@ -43,9 +43,19 @@ def build_report(*, user_id, username, full_name, link, volume, duration,
         lines.append(f"🚀 پنل: {_html.escape(str(panel))}")
     elif source == "stock":
         lines.append("📦 منبع: انبار دستی")
-    lines.append(f"🆔 id: <code>{user_id}</code>")
-    uname = f"@{username}" if username else "—"
-    lines.append(f"👤 {_html.escape(full_name or '—')} | {_html.escape(uname)}")
+    # نحوهٔ نمایشِ هویتِ مشتری (پیشنهادِ #188): هر دو (پیش‌فرض) / فقط آیدیِ عددی / فقط یوزرنیم
+    from tenant.shared.buyer_ident import normalize as _norm_mode
+    _mode = _norm_mode(ident_mode)
+    if _mode == "id":
+        lines.append(f"🆔 id: <code>{user_id}</code>")
+    elif _mode == "username" and username:
+        lines.append(f"👤 {_html.escape('@' + str(username).lstrip('@'))}")
+    elif _mode == "username":
+        lines.append(f"🆔 id: <code>{user_id}</code>")        # یوزرنیم نداشت ⇒ آیدی، تا گزارش بی‌هویت نماند
+    else:
+        lines.append(f"🆔 id: <code>{user_id}</code>")
+        uname = f"@{username}" if username else "—"
+        lines.append(f"👤 {_html.escape(full_name or '—')} | {_html.escape(uname)}")
     lines.append(f"🕒 {_tehran_now()}")
     return "\n".join(lines)
 
@@ -71,7 +81,8 @@ async def report(bot, bot_id: int, u, *, tg_username=None, link="", volume="", d
         text = build_report(
             user_id=getattr(u, "telegram_id", None), username=tg_username or getattr(u, "username", None),
             full_name=getattr(u, "full_name", None), link=link, volume=volume,
-            duration=duration, panel=name, source=source, show_link=show_link)
+            duration=duration, panel=name, source=source, show_link=show_link,
+            ident_mode=await __import__("tenant.shared.buyer_ident", fromlist=["get_mode"]).get_mode(bot_id))
         try:
             chat_id = int(ch)
         except ValueError:

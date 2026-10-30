@@ -43,6 +43,9 @@ async def _content(bot_id: int):
         rows.append([InlineKeyboardButton(
             text=f"🔗 نمایشِ لینکِ سرویس در گزارش: {'✅' if show else '❌'}",
             callback_data="trrep:link", style=ButtonStyle.PRIMARY)])
+        from tenant.shared.buyer_ident import LABELS as _BL, get_mode as _gm
+        rows.append([InlineKeyboardButton(text=f"🆔 نمایشِ مشتری: {_BL[await _gm(bot_id)]}",
+                                          callback_data="trrep:ident", style=ButtonStyle.PRIMARY)])
         rows.append([InlineKeyboardButton(text="🗑 حذفِ اتصال", callback_data="trrep:clear",
                                           style=ButtonStyle.DANGER)])
     rows.append([InlineKeyboardButton(text="🔗 اتصال / تغییرِ کانال", callback_data="trrep:set",
@@ -153,6 +156,18 @@ async def trrep_link(cb: CallbackQuery, bot: Bot):
     txt, kb = await _content(row.id)
     await _show(cb, txt, kb)
     await cb.answer("بدون لینک" if cur else "با لینک")
+
+
+@trial_report_admin_router.callback_query(F.data == "trrep:ident")
+async def trrep_ident(cb: CallbackQuery, bot: Bot):
+    from tenant.shared.buyer_ident import cycle, LABELS
+    row = await _gate(cb, bot)
+    if not row:
+        return
+    new = await cycle(row.id)
+    txt, kb = await _content(row.id)
+    await _show(cb, txt, kb)
+    await cb.answer("✅ " + LABELS[new])
 
 
 @trial_report_admin_router.callback_query(F.data == "trrep:test")
