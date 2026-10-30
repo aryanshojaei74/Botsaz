@@ -97,8 +97,14 @@ def order_shim(o, chat_id: int | None = None):
         status_label = _VS_GIFT_STATUS_LABELS.get(str(getattr(o, "status", "") or "").lower())
     except Exception:
         status_label = None
+    gid = str(getattr(o, "gift_id", "") or "")
+    qty = int(getattr(o, "quantity", 1) or 1)
+    if gid.startswith(("starsell_", "srx_")):          # تعدادِ واقعی = تعدادِ استارز (نه ۱)
+        qty = int(getattr(o, "star_count", 0) or 0) * (qty if gid.startswith("srx_") else 1)
+    elif gid.startswith("tonsell_"):                   # مقدارِ تون (اعشاری؛ ذخیره‌شده به‌صورتِ صدم)
+        qty = (int(getattr(o, "star_count", 0) or 0)) / 100
     return SimpleNamespace(
-        id=o.id, tracking_code=o.tracking_code, service_name=_label(o), quantity=int(getattr(o, "quantity", 1) or 1),
+        id=o.id, tracking_code=o.tracking_code, service_name=_label(o), quantity=qty,
         price_toman=int(getattr(o, "price_toman", 0) or 0) * int(getattr(o, "quantity", 1) or 1),
         link=getattr(o, "dest_label", "") or "", service_id=getattr(o, "gift_id", "") or "",
         status=getattr(o, "status", "") or "", created_at=getattr(o, "created_at", None),

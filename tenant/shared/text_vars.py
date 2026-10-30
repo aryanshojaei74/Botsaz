@@ -276,7 +276,8 @@ async def _order_values(names: set[str], bot_id: int | None, order) -> dict[str,
     if "product_name" in names:
         v["product_name"] = _esc(getattr(o, "service_name", None) or "—")
     if "quantity" in names:
-        v["quantity"] = _fmt_int(qty)
+        _qraw = getattr(o, "quantity", 0) or 0
+        v["quantity"] = (f"{_qraw:g}" if isinstance(_qraw, float) and _qraw != int(_qraw) else _fmt_int(qty))   # تون: اعشاری
     if "amount" in names:
         v["amount"] = _fmt_int(amount)
     if "price_per_1000" in names:

@@ -12723,7 +12723,11 @@ async def gift_list_pending_action(cb: CallbackQuery, bot: Bot):
     gid = o.gift_id or ""
     key = next((p for p in ("starsell_", "tonsell_", "srx_") if gid.startswith(p)), "")
     cb_prefix, fn_name = _LP_ROUTES[(key, act)]
-    await globals()[fn_name](cb.model_copy(update={"data": f"{cb_prefix}:{oid}"}), bot)
+    _tok = _KEEP_ADMIN_MSG.set(True)
+    try:
+        await globals()[fn_name](cb.model_copy(update={"data": f"{cb_prefix}:{oid}"}), bot)
+    finally:
+        _KEEP_ADMIN_MSG.reset(_tok)
     try:
         await gift_orders(cb.model_copy(update={"data": f"gift:orders:{page}"}), bot)
     except Exception:
@@ -12947,17 +12951,19 @@ async def gift_qty_continue(cb: CallbackQuery, bot: Bot):
         if g and not g.is_manual:
             unit_price, item_label = await _gift_price_and_label(g, row.id)
             ckb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🤖 ارسال خودکار توسطِ ربات",
+                [InlineKeyboardButton(text="🤖 ربات (غیرقابل تبدیل/فروش)",
                                       callback_data=f"gift:via0:b:{gift_id}:{qty}", style=ButtonStyle.SUCCESS)],
-                [InlineKeyboardButton(text="👤 ارسال با اکانتِ پشتیبانی (دستی)",
+                [InlineKeyboardButton(text="👤 اکانتِ پشتیبانی (قابل تبدیل/فروش)",
                                       callback_data=f"gift:via0:s:{gift_id}:{qty}", style=ButtonStyle.PRIMARY)],
                 [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="gift:back_shop", style=ButtonStyle.DANGER)],
             ])
             await _EditFirstV(cb.message).answer(
                 f"🎁 <b>{item_label}</b>" + (f" × {qty}" if qty > 1 else "") + f"\n💰 {unit_price * qty:,} تومان\n\n"
                 "گیفت چطور برایِ مقصد فرستاده شود؟\n"
-                "🤖 <b>ربات:</b> بعد از پرداخت فوراً و خودکار ارسال می‌شود (فقط برایِ کسی که ربات را استارت کرده).\n"
-                "👤 <b>اکانتِ پشتیبانی:</b> دستی ارسال می‌شود و برایِ هر آیدی/یوزرنیمی ممکن است.",
+                "🤖 <b>ربات:</b> بعد از پرداخت فوراً و خودکار ارسال می‌شود (فقط برایِ کسی که ربات را استارت کرده). "
+                "⛔️ <b>غیرقابل تبدیل به استارز و فروش.</b>\n"
+                "👤 <b>اکانتِ پشتیبانی:</b> دستی ارسال می‌شود و برایِ هر آیدی/یوزرنیمی ممکن است. "
+                "✅ <b>قابل تبدیل به استارز و فروش.</b>",
                 reply_markup=ckb, parse_mode="HTML")
             return
     await _gift_ask_dest(_EditFirstV(cb.message), row.id, gift_id, qty)
@@ -17048,7 +17054,6 @@ async def ton_setmax_save(msg: Message, bot: Bot, state: FSMContext):
 async def show_ton_shop_to_user(bot: Bot, target: Message, bot_id: int,
                                 state: "FSMContext | None" = None) -> None:
     rate, qmin, qmax = await _ton_sell_settings(bot_id)
-    from tenant import smart_cancel_kb
     if not rate:
         await target.answer("💎 فروشِ تون فعلاً در دسترس نیست. بعداً دوباره سر بزن.")
         return
@@ -17057,8 +17062,26 @@ async def show_ton_shop_to_user(bot: Bot, target: Message, bot_id: int,
     await target.answer(
         "💎 <b>خریدِ تون (TON)</b>\n\n"
         f"نرخ: هر ۱ TON = <b>{rate:,.0f} تومان</b>\n"
-        f"چه مقدار تون می‌خواهی؟ (بینِ {qmin:g} تا {qmax:g} — اعشاری مجاز، مثال: 1.5)\n"
-        "مقدارِ موردنظرت را بفرست:",
+        f"یکی از مقدارهای آماده را بزن یا «✍️ مقدار دلخواه» و عدد را بفرست "
+        f"(بینِ {qmin:g} تا {qmax:g} — اعشاری مجاز، مثال: 1.5):",
+        parse_mode="HTML",
+        reply_markup=_pick_kb([q for q in _TON_PICKS if qmin <= q <= qmax], "ton:q", "TON", "ton:qc"))
+
+
+async def _ton_amount_chosen(answer, bot: Bot, state: FSMContext, row, amount: float, rate: float) -> None:
+    await state.update_data(ton_amount=amount, ton_disc=None)   # PATCH_VS_DISCOUNT_V1
+    await state.set_state(SmmFSM.ton_wallet_in)
+    from tenant import smart_cancel_kb
+    price = round(amount * rate)
+    from tenant.bots.virtual_service.vs_discount import vsd_enabled   # PATCH_VS_DISCOUNT_V1
+    _disc_hint = ("\n\n🏷 کد تخفیف داری؟ <b>قبل از آدرس</b>، همان کد را بفرست."
+                  if await vsd_enabled(row.id) else "")
+    await answer(
+        f"💎 {amount:g} TON — {price:,} تومان\n\n"
+        "حالا <b>آدرسِ کیف‌پولِ TON</b> مقصد را بفرست (همان‌جایی که می‌خواهی تون‌ها "
+        "واریز شود).\n\n"
+        "⚠️ آدرس را با دقت بفرست؛ واریزِ اشتباه روی بلاک‌چین قابلِ برگشت نیست."
+        + _disc_hint,
         parse_mode="HTML", reply_markup=await smart_cancel_kb(bot))
 
 
@@ -17073,20 +17096,27 @@ async def ton_amount_in(msg: Message, bot: Bot, state: FSMContext):
     if amount is None or amount < qmin or amount > qmax:
         await msg.answer(f"❌ مقدار باید بینِ {qmin:g} تا {qmax:g} تون باشد. دوباره بفرست:")
         return
-    await state.update_data(ton_amount=amount, ton_disc=None)   # PATCH_VS_DISCOUNT_V1
-    await state.set_state(SmmFSM.ton_wallet_in)
-    from tenant import smart_cancel_kb
-    price = round(amount * rate)
-    from tenant.bots.virtual_service.vs_discount import vsd_enabled   # PATCH_VS_DISCOUNT_V1
-    _disc_hint = ("\n\n🏷 کد تخفیف داری؟ <b>قبل از آدرس</b>، همان کد را بفرست."
-                  if await vsd_enabled(row.id) else "")
-    await msg.answer(
-        f"💎 {amount:g} TON — {price:,} تومان\n\n"
-        "حالا <b>آدرسِ کیف‌پولِ TON</b> مقصد را بفرست (همان‌جایی که می‌خواهی تون‌ها "
-        "واریز شود).\n\n"
-        "⚠️ آدرس را با دقت بفرست؛ واریزِ اشتباه روی بلاک‌چین قابلِ برگشت نیست."
-        + _disc_hint,
-        parse_mode="HTML", reply_markup=await smart_cancel_kb(bot))
+    await _ton_amount_chosen(msg.answer, bot, state, row, amount, rate)
+
+
+@smm_router.callback_query(F.data.regexp(r"^ton:q:[0-9.]+$"))
+async def ton_amount_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    if not row:
+        return await cb.answer()
+    amount = _parse_ton_amount(cb.data.split(":")[2])
+    rate, qmin, qmax = await _ton_sell_settings(row.id)
+    if amount is None or amount < qmin or amount > qmax:
+        return await cb.answer(f"مقدار باید بینِ {qmin:g} تا {qmax:g} تون باشد.", show_alert=True)
+    await cb.answer()
+    await _ton_amount_chosen(cb.message.answer, bot, state, row, amount, rate)
+
+
+@smm_router.callback_query(F.data == "ton:qc")
+async def ton_amount_custom(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(SmmFSM.ton_amount_in)
+    await cb.answer("مقدارِ دلخواهت را بفرست (مثلاً 2.5).", show_alert=True)
 
 
 @smm_router.message(SmmFSM.ton_wallet_in, F.text)
@@ -18008,19 +18038,31 @@ async def srx_admin_reject(cb: CallbackQuery, bot: Bot):
 
 # ─────────────── فروشگاهِ استارز — طرفِ مشتری ───────────────
 
+_STAR_PICKS = (50, 75, 100)
+_TON_PICKS = (0.1, 0.5, 1)
+
+
+def _pick_kb(picks, prefix: str, unit: str, custom_cb: str) -> InlineKeyboardMarkup:
+    """مقدارهای آماده + «مقدار دلخواه» + لغو (اینلاین؛ در هر دو حالتِ منو کار می‌کند)."""
+    rows = []
+    if picks:
+        rows.append([InlineKeyboardButton(text=f"{p:g} {unit}", callback_data=f"{prefix}:{p:g}") for p in picks])
+    rows.append([InlineKeyboardButton(text="✍️ مقدار دلخواه", callback_data=custom_cb)])
+    rows.append([InlineKeyboardButton(text="❌ لغو", callback_data="fsm:cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def show_stars_shop_to_user(bot: Bot, target: Message, bot_id: int, state: "FSMContext | None" = None) -> None:
     rate, qmin, qmax = await _stars_sell_settings(bot_id)
-    from tenant import smart_cancel_kb
     if state is not None:
         await state.set_state(SmmFSM.stars_qty_in)
-    # یک پیامِ واحد برای نرخ، بازه و دریافتِ تعداد؛ فقط لغو و بازگشت به خانه
-    # زیرِ همین پیام نمایش داده می‌شوند تا چت با پیامِ دوم شلوغ نشود.
+    # یک پیامِ واحد برای نرخ، بازه و دریافتِ تعداد (مقدارهای آماده + دلخواه + لغو)
     await target.answer(
         f"⭐ <b>خریدِ استارزِ تلگرام</b>\n\n"
         f"نرخ: هر ⭐ = <b>{rate:,.0f} تومان</b>\n"
-        f"چه تعداد استارز می‌خواهی؟ (بینِ {qmin:,} تا {qmax:,})\n"
-        f"عدد مورد نظرت رو بفرست:",
-        parse_mode="HTML", reply_markup=await smart_cancel_kb(bot))
+        f"یکی از تعدادهای آماده را بزن یا «✍️ مقدار دلخواه» و عدد را بفرست (بینِ {qmin:,} تا {qmax:,}):",
+        parse_mode="HTML",
+        reply_markup=_pick_kb([q for q in _STAR_PICKS if qmin <= q <= qmax], "star:q", "⭐", "star:qc"))
 
 
 @smm_router.callback_query(F.data == "ssl:calc")
@@ -18050,17 +18092,7 @@ async def ssl_balance_calc(cb: CallbackQuery, bot: Bot):
     await cb.message.answer(msg, parse_mode="HTML")
 
 
-@smm_router.message(SmmFSM.stars_qty_in, F.text)
-async def stars_qty_in(msg: Message, bot: Bot, state: FSMContext):
-    from tenant import get_bot_row, fa_to_int
-    row = await get_bot_row(bot)
-    if not row:
-        return
-    qty = fa_to_int(msg.text)
-    rate, qmin, qmax = await _stars_sell_settings(row.id)
-    if not qty or qty < qmin or qty > qmax:
-        await msg.answer(f"❌ عدد باید بینِ {qmin:,} تا {qmax:,} باشد. دوباره بفرست:")
-        return
+async def _stars_qty_chosen(answer, state: FSMContext, qty: int, rate: float) -> None:
     await state.update_data(stars_qty=qty)
     # === PATCH_STARS_SELL_V1 ===
     # بعدِ اینجا منتظرِ زدنِ دکمه‌ایم (callback)، نه پیامِ متنیِ دیگر —
@@ -18074,12 +18106,46 @@ async def stars_qty_in(msg: Message, bot: Bot, state: FSMContext):
         [InlineKeyboardButton(text="👤 برایِ کاربرِ دیگر (یوزرنیم)", callback_data="star:dask")],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="star:back_shop", style=ButtonStyle.DANGER)],
     ])
-    await msg.answer(
+    await answer(
         f"⭐ {qty:,} استارز — {price:,} تومان\n\n"
         f"این استارز‌ها را برایِ چه کسی می‌خری؟\n\n"
         "⚠️ توجه: برایِ «کاربرِ دیگر»، آن شخص باید یوزرنیمِ عمومی داشته باشد "
         "(چون این خرید با فرگمنت انجام می‌شود، نه از طریقِ ربات).",
         reply_markup=kb)
+
+
+@smm_router.message(SmmFSM.stars_qty_in, F.text)
+async def stars_qty_in(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import get_bot_row, fa_to_int
+    row = await get_bot_row(bot)
+    if not row:
+        return
+    qty = fa_to_int(msg.text)
+    rate, qmin, qmax = await _stars_sell_settings(row.id)
+    if not qty or qty < qmin or qty > qmax:
+        await msg.answer(f"❌ عدد باید بینِ {qmin:,} تا {qmax:,} باشد. دوباره بفرست:")
+        return
+    await _stars_qty_chosen(msg.answer, state, qty, rate)
+
+
+@smm_router.callback_query(F.data.regexp(r"^star:q:\d+$"))
+async def stars_qty_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    if not row:
+        return await cb.answer()
+    qty = int(cb.data.split(":")[2])
+    rate, qmin, qmax = await _stars_sell_settings(row.id)
+    if qty < qmin or qty > qmax:
+        return await cb.answer(f"تعداد باید بینِ {qmin:,} تا {qmax:,} باشد.", show_alert=True)
+    await cb.answer()
+    await _stars_qty_chosen(cb.message.answer, state, qty, rate)
+
+
+@smm_router.callback_query(F.data == "star:qc")
+async def stars_qty_custom(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(SmmFSM.stars_qty_in)
+    await cb.answer("عددِ دلخواهت را بفرست.", show_alert=True)
 
 
 @smm_router.callback_query(F.data == "star:back_shop")
@@ -18570,11 +18636,17 @@ async def _channel_post_mark_done(cb, text: str) -> None:
             logger.info("برداشتنِ دکمه‌هایِ پستِ کانال ممکن نشد")
 
 
+import contextvars as _cv
+_KEEP_ADMIN_MSG: "_cv.ContextVar[bool]" = _cv.ContextVar("keep_admin_msg", default=False)
+
+
 async def _admin_msg_close(cb, text: str) -> None:
     """بعد از «انجام شد/رد»، همان پیامِ سفارش در چتِ ادمین پاک می‌شود (نه اینکه پیامِ تازه برسد و قبلی بماند).
     اگر حذف ممکن نبود (پیامِ قدیمی)، دکمه‌ها برداشته و متنِ نتیجه فرستاده می‌شود.
     در کانالِ سفارشات پست پاک نمی‌شود: نتیجه زیرش نوشته و دکمه‌ها برداشته می‌شود
     تا بقیهٔ تیم ببینند رسیدگی شده (PATCH_MANUAL_ORDER_CHANNEL_V1)."""
+    if _KEEP_ADMIN_MSG.get():        # از داخلِ «لیستِ سفارش‌ها»: پیامِ لیست نباید پاک شود، خودِ لیست تازه می‌شود
+        return
     if getattr(getattr(cb.message, "chat", None), "type", None) == "channel":
         await _channel_post_mark_done(cb, text)
         return

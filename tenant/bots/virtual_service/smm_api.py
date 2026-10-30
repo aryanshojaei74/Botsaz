@@ -632,7 +632,25 @@ async def cancel_order(api_url: str, api_key: str, order_id) -> dict | list | No
     if _is_paystars(api_url):
         return {"error": "این پنل لغوِ سفارش را از طریقِ API پشتیبانی نمی‌کند."}
     d = await _post(api_url, {"key": api_key, "action": "cancel", "orders": str(order_id)})
+    # بعضی پنل‌ها (مثلِ WhaleSMM) برایِ cancel پارامترِ «order» (مفرد) می‌خواهند و با «orders» خطایِ شناسهٔ سفارش
+    # می‌دهند («error.incorrect_order_id»)؛ فقط در همین حالت یک‌بار با نامِ مفرد تکرار می‌کنیم.
+    if _cancel_wrong_param(d):
+        d2 = await _post(api_url, {"key": api_key, "action": "cancel", "order": str(order_id)})
+        if d2 is not None:
+            return d2
     return d
+
+
+def _cancel_wrong_param(d) -> bool:
+    items = d if isinstance(d, list) else [d]
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        c = it.get("cancel") if isinstance(it.get("cancel"), dict) else it
+        e = str(c.get("error") or it.get("error") or "").lower()
+        if e and "already" not in e and any(k in e for k in ("incorrect", "invalid", "not found", "required", "missing", "order_id", "order id")):
+            return True
+    return False
 
 
 async def validate(api_url: str, api_key: str) -> tuple[bool, str]:

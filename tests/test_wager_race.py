@@ -375,3 +375,39 @@ def test_speed_words_do_not_repeat_in_the_same_chat():
     G._RECENT_WORDS.clear()
     qs = [R.new_question("speed", (7, 333))["q"] for _ in range(100)]
     assert len(set(qs)) == 100                                      # مسیرِ مسابقهٔ پولی هم همان را می‌خواند
+
+
+@pytest.mark.asyncio
+async def test_pattern_is_turn_based_wrong_answer_passes_the_turn(env, monkeypatch):
+    mk = env
+    w = await make(mk, "pattern")
+    r = await R.join_race(w.id, (2, "u2", None))
+    assert r.w.turn_id in (1, 2)
+    st = json.loads(r.w.state)
+    R.LIVE[w.id] = {"wid": w.id, "chat": CHAT, "kind": "pattern", "players": {1, 2}, "answer": st["a"], "n": None,
+                    "until": 10 ** 12}
+    first, other = r.w.turn_id, (2 if r.w.turn_id == 1 else 1)
+    out = []
+
+    async def reply(t, **k):
+        out.append(t)
+
+    async def noedit(*a, **k):
+        return None
+    monkeypatch.setattr(R, "_edit", noedit)
+    monkeypatch.setattr(R, "_expire_later", noedit)
+
+    def msg(text, uid):
+        return NS(text=text, chat=NS(id=CHAT), from_user=NS(id=uid, is_bot=False), reply=reply)
+    wrong = str(int(st["a"]) + 1)
+    # نفرِ بی‌نوبت جواب بدهد ⇒ «نوبتِ او نیست»؛ کسی برنده نمی‌شود
+    assert await R.guess_step(None, msg(st["a"], other), R.LIVE[w.id]) == "done"
+    assert "نوبتِ" in out[-1]
+    # نفرِ نوبت‌دار غلط بگوید ⇒ «اشتباه گفتی» و نوبت به حریف می‌رسد
+    assert await R.guess_step(None, msg(wrong, first), R.LIVE[w.id]) == "done"
+    assert "اشتباه" in out[-1]
+    async with mk() as s:
+        assert (await s.get(models.PlatformWager, w.id)).turn_id == other
+    # حریف درست بگوید ⇒ برنده
+    assert await R.guess_step(None, msg(st["a"], other), R.LIVE[w.id]) == "win"
+    assert R._match(msg(wrong, 1)) is not None                # عددِ غلط هم به مسابقه می‌رسد
