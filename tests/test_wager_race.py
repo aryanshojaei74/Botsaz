@@ -380,6 +380,9 @@ def test_speed_words_do_not_repeat_in_the_same_chat():
 @pytest.mark.asyncio
 async def test_pattern_is_turn_based_wrong_answer_passes_the_turn(env, monkeypatch):
     mk = env
+    R.LIVE.clear()
+    R._LAST_NOTE.clear()
+    R._LAST_GUESS.clear()
     w = await make(mk, "pattern")
     r = await R.join_race(w.id, (2, "u2", None))
     assert r.w.turn_id in (1, 2)

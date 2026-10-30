@@ -100,7 +100,7 @@ def order_shim(o, chat_id: int | None = None):
     gid = str(getattr(o, "gift_id", "") or "")
     qty = int(getattr(o, "quantity", 1) or 1)
     if gid.startswith(("starsell_", "srx_")):          # تعدادِ واقعی = تعدادِ استارز (نه ۱)
-        qty = int(getattr(o, "star_count", 0) or 0) * (qty if gid.startswith("srx_") else 1)
+        qty = int(getattr(o, "star_count", 0) or 0) * qty
     elif gid.startswith("tonsell_"):                   # مقدارِ تون (اعشاری؛ ذخیره‌شده به‌صورتِ صدم)
         qty = (int(getattr(o, "star_count", 0) or 0)) / 100
     return SimpleNamespace(

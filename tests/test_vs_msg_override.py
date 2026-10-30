@@ -53,7 +53,7 @@ async def db(monkeypatch):
 async def test_custom_text_replaces_default_with_variables(db):
     db["smm_txt_completed"] = "سلام! سفارش {{tracking_code}} ({{product_name}} × {{quantity}}) انجام شد 🌹"
     out = await VO.override_text(3, 555, "✅ سفارش شما با موفقیت تکمیل شد! 🎉\n\n🔖 کد پیگیری: <code>TRK12345</code>")
-    assert out == "سلام! سفارش TRK12345 (⭐ 200 استارز × 2) انجام شد 🌹"
+    assert out == "سلام! سفارش TRK12345 (⭐ 200 استارز × 200) انجام شد 🌹"
 
 
 async def test_no_custom_text_means_no_change(db):
