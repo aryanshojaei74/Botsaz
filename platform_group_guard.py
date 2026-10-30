@@ -1703,6 +1703,10 @@ from platform_ai_kb import (ALWAYS as _GG_AI_ALWAYS, TOPICS_2026_10D as _GG_AI_T
                             TOPICS_2026_10E as _GG_AI_TOPICS_NEW_E,
                             clean_ai_text as _gg_clean_ai_text, select_relevant_topics as _kb_select,
                             strip_marks as _gg_strip_marks)
+# === PATCH_AI_TWO_STAGE_V1 === تحلیلِ سوال + نقشهٔ دقیقِ دکمه‌هایِ پنل
+from platform_ai_kb import (ANALYZE_SYSTEM as _AN_SYSTEM, analyze_user_prompt as _an_user_prompt,
+                            compose_knowledge as _kb_compose, menu_lines as _kb_menu_lines,
+                            parse_analysis as _an_parse, topic_index as _an_topic_index)
 
 # === PATCH_GROUP_GUARD_KB_RETRIEVAL_V1 ===
 # هر آیتم: (کلیدواژه‌ها، متنِ کامل همون بخش). فقط بخش‌هایی که با سوالِ
@@ -2144,7 +2148,7 @@ def _gg_select_relevant_topics(question: str, char_budget: int = 11000) -> str:
     return _kb_select(question, _GG_AI_TOPICS, char_budget)
 
 
-async def _build_ai_system_prompt(question: str = "") -> str:
+async def _build_ai_system_prompt(question: str = "", analysis: dict | None = None) -> str:
     """PATCH_GROUP_GUARD_CUSTOM_KNOWLEDGE_V1 — پرامپتِ پایه رو با «دانشِ سفارشیِ»
     ادمین (که هر وقت لازم شد از پنل آپدیت می‌کنه، بدونِ نیاز به تغییرِ کد یا
     ری‌استارتِ سرور) ترکیب می‌کنه؛ همیشه در لحظهٔ پرسیدن خونده می‌شه، پس همیشه
@@ -2166,10 +2170,8 @@ async def _build_ai_system_prompt(question: str = "") -> str:
     if _mode != "full" and question:
         from ai_router import get_router as _gr
         _budget = 9000 if _gr().configured() else (11000 if is_groq else 16000)   # سهمیهٔ توکنیِ رایگان کم است
-        relevant = _gg_select_relevant_topics(question, _budget)
-        topics_block = (
-            "# بخش‌هایِ مرتبط با سوالِ کاربر (از میانِ دانشِ کاملِ ربات‌هایِ مستأجر)\n"
-            + relevant) if relevant else ""
+        # === PATCH_AI_TWO_STAGE_V1 === بخش‌هایِ منتخبِ مرحلهٔ تحلیل + کلیدواژه‌ها + نقشهٔ دقیقِ دکمه‌ها (بدونِ تحلیل هم نقشه می‌آید)
+        topics_block = _kb_compose(question, _GG_AI_TOPICS, analysis, _budget)
     else:
         topics_block = (
             "# دانشِ کاملِ ربات‌هایِ مستأجر (همهٔ بخش‌ها)\n"
@@ -2187,6 +2189,36 @@ async def _build_ai_system_prompt(question: str = "") -> str:
 
 
 # === PATCH_GROUP_GUARD_AI_COST_V1 === کشِ جوابِ سوال‌هایِ تکراری + پاسخِ آماده به سلام/تشکر
+_AN_CACHE: dict[str, tuple[float, dict | None]] = {}
+
+
+async def _ai_analyze(question: str) -> dict | None:
+    """مرحلهٔ ۱: منظورِ کاربر را می‌فهمد و بخش‌هایِ لازم را از فهرستِ کاملِ دانش انتخاب می‌کند. هر خطا ⇒ None (رفتارِ قبلی)."""
+    try:
+        if (await get_pset("group_guard_ai_two_stage", "1")) == "0" or not question.strip():
+            return None
+        key = _ai_cache_key(question)
+        hit = _AN_CACHE.get(key)
+        if hit and time.monotonic() - hit[0] < _AI_CACHE_TTL:
+            return hit[1]
+        from ai_router import get_router as _gr
+        router = _gr()
+        if not router.configured():
+            return None
+        text, usage, _route = await router.chat(_AN_SYSTEM, _an_user_prompt(question, _an_topic_index(_GG_AI_TOPICS)),
+                                                max_tokens=320, timeout=20)
+        res = _an_parse(text, len(_GG_AI_TOPICS))
+        logger.info("group_guard_ai analysis: ok=%s topics=%s ambiguous=%s usage=%s", bool(res),
+                    (res or {}).get("topics"), (res or {}).get("ambiguous"), (usage or {}).get("total_tokens"))
+        if len(_AN_CACHE) > 300:
+            _AN_CACHE.clear()
+        _AN_CACHE[key] = (time.monotonic(), res)
+        return res
+    except Exception:
+        logger.exception("group_guard_ai: مرحلهٔ تحلیلِ سوال ناموفق بود؛ بدونِ تحلیل ادامه می‌دهیم")
+        return None
+
+
 _AI_CACHE: dict[str, tuple[float, str]] = {}
 _AI_CACHE_TTL = 6 * 3600
 _AI_CACHE_MAX = 400
@@ -2247,7 +2279,10 @@ async def _ask_ai(question: str) -> str:
     from ai_router import get_router as _get_router
     _router = _get_router()
     if _router.configured():
-        system_prompt = await _build_ai_system_prompt(question)
+        _analysis = await _ai_analyze(question)          # PATCH_AI_TWO_STAGE_V1
+        if _analysis and _analysis.get("ambiguous") and _analysis.get("clarify"):
+            return _gg_clean_ai_text(_analysis["clarify"]) or "منظورت دقیقاً چیه؟"
+        system_prompt = await _build_ai_system_prompt(question, _analysis)
         text, usage, route = await _router.chat(system_prompt, question, max_tokens=600)
         logger.info("group_guard_ai usage: prompt=%s completion=%s total=%s route=%s",
                     usage.get("prompt_tokens"), usage.get("completion_tokens"), usage.get("total_tokens"), route)

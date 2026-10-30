@@ -145,6 +145,171 @@ def select_relevant_topics(question: str, topics, char_budget: int = 9000) -> st
     return "\n\n".join(picked)
 
 
+# ───────────────────────── نقشهٔ دقیقِ پنل + تحلیلِ سوال (دو مرحله‌ای) ─────────────────────────
+# چرا: مسیرها دستی نوشته می‌شدند و با تغییرِ منوها غلط می‌شدند، و انتخابِ بخش‌ها فقط با کلیدواژه بود؛ پس وقتی کاربر با کلمه‌هایِ
+# دیگری می‌پرسید مدل مسیر را حدس می‌زد. حالا (۱) برچسبِ واقعیِ دکمه‌هایِ پنل از خودِ کد استخراج و در platform_ai_menu_map.py ذخیره
+# می‌شود، (۲) یک مرحلهٔ تحلیل اول منظورِ کاربر را می‌فهمد و بخش‌هایِ لازم را از فهرستِ کاملِ دانش انتخاب می‌کند.
+
+_FIELD_FA = {
+    "vpn_sales": "فروش VPN", "virtual_service": "خدمات مجازی تلگرام", "ad_bot": "ربات تبلیغاتی", "digital_shop": "فروشگاه دیجیتال",
+    "booking": "رزرو و نوبت‌دهی", "community_mgmt": "مدیریت گروه و کانال", "giveaway": "قرعه‌کشی", "escrow_bot": "واسطه‌گری",
+    "funstat": "Fun Stat", "support_desk": "هلپ‌دسک", "general": "ربات عمومی", "file_link": "فایل و لینک", "panel_yar": "پنل‌یار",
+    "partner": "ربات همکار",
+}
+_FIELD_HINTS = (
+    ("vpn_sales", ("vpn", "وی پی ان", "کانفیگ", "v2ray", "ویتوری", "وایرگارد", "wireguard", "پنل سنایی", "مرزبان", "پاسارگارد", "ساب")),
+    ("virtual_service", ("خدمات مجازی", "استارز", "فالوور", "smm", "ممبر", "شماره مجازی", "گیفت", "premium", "پریمیوم", "تون")),
+    ("ad_bot", ("تبلیغاتی", "ربات تبلیغ")),
+    ("giveaway", ("قرعه", "قرعه کشی")),
+    ("partner", ("همکار", "نمایندگی")),
+)
+_PLAN_FA = {"free": "", "growth": " [از پلن رشد]", "pro": " [پلن حرفه‌ای]", "partner": " [ربات همکار]"}
+_PLAN_ORDER = {"free": 0, "growth": 1, "pro": 2, "partner": 3}
+
+
+def _menu_entries():
+    try:
+        from platform_ai_menu_map import MENU_ENTRIES
+        return MENU_ENTRIES
+    except Exception:  # noqa: BLE001 — فایلِ تولیدشده نبود ⇒ بدونِ نقشه ادامه بده
+        return ()
+
+
+def _q_tokens(q: str) -> list[str]:
+    return [t for t in _PUNCT.sub(" ", norm(q)).split() if len(t) >= 3 and t not in _STOP]
+
+
+def menu_lines(question: str, limit: int = 26, entries=None) -> str:
+    """دکمه‌هایِ واقعیِ پنل که با سوال هم‌پوشانی دارند، با مسیرِ کامل و پلنِ لازم؛ خالی اگر چیزی نبود."""
+    entries = _menu_entries() if entries is None else entries
+    toks = _q_tokens(question)
+    if not entries or not toks:
+        return ""
+    qn = norm(question)
+    want_fields = {f for f, hints in _FIELD_HINTS if any(norm(h) in qn for h in hints)}
+    agg: dict[tuple[str, str], dict] = {}
+    for field, plan, section, label in entries:
+        if want_fields and field not in want_fields and field != "partner":
+            continue
+        e = agg.setdefault((section, label), {"fields": set(), "plan": plan})
+        e["fields"].add(field)
+        if _PLAN_ORDER[plan] < _PLAN_ORDER[e["plan"]]:
+            e["plan"] = plan
+    scored = []
+    for (section, label), e in agg.items():
+        ln = norm(label)
+        words = _PUNCT.sub(" ", ln).split()
+        sc = 0.0
+        for t in toks:
+            if any(w == t or (len(t) >= 4 and (w.startswith(t) or t.startswith(w) and len(w) >= 4)) for w in words):
+                sc += 1.0 + min(1.0, len(t) / 8)
+            elif len(t) >= 5 and t in ln:
+                sc += 0.8
+        if sc > 0:
+            scored.append((sc, section, label, e))
+    scored.sort(key=lambda x: (-x[0], x[1], x[2]))
+    out = []
+    for _sc, section, label, e in scored[:limit]:
+        note = ""
+        fl = sorted(e["fields"])
+        if 0 < len(fl) <= 6 and not (want_fields and set(fl) <= want_fields):
+            note = " — فقط در: " + "، ".join(_FIELD_FA.get(f, f) for f in fl)
+        out.append(f"• پنل مدیریت ← {section} ← {label}{_PLAN_FA.get(e['plan'], '')}{note}")
+    return "\n".join(out)
+
+
+def topic_title(text: str, kws) -> str:
+    first = (text or "").strip().split("\n", 1)[0]
+    first = re.split(r"\s[—-]\s|:\s", first, 1)[0]
+    return (first[:46]).strip() or " ".join(list(kws)[:3])
+
+
+def topic_index(topics) -> str:
+    """فهرستِ فشردهٔ «شماره: عنوان | چند کلیدواژه» برایِ مرحلهٔ تحلیل."""
+    lines = []
+    for i, (kws, text) in enumerate(topics):
+        extra = "، ".join(list(kws)[:3])
+        lines.append(f"{i}: {topic_title(text, kws)} | {extra}")
+    return "\n".join(lines)
+
+
+ANALYZE_SYSTEM = """تو تحلیل‌گرِ سوالِ کاربرانِ «بات‌ساز» هستی. جواب نمی‌دی؛ فقط منظورِ کاربر رو می‌فهمی و بخش‌هایِ دانشِ لازم رو انتخاب می‌کنی.
+خروجی فقط یک JSON معتبر باشه (بدونِ توضیح و بدونِ ```):
+{"intent": "منظورِ واقعیِ کاربر در یک جمله به فارسی", "bot_type": "vpn_sales|virtual_service|ad_bot|giveaway|partner|main_bot|unknown", "topics": [شماره‌هایِ بخش‌هایِ لازم از فهرست، حداکثر ۶ تا], "menu_terms": ["حداکثر ۵ کلمهٔ کلیدی که اسمِ دکمه‌هایِ پنل رو پیدا می‌کنه"], "ambiguous": false, "clarify": ""}
+قواعد:
+- منظور رو از روی معنا بفهم نه فقط کلمه‌ها؛ غلط املایی، فینگلیش و لحنِ شکایتی بهانه نیست.
+- فقط وقتی «ambiguous» رو true بذار که بدونِ جواب به یه سوالِ کوتاه واقعاً نشه مسیر داد (مثلاً معلوم نیست کدوم نوعِ ربات یا کدوم قابلیت). در اون حالت «clarify» یک سوالِ کوتاهِ فارسی باشه.
+- اگه سوال به هیچ بخشی از فهرست نمی‌خوره، topics رو خالی بذار."""
+
+
+def analyze_user_prompt(question: str, index: str) -> str:
+    return f"# فهرستِ بخش‌هایِ دانش\n{index}\n\n# سوالِ کاربر\n{question}"
+
+
+def parse_analysis(text: str, n_topics: int) -> dict | None:
+    """JSONِ تحلیل را (حتی اگر دورش متنِ اضافه باشد) می‌خواند و پاک‌سازی می‌کند؛ نامعتبر ⇒ None."""
+    import json
+    t = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL | re.IGNORECASE)
+    m = re.search(r"\{.*\}", t, flags=re.DOTALL)
+    if not m:
+        return None
+    try:
+        d = json.loads(m.group(0))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    ids = []
+    for x in d.get("topics") or []:
+        try:
+            i = int(x)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= i < n_topics and i not in ids:
+            ids.append(i)
+    terms = [str(x).strip() for x in (d.get("menu_terms") or []) if str(x).strip()][:6]
+    return {
+        "intent": str(d.get("intent") or "").strip()[:300],
+        "bot_type": str(d.get("bot_type") or "unknown").strip()[:30],
+        "topics": ids[:6],
+        "menu_terms": terms,
+        "ambiguous": bool(d.get("ambiguous")),
+        "clarify": str(d.get("clarify") or "").strip()[:240],
+    }
+
+
+def compose_knowledge(question: str, topics, analysis: dict | None, char_budget: int = 9000) -> str:
+    """بخش‌هایِ منتخبِ تحلیل + بخش‌هایِ کلیدواژه‌ایِ تکمیلی + نقشهٔ دکمه‌هایِ پنل، با رعایتِ بودجه."""
+    parts: list[str] = []
+    used = 0
+    seen: set[int] = set()
+    for i in (analysis or {}).get("topics", []):
+        if i in seen or not (0 <= i < len(topics)):
+            continue
+        t = topics[i][1]
+        if parts and used + len(t) > char_budget:
+            continue
+        parts.append(t)
+        used += len(t)
+        seen.add(i)
+    rest = select_relevant_topics(question, topics, max(0, char_budget - used))
+    if rest:
+        for chunk in rest.split("\n\n"):
+            if chunk and chunk not in parts and not any(chunk == topics[i][1] for i in seen):
+                parts.append(chunk)
+    block = "\n\n".join(parts)
+    menu_q = question + " " + " ".join((analysis or {}).get("menu_terms", []))
+    menu = menu_lines(menu_q)
+    head = []
+    if analysis and analysis.get("intent"):
+        head.append(f"# تحلیلِ سوالِ کاربر\nمنظور: {analysis['intent']}\nنوعِ ربات: {analysis.get('bot_type', 'unknown')}")
+    if menu:
+        head.append("# نقشهٔ دقیقِ دکمه‌هایِ پنل (از خودِ ربات استخراج شده؛ مسیر را فقط با همین اسم‌ها بنویس)\n" + menu)
+    if block:
+        head.append("# بخش‌هایِ مرتبطِ دانش\n" + block)
+    return "\n\n".join(head)
+
+
 # ───────────────────────── پرامپتِ پایه (همیشه فرستاده می‌شود) ─────────────────────────
 
 ALWAYS = """[نقش]
@@ -177,6 +342,9 @@ ALWAYS = """[نقش]
 3) مالی و کیف پول: سفارش‌ها و رسیدها، شماره کارت، درگاه‌ها، کد تخفیف
 4) آمار و گزارشات: آمار، مدیریت کاربران
 5) سرویس‌ها و محصولات: بسته به نوع ربات، مثلا انبار کانفیگ‌های دستی و پنل VPN خودکار (فروش VPN)، فروشگاه، خدمات مجازی، رزرو و بقیه
+
+[قبل از جواب]
+اگه «تحلیلِ سوالِ کاربر» اومده، جواب باید دقیقاً به همون «منظور» بخوره، نه به یه موضوعِ شبیهش. مسیرها رو فقط با اسمِ دکمه‌هایِ «نقشهٔ دقیقِ دکمه‌هایِ پنل» و بخش‌هایِ دانش بنویس؛ اگه دکمه‌ای تو نقشه نبود یا پلنش بالاتره، همین رو بگو (مثلاً «این گزینه از پلن رشد به بالا بازه») و اسمِ دکمه رو از خودت درنیار.
 
 [صداقت]
 - مسیر یا عددِ ساختگی نساز؛ فقط چیزی که تو بخش‌های دانش اومده. قیمت پلن‌ها اینجا نیست، پس بگو از خودِ ربات اصلی ببینه چون تغییر می‌کنه. قیمتی که برای بازی‌های شرط‌بندی نوشته شده فقط پیش‌فرضه و مدیر عوضش می‌کنه.
