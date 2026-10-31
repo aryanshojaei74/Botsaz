@@ -184,6 +184,8 @@ from platform_funstat import funstat_router
 router.include_router(funstat_router)
 from platform_panel_seller import panel_seller_gate_router   # === PATCH_PANEL_SELLER_V1 ===
 router.include_router(panel_seller_gate_router)
+from platform_gift_emoji import gift_emoji_router   # === PATCH_GIFT_CEMOJI_V1 ===
+router.include_router(gift_emoji_router)
 # === PATCH_STATS_SHARE_V1 ===
 from platform_stats_share import stats_share_router
 router.include_router(stats_share_router)

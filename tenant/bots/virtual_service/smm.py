@@ -12099,6 +12099,18 @@ def _gift_price(star_count: int, rate: float, margin_pct: float) -> int:
 
 
 # === PATCH_MANUAL_GIFT_V1 ===
+async def _gift_icon_id(bot_id: int, gift_id) -> str | None:
+    """custom_emoji_idِ همین گیفت از نگاشتِ سراسری؛ فقط اگر مالک «آیکونِ پرمیومِ گیفت‌ها» را روشن کرده باشد."""
+    try:
+        if (await _get_setting(bot_id, "gift_icons", "0")) != "1":
+            return None
+        from platform_gift_emoji import get_map
+        return (await get_map()).get(str(gift_id)) or None
+    except Exception:
+        logger.exception("خواندنِ نگاشتِ آیکونِ گیفت ناموفق بود")
+        return None
+
+
 async def _gift_price_and_label(g: "TelegramGiftConfig", bot_id: int) -> tuple[int, str]:
     """(قیمتِ نهایی، برچسبِ کوتاهِ کالا) — هم برایِ گیفتِ کاتالوگی هم سفارشی؛
     یک‌جا نگهش می‌داریم تا فروشگاه/فاکتور/لیستِ ادمین همیشه هماهنگ بمانند."""
@@ -12263,6 +12275,8 @@ async def gift_admin_content(bot_id: int, bot: "Bot | None" = None) -> tuple[str
         [InlineKeyboardButton(text="🔄 به‌روزرسانیِ فهرست از تلگرام", callback_data="gift:refresh")],
         [InlineKeyboardButton(text="🗂 مدیریتِ گیفت‌ها (فعال/غیرفعال)", callback_data="gift:list:0")],
         [InlineKeyboardButton(text="🎨 ایموجیِ گیفت‌ها", callback_data="gifte:list:0")],   # PATCH_GIFT_EMOJI_V1
+        [InlineKeyboardButton(text="💎 آیکونِ پرمیومِ گیفت‌ها در فروشگاه: " + ("✅ روشن" if (await _get_setting(bot_id, "gift_icons", "0")) == "1" else "⬜️ خاموش"),
+                              callback_data="gift:icons")],   # PATCH_GIFT_CEMOJI_V1
         # === PATCH_GLOBAL_MANUAL_DELIVERY_V1 ===
         [InlineKeyboardButton(text=manual_toggle_text, callback_data="gift:manualdelivery:toggle",
                               style=ButtonStyle.PRIMARY)],
@@ -12359,6 +12373,24 @@ async def gift_refresh(cb: CallbackQuery, bot: Bot):
                                   "از «🎨 ایموجیِ گیفت‌ها» برایِ هر کدام ایموجیِ دلخواه بگذار؛ ضمناً مشتری استیکرِ واقعیِ گیفت را هم می‌بیند.",
                                 parse_mode="HTML")
     await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+# === PATCH_GIFT_CEMOJI_V1 ===
+@smm_router.callback_query(F.data == "gift:icons")
+async def gift_icons_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    cur = (await _get_setting(row.id, "gift_icons", "0")) == "1"
+    await _set_setting(row.id, "gift_icons", "0" if cur else "1")
+    await cb.answer("⬜️ خاموش شد." if cur else
+                    "✅ روشن شد. ⚠️ آیکون فقط وقتی دیده می‌شود که مالکِ ربات پریمیوم باشد یا یوزرنیمِ اضافهٔ فرگمنت داشته باشد؛ "
+                    "وگرنه گیفت‌ها بدونِ ایموجی دیده می‌شوند و باید خاموشش کنی.", show_alert=True)
+    text, kb = await gift_admin_content(row.id, bot)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 # === PATCH_GIFT_EMOJI_V1 === ایموجیِ دلخواه برایِ هر گیفت (مالک)
@@ -12879,6 +12911,13 @@ async def show_gift_shop_to_user(bot: Bot, target: Message, bot_id: int) -> None
         if g.star_count > balance:
             continue
         price, item_label = await _gift_price_and_label(g, bot_id)
+        # === PATCH_GIFT_CEMOJI_V1 === آیکونِ پرمیومِ خودِ همین گیفت (فقط با تیکِ مالک؛ متن بی‌ایموجی تا دوتایی نشود)
+        _cid = await _gift_icon_id(bot_id, g.gift_id)
+        if _cid:
+            rows.append([InlineKeyboardButton(text=f"گیفت ({g.star_count} استارز) — {price:,} تومان",
+                                              callback_data=f"gift:pick:{g.gift_id}", icon_custom_emoji_id=_cid,
+                                              style=item_style)])
+            continue
         rows.append([InlineKeyboardButton(text=f"{item_label} — {price:,} تومان",
                                           callback_data=f"gift:pick:{g.gift_id}",
                                           style=item_style)])
