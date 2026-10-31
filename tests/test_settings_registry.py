@@ -196,7 +196,7 @@ def test_registered_callback_has_a_router_handler(cb):
 
 VPN_CALLBACKS = {
     "tadm:edit_guides", "tadm:cfgguide", "tadm:cfgnameprompt", "set:trial",
-    "set:buy_onhold", "qrbg:menu", "tadm:groupsettings",
+    "set:buy_onhold", "set:autorenew", "qrbg:menu", "tadm:groupsettings",   # PATCH_VPN_AUTORENEW_V1
     "vtl:menu", "set:cat_icons",   # PATCH_VPN_TITLES_IN_SETTINGS_V1
     "vrf:cfg",    # PATCH_VPN_REFUND_V1
     "stk:menu",   # PATCH_STOCK_ALARM_V1
@@ -229,7 +229,7 @@ def test_vpn_menu_order_matches_previous_layout(vpn):
     items = regmod.visible_items("vpn_sales", "pro")
     out = [cb for _, cb in regmod.merge_into(base, items)]
     assert out == ["tadm:homebtns", "tadm:btn_colors", "tadm:edit_guides", "tadm:cfgguide",
-                   "tadm:cfgnameprompt", "set:trial", "gwname:menu", "set:buy_onhold",
+                   "tadm:cfgnameprompt", "set:trial", "gwname:menu", "set:buy_onhold", "set:autorenew",
                    "set:welcome", "dga:menu", "qrbg:menu", "pemj:menu:0",
                    "set:homemenutext", "tadm:backup:menu", "tadm:groupsettings", "miniapp:panel", "vtl:menu", "set:cat_icons", "vrf:cfg", "stk:menu"]
 
