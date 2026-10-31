@@ -429,3 +429,11 @@ async def test_platform_plan_guard_and_gate(env, monkeypatch):
 
 async def _aw(v):
     return v
+
+
+def test_worker_modules_import_cleanly():
+    """worker_tenant مستقیم این حلقه‌ها را import می‌کند؛ هر ImportError کلِ worker را از کار می‌اندازد."""
+    import importlib
+    for name in ("tenant.bots.panel_seller.loop", "tenant.bots.vpn.autorenew"):
+        mod = importlib.import_module(name)
+        assert callable(getattr(mod, "panel_seller_loop", None) or getattr(mod, "autorenew_loop"))

@@ -39,6 +39,19 @@ async def _buy_onhold_label(bot_id: int) -> str:
     return _BUY_ONHOLD_PREFIX + ": " + ("⏸ از اولین اتصال" if on else "▶️ از لحظهٔ خرید")
 
 
+_AUTORENEW_PREFIX = "♻️ تمدیدِ خودکارِ مشتری از کیف‌پول"      # PATCH_VPN_AUTORENEW_V1
+
+
+async def _autorenew_label(bot_id: int) -> str:
+    from tenant import get_setting
+    return _AUTORENEW_PREFIX + ": " + ("✅ روشن" if await get_setting(bot_id, "autorenew_enabled", "0") == "1" else "⬜️ خاموش")
+
+
+async def _autorenew(cb, bot):
+    from tenant.bots.vpn.autorenew import owner_toggle
+    await owner_toggle(cb, bot)
+
+
 _CAT_ICONS_PREFIX = "🔣 آیکنِ کنارِ دسته‌ها"
 
 
@@ -152,6 +165,12 @@ register_settings_items(KIND, [
         handler=_buy_onhold,
         label_fn=_buy_onhold_label, label_prefix=_BUY_ONHOLD_PREFIX,
         after=("gwname:menu", "set:trial"),
+    ),
+    SettingsItem(
+        label=_AUTORENEW_PREFIX + ": ⬜️ خاموش", callback="set:autorenew",
+        handler=_autorenew,
+        label_fn=_autorenew_label, label_prefix=_AUTORENEW_PREFIX,
+        after=("set:buy_onhold", "gwname:menu", "set:trial"),
     ),
     SettingsItem(
         label="🖼 عکسِ پشتِ بارکد (QR)", callback="qrbg:menu",

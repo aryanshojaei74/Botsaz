@@ -241,6 +241,8 @@ tenant_router.include_router(panel_tools_router)
 from tenant.gateways.receipt_ai_key import receipt_ai_router  # PATCH_RECEIPT_AI_OWN_KEY_V1
 tenant_router.include_router(receipt_ai_router)
 _include(vpn_user_router, "vpn")
+from tenant.bots.vpn.autorenew import autorenew_router   # === PATCH_VPN_AUTORENEW_V1 ===
+_include(autorenew_router, "vpn")
 tenant_router.include_router(ticket_router)
 tenant_router.include_router(product_rating_router)  # PATCH_PRODUCT_RATING_V1
 tenant_router.include_router(token_swap_router)

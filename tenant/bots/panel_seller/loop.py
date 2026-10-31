@@ -6,7 +6,7 @@ import asyncio
 from sqlalchemy import select
 
 from config import Session
-from models import BotRow
+from models import Bot as BotRow
 
 from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)

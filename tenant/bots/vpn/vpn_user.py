@@ -6168,6 +6168,14 @@ async def vpn_service(cb: CallbackQuery, bot: Bot):
                                   callback_data=f"vadd:{aid}",
                                   style=await _ibs(_bid, "ibtn:add_volume"))],
         ]
+    # === PATCH_VPN_AUTORENEW_V1 === دکمهٔ «تمدیدِ خودکار» فقط اگر مالک قابلیت را روشن کرده
+    try:
+        from tenant.bots.vpn.autorenew import button_for as _ar_btn
+        _arb = await _ar_btn(_bid, aid) if renew_on else None
+        if _arb is not None:
+            kb_rows.append([_arb])
+    except Exception:
+        logger.exception("دکمهٔ تمدیدِ خودکار ساخته نشد")
     # === PATCH_SVC_PAGE_TIDY_V1 === (ایلیا) وایرگارد فقط اگر مالک برایِ این پنل روشن گذاشته؛ «نمایش اطلاعاتِ کانفیگ در وب»
     # (همان چیزی که لینکِ ساب نشان می‌دهد) و «تغییر نام» از صفحهٔ سرویس برداشته شد (هندلرها سرِ جایشان‌اند).
     _small = []

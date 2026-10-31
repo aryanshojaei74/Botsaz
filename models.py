@@ -4066,3 +4066,21 @@ class PanelSellerAccount(Base):
 
 
 TENANT_OWNED_MODELS += [PanelSellerAccount, PanelSellerPackage]
+
+
+# === PATCH_VPN_AUTORENEW_V1 === تمدیدِ خودکار از کیف‌پول برایِ هر سرویس (مشتری خودش روشن می‌کند)
+class VpnAutoRenew(Base):
+    __tablename__ = "vpn_auto_renew"
+    __table_args__ = (UniqueConstraint("bot_id", "account_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    account_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_tg: Mapped[int] = mapped_column(BigInteger, index=True)
+    plan_id: Mapped[int | None] = mapped_column(Integer)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    last_cycle: Mapped[str | None] = mapped_column(String(32))     # انقضایی که برایش تلاش شد (جلوگیری از تکرار)
+    last_result: Mapped[str | None] = mapped_column(String(20))    # ok | nofunds | failed | noplan
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+TENANT_OWNED_MODELS += [VpnAutoRenew]
