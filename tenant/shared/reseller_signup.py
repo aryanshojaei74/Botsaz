@@ -165,6 +165,7 @@ async def render(bot_id: int, tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
                                   callback_data="rsp:topup", style=ButtonStyle.SUCCESS)],
             [InlineKeyboardButton(text="🛠 ساخت پنل",
                                   callback_data="rsp:create", style=ButtonStyle.PRIMARY)],
+            [InlineKeyboardButton(text="🏠 بازگشت به منو", callback_data="mbtn:home", style=ButtonStyle.DANGER)],
         ]
         if need and have < need:
             txt = ("🏷 <b>پنلِ نمایندگی</b>\n\n"
@@ -192,6 +193,7 @@ async def render(bot_id: int, tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
                                       callback_data="rsp:topup", style=ButtonStyle.SUCCESS)])
     rows.append([InlineKeyboardButton(text="🔄 بروزرسانی",
                                       callback_data="rsp:home", style=ButtonStyle.PRIMARY)])
+    rows.append([InlineKeyboardButton(text="🏠 بازگشت به منو", callback_data="mbtn:home", style=ButtonStyle.DANGER)])
 
     warn = ""
     if need and have < need:
