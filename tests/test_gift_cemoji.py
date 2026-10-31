@@ -9,6 +9,7 @@ import config
 import models
 import platform_gift_emoji as PG
 import tenant
+from tenant.bots.virtual_service import gift_sync as _GSM  # noqa: F401
 from tenant.bots.virtual_service import smm as SM
 
 
@@ -41,7 +42,7 @@ async def env(monkeypatch):
     async with engine.begin() as conn:
         await conn.run_sync(models.Base.metadata.create_all)
     maker = async_sessionmaker(engine, expire_on_commit=False)
-    for mod in (config, PG, tenant, SM):
+    for mod in (config, PG, tenant, SM, _GSM):
         monkeypatch.setattr(mod, "Session", maker)
     PG._CACHE.update(t=0.0, map={})
     tenant._SETTING_CACHE.clear()
@@ -64,7 +65,7 @@ async def test_manual_entries_win_and_pack_name_configurable(env):
     await PG._set(PG.KEY_MANUAL, '{"g1": "MANUAL", "g9": "X"}')
     assert await PG.get_map(fresh=True) == {"g1": "MANUAL", "g9": "X"}
     await PG._set(PG.KEY_PACK, "my_pack")
-    b = FakeBot([], [])
+    b = FakeBot([gift("g1", "u1")], [])
     await PG.sync(b)
     assert b.asked == "my_pack"
 
@@ -137,3 +138,41 @@ async def test_dump_lists_gifts_and_pack_for_diagnosis(env, monkeypatch):
     sent.clear()
     await PG.cmd_dump(m2)
     assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_sync_prefers_gift_own_custom_emoji_and_skips_pack_when_all_have_it(env):
+    g1 = NS(id="g1", sticker=NS(file_unique_id="u1", custom_emoji_id="OWN1"))
+    g2 = NS(id="g2", sticker=NS(file_unique_id="u2", custom_emoji_id="OWN2"))
+    bot = FakeBot([g1, g2], [sticker("u1", "PACK1")])
+    r = await PG.sync(bot)
+    assert bot.asked is None                                           # همهٔ گیفت‌ها ایموجیِ خودشان را دارند ⇒ پک لازم نیست
+    assert (r["matched"], r["own"], r["unmatched"]) == (2, 2, [])
+    assert await PG.get_map(fresh=True) == {"g1": "OWN1", "g2": "OWN2"}
+
+
+@pytest.mark.asyncio
+async def test_pack_fallback_by_size_and_emoji(env):
+    gift_no_cid = NS(id="g1", sticker=NS(file_unique_id="x", custom_emoji_id=None, file_size=62496, emoji="🧸"))
+    pk = NS(file_unique_id="y", custom_emoji_id="PACK-TEDDY", file_size=62496, emoji="🧸")
+    other = NS(file_unique_id="z", custom_emoji_id="PACK-OTHER", file_size=1, emoji="🎁")
+    r = await PG.sync(FakeBot([gift_no_cid], [other, pk]))
+    assert r["matched"] == 1 and r["own"] == 0
+    assert await PG.get_map(fresh=True) == {"g1": "PACK-TEDDY"}
+
+
+@pytest.mark.asyncio
+async def test_tenant_sync_stores_own_custom_emoji_and_icon_uses_it(env):
+    async with env() as s:
+        s.add(models.Bot(id=5, owner_id=500, token="5:T", username="b", field="virtual_service", plan="pro", status="active"))
+        s.add(models.TelegramGiftConfig(bot_id=5, gift_id="teddy", star_count=50, emoji="🧸", active=True))
+        await s.commit()
+    from tenant.bots.virtual_service import gift_sync as GS
+    monkey_gift = NS(id="teddy", star_count=50, sticker=NS(emoji="🧸", file_id="F", custom_emoji_id="CE-OWN"))
+    await GS.sync_bot(FakeBot([monkey_gift], []), 5)
+    tenant._SETTING_CACHE.clear()
+    assert await tenant.get_setting(5, "gift_cemoji:teddy", "") == "CE-OWN"
+    await tenant.set_setting(5, "gift_icons", "1")
+    tenant._SETTING_CACHE.clear()
+    PG._CACHE.update(t=0.0, map={})
+    assert await SM._gift_icon_id(5, "teddy") == "CE-OWN"

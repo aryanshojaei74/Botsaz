@@ -40,9 +40,13 @@ async def sync_bot(bot, bot_id: int) -> list[tuple[str, str, int]]:
                 new.append((g.id, emoji or "🎁", g.star_count))
         await s.commit()
     for g in result.gifts:
-        fid = getattr(getattr(g, "sticker", None), "file_id", None)
+        st = getattr(g, "sticker", None)
+        fid = getattr(st, "file_id", None)
         if fid:
             await set_setting(bot_id, f"gift_sticker:{g.id}", fid)
+        cid = getattr(st, "custom_emoji_id", None)          # PATCH_GIFT_CEMOJI_V1: استیکرِ گیفت‌ها خودشان custom_emoji‌اند
+        if cid:
+            await set_setting(bot_id, f"gift_cemoji:{g.id}", cid)
     return new
 
 

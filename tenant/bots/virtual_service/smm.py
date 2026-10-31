@@ -12105,7 +12105,9 @@ async def _gift_icon_id(bot_id: int, gift_id) -> str | None:
         if (await _get_setting(bot_id, "gift_icons", "0")) != "1":
             return None
         from platform_gift_emoji import get_map
-        return (await get_map()).get(str(gift_id)) or None
+        # اولویت: نگاشتِ سراسری/دستیِ مدیر، بعد ایموجیِ خودِ استیکرِ گیفت که همین ربات موقعِ هم‌گام‌سازی ذخیره کرده
+        return ((await get_map()).get(str(gift_id))
+                or (await _get_setting(bot_id, f"gift_cemoji:{gift_id}", "")).strip() or None)
     except Exception:
         logger.exception("خواندنِ نگاشتِ آیکونِ گیفت ناموفق بود")
         return None
@@ -12355,12 +12357,19 @@ async def gift_refresh(cb: CallbackQuery, bot: Bot):
         await s.commit()
     # === PATCH_GIFT_EMOJI_V1 === استیکرِ واقعیِ هر گیفت ذخیره می‌شود تا مشتری شکلِ دقیقِ همان گیفت را ببیند
     for g in result.gifts:
-        fid = getattr(getattr(g, "sticker", None), "file_id", None)
+        _st = getattr(g, "sticker", None)
+        fid = getattr(_st, "file_id", None)
         if fid:
             try:
                 await _set_setting(row.id, f"gift_sticker:{g.id}", fid)
             except Exception:
                 logger.exception("ذخیرهٔ استیکرِ گیفت ناموفق بود")
+        _cid = getattr(_st, "custom_emoji_id", None)       # PATCH_GIFT_CEMOJI_V1
+        if _cid:
+            try:
+                await _set_setting(row.id, f"gift_cemoji:{g.id}", _cid)
+            except Exception:
+                logger.exception("ذخیرهٔ ایموجیِ پرمیومِ گیفت ناموفق بود")
     text, kb = await gift_admin_content(row.id, bot)
     await cb.message.answer(f"✅ فهرست به‌روز شد — {len(result.gifts)} گیفت خوانده شد "
                             f"({n_new} موردِ تازه، غیرفعال).")

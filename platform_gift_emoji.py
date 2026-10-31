@@ -69,21 +69,40 @@ async def get_map(fresh: bool = False) -> dict[str, str]:
 
 
 async def sync(bot) -> dict:
-    """گیفت‌ها را با پکِ ایموجی تطبیق می‌دهد. خروجی: {matched, total, unmatched:[gift_id], pack, pack_size, error}."""
+    """نگاشتِ گیفت ← custom_emoji_id را می‌سازد. اولویت: خودِ استیکرِ گیفت (در تلگرام استیکرِ گیفت‌ها از نوعِ custom_emoji است و
+    custom_emoji_id دارد؛ گیفتِ تازه هم خودکار می‌آید). اگر نبود، با پکِ ایموجی تطبیق می‌دهیم (اندازهٔ فایل + ایموجی، بعد file_unique_id).
+    خروجی: {matched, total, own, unmatched:[gift_id], pack, pack_size, error}."""
     pack_name = (await _get(KEY_PACK, DEFAULT_PACK)).strip() or DEFAULT_PACK
-    out = {"matched": 0, "total": 0, "unmatched": [], "pack": pack_name, "pack_size": 0, "error": ""}
+    out = {"matched": 0, "own": 0, "total": 0, "unmatched": [], "pack": pack_name, "pack_size": 0, "error": ""}
     try:
         gifts = (await bot.get_available_gifts()).gifts
-        pack = await bot.get_sticker_set(pack_name)
     except Exception as e:  # noqa: BLE001
         out["error"] = f"{type(e).__name__}: {str(e)[:160]}"
         return out
-    by_unique = {s.file_unique_id: s.custom_emoji_id for s in pack.stickers if getattr(s, "custom_emoji_id", None)}
-    out["pack_size"], out["total"] = len(pack.stickers), len(gifts)
+    out["total"] = len(gifts)
+    pack = None
+    if any(not getattr(getattr(g, "sticker", None), "custom_emoji_id", None) for g in gifts):
+        try:
+            pack = await bot.get_sticker_set(pack_name)
+        except Exception as e:  # noqa: BLE001
+            out["error"] = f"پک: {type(e).__name__}: {str(e)[:120]}"
+    by_unique, by_size = {}, {}
+    for s in (pack.stickers if pack else []):
+        if getattr(s, "custom_emoji_id", None):
+            by_unique[s.file_unique_id] = s.custom_emoji_id
+            if getattr(s, "file_size", None) and getattr(s, "emoji", None):
+                by_size.setdefault((s.file_size, s.emoji), s.custom_emoji_id)
+    out["pack_size"] = len(pack.stickers) if pack else 0
     auto = {}
     for g in gifts:
-        uid = getattr(getattr(g, "sticker", None), "file_unique_id", None)
-        cid = by_unique.get(uid)
+        st = getattr(g, "sticker", None)
+        cid = getattr(st, "custom_emoji_id", None)
+        if cid:
+            out["own"] += 1
+        else:
+            cid = by_unique.get(getattr(st, "file_unique_id", None))
+            if not cid and getattr(st, "file_size", None) and getattr(st, "emoji", None):
+                cid = by_size.get((st.file_size, st.emoji))
         if cid:
             auto[str(g.id)] = cid
         else:
@@ -105,8 +124,8 @@ async def cmd_map(msg: Message):
     r = await sync(msg.bot)
     if r["error"]:
         return await msg.answer(f"❌ {r['error']}\nنامِ پک: <code>{r['pack']}</code> (با /giftepack عوض می‌شود)", parse_mode="HTML")
-    text = (f"🎁 نگاشتِ گیفت ← ایموجیِ پرمیوم\nپک: <code>{r['pack']}</code> ({r['pack_size']} ایموجی)\n"
-            f"✅ خودکار پیدا شد: {r['matched']} از {r['total']} گیفت")
+    text = (f"🎁 نگاشتِ گیفت ← ایموجیِ پرمیوم\n✅ خودکار پیدا شد: {r['matched']} از {r['total']} گیفت "
+            f"({r['own']} تا از خودِ استیکرِ گیفت)")
     if r["unmatched"]:
         text += "\n\n❓ بدونِ تطبیق (با /gifte دستی بده):\n" + "\n".join(f"<code>{g}</code>" for g in r["unmatched"][:20])
     await msg.answer(text, parse_mode="HTML")
