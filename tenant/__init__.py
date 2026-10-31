@@ -8300,7 +8300,8 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
     # === PATCH_ZIBAL_GATEWAY_V1 ===
     if await get_setting(bot_id, "zibal_enabled", "0") == "1" and \
             bool((await get_setting(bot_id, "zibal_merchant_id", "")).strip()):
-        options.append(("🔐 شارژ با زیبال", "w:zibal", succ))
+        from tenant.gateways.gateway_layout import gw_custom_label as _gwcl_zb
+        options.append((await _gwcl_zb(bot_id, "zibal", "🔐 شارژ با زیبال"), "w:zibal", succ))
     try:
         from tenant.gateways.hesabpay import is_available as _hb_ok
         async with Session() as _s_hb:

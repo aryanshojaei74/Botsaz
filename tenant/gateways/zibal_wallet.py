@@ -50,6 +50,7 @@ class TenantZibalFSM(StatesGroup):
     amount = State()
     merchant = State()
     base = State()
+    fee_val = State()      # PATCH_ZIBAL_FEE_V1
 
 
 async def _setting(bot_id: int, key: str, default: str = "") -> str:
@@ -100,9 +101,45 @@ async def _configured(bot_id: int) -> bool:
             and bool(await _callback_base(bot_id)))
 
 
+# === PATCH_ZIBAL_FEE_V1 === «انتقالِ کارمزدِ درگاه به خریدار» (درخواستِ Nexivo)
+# receipt_text: «zibal_track=X» یا «zibal_track=X|fee=N». خریدار amount+fee را به درگاه می‌پردازد ولی کیف‌پول فقط
+# به‌اندازهٔ amount (مبلغِ اصلی) شارژ می‌شود.
 def _zb_parse_receipt(txt: str) -> str:
+    return _zb_parse_receipt_fee(txt)[0]
+
+
+def _zb_parse_receipt_fee(txt: str) -> tuple[str, int]:
     raw = (txt or "").strip()
-    return raw.replace("zibal_track=", "", 1).strip()
+    fee = 0
+    if "|fee=" in raw:
+        raw, _, fee_s = raw.partition("|fee=")
+        try:
+            fee = max(0, int(fee_s.strip()))
+        except ValueError:
+            fee = 0
+    return raw.replace("zibal_track=", "", 1).strip(), fee
+
+
+def calc_fee(mode: str, val: float, amount: int) -> int:
+    """mode: off / pct (درصدِ مبلغ، گردشده به بالا) / fixed (تومانِ ثابت)."""
+    try:
+        if mode == "pct" and val > 0:
+            import math
+            return int(math.ceil(int(amount) * float(val) / 100.0))
+        if mode == "fixed" and val > 0:
+            return int(val)
+    except Exception:
+        logger.exception("zibal: محاسبهٔ کارمزد ناموفق بود")
+    return 0
+
+
+async def fee_for(bot_id: int, amount: int) -> int:
+    mode = (await _setting(bot_id, "zibal_fee_mode", "off")).strip()
+    try:
+        val = float((await _setting(bot_id, "zibal_fee_val", "0")).strip() or 0)
+    except ValueError:
+        val = 0.0
+    return calc_fee(mode, val, amount)
 
 
 async def _settle_zibal_order(order_id: int) -> tuple[str, str, int, int | None, int | None, float | None, str | None]:
@@ -119,7 +156,7 @@ async def _settle_zibal_order(order_id: int) -> tuple[str, str, int, int | None,
         bot_id = order.bot_id
         if order.status == "paid":
             return "already", "این پرداخت قبلاً تأیید و به کیف پول اضافه شده است.", int(order.amount or 0), bot_id, None, None, None
-        track_id = _zb_parse_receipt(order.receipt_text or "")
+        track_id, fee = _zb_parse_receipt_fee(order.receipt_text or "")
         if not track_id:
             return "error", "اطلاعاتِ این سفارش ناقص است.", 0, bot_id, None, None, None
         merchant_rec = await s.scalar(select(Setting).where(
@@ -137,7 +174,10 @@ async def _settle_zibal_order(order_id: int) -> tuple[str, str, int, int | None,
         if not ok:
             return "not_paid", ref_or_msg, amount, bot_id, None, None, None
         if verified_amount:
-            amount = verified_amount
+            # با کارمزدِ خریدار، مبلغِ تأییدشدهٔ درگاه = مبلغِ اصلی + کارمزد؛ کیف‌پول فقط مبلغِ اصلی را می‌گیرد
+            amount = verified_amount - fee if fee else verified_amount
+            if amount <= 0:
+                return "error", "مبلغِ تأییدشدهٔ درگاه با فاکتور نمی‌خواند.", 0, bot_id, None, None, None
         claim = await s.execute(update(Order).where(
             Order.id == order.id, Order.status != "paid").values(status="paid"))
         if claim.rowcount == 0:
@@ -363,8 +403,10 @@ async def _create_payment(message: Message, bot: Bot, amount: int, from_user=Non
     bot_label = f"@{row.username}" if row.username else f"#{row.id}"
     description = f"افزایش موجودیِ کیف‌پول کاربر {payer.id} در ربات {bot_label}"   # PATCH_PAYER_IDENTITY_V1
 
+    fee = await fee_for(row.id, amount)          # PATCH_ZIBAL_FEE_V1
+    gateway_amount = amount + fee
     ok, result = await platform_zibal.request_payment(
-        merchant, amount, description, callback_url)
+        merchant, gateway_amount, description, callback_url)
     if not ok:
         await message.answer(f"❌ ساخت پرداخت ناموفق بود:\n{result}")
         return
@@ -391,14 +433,15 @@ async def _create_payment(message: Message, bot: Bot, amount: int, from_user=Non
     async with Session() as s:
         order = Order(bot_id=row.id, user_id=user.id, volume_gb=0, days=0, count=1,
                       amount=amount, pay_method="zibal_wallet", status="pending",
-                      receipt_text=f"zibal_track={result}")
+                      receipt_text=f"zibal_track={result}" + (f"|fee={fee}" if fee else ""))
         s.add(order)
         await s.commit()
     # === PATCH_GATEWAY_REDIRECT_LINK_V1 ===
     from tenant.gateways.gateway_redirect import startpay_for
     pay_url = await startpay_for(row.id, "zibal", result)
     _inv_msg = await message.answer(
-        f"✅ فاکتور شارژ کیف پول ساخته شد.\n\nمبلغ: <b>{_rial(amount)}</b>\n\n"
+        f"✅ فاکتور شارژ کیف پول ساخته شد.\n\nمبلغ شارژ: <b>{_rial(amount)}</b>\n"
+        + (f"کارمزد درگاه: <b>{_rial(fee)}</b>\nمبلغ قابل پرداخت: <b>{_rial(gateway_amount)}</b>\n" if fee else "") + "\n"
         "روی دکمهٔ زیر بزنید و پرداخت را در درگاه زیبال انجام دهید. کیف پول معمولاً خودکار شارژ می‌شود؛ "
         "اگر بعد از پرداخت شارژ نشد، دکمهٔ «✅ بررسی و تأیید پرداخت» را بزنید.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -449,6 +492,16 @@ async def zibal_manual_verify(cb: CallbackQuery):
         await cb.message.answer(f"❌ بررسی ناموفق بود: {msg}")
 
 
+async def _fee_btn_text(bot_id: int) -> str:
+    mode = (await _setting(bot_id, "zibal_fee_mode", "off")).strip()
+    val = (await _setting(bot_id, "zibal_fee_val", "0")).strip()
+    if mode == "pct" and val not in ("", "0"):
+        return f"💸 کارمزد با خریدار: {val}٪ 🟢"
+    if mode == "fixed" and val not in ("", "0"):
+        return f"💸 کارمزد با خریدار: {val} تومان 🟢"
+    return "💸 کارمزد با خریدار: خاموش ⚪️"
+
+
 async def zibal_admin_text(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     enabled = await _setting(bot_id, "zibal_enabled", "0") == "1"
     merchant = await _setting(bot_id, "zibal_merchant_id", "")
@@ -478,6 +531,7 @@ async def zibal_admin_text(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
         [InlineKeyboardButton(text="✏️ ثبت / ویرایش مرچنت‌ایدی", callback_data="zbt:merchant", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="🌐 ثبت/ویرایشِ دامنهٔ callback", callback_data="zbt:base", style=ButtonStyle.PRIMARY)],
         _gwr_btn("zibal"),  # PATCH_GATEWAY_REDIRECT_LINK_V1
+        [InlineKeyboardButton(text=await _fee_btn_text(bot_id), callback_data="zbt:fee", style=ButtonStyle.PRIMARY)],
     ]
     if enabled and merchant.strip() and _base:
         rows.append([InlineKeyboardButton(text="🧪 تست اتصال زیبال", callback_data="zbt:test", style=ButtonStyle.SUCCESS)])
@@ -663,3 +717,79 @@ async def zibal_admin_merchant_save(msg: Message, state: FSMContext, bot: Bot):
     await state.clear()
     text, kb = await zibal_admin_text(row.id)
     await msg.answer("✅ مرچنت‌ایدی ذخیره شد.\n\n" + text, reply_markup=kb)
+
+
+# === PATCH_ZIBAL_FEE_V1 === تنظیمِ «انتقالِ کارمزد به خریدار»
+def _fee_menu_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 کارمزد درصدی", callback_data="zbt:feem:pct", style=ButtonStyle.PRIMARY),
+         InlineKeyboardButton(text="💵 مبلغ ثابت", callback_data="zbt:feem:fixed", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="⚪️ خاموش (کارمزد با من)", callback_data="zbt:feem:off", style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="set:zibal", style=ButtonStyle.DANGER)],
+    ])
+
+
+@zibal_admin_router.callback_query(F.data == "zbt:fee")
+async def zibal_admin_fee(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await cb.message.edit_text(
+        "💸 <b>انتقالِ کارمزدِ درگاه به خریدار</b>\n\n"
+        f"وضعیتِ فعلی: {await _fee_btn_text(row.id)}\n\n"
+        "اگر روشن باشد، موقعِ شارژ کارمزد به مبلغ اضافه می‌شود و خریدار «مبلغِ شارژ + کارمزد» را می‌پردازد؛ "
+        "ولی کیف‌پولش دقیقاً به‌اندازهٔ مبلغِ اصلی شارژ می‌شود و کارمزد از سهمِ تو کم نمی‌شود.\n\n"
+        "• <b>درصدی</b>: مثلاً ۲ یعنی ۲٪ مبلغِ شارژ (به بالا گرد می‌شود)\n"
+        "• <b>مبلغ ثابت</b>: مثلاً ۲٬۰۰۰ تومان برای هر شارژ",
+        reply_markup=_fee_menu_kb())
+    await cb.answer()
+
+
+@zibal_admin_router.callback_query(F.data.startswith("zbt:feem:"))
+async def zibal_admin_fee_mode(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok, set_setting
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    mode = cb.data.rsplit(":", 1)[1]
+    if mode == "off":
+        await set_setting(row.id, "zibal_fee_mode", "off")
+        await set_setting(row.id, "zibal_fee_val", "0")
+        await cb.answer("کارمزد خاموش شد")
+        text, kb = await zibal_admin_text(row.id)
+        await cb.message.edit_text(text, reply_markup=kb)
+        return
+    if mode not in ("pct", "fixed"):
+        await cb.answer()
+        return
+    await state.set_state(TenantZibalFSM.fee_val)
+    await state.update_data(fee_mode=mode)
+    await cb.message.answer("درصدِ کارمزد را بفرست (مثلاً <code>2</code> یا <code>1.5</code>؛ حداکثر ۲۰):" if mode == "pct"
+                            else "مبلغِ ثابتِ کارمزد را به تومان بفرست (مثلاً <code>2000</code>؛ حداکثر ۵۰٬۰۰۰):",
+                            parse_mode="HTML")
+    await cb.answer()
+
+
+@zibal_admin_router.message(TenantZibalFSM.fee_val, F.text)
+async def zibal_admin_fee_save(msg: Message, state: FSMContext, bot: Bot):
+    from tenant import get_bot_row, set_setting
+    row = await get_bot_row(bot)
+    if not row:
+        return
+    mode = (await state.get_data()).get("fee_mode", "pct")
+    _tr = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+    raw = (msg.text or "").translate(_tr).strip().replace("٫", ".").replace("،", "").replace(",", "")
+    try:
+        val = float(raw)
+    except ValueError:
+        val = 0.0
+    lim = 20 if mode == "pct" else 50_000
+    if not (0 < val <= lim):
+        await msg.answer(f"❌ عددِ نامعتبر (بین ۰ و {lim:,}).")
+        return
+    await set_setting(row.id, "zibal_fee_mode", mode)
+    await set_setting(row.id, "zibal_fee_val", (f"{val:g}" if mode == "pct" else str(int(val))))
+    await state.clear()
+    text, kb = await zibal_admin_text(row.id)
+    await msg.answer("✅ کارمزدِ خریدار ذخیره شد.\n\n" + text, reply_markup=kb)

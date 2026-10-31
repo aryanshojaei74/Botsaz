@@ -26,7 +26,7 @@ gateway_layout_router = Router(name="gateway_layout")
 ITEMS: list[tuple[str, str, str, bool]] = [
     ("card",        "w:charge",      "💳 کارت‌به‌کارت",   True),
     ("zarinpal",    "w:zarinpal",    "🔐 زرین‌پال",       True),
-    ("zibal",       "w:zibal",       "🔐 زیبال",          False),
+    ("zibal",       "w:zibal",       "🔐 زیبال",          True),
     ("uniquepay",   "w:uniquepay",   "💳 یونیک‌پی",       True),
     ("apay",        "w:apay",        "💳 آپی",            True),
     ("abangateway", "w:abangateway", "💳 آبان گیت‌وی",    True),
