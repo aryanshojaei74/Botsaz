@@ -12109,7 +12109,7 @@ async def _gift_price_and_label(g: "TelegramGiftConfig", bot_id: int) -> tuple[i
     rate, margin = await _gift_settings(bot_id)
     price = _gift_price(g.star_count, rate, margin)
     # === PATCH_GIFT_EMOJI_V1 === ایموجیِ دلخواهِ مالک برایِ همین گیفت (مثلاً 🎃🧸 برایِ تدیِ هالووین)
-    _emj = (await _get_setting(bot_id, f"gift_emoji:{g.gift_id}", "")).strip() or g.emoji or "🎁"
+    _emj = (await _get_setting(bot_id, f"gift_emoji:{getattr(g, 'gift_id', '')}", "")).strip() or g.emoji or "🎁"
     label = f"گیفتِ {_emj} ({g.star_count} استارز)"
     return price, label
 
