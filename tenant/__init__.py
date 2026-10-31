@@ -182,6 +182,8 @@ from tenant.shared.period_stats import pst_router   # PATCH_PERIOD_STATS_V1
 tenant_router.include_router(pst_router)
 from tenant.shared.daily_report import daily_report_router   # PATCH_DAILY_REPORT_V1
 tenant_router.include_router(daily_report_router)
+from tenant.shared.funnel import funnel_router   # PATCH_FUNNEL_V1
+tenant_router.include_router(funnel_router)
 from tenant.shared.wallet_codes import wallet_codes_router   # PATCH_WALLET_CODES_V1
 tenant_router.include_router(wallet_codes_router)
 # === PATCH_KYC_V1 ===
