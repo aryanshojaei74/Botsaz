@@ -30,6 +30,7 @@ _TAGS = {
     "admin_add":    "افزایشِ دستیِ ادمین",
     "admin_deduct": "کسرِ دستیِ ادمین",
     "referral":     "پاداشِ دعوت",
+    "gift_code":    "کدِ شارژ",              # PATCH_WALLET_CODES_V1
     "bulk":         "شارژِ گروهیِ ادمین",
 }
 

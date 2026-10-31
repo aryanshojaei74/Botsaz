@@ -4086,3 +4086,33 @@ class VpnAutoRenew(Base):
 
 
 TENANT_OWNED_MODELS += [VpnAutoRenew]
+
+
+# === PATCH_WALLET_CODES_V1 === کدِ شارژِ کیف‌پول (کد هدیه): مالک می‌سازد، مشتری وارد می‌کند و مبلغ به کیف‌پولش می‌رود
+class WalletCode(Base):
+    __tablename__ = "wallet_codes"
+    __table_args__ = (UniqueConstraint("bot_id", "code"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    code: Mapped[str] = mapped_column(String(40))
+    amount_toman: Mapped[int] = mapped_column(Integer)
+    max_uses: Mapped[int] = mapped_column(Integer, default=1)          # ۰ = نامحدود
+    per_user: Mapped[int] = mapped_column(Integer, default=1)          # هر کاربر چند بار (۰ = نامحدود)
+    used_count: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    note: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class WalletCodeUse(Base):
+    __tablename__ = "wallet_code_uses"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    code_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_tg: Mapped[int] = mapped_column(BigInteger, index=True)
+    amount_toman: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+TENANT_OWNED_MODELS += [WalletCodeUse, WalletCode]

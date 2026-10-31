@@ -182,6 +182,8 @@ from tenant.shared.period_stats import pst_router   # PATCH_PERIOD_STATS_V1
 tenant_router.include_router(pst_router)
 from tenant.shared.daily_report import daily_report_router   # PATCH_DAILY_REPORT_V1
 tenant_router.include_router(daily_report_router)
+from tenant.shared.wallet_codes import wallet_codes_router   # PATCH_WALLET_CODES_V1
+tenant_router.include_router(wallet_codes_router)
 # === PATCH_KYC_V1 ===
 from tenant.shared.kyc_admin import kyc_admin_router
 tenant_router.include_router(kyc_admin_router)
@@ -8358,6 +8360,13 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
             options.append((_btr_lbl, "btr:start", prim))
     except Exception:
         logger.exception("افزودنِ دکمهٔ انتقالِ موجودی به کیف پول ناموفق بود")
+    # === PATCH_WALLET_CODES_V1 === فقط وقتی مالک حداقل یک کدِ فعال دارد
+    try:
+        from tenant.shared.wallet_codes import any_active as _wc_any, LABEL as _wc_lbl
+        if await _wc_any(bot_id):
+            options.append((_wc_lbl, "wcode:redeem", prim))
+    except Exception:
+        logger.exception("افزودنِ دکمهٔ کدِ شارژ به کیف پول ناموفق بود")
     options.append(("📋 تاریخچه تراکنش‌ها", "w:history", prim))
     # === PATCH_GATEWAY_LAYOUT_V1 === ترتیبِ دلخواهِ دکمه‌هایِ درگاه
     from tenant.gateways.gateway_layout import apply_order_options as _gw_ord_o
@@ -12273,6 +12282,7 @@ async def _sec_finance_opts(bot_id: int, plan: str) -> list[tuple[str, str]]:
         opts.append((f"📱 تایید شماره پیش از پرداخت: " + ("✅ فعال" if _payphone_on else "❌ غیرفعال"),
                      "set:toggle_payphone"))
         opts.append(("📨 پنل پیامکی (تأییدِ شماره با کد)", "psms:menu"))   # PATCH_SMS_VERIFY_V1
+    opts.append(("🎟 کدهای شارژ کیف‌پول", "wcode:menu"))                  # PATCH_WALLET_CODES_V1
     if ok(Feature.GATEWAY_PAYMENT):
         opts.append(("🪙 درگاه ارز دیجیتال (NOWPayments)", "set:crypto"))
     if plan != "free":
