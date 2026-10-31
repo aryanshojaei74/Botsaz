@@ -148,13 +148,23 @@ def _traffic_of(c: dict) -> tuple[int, int]:
     return up, down
 
 
-async def _delete_from_panel(pf: tuple, email: str) -> None:
+async def _delete_from_panel(pf: tuple, email: str) -> bool:
+    """حذفِ حساب از پنل. True فقط اگر پنل واقعاً حذف کرد (یا حساب از قبل نبود).
+
+    === PATCH_TRIAL_DELETE_RETRY_V1 === (باگِ #190: «تستِ رایگان بعد از تمام‌شدن از پنل پاک نمی‌شود»)
+    قبلاً خطایِ پنل (تایم‌اوت، ۴۲۹ محدودیتِ لاگین، قطعیِ لحظه‌ای) فقط لاگ می‌شد ولی ردیفِ محلی و «کانفیگ‌هایِ من» بعدش
+    پاک می‌شد و به کاربر هم «حذف شد» می‌رسید؛ پس حسابِ مرده برایِ همیشه روی پنل می‌ماند و دیگر هیچ حلقه‌ای سراغش نمی‌آمد.
+    حالا اگر حذف نشد، ردیف می‌ماند و ده دقیقهٔ بعد دوباره تلاش می‌شود."""
     client = _make_client(pf)
     try:
         await client.delete_account(email)
-    except Exception:
-        logger.exception("trial_cleanup: حذفِ %r از پنلِ %s ناموفق بود.",
-                         email, pf[0])
+        return True
+    except Exception as e:
+        from log_throttle import should_log
+        if should_log(f"trialdel:{pf[1]}:{email}", 3600):
+            logger.warning("trial_cleanup: حذفِ %r از پنلِ %s ناموفق بود؛ دورِ بعد دوباره تلاش می‌شود: %s",
+                           email, pf[0], (str(e) or type(e).__name__).splitlines()[0][:200])
+        return False
     finally:
         try:
             await client.close()
@@ -199,7 +209,11 @@ async def _process_bot(bot_id: int) -> None:
     try:
         for (aid, email, tg_id, title, code, pkey, exp_at, warned_at, created_at,
              unused_warned_at) in rows:
-            pf = by_key.get(pkey) or panel_fields[0]
+            # === PATCH_TRIAL_DELETE_RETRY_V1 === حسابی که پنلِ خودش فعال/در دسترس نیست روی «اولین پنل» حذف نشود
+            # (آنجا نیست؛ حذف «موفق» حساب می‌شد و ردیف پاک می‌شد درحالی‌که حسابِ واقعی روی پنلِ خودش می‌ماند).
+            pf = by_key.get(pkey) if pkey else panel_fields[0]
+            if pf is None:
+                continue
 
             # ---- ۱) آیا تست تمام شده؟ منبعِ اصلی خودِ پنل، وگرنه expires_at
             if pf[0] not in exp_cache:
@@ -260,7 +274,8 @@ async def _process_bot(bot_id: int) -> None:
                                         a2.trial_unused_warned_at = now
                                         await s.commit()
                         elif (now - unused_warned_at).total_seconds() >= hours * 3600:
-                            await _delete_from_panel(pf, email)
+                            if not await _delete_from_panel(pf, email):
+                                continue                       # حذف نشد ⇒ ردیف می‌ماند و دورِ بعد دوباره
                             async with Session() as s:
                                 a2 = await s.get(PanelAccount, aid)
                                 if a2:
@@ -315,7 +330,8 @@ async def _process_bot(bot_id: int) -> None:
             if (now - warned_at).total_seconds() < hours * 3600:
                 continue
 
-            await _delete_from_panel(pf, email)
+            if not await _delete_from_panel(pf, email):
+                continue                                       # حذف نشد ⇒ ردیف می‌ماند و دورِ بعد دوباره
             async with Session() as s:
                 a2 = await s.get(PanelAccount, aid)
                 if a2:
