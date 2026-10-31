@@ -208,3 +208,64 @@ async def test_custom_volume_insufficient_balance_and_timed_option(env2):
     async with env2() as s:
         a = await s.get(models.PanelSellerAccount, ok["account_id"])
     assert a.expires_at is not None and a.max_users == 5
+
+
+# ─────────── مصرف/تعدادِ کاربر در پاسارگاردِ جدید (PATCH_PSEL_PASARGUARD_USAGE_V1) ───────────
+class NewPGStats:
+    admins = [{"username": "other", "used_traffic": 111, "total_users": 9},
+              {"username": "PsAbc", "used_traffic": 5_000_000_000, "total_users": 7}]
+    calls: list = []
+
+    async def _request(self, method, path, json=None, params=None):
+        NewPGStats.calls.append((method, path))
+        if path == "/api/admins":
+            return {"admins": NewPGStats.admins, "total": len(NewPGStats.admins), "active": 2, "disabled": 0, "limited": 0}
+        raise PanelError(f"{method} {path} HTTP 404")
+
+    async def close(self): pass
+
+
+@pytest.mark.asyncio
+async def test_new_pasarguard_reads_usage_and_user_count_from_admin_list():
+    NewPGStats.calls = []
+    api = AD.PanelAdminAPI(NewPGStats())
+    assert await api.usage_bytes("psabc") == 5_000_000_000             # فقط خودِ ادمین (نه «other»)؛ بدونِ حساسیت به حروف
+    assert await api.user_count("psabc") == 7                          # total_users؛ فیلترِ /api/users نامعتبر را صدا نمی‌زند
+    assert all(p == "/api/admins" for _m, p in NewPGStats.calls)
+
+
+@pytest.mark.asyncio
+async def test_new_pasarguard_missing_admin_raises_instead_of_reporting_zero():
+    api = AD.PanelAdminAPI(NewPGStats())
+    with pytest.raises(PanelError):
+        await api.usage_bytes("ghost")                                  # صفر نمی‌دهد (وگرنه محدودیتِ حجم هرگز اعمال نمی‌شد)
+    with pytest.raises(PanelError):
+        await api.user_count("ghost")
+
+
+@pytest.mark.asyncio
+async def test_old_marzban_style_keeps_old_endpoints():
+    class OldM:
+        calls = []
+
+        async def _request(self, method, path, json=None, params=None):
+            OldM.calls.append((method, path))
+            if path == "/api/admins":
+                return [{"username": "u1", "is_sudo": False}]                   # لیستِ ساده ⇒ سبکِ قدیمی
+            if path.startswith("/api/admin/usage/"):
+                return 2048
+            if path == "/api/users":
+                return {"users": [], "total": 4}
+            raise PanelError("404")
+
+        async def close(self): pass
+    api = AD.PanelAdminAPI(OldM())
+    assert await api.usage_bytes("u1") == 2048 and await api.user_count("u1") == 4
+
+    class NoAdminsEndpoint(OldM):
+        async def _request(self, method, path, json=None, params=None):
+            if path == "/api/admins":
+                raise PanelError("GET /api/admins HTTP 404")
+            return await OldM._request(self, method, path, json=json, params=params)
+    api2 = AD.PanelAdminAPI(NoAdminsEndpoint())
+    assert await api2.usage_bytes("u1") == 2048                                  # /api/admins نبود ⇒ همان رفتارِ قبلی

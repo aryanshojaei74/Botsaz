@@ -90,8 +90,28 @@ class PanelAdminAPI:
     async def activate_users(self, username: str) -> None:
         await self.c._request("POST", f"/api/admin/{quote(username)}/users/activate")
 
+    async def _admin_row(self, username: str) -> tuple[dict | None, bool]:
+        """PATCH_PSEL_PASARGUARD_USAGE_V1 — (ردیفِ ادمین از GET /api/admins، «پنلِ جدید است؟»).
+        پاسارگاردِ جدید: {"admins": [...], "total": ...} و هر ادمین used_traffic/total_users دارد؛ مرزبان/قدیمی: لیستِ ساده.
+        فیلترِ username سمتِ سرور تأیید نشده، پس سمتِ ما هم دقیق مقایسه می‌شود."""
+        res = await self.c._request("GET", "/api/admins", params={"username": username, "limit": 500})
+        new_style = isinstance(res, dict) and isinstance(res.get("admins"), list)
+        items = res.get("admins") if new_style else (res if isinstance(res, list) else [])
+        for it in items or []:
+            if isinstance(it, dict) and str(it.get("username") or "").lower() == username.lower():
+                return it, new_style
+        return None, new_style
+
     async def usage_bytes(self, username: str) -> int:
-        """مصرفِ کلِ کاربرانِ این ادمین (بایت)."""
+        """مصرفِ کلِ کاربرانِ این ادمین (بایت). پنلِ جدید: used_traffic از لیستِ ادمین‌ها (یکایِ بایت تأییدِ رسمی ندارد)."""
+        try:
+            row, new_style = await self._admin_row(username)
+        except PanelError:                                # پنلِ قدیمی بدونِ /api/admins ⇒ مسیرِ قدیمی (رفتارِ قبلی)
+            row, new_style = None, False
+        if new_style:
+            if row is None or row.get("used_traffic") is None:
+                raise PanelError("مصرفِ ادمین از پنلِ جدید خوانده نشد (ادمین در فهرست نبود یا used_traffic نداشت).")
+            return int(float(row["used_traffic"]))
         res = await self.c._request("GET", f"/api/admin/usage/{quote(username)}")
         if isinstance(res, dict):
             res = res.get("raw", res.get("usage", 0))
@@ -101,6 +121,14 @@ class PanelAdminAPI:
             return 0
 
     async def user_count(self, username: str) -> int:
+        try:
+            row, new_style = await self._admin_row(username)
+        except PanelError:
+            row, new_style = None, False
+        if new_style:                                    # پاسارگاردِ جدید: فیلترِ کاربرِ مالک تأیید نشده؛ total_users خودِ ادمین
+            if row is None or row.get("total_users") is None:
+                raise PanelError("تعدادِ کاربرانِ ادمین از پنلِ جدید خوانده نشد.")
+            return int(row["total_users"])
         res = await self.c._request("GET", "/api/users", params={"admin": username, "limit": 1})
         if isinstance(res, dict):
             try:
