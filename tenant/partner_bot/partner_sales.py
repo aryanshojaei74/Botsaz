@@ -99,6 +99,23 @@ async def _partner_of(bot: Bot) -> tuple[BotRow, PartnerBot] | None:
     return row, pb
 
 
+async def _partner_diag(bot: Bot) -> str:
+    """علتِ اینکه _partner_of چیزی برنگرداند (برایِ لاگ و پیامِ مدیر)."""
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    if not row:
+        return "ردیفِ ربات پیدا نشد"
+    if row.plan != "partner":
+        return f"پلنِ ربات «{row.plan}» است، نه «partner»"
+    async with Session() as s:
+        pb = await s.scalar(select(PartnerBot).where(PartnerBot.bot_id == row.id))
+    if not pb:
+        return "پلن «همکار» است ولی ردیفِ همکار (partner_bots) برایِ این ربات ساخته نشده"
+    if pb.status != "active":
+        return f"وضعیتِ همکار «{pb.status}» است (باید active باشد)"
+    return "نامشخص"
+
+
 async def sale_price(bot_id: int, plan: str, telegram_id: int | None = None) -> int:
     """قیمتی که *همکار* برای فروش تعیین کرده (در Setting همان ربات).
 
@@ -246,6 +263,22 @@ async def ps_menu(cb: CallbackQuery, bot: Bot, state: FSMContext = None):
         await state.clear()
     ok = await _partner_of(bot)
     if not ok:
+        # === PATCH_PARTNER_SILENT_FAIL_V1 === قبلاً این‌جا ساکت برمی‌گشت و مشتری هیچ جوابی نمی‌دید.
+        why = await _partner_diag(bot)
+        logger.warning("partner ps_menu: ربات همکارِ فعال شناخته نشد — %s", why)
+        try:
+            from tenant import get_bot_row, is_owner_or_admin
+            _r = await get_bot_row(bot)
+            _staff = bool(_r) and await is_owner_or_admin(_r.id, cb.from_user.id, _r.owner_id)
+        except Exception:
+            logger.exception("partner ps_menu: بررسیِ نقشِ کاربر ناموفق بود")
+            _staff = False
+        _txt = ("⏳ فروشِ ربات در حالِ حاضر در دسترس نیست؛ کمی بعد دوباره امتحان کن یا به پشتیبانی پیام بده."
+                + (f"\n\n🛠 (فقط مدیر) علت: {why}" if _staff else ""))
+        try:
+            await cb.message.answer(_txt)
+        except Exception:
+            logger.exception("partner ps_menu: ارسالِ پیامِ خطا ناموفق بود")
         await cb.answer()
         return
     row, pb = ok

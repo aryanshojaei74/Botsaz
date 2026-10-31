@@ -17008,6 +17008,13 @@ async def _build_bot_detail(bot_id: int, src: str = "bots", viewer_id: int | Non
     async with Session() as s:
         _partner_sale_exists = bool(await s.scalar(
             select(_PartnerSaleChk.id).where(_PartnerSaleChk.sold_bot_id == bot_id)))
+    # === PATCH_PARTNER_DIAG_V1 === پلنِ «همکار» بدونِ ردیفِ همکار ⇒ دکمهٔ «ساخت ربات (فروش به کاربر)» ساکت می‌ماند
+    _pb_row = None
+    if (plan or "") == "partner":
+        from models import PartnerBot as _PB
+        async with Session() as _s_pb:
+            _pb_row = await _s_pb.scalar(select(_PB).where(_PB.bot_id == bot_id))
+    _pb_row_exists = _pb_row is not None
     if miniapp_on:
         miniapp_btn = hx_button("🛍 خاموش‌کردنِ مینی‌اپ",
                                 callback_data=f"abotminiapp:{bot_id}:{src}",
@@ -17044,6 +17051,8 @@ async def _build_bot_detail(bot_id: int, src: str = "bots", viewer_id: int | Non
         # === PATCH_ADM_BOT_HOURS_V1 === برای تمدیدهای کوتاه (تست، مهلتِ چندساعته)
         [hx_button("➕ افزودن ساعت", callback_data=f"abothours:add:{bot_id}:{src}"),
          hx_button("➖ کسر ساعت", callback_data=f"abothours:sub:{bot_id}:{src}")],
+        *([[hx_button("🛠 ساختِ ردیفِ همکار برایِ این ربات", callback_data=f"abotpbfix:{bot_id}:{src}",
+                      style=ButtonStyle.SUCCESS)]] if ((plan or "") == "partner" and not _pb_row_exists) else []),
         [hx_button("📜 تاریخچهٔ تغییرات (علت‌ها)", callback_data=f"abotlog:{bot_id}:{src}:0",
                    style=ButtonStyle.PRIMARY)],   # PATCH_BOT_CHANGE_LOG_V1
         [hx_button("👤 انتقال ربات به کاربر دیگر", callback_data=f"abotxfer:{bot_id}")],
@@ -17068,9 +17077,12 @@ async def _build_bot_detail(bot_id: int, src: str = "bots", viewer_id: int | Non
         owner_name = (await _owner_names(_s_own, [owner])).get(owner, "بی‌نام")
     # === PATCH_BOT_MAKER_SOURCE_V1 === این ربات با چه ابزاری ساخته شده
     maker_line = ""
+    if (plan or "") == "partner":
+        maker_line += ("\n🤝 ردیفِ همکار: " + ("❌ ساخته نشده (فروشِ ربات کار نمی‌کند)" if not _pb_row else
+                       ("🟢 فعال" if _pb_row.status == "active" else f"🔴 {_pb_row.status}")))
     try:
         async with Session() as _s_mk:
-            maker_line = "\n" + await _bot_maker_line(_s_mk, bot_id)
+            maker_line += "\n" + await _bot_maker_line(_s_mk, bot_id)
     except Exception:
         logger.exception("تعیینِ ابزارِ سازندهٔ ربات ناموفق بود (نادیده گرفته شد)")
     text = (
@@ -17148,6 +17160,29 @@ async def _apply_bot_menu_button(row: BotRow) -> str | None:
         except Exception:
             logger.exception("بستنِ سشنِ رباتِ تنانت ناموفق بود")
     return err
+
+
+# === PATCH_PARTNER_DIAG_V1 === ساختِ ردیفِ همکار برایِ رباتی که پلنش «همکار» است ولی ردیفِ partner_bots ندارد
+@router.callback_query(F.data.startswith("abotpbfix:"))
+async def adm_bot_partner_fix(cb: CallbackQuery):
+    if not await has_perm(cb.from_user.id, "adm:bots"):
+        await cb.answer("دسترسی ندارید", show_alert=True)
+        return
+    from models import PartnerBot
+    parts = cb.data.split(":")
+    bot_id, src = int(parts[1]), (parts[2] if len(parts) > 2 else "bots")
+    async with Session() as s:
+        r = await s.get(BotRow, bot_id)
+        if not r or r.plan != "partner":
+            await cb.answer("پلنِ این ربات «همکار» نیست.", show_alert=True)
+            return
+        if await s.scalar(select(PartnerBot.id).where(PartnerBot.bot_id == bot_id)):
+            await cb.answer("ردیفِ همکار از قبل هست.", show_alert=True)
+            return
+        s.add(PartnerBot(bot_id=bot_id, owner_id=r.owner_id, status="active", expires_at=r.plan_expires_at))
+        await s.commit()
+    await cb.answer("✅ ردیفِ همکار ساخته شد", show_alert=True)
+    await _render_bot_detail(cb, bot_id, src, note="ردیفِ همکار ساخته شد ✅")
 
 
 # === PATCH_BOT_CHANGE_LOG_V1 === تاریخچهٔ تغییراتِ یک ربات (پلن/نوع/وضعیت/سررسید/…) با علت و عامل
