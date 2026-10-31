@@ -20,7 +20,7 @@ from models import PanelSellerAccount, PanelSellerPackage, VpnPanel
 
 from tenant.bots.panel_seller import adapter as AD
 from tenant.bots.panel_seller import service as SV
-from tenant.bots.panel_seller.common import (HOME_ROW, REASON_FA, STATUS_FA, back_row, btn, edit_or_send, esc, fa,
+from tenant.bots.panel_seller.common import (exp_text, HOME_ROW, REASON_FA, STATUS_FA, back_row, btn, edit_or_send, esc, fa,
                                              fmt_time, gb_text, kb, n, pk_line, sales_gate, users_text)
 
 from logging_setup import get_logger as _get_logger
@@ -59,6 +59,8 @@ async def show_buy(event, bot: Bot, row, uid: int) -> None:
     if not pks:
         return await edit_or_send(event, "📦 فعلاً بسته‌ای برایِ فروش نیست؛ بعداً سر بزن.", kb(HOME_ROW))
     rows = [[btn(f"{p.title[:28]} — {n(p.price_toman)} تومان", f"psel:b:{p.id}", style=ButtonStyle.SUCCESS)] for p in pks]
+    if await SV.test_available(row.id, uid):          # PATCH_PSEL_FREE_TEST_V1
+        rows.insert(0, [btn("🧪 تستِ رایگان", "psel:tst", style=ButtonStyle.PRIMARY)])
     rows.append(HOME_ROW)
     await edit_or_send(event, "🧩 <b>خریدِ پنل</b>\n\nیک بسته را انتخاب کن؛ بعد از پرداخت، ادمینِ پنل با نام‌کاربری و رمز برایت ساخته می‌شود.",
                        kb(*rows))
@@ -109,6 +111,7 @@ async def buy_do(cb: CallbackQuery, bot: Bot):
         from tenant.shared import vs_pay
         return await vs_pay.insufficient_notice(cb.message, row.id, uid, int(r["need"]), cb.data)
     if st == "panel_failed":
+        await tell_owner_failure(bot, row, uid, "ساختِ پنل", r.get("error"))      # PATCH_PSEL_OWNER_FAIL_NOTICE_V1
         return await edit_or_send(cb, "❌ ساختِ پنل با خطا روبه‌رو شد؛ مبلغی کم نشد (اگر کم شده بود برگشته).\n"
                                       "کمی بعد دوباره امتحان کن یا به پشتیبانی بگو.", kb(back_row("psel:buy")))
     if st != "ok":
@@ -118,6 +121,63 @@ async def buy_do(cb: CallbackQuery, bot: Bot):
             f"🌐 آدرس: <code>{esc(r['panel_url'])}</code>\n🆔 نام‌کاربری: <code>{esc(r['username'])}</code>\n"
             f"🔑 رمز: <code>{esc(r['password'])}</code>\n🔖 کدِ پیگیری: <code>{esc(r['tracking'])}</code>\n\n"
             "رمز را جایی امن نگه دار. وضعیتِ پنل از «🗂 پنل‌هایِ من» قابلِ مشاهده است.",
+        kb([btn("🗂 پنل‌هایِ من", "psel:my", style=ButtonStyle.PRIMARY)], HOME_ROW))
+
+
+async def tell_owner_failure(bot: Bot, row, buyer_tg: int, what: str, error: str | None) -> None:
+    """PATCH_PSEL_OWNER_FAIL_NOTICE_V1 — وقتی ساخت/تمدیدِ پنل روی خودِ پنل خطا می‌دهد، مشتری فقط پیامِ کلی می‌بیند؛ علتِ دقیق
+    (مثلاً دسترسیِ sudo، آدرس/پورت، ورژنِ API) برایِ مالک و ادمین‌ها فرستاده می‌شود (حداکثر هر ۱۰ دقیقه یک‌بار برایِ هر ربات)."""
+    try:
+        from log_throttle import should_log
+        if not should_log(f"psel_fail:{row.id}", 600):
+            return
+        from tenant import _notify_admins
+        await _notify_admins(bot, row, (
+            f"⚠️ <b>{esc(what)} برایِ مشتری <code>{buyer_tg}</code> روی پنل ناموفق بود</b>\n\n"
+            f"🔎 علتِ پنل:\n<code>{esc((error or 'پاسخی از پنل نیامد')[:300])}</code>\n\n"
+            "بررسی کن: آدرس/پورتِ پنل، نام‌کاربری و رمزِ sudo، اینکه حسابِ اتصال «sudo» باشد، و اینکه ربات به پنل دسترسیِ شبکه دارد."))
+    except Exception:      # noqa: BLE001
+        logger.exception("panel_seller: اطلاعِ خطایِ پنل به مالک ناموفق بود")
+
+
+# ═══════════════════════ تستِ رایگان ═══════════════════════
+
+@psel_user_router.callback_query(F.data.regexp(r"^psel:(tst|tstok)$"))
+async def free_test(cb: CallbackQuery, bot: Bot):
+    from tenant import get_or_create_user
+    row = await _row(bot)
+    if not row:
+        return await cb.answer()
+    ok, why = await sales_gate(row)
+    if not ok:
+        return await cb.answer(why, show_alert=True)
+    uid = cb.from_user.id
+    cfg = await SV.test_settings(row.id)
+    if not await SV.test_available(row.id, uid):
+        return await cb.answer("تستِ رایگان فعال نیست یا قبلاً از آن استفاده کرده‌ای.", show_alert=True)
+    if cb.data.endswith(":tst"):
+        return await edit_or_send(
+            cb, "🧪 <b>تستِ رایگان</b>\n\n"
+                f"⏳ مدت: {fa(cfg['hours'])} ساعت · 📊 حجم: {gb_text(cfg['gb'])} · 👥 کاربر: {users_text(cfg['users'])}\n\n"
+                "هر نفر یک‌بار می‌تواند تست بگیرد.",
+            kb([btn("✅ ساختِ پنلِ تست", "psel:tstok", style=ButtonStyle.SUCCESS)], back_row("psel:buy")))
+    await get_or_create_user(row.id, uid, cb.from_user.full_name or "", cb.from_user.username or "")
+    await cb.answer("در حالِ ساختِ پنلِ تست…")
+    r = await SV.buy_test(row.id, uid, bot=bot, row=row)
+    st = r["status"]
+    if st == "panel_failed":
+        await tell_owner_failure(bot, row, uid, "ساختِ پنلِ تست", r.get("error"))
+        return await edit_or_send(cb, "❌ ساختِ پنل با خطا روبه‌رو شد؛ کمی بعد دوباره امتحان کن یا به پشتیبانی بگو.", kb(back_row("psel:buy")))
+    if st != "ok":
+        msg = {"test_used": "قبلاً تست گرفته‌ای.", "disabled": "تستِ رایگان فعال نیست.",
+               "no_panel": "فعلاً پنلی برایِ تست متصل نیست.", "unsupported": "پنلِ متصل برایِ تست پشتیبانی نمی‌شود."}.get(st, "انجام نشد.")
+        return await edit_or_send(cb, "❌ " + msg, kb(back_row("psel:buy")))
+    await edit_or_send(
+        cb, "✅ <b>پنلِ تستِ تو آماده است!</b>\n\n"
+            f"🌐 آدرس: <code>{esc(r['panel_url'])}</code>\n🆔 نام‌کاربری: <code>{esc(r['username'])}</code>\n"
+            f"🔑 رمز: <code>{esc(r['password'])}</code>\n\n"
+            f"⏳ {fa(r['hours'])} ساعت · 📊 {gb_text(r['gb'])} · 👥 {users_text(r['users'])}\n"
+            "بعد از پایانِ تست برایِ ادامه از «🧩 خریدِ پنل» بسته بخر.",
         kb([btn("🗂 پنل‌هایِ من", "psel:my", style=ButtonStyle.PRIMARY)], HOME_ROW))
 
 
@@ -179,7 +239,7 @@ async def my_detail(cb: CallbackQuery, bot: Bot):
     why = f" ({REASON_FA.get(a.suspend_reason, a.suspend_reason)})" if a.status == "suspended" and a.suspend_reason else ""
     text = (f"🗂 <b>{esc(a.title)}</b>\n\n🌐 <code>{esc(panel.base_url) if panel else '—'}</code>\n"
             f"🆔 <code>{esc(a.admin_username)}</code>\nوضعیت: {STATUS_FA.get(a.status, a.status)}{why}\n"
-            f"⏳ پایان: {fmt_time(a.expires_at)}")
+            f"⏳ پایان: {exp_text(a.expires_at)}")
     if panel and a.status == "active":
         live = await _live_usage(a, panel)
         if live:
@@ -246,6 +306,7 @@ async def extra_gb_buy(cb: CallbackQuery, bot: Bot):
         msg = {"disabled": "خریدِ حجمِ اضافه فعال نیست.", "unlimited": "حجمِ این پنل نامحدود است.",
                "bad_amount": "مقدارِ نامعتبر.", "not_found": "این پنل الان قابلِ افزودنِ حجم نیست."}.get(st)
         if st == "panel_failed":
+            await tell_owner_failure(bot, row, cb.from_user.id, "افزودنِ حجم", r.get("error"))
             msg = "پنل جواب نداد؛ مبلغی کم نشد. کمی بعد دوباره امتحان کن."
         return await edit_or_send(cb, "❌ " + (msg or "انجام نشد."), kb(back_row(f"psel:a:{a.id}")))
     extra = f"\n🔑 رمزِ تازه (چون پنل بسته شده بود): <code>{esc(r['new_password'])}</code>" if r.get("new_password") else ""
@@ -275,11 +336,13 @@ async def renew_flow(cb: CallbackQuery, bot: Bot):
     if r["status"] == "insufficient":
         from tenant.shared import vs_pay
         return await vs_pay.insufficient_notice(cb.message, row.id, cb.from_user.id, int(r["need"]), cb.data)
+    if r["status"] == "panel_failed":
+        await tell_owner_failure(bot, row, cb.from_user.id, "تمدیدِ پنل", r.get("error"))
     if r["status"] != "ok":
         return await edit_or_send(cb, "❌ تمدید انجام نشد" + (f":\n<code>{esc(r.get('error'))}</code>" if r.get("error") else ".")
                                   , kb(back_row(f"psel:a:{a.id}")))
     extra = f"\n🔑 رمزِ تازه: <code>{esc(r['new_password'])}</code>" if r.get("new_password") else ""
-    await edit_or_send(cb, f"✅ تمدید شد. پایان: {fmt_time(r['expires_at'])}{extra}", kb(back_row(f"psel:a:{a.id}")))
+    await edit_or_send(cb, f"✅ تمدید شد. پایان: {exp_text(r['expires_at'])}{extra}", kb(back_row(f"psel:a:{a.id}")))
 
 
 @psel_user_router.callback_query(F.data.regexp(r"^psel:(pw|pwok):\d+$"))

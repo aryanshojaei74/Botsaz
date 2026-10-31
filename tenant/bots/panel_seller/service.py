@@ -104,7 +104,7 @@ async def buy(bot_id: int, buyer_tg: int, package_id: int, api_factory=None, bot
         acc = PanelSellerAccount(
             bot_id=bot_id, buyer_tg=buyer_tg, panel_id=panel.id, package_id=pk.id, title=pk.title,
             admin_username=username, data_gb=pk.data_gb, max_users=pk.max_users,
-            expires_at=datetime.utcnow() + timedelta(days=int(pk.days or 30)), status="active",
+            expires_at=(datetime.utcnow() + timedelta(days=int(pk.days)) if int(pk.days or 0) > 0 else None), status="active",   # ۰ = نامحدود
             price_toman=price, tracking_code=trk)
         s.add(acc)
         await s.commit()
@@ -163,14 +163,92 @@ async def renew(bot_id: int, account_id: int, buyer_tg: int, api_factory=None) -
         return {"status": "panel_failed", "error": str(e)[:300]}
     async with Session() as s:
         acc = await s.get(PanelSellerAccount, account_id, with_for_update=True)
-        base = max(acc.expires_at or datetime.utcnow(), datetime.utcnow())
-        acc.expires_at = base + timedelta(days=int(pk.days or 30))
+        if int(pk.days or 0) > 0:
+            base = max(acc.expires_at or datetime.utcnow(), datetime.utcnow())
+            acc.expires_at = base + timedelta(days=int(pk.days))
+        else:
+            acc.expires_at = None                        # بستهٔ نامحدود: بدونِ انقضا
         acc.data_gb, acc.max_users = pk.data_gb, pk.max_users
         acc.status, acc.suspend_reason, acc.flags = "active", None, None
         acc.price_toman = int(acc.price_toman or 0) + price
         await s.commit()
         exp = acc.expires_at
     return {"status": "ok", "expires_at": exp, "new_password": new_pw, "username": acc.admin_username}
+
+
+# === PATCH_PSEL_FREE_TEST_V1 === (Whale Support) «تستِ رایگان»: هر مشتری یک بار، با مشخصاتِ کوچکِ تعیین‌شده توسطِ مالک
+TEST_TITLE = "🧪 تستِ رایگان"
+
+
+async def test_settings(bot_id: int) -> dict:
+    from tenant import get_setting
+
+    async def _i(key, default, lo, hi):
+        try:
+            return max(lo, min(hi, int(float((await get_setting(bot_id, key, str(default))) or default))))
+        except (TypeError, ValueError):
+            return default
+    return {"enabled": (await get_setting(bot_id, "psel_test_enabled", "0")) == "1",
+            "hours": await _i("psel_test_hours", 24, 1, 24 * 30),
+            "gb": await _i("psel_test_gb", 1, 1, 1000),
+            "users": await _i("psel_test_users", 3, 0, 10000)}
+
+
+async def test_available(bot_id: int, buyer_tg: int) -> bool:
+    """تست روشن است و این مشتری هنوز تست نگرفته (حتی اگر پنلِ تستش حذف شده باشد)."""
+    if not (await test_settings(bot_id))["enabled"]:
+        return False
+    async with Session() as s:
+        used = await s.scalar(select(PanelSellerAccount.id).where(
+            PanelSellerAccount.bot_id == bot_id, PanelSellerAccount.buyer_tg == buyer_tg,
+            PanelSellerAccount.title == TEST_TITLE).limit(1))
+    return used is None
+
+
+async def buy_test(bot_id: int, buyer_tg: int, api_factory=None, bot=None, row=None) -> dict:
+    """status: ok | disabled | test_used | no_panel | unsupported | panel_failed."""
+    api_factory = api_factory or _api
+    cfg = await test_settings(bot_id)
+    if not cfg["enabled"]:
+        return {"status": "disabled"}
+    if not await test_available(bot_id, buyer_tg):
+        return {"status": "test_used"}
+    async with Session() as s:
+        panels = (await s.scalars(select(VpnPanel).where(VpnPanel.bot_id == bot_id, VpnPanel.enabled == True)   # noqa: E712
+                                  .order_by(VpnPanel.id))).all()
+    panel = next((p for p in panels if AD.supports(p.panel_key)), None)
+    if panel is None:
+        return {"status": "no_panel" if not panels else "unsupported"}
+    username, password = gen_username(), gen_password()
+    try:
+        api = api_factory(panel)
+        try:
+            await api.create_admin(username, password)
+        finally:
+            await api.close()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("panel_seller: ساختِ ادمینِ تست ناموفق (bot=%s): %s", bot_id, e)
+        return {"status": "panel_failed", "error": str(e)[:300]}
+    from models import alloc_tracking_in
+    async with Session() as s:
+        trk = await alloc_tracking_in(s, bot_id)
+        acc = PanelSellerAccount(
+            bot_id=bot_id, buyer_tg=buyer_tg, panel_id=panel.id, package_id=None, title=TEST_TITLE,
+            admin_username=username, data_gb=cfg["gb"], max_users=cfg["users"],
+            expires_at=datetime.utcnow() + timedelta(hours=cfg["hours"]), status="active", price_toman=0, tracking_code=trk)
+        s.add(acc)
+        await s.commit()
+        acc_id = acc.id
+    if bot is not None and row is not None:
+        try:
+            from tenant import _purchase_alert
+            async with Session() as s:
+                buyer = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == buyer_tg))
+            await _purchase_alert(bot, row, buyer=buyer, section="پنل‌فروشی", detail="تستِ رایگان", amount=0, tracking_code=trk)
+        except Exception:      # noqa: BLE001
+            logger.exception("panel_seller: اعلانِ تستِ رایگان ناموفق بود")
+    return {"status": "ok", "account_id": acc_id, "username": username, "password": password,
+            "panel_url": panel.base_url, "tracking": trk, "hours": cfg["hours"], "gb": cfg["gb"], "users": cfg["users"]}
 
 
 # === PATCH_PSEL_EXTRA_VOLUME_V1 === خریدِ حجمِ اضافه (درخواستِ Whale Support): سقفِ حجمِ همین دوره بالا می‌رود؛ با تمدید به حجمِ بسته برمی‌گردد.

@@ -21,7 +21,7 @@ from models import PanelSellerAccount, PanelSellerPackage, VpnPanel
 
 from tenant.bots.panel_seller import adapter as AD
 from tenant.bots.panel_seller import service as SV
-from tenant.bots.panel_seller.common import (HOME_ROW, REASON_FA, STATUS_FA, back_row, btn, edit_or_send, esc, fa,
+from tenant.bots.panel_seller.common import (exp_text, HOME_ROW, REASON_FA, STATUS_FA, back_row, btn, edit_or_send, esc, fa,
                                              fmt_time, gb_text, is_admin, kb, n, pk_line, status_line, users_text)
 
 from logging_setup import get_logger as _get_logger
@@ -46,6 +46,7 @@ class PselFSM(StatesGroup):
     days = State()
     price = State()
     extra_price = State()      # PATCH_PSEL_EXTRA_VOLUME_V1
+    test_cfg = State()         # PATCH_PSEL_FREE_TEST_V1
 
 
 async def _guard(event, bot: Bot):
@@ -257,7 +258,7 @@ async def pk_users(msg: Message, bot: Bot, state: FSMContext):
     if v is None:
         return await msg.answer("یک عددِ صحیح بفرست (۰ = نامحدود).")
     await state.update_data(psel_users=v)
-    await _step(msg, bot, state, "📅 مدتِ بسته به <b>روز</b> (مثلاً ۳۰):", PselFSM.days)
+    await _step(msg, bot, state, "📅 مدتِ بسته به <b>روز</b> (مثلاً ۳۰) — <code>0</code> = نامحدود (بدونِ انقضا):", PselFSM.days)
 
 
 @psel_admin_router.message(PselFSM.days, F.text)
@@ -265,8 +266,8 @@ async def pk_days(msg: Message, bot: Bot, state: FSMContext):
     if not await _guard(msg, bot):
         return
     v = _num(msg.text)
-    if not v or v > 3650:
-        return await msg.answer("یک عددِ صحیح بین ۱ تا ۳۶۵۰ بفرست.")
+    if v is None or v > 3650:
+        return await msg.answer("یک عددِ صحیح بین ۰ تا ۳۶۵۰ بفرست (۰ = نامحدود).")
     await state.update_data(psel_days=v)
     await _step(msg, bot, state, "💰 قیمت به <b>تومان</b> (۰ = رایگان):", PselFSM.price)
 
@@ -326,7 +327,7 @@ async def _acc_view(row, aid: int):
     why = f" ({REASON_FA.get(a.suspend_reason, a.suspend_reason)})" if a.status == "suspended" and a.suspend_reason else ""
     text = (f"👤 <b>{esc(a.title)}</b>\n🆔 <code>{esc(a.admin_username)}</code>\n"
             f"خریدار: <code>{a.buyer_tg}</code>\nوضعیت: {STATUS_FA.get(a.status, a.status)}{why}\n"
-            f"📊 {gb_text(a.data_gb)} · 👥 {users_text(a.max_users)}\n⏳ پایان: {fmt_time(a.expires_at)}\n"
+            f"📊 {gb_text(a.data_gb)} · 👥 {users_text(a.max_users)}\n⏳ پایان: {exp_text(a.expires_at)}\n"
             f"🔖 {esc(a.tracking_code or '—')}\n🌐 <code>{esc(panel.base_url) if panel else '—'}</code>")
     rows = []
     if a.status == "active":
@@ -471,7 +472,12 @@ async def _set_view(row):
         on = (await get_setting(row.id, key, default)) == "1"
         rows.append([btn(f"{label}: {'✅ مجاز' if on else '⛔️ ممنوع'}", f"psel:set:{key}",
                          style=ButtonStyle.SUCCESS if on else ButtonStyle.DANGER)])
-    from tenant.bots.panel_seller.service import extra_gb_price
+    from tenant.bots.panel_seller.service import extra_gb_price, test_settings
+    _tc = await test_settings(row.id)
+    rows.append([btn(f"🧪 تستِ رایگان: {'✅ روشن' if _tc['enabled'] else '⛔️ خاموش'}", "psel:tt",
+                     style=ButtonStyle.SUCCESS if _tc["enabled"] else ButtonStyle.DANGER)])
+    rows.append([btn(f"⚙️ مشخصاتِ تست: {fa(_tc['hours'])} ساعت · {fa(_tc['gb'])} گیگ · {fa(_tc['users'])} کاربر", "psel:tc",
+                     style=ButtonStyle.PRIMARY)])
     _xp = await extra_gb_price(row.id)
     rows.append([btn(f"📈 حجمِ اضافه: {fa(f'{_xp:,}') + ' تومان/گیگ' if _xp else '⛔️ خاموش'}", "psel:xp",
                      style=ButtonStyle.SUCCESS if _xp else ButtonStyle.DANGER)])
@@ -533,3 +539,49 @@ async def extra_price_save(msg: Message, bot: Bot, state: FSMContext):
     text, markup = await _set_view(row)
     await msg.answer(("✅ فروشِ حجمِ اضافه روشن شد.\n\n" if v else "✅ فروشِ حجمِ اضافه خاموش شد.\n\n") + text,
                      reply_markup=markup, parse_mode="HTML")
+
+
+# === PATCH_PSEL_FREE_TEST_V1 === تستِ رایگان: روشن/خاموش + مشخصات (ساعت، گیگ، کاربر)
+@psel_admin_router.callback_query(F.data == "psel:tt")
+async def test_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    from tenant import get_setting, set_setting
+    cur = (await get_setting(row.id, "psel_test_enabled", "0")) == "1"
+    await set_setting(row.id, "psel_test_enabled", "0" if cur else "1")
+    text, markup = await _set_view(row)
+    await edit_or_send(cb, text, markup)
+    await cb.answer("تستِ رایگان روشن شد ✅" if not cur else "خاموش شد.")
+
+
+@psel_admin_router.callback_query(F.data == "psel:tc")
+async def test_cfg_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.set_state(PselFSM.test_cfg)
+    await edit_or_send(cb, "⚙️ مشخصاتِ تستِ رایگان را در <b>یک پیام</b> و با فاصله بفرست:\n"
+                           "<code>ساعت  گیگ  حداکثرِ‌کاربر</code>\n\nمثلاً <code>24 1 3</code> یعنی ۲۴ ساعت، ۱ گیگ، ۳ کاربر "
+                           "(حداکثرِ کاربر <code>0</code> = نامحدود).", kb(back_row("psel:set", "✖️ لغو")))
+    await cb.answer()
+
+
+@psel_admin_router.message(PselFSM.test_cfg, F.text)
+async def test_cfg_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard(msg, bot)
+    if not row:
+        return
+    parts = [_num(x) for x in (msg.text or "").replace("،", " ").replace(",", " ").split()]
+    if len(parts) != 3 or any(v is None for v in parts):
+        return await msg.answer("❌ سه عدد بفرست: ساعت، گیگ، حداکثرِ کاربر؛ مثلاً <code>24 1 3</code>", parse_mode="HTML")
+    hours, gb, users = parts
+    if not (1 <= hours <= 720 and 1 <= gb <= 1000 and 0 <= users <= 10000):
+        return await msg.answer("❌ ساعت ۱ تا ۷۲۰، گیگ ۱ تا ۱۰۰۰، کاربر ۰ تا ۱۰۰۰۰.")
+    from tenant import set_setting
+    await set_setting(row.id, "psel_test_hours", str(hours))
+    await set_setting(row.id, "psel_test_gb", str(gb))
+    await set_setting(row.id, "psel_test_users", str(users))
+    await state.clear()
+    text, markup = await _set_view(row)
+    await msg.answer("✅ مشخصاتِ تست ذخیره شد.\n\n" + text, reply_markup=markup, parse_mode="HTML")

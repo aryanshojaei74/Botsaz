@@ -23,9 +23,18 @@ def users_text(v) -> str:
     return "نامحدود" if not v else f"{fa(int(v))} کاربر"
 
 
+def days_text(days) -> str:
+    """PATCH_PSEL_UNLIMITED_DAYS_V1 — ۰ روز = بدونِ انقضا (نامحدود)."""
+    return "♾ نامحدود" if not days or int(days) <= 0 else f"{fa(int(days))} روز"
+
+
+def exp_text(dt) -> str:
+    return "♾ نامحدود" if dt is None else fmt_time(dt)
+
+
 def pk_line(pk) -> str:
     return (f"📦 <b>{esc(pk.title)}</b> — {gb_text(pk.data_gb)} · {users_text(pk.max_users)} · "
-            f"{fa(pk.days)} روز · {n(pk.price_toman)} تومان")
+            f"{days_text(pk.days)} · {n(pk.price_toman)} تومان")
 
 
 async def sales_gate(row) -> tuple[bool, str]:
