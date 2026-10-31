@@ -38,6 +38,7 @@ from tenant.shared.broadcast_runner import broadcast_loop as _broadcast_loop  # 
 from tenant.shared.stock_alarm import stock_alarm_loop as _stock_alarm_loop  # PATCH_STOCK_ALARM_V1
 from tenant.bots.virtual_service.smm import vnum_recover_loop as _vnum_recover_loop  # PATCH_VNUM_RECOVER_V1
 from tenant.bots.giveaway.loop import giveaway_loop as _giveaway_loop  # PATCH_GIVEAWAY_BOT_V1
+from tenant.shared.daily_report import daily_report_loop as _daily_report_loop  # PATCH_DAILY_REPORT_V1
 from tenant.bots.vpn.autorenew import autorenew_loop as _autorenew_loop  # PATCH_VPN_AUTORENEW_V1
 from tenant.bots.panel_seller.loop import panel_seller_loop as _panel_seller_loop  # PATCH_PANEL_SELLER_V1
 
@@ -157,6 +158,7 @@ async def _worker_startup():
         _nft_sources_loop(),
         # === PATCH_BROADCAST_DURABLE_V1 === ادامهٔ ارسال‌هایِ همگانیِ قطع‌شده بعد از ری‌استارت
         _broadcast_loop(),
+        _daily_report_loop(),   # PATCH_DAILY_REPORT_V1
         _autorenew_loop(),   # PATCH_VPN_AUTORENEW_V1: تمدیدِ خودکار از کیف‌پول
         _panel_seller_loop(),   # PATCH_PANEL_SELLER_V1: اعمالِ سقف‌ها/انقضا و هشدارِ ادمین‌هایِ فروخته‌شده
         _giveaway_loop(),   # PATCH_GIVEAWAY_BOT_V1: پایانِ خودکارِ قرعه‌کشی‌ها + شمارندهٔ اعلان‌ها

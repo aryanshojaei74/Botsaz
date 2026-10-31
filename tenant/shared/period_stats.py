@@ -138,6 +138,7 @@ async def pst_menu(cb: CallbackQuery, bot: Bot):
     text = await build_text(row.id)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="pst:menu", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="📅 گزارشِ روزانه به تلگرام", callback_data="drep:menu", style=ButtonStyle.SUCCESS)],   # PATCH_DAILY_REPORT_V1
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:stats", style=ButtonStyle.DANGER)]])
     try:
         await cb.message.edit_text(text, reply_markup=kb)

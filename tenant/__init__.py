@@ -180,6 +180,8 @@ from tenant.bots.vpn.stock_give import sg_router   # PATCH_STOCK_GIVE_TO_USER_V1
 tenant_router.include_router(sg_router)
 from tenant.shared.period_stats import pst_router   # PATCH_PERIOD_STATS_V1
 tenant_router.include_router(pst_router)
+from tenant.shared.daily_report import daily_report_router   # PATCH_DAILY_REPORT_V1
+tenant_router.include_router(daily_report_router)
 # === PATCH_KYC_V1 ===
 from tenant.shared.kyc_admin import kyc_admin_router
 tenant_router.include_router(kyc_admin_router)
