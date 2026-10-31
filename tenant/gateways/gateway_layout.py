@@ -216,6 +216,47 @@ async def apply_direct_first(bot_id: int, markup):
         return markup
 
 
+# === PATCH_GATEWAY_PAIR_ROWS_V1 === (Nexivo) دو درگاه کنارِ هم در یک ردیف، نه هر درگاه یک ردیف
+def pair_rows(rows: list[list], flags: dict[str, bool]) -> list[list]:
+    """ردیفِ تک‌دکمه‌ایِ درگاهِ «جفت‌شده» را به ردیفِ درگاهِ تک‌دکمه‌ایِ دقیقاً قبلی می‌چسباند (حداکثر دو دکمه در ردیف).
+    فقط ردیف‌هایِ متوالیِ درگاه؛ ردیفِ غیرِدرگاه زنجیره را می‌شکند."""
+    out: list[list] = []
+    prev_ok = False                       # آخرین ردیفِ خروجی یک درگاهِ تک‌دکمه‌ایِ قابلِ‌چسبیدن است؟
+    for r in rows:
+        key = None
+        if len(r) == 1:
+            key = _gw_key_of_cb(getattr(r[0], "callback_data", None) or "")
+        if key is None:
+            out.append(list(r))
+            prev_ok = False
+            continue
+        if flags.get(key) and prev_ok and len(out[-1]) == 1:
+            out[-1] = out[-1] + list(r)
+            prev_ok = False               # ردیف پر شد (۲ دکمه)
+        else:
+            out.append(list(r))
+            prev_ok = True
+    return out
+
+
+async def apply_pairs(bot_id: int, markup):
+    try:
+        from aiogram.types import InlineKeyboardMarkup as _IKM
+        if not isinstance(markup, _IKM):
+            return markup
+        keys = {_gw_key_of_cb(b.callback_data or "") for r in markup.inline_keyboard for b in r} - {None}
+        flags = {}
+        for k in keys:
+            flags[k] = (await _get(bot_id, f"gw_pair_{k}", "")) == "1"
+        if not any(flags.values()):
+            return markup
+        rows = pair_rows([list(r) for r in markup.inline_keyboard], flags)
+        return _IKM(inline_keyboard=rows)
+    except Exception:
+        logger.exception("gateway_layout: جفت‌کردنِ دکمه‌هایِ درگاه ناموفق بود")
+        return markup
+
+
 async def apply_card_rename(bot_id: int, markup):
     """اسمِ دلخواهِ «کارت‌به‌کارت» (card_display_name) را عیناً رویِ دکمه‌هایِ کارتِ صفحه‌هایِ خرید/کیف پول می‌گذارد."""
     try:
@@ -252,7 +293,7 @@ async def _menu_content(bot_id: int):
     order = await get_order(bot_id)
     text = ("🎛 <b>نام و ترتیبِ دکمه‌هایِ پرداخت</b>\n\n"
             "زیرِ نامِ هر درگاه:\n"
-            "⬆️ ⬇️ جابه‌جایی  •  🏷 تغییرِ اسم  •  🎨 تغییرِ رنگ\n\n"
+            "⬆️ ⬇️ جابه‌جایی  •  🏷 تغییرِ اسم  •  🎨 تغییرِ رنگ  •  ↔️ کنارِ درگاهِ قبلی (دو درگاه در یک ردیف)\n\n"
             "🔝 با روشن‌کردنِ گزینهٔ پایین، در صفحهٔ خرید دکمهٔ پرداختِ مستقیمِ درگاه (مثلاً «کارت به کارت آنی») "
             "بالایِ «پرداخت از کیف پول» می‌آید.\n"
             "رنگ فقط در پلن‌هایِ دارایِ «دکمهٔ رنگی» اعمال می‌شود. ترتیب در «کیف پول» و دکمه‌هایِ شارژِ صفحهٔ خرید "
@@ -276,6 +317,11 @@ async def _menu_content(bot_id: int):
         if renamable:
             tools.append(InlineKeyboardButton(text="🏷 اسم", callback_data=f"gwl:name:{key}"))
         tools.append(InlineKeyboardButton(text=f"🎨 رنگ {_COLOR_EMOJI.get(col, '⚪️')}", callback_data=f"gwl:col:{key}"))
+        _pair_on = (await _get(bot_id, f"gw_pair_{key}", "")) == "1"
+        if n > 0:                                         # اولین درگاه «قبلی» ندارد
+            tools.append(InlineKeyboardButton(text=f"↔️ کنارِ قبلی {'✅' if _pair_on else '⬜️'}",
+                                              callback_data=f"gwl:pair:{key}",
+                                              style=ButtonStyle.SUCCESS if _pair_on else None))
         rows.append(tools)
     _first = (await _get(bot_id, "gw_direct_first", "0")) == "1"
     rows.append([InlineKeyboardButton(
@@ -356,6 +402,22 @@ async def gwl_color(cb: CallbackQuery, bot: Bot):
     await cb.answer(f"رنگ: {_COLOR_EMOJI[nxt]}")
 
 
+@gateway_layout_router.callback_query(F.data.startswith("gwl:pair:"))
+async def gwl_pair(cb: CallbackQuery, bot: Bot):
+    """PATCH_GATEWAY_PAIR_ROWS_V1 — این درگاه کنارِ درگاهِ بالاییِ خودش (در یک ردیف) نمایش داده شود/نشود."""
+    from tenant import _owner_ok, set_setting
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    key = cb.data.split(":", 2)[2]
+    if key not in _BY_KEY:
+        return await cb.answer()
+    new = "0" if (await _get(row.id, f"gw_pair_{key}", "")) == "1" else "1"
+    await set_setting(row.id, f"gw_pair_{key}", new)
+    await _show(cb, row.id)
+    await cb.answer("کنارِ درگاهِ قبلی ✅" if new == "1" else "ردیفِ جدا ⬜️")
+
+
 @gateway_layout_router.callback_query(F.data == "gwl:first")
 async def gwl_first(cb: CallbackQuery, bot: Bot):
     from tenant import _owner_ok, set_setting
@@ -378,6 +440,7 @@ async def gwl_reset(cb: CallbackQuery, bot: Bot):
     await set_setting(row.id, "gw_direct_first", "0")
     for key, _cb, _t, renamable in ITEMS:
         await set_setting(row.id, f"gw_color_{key}", "")       # PATCH_GATEWAY_COLORS_V1
+        await set_setting(row.id, f"gw_pair_{key}", "")        # PATCH_GATEWAY_PAIR_ROWS_V1
         if renamable:
             _d, sk = GATEWAY_LABELS.get(key, (key, f"{key}_display_name"))
             await set_setting(row.id, sk, "")

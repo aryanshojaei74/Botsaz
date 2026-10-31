@@ -3316,6 +3316,8 @@ def _nav_install(bot) -> None:
                     _mk2 = await _adf(_rowc.id, _mk2)
                     from tenant.gateways.gateway_layout import apply_card_rename as _acr   # PATCH_CARD_RENAME_COLOR_V1
                     _mk2 = await _acr(_rowc.id, _mk2)
+                    from tenant.gateways.gateway_layout import apply_pairs as _apr   # PATCH_GATEWAY_PAIR_ROWS_V1
+                    _mk2 = await _apr(_rowc.id, _mk2)
                     if _mk2 is not mk:
                         method = method.model_copy(update={"reply_markup": _mk2})
                         mk = _mk2
