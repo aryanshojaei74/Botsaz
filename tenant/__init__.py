@@ -274,6 +274,8 @@ _include(community_router, "community_mgmt")  # === PATCH_COMMUNITY_MGMT_V1 ===
 _include(funstat_bot_router, "funstat")  # === PATCH_FUNSTAT_BOT_V1 ===
 from tenant.bots.giveaway import giveaway_router  # === PATCH_GIVEAWAY_BOT_V1 ===
 _include(giveaway_router, "giveaway")
+from tenant.shared.sms_verify import sms_verify_router   # === PATCH_SMS_VERIFY_V1 ===
+tenant_router.include_router(sms_verify_router)
 from tenant.bots.panel_seller import panel_seller_router  # === PATCH_PANEL_SELLER_V1 ===
 _include(panel_seller_router, "panel_seller")
 tenant_router.include_router(slideshow_router)
@@ -1896,6 +1898,9 @@ async def pay_phone_gate(message: Message, row, user_id: int) -> bool:
     """اگر لازم بود، از کاربر شماره می‌گیرد. True یعنی جلوی پرداخت گرفته شد."""
     if not await _pay_needs_phone(row, user_id):
         return False
+    from tenant.shared.sms_verify import sms_prompt        # PATCH_SMS_VERIFY_V1: روشِ «پیامک» اگر مالک انتخاب کرده
+    if await sms_prompt(message, row.id, pay=True):
+        return True
     kb = ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text=BTN_PHONE_VERIFY, request_contact=True)]
     ], resize_keyboard=True)
@@ -1911,6 +1916,13 @@ async def pay_phone_gate(message: Message, row, user_id: int) -> bool:
 
 
 async def _phone_verify_prompt(msg: Message) -> None:
+    try:
+        from tenant.shared.sms_verify import sms_prompt    # PATCH_SMS_VERIFY_V1
+        _row_sv = await get_bot_row(msg.bot)
+        if _row_sv and await sms_prompt(msg, _row_sv.id):
+            return
+    except Exception:
+        logger.exception("پرامپتِ تأییدِ پیامکی ساخته نشد؛ مسیرِ مخاطب")
     kb = ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text=BTN_PHONE_VERIFY, request_contact=True)]
     ], resize_keyboard=True)
@@ -1969,22 +1981,8 @@ async def send_phone_log(bot: Bot, row, user, phone: str, reason: str = "") -> N
                          row.id)
 
 
-@tenant_router.message(F.contact)
-async def tenant_phone_verify_receive(msg: Message, bot: Bot, state: FSMContext):
-    row = await get_bot_row(bot)
-    if not row:
-        return
-    contact = msg.contact
-    # امنیت: باید شمارهٔ خودِ همون کاربر باشه (نه یه مخاطبِ دیگه که فوروارد/ارسال کرده)
-    if contact.user_id and contact.user_id != msg.from_user.id:
-        await msg.answer("❗️ باید شماره‌ی خودت رو با همون دکمهٔ پایین بفرستی، نه یه مخاطبِ دیگه.")
-        return
-    phone = (contact.phone_number or "").strip().lstrip("+")
-    if not phone.startswith("98"):
-        await msg.answer(
-            "❌ فقط شماره‌هایِ ایران (+۹۸) قبول می‌شه. با شماره‌ای که تو تلگرامِ خودت "
-            "ثبته و ایرانیه، دوباره روی دکمه بزن:")
-        return
+async def _phone_verified_ok(msg: Message, bot: Bot, state: FSMContext, row, phone: str) -> bool:
+    """ذخیرهٔ شمارهٔ تاییدشده + گزارش + ادامهٔ مسیرِ معلق + پیامِ موفقیت (مشترکِ تاییدِ مخاطب و کدِ پیامکی)."""
     u = await get_or_create_user(row.id, msg.from_user.id, msg.from_user.full_name,
                                  msg.from_user.username or "")
     # === PATCH_PHONE_VERIFY_FRESH_READ_V1 ===
@@ -2007,7 +2005,7 @@ async def tenant_phone_verify_receive(msg: Message, bot: Bot, state: FSMContext)
                      row.id, msg.from_user.id)
         await msg.answer("⚠️ ثبتِ شماره با مشکل مواجه شد. لطفاً دوباره امتحان کن "
                          "یا به پشتیبانی اطلاع بده.")
-        return
+        return False
     # === PATCH_PHONE_LOG_CHANNEL_V1 ===
     _pay_gate_now = (await get_setting(row.id, "phone_verify_pay", "off")) == "on"
     await send_phone_log(bot, row, u, phone,
@@ -2029,6 +2027,59 @@ async def tenant_phone_verify_receive(msg: Message, bot: Bot, state: FSMContext)
         if ikb:
             # === PATCH_CUSTOM_HOME_MENU_TEXT_HIDE_V4 ===
             await send_home_menu(msg, row.id, ikb, attach=_ok_msg)
+    return True
+
+
+@tenant_router.message(F.contact)
+async def tenant_phone_verify_receive(msg: Message, bot: Bot, state: FSMContext):
+    row = await get_bot_row(bot)
+    if not row:
+        return
+    contact = msg.contact
+    # امنیت: باید شمارهٔ خودِ همون کاربر باشه (نه یه مخاطبِ دیگه که فوروارد/ارسال کرده)
+    if contact.user_id and contact.user_id != msg.from_user.id:
+        await msg.answer("❗️ باید شماره‌ی خودت رو با همون دکمهٔ پایین بفرستی، نه یه مخاطبِ دیگه.")
+        return
+    phone = (contact.phone_number or "").strip().lstrip("+")
+    if not phone.startswith("98"):
+        await msg.answer(
+            "❌ فقط شماره‌هایِ ایران (+۹۸) قبول می‌شه. با شماره‌ای که تو تلگرامِ خودت "
+            "ثبته و ایرانیه، دوباره روی دکمه بزن:")
+        return
+    await _phone_verified_ok(msg, bot, state, row, phone)
+
+
+# === PATCH_PAY_PHONE_GATE_ALL_V1 ===
+# گیتِ «تأییدِ شماره پیش از پرداخت» فقط روی چند مسیرِ خرید بود؛ شارژِ کیف‌پول با کارت‌به‌کارت و درگاه‌ها (و شارژِ
+# داخلِ خریدِ خدماتِ مجازی) رد می‌شد. این میان‌افزار *شروعِ* هر پرداخت/شارژ را یک‌جا می‌گیرد؛ فقط وقتی مالک
+# «تایید شماره پیش از پرداخت» را روشن کرده باشد کار می‌کند (پیش‌فرض خاموش) و مالک/ادمین معاف‌اند.
+_PAY_START_PREFIXES = (
+    "w:charge", "w:zarinpal", "w:zibal", "w:crypto", "w:stars", "w:swap", "w:cdirect", "w:tonpays", "w:ton_direct",
+    "w:hesabpay", "w:abangateway", "w:apay", "wcamt:", "vsc:o:", "mcfg:paycard:", "ab:show_wallet", "bpl:show_wallet",
+    "bpu:amt:", "tond:pay",
+)
+
+
+@tenant_router.callback_query.outer_middleware
+async def tenant_pay_phone_gate_mw(handler, event, data):
+    cbdata = getattr(event, "data", "") or ""
+    u = getattr(event, "from_user", None)
+    if not u or not cbdata.startswith(_PAY_START_PREFIXES):
+        return await handler(event, data)
+    msg = getattr(event, "message", None)
+    if msg is None or getattr(getattr(msg, "chat", None), "type", "private") != "private":
+        return await handler(event, data)
+    bot = data.get("bot") or getattr(event, "bot", None)
+    row = await get_bot_row(bot) if bot is not None else None
+    if not row:
+        return await handler(event, data)
+    try:
+        if await pay_phone_gate(msg, row, u.id):
+            await event.answer("📱 اول شماره‌ات را تایید کن.", show_alert=True)
+            return None
+    except Exception:
+        logger.exception("گیتِ شماره پیش از پرداخت خطا داد؛ مسیر ادامه می‌یابد")
+    return await handler(event, data)
 
 
 # === PATCH_PHONE_GATE_CB_V1 ===
@@ -12219,6 +12270,7 @@ async def _sec_finance_opts(bot_id: int, plan: str) -> list[tuple[str, str]]:
     if ok(Feature.PHONE_VERIFY):     # PATCH_FREE_PLAN_SIMPLIFY_V1
         opts.append((f"📱 تایید شماره پیش از پرداخت: " + ("✅ فعال" if _payphone_on else "❌ غیرفعال"),
                      "set:toggle_payphone"))
+        opts.append(("📨 پنل پیامکی (تأییدِ شماره با کد)", "psms:menu"))   # PATCH_SMS_VERIFY_V1
     if ok(Feature.GATEWAY_PAYMENT):
         opts.append(("🪙 درگاه ارز دیجیتال (NOWPayments)", "set:crypto"))
     if plan != "free":
