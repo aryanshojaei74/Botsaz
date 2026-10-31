@@ -18,7 +18,7 @@ from sqlalchemy import func, select
 
 from config import Session
 from logging_setup import get_logger as _get_logger
-from models import (GiftOrder, NftOrder, Order, ProductOrder, ReferralJoin, SmmOrder, WalletTxn)
+from models import (BetLedger, GiftOrder, NftOrder, Order, ProductOrder, ReferralJoin, SmmOrder, WalletTxn)
 
 logger = _get_logger(__name__)
 
@@ -111,6 +111,78 @@ async def referrals_report(bot_id: int, now_utc=None) -> list[tuple[str, int, in
     return out
 
 
+# === PATCH_FEE_PROFIT_STATS_V1 === (SINA) آمارِ کارمزد (انتقال/بازی) و سود به‌تفکیکِ بازه
+_FEE_NOTE_RE = None
+
+
+def _fee_from_note(note: str | None) -> int:
+    """مبلغِ کارمزد از یادداشتِ «کارمزدِ انتقال (۲٪): 1,234 تومان» (ردیفِ WalletTxn مبلغِ صفر دارد و عدد فقط در یادداشت است)."""
+    import re
+    global _FEE_NOTE_RE
+    if _FEE_NOTE_RE is None:
+        _FEE_NOTE_RE = re.compile(r"([\d,٬]+)\s*تومان")
+    m = _FEE_NOTE_RE.findall(note or "")
+    if not m:
+        return 0
+    try:
+        return int(m[-1].replace(",", "").replace("٬", ""))
+    except ValueError:
+        return 0
+
+
+async def fees_report(bot_id: int, now_utc=None) -> list[tuple[str, int, int]]:
+    """[(برچسب، کارمزدِ انتقال، کارمزدِ بازی‌ها)]"""
+    out = []
+    async with Session() as s:
+        for label, since in period_starts(now_utc):
+            q = select(WalletTxn.note).where(WalletTxn.bot_id == bot_id, WalletTxn.kind == "group_transfer_fee")
+            if since is not None:
+                q = q.where(WalletTxn.created_at >= since)
+            transfer = sum(_fee_from_note(n) for n in (await s.scalars(q.limit(100000))).all())
+            q2 = select(func.coalesce(func.sum(-BetLedger.amount), 0)).where(BetLedger.bot_id == bot_id, BetLedger.kind == "fee")
+            if since is not None:
+                q2 = q2.where(BetLedger.created_at >= since)
+            game = int((await s.execute(q2)).scalar() or 0)
+            out.append((label, int(transfer), game))
+    return out
+
+
+async def profit_report(bot_id: int, now_utc=None) -> list[tuple[str, int, int, int]]:
+    """[(برچسب، سودِ فروش، تعدادِ سفارشِ دارایِ هزینه، تعدادِ سفارشِ بدونِ هزینهٔ ثبت‌شده)]
+    سود فقط برایِ سفارش‌هایِ خدماتِ مجازی که هزینهٔ خرید (cost_toman) ثبت دارند = قیمتِ فروش − هزینه."""
+    out = []
+    ok_status = SmmOrder.status.in_(["sent", "completed", "partial", "awaiting_admin", "sending"])
+    async with Session() as s:
+        for label, since in period_starts(now_utc):
+            base = [SmmOrder.bot_id == bot_id, ok_status]
+            if since is not None:
+                base.append(SmmOrder.created_at >= since)
+            r = (await s.execute(select(
+                func.coalesce(func.sum(SmmOrder.price_toman - SmmOrder.cost_toman), 0), func.count()
+            ).where(*base, SmmOrder.cost_toman.is_not(None), SmmOrder.cost_toman > 0))).one()
+            miss = int((await s.execute(select(func.count()).where(
+                *base, (SmmOrder.cost_toman.is_(None)) | (SmmOrder.cost_toman <= 0)))).scalar() or 0)
+            out.append((label, int(r[0] or 0), int(r[1] or 0), miss))
+    return out
+
+
+def _fees_block(rows: list[tuple[str, int, int]]) -> str:
+    lines = ["<b>آمار کارمزد:</b>"]
+    for label, tr, gm in rows:
+        lines.append(f"• {label}: <b>{_fa(tr + gm)}</b> تومان — انتقال: {_fa(tr)} · بازی‌ها: {_fa(gm)}")
+    return "\n".join(lines)
+
+
+def _profit_block(rows: list[tuple[str, int, int, int]]) -> str:
+    lines = ["<b>آمار سود (فروشِ خدماتِ مجازی):</b>"]
+    for label, p, n, miss in rows:
+        extra = f" (از {_fa(n)} سفارش)" if n else ""
+        lines.append(f"• {label}: <b>{_fa(p)}</b> تومان{extra}")
+    if any(m for *_a, m in rows):
+        lines.append("<i>سفارش‌هایِ بدونِ هزینهٔ ثبت‌شده در سود حساب نمی‌شوند.</i>")
+    return "\n".join(lines)
+
+
 def _block(title: str, rows: list[tuple[str, int, int]], unit: str, money_label: str) -> str:
     lines = [f"<b>{title}:</b>"]
     for label, n, tot in rows:
@@ -122,10 +194,16 @@ def _block(title: str, rows: list[tuple[str, int, int]], unit: str, money_label:
 async def build_text(bot_id: int, now_utc=None) -> str:
     o, w, r = (await orders_report(bot_id, now_utc), await topups_report(bot_id, now_utc),
                await referrals_report(bot_id, now_utc))
+    try:
+        f, pr = await fees_report(bot_id, now_utc), await profit_report(bot_id, now_utc)
+        fp = "\n\n💸 " + _fees_block(f) + "\n\n💹 " + _profit_block(pr)
+    except Exception:
+        logger.exception("period_stats: آمارِ کارمزد/سود ناموفق بود (بقیهٔ گزارش نمایش داده شد)")
+        fp = ""
     return ("📈 <b>آمار زمانی</b>\n\n"
             + "📋 " + _block("آمار سفارشات", o, "سفارش", "فروش") + "\n\n"
             + "👛 " + _block("آمار افزایش موجودی‌ها", w, "شارژ", "مجموع") + "\n\n"
-            + "👥 " + _block("آمار زیرمجموعه‌گیری", r, "نفر", "پاداشِ پرداخت‌شده"))
+            + "👥 " + _block("آمار زیرمجموعه‌گیری", r, "نفر", "پاداشِ پرداخت‌شده") + fp)
 
 
 @pst_router.callback_query(F.data == "pst:menu")
