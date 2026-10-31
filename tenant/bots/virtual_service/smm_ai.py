@@ -301,6 +301,59 @@ async def _get_model(bot_id: int | None, provider: str) -> str | None:
         return None
 
 
+# === PATCH_AI_TOKEN_BUDGET_V1 === (SINA) Groq سقفِ ورودی ~۸۰۰۰ توکن دارد؛ ربات برایِ «سلام» هم تا ۱۲٬۰۰۰ نویسهٔ فارسی (≈۱۰ هزار توکن)
+# کاتالوگ می‌فرستاد و همه‌چیز خطا می‌داد. حالا اندازهٔ ورودی طبقِ سقفِ ارائه‌دهنده کوتاه می‌شود و خطوطِ مرتبط با سؤال اولویت دارند.
+_CHARS_PER_TOKEN = 1.25                       # فارسی در توکنایزرِ لاما/کوئن ≈ ۱٫۲۵ نویسه برایِ هر توکن (از مشاهدهٔ واقعی)
+_TOKEN_LIMITS = {"groq": 8000}                # ارائه‌دهنده ← سقفِ توکنِ هر درخواست؛ بقیه بدونِ سقفِ عملی
+_NO_LIMIT_CHARS = 24000
+_SHORT_Q_CHARS = 3500                         # سلام/احوال‌پرسی/سؤالِ خیلی کوتاه: کاتالوگِ کامل لازم نیست
+
+
+def _char_budget(provider: str, model: str | None, token_limit: int | None = None) -> int:
+    """بودجهٔ نویسه برایِ (system + context + سؤال). سهمِ خروجی (max_tokens) و حاشیهٔ امنیت از سقف کم می‌شود."""
+    limit = int(token_limit or _TOKEN_LIMITS.get(provider, 0) or 0)
+    if limit <= 0:
+        return _NO_LIMIT_CHARS
+    out = _openai_compat_tuning(model or "").get("max_tokens", 400)
+    return max(2000, int((limit - out - 400) * _CHARS_PER_TOKEN))
+
+
+def _words(s: str) -> set[str]:
+    import re
+    return {w for w in re.split(r"[^\w]+", (s or "").lower()) if len(w) >= 2}
+
+
+def fit_context(context: str, question: str, budget: int) -> str:
+    """context را به budget نویسه می‌رساند. تیترها/خطوطِ غیرِفهرست (مثلاً قیمتِ استارز/تون) همیشه می‌مانند؛ خطوطِ فهرست («- …»)
+    اول طبقِ هم‌پوشانی با سؤال، بعد به ترتیبِ اصلی تا پرشدنِ بودجه برداشته می‌شوند؛ خروجی به ترتیبِ اصلی است."""
+    if not context or len(context) <= budget:
+        return context
+    lines = context.split("\n")
+    keep = {i for i, ln in enumerate(lines) if not ln.lstrip().startswith("- ")}
+    used = sum(len(lines[i]) + 1 for i in keep)
+    if used >= budget:                                   # حتی تیترها جا نمی‌شوند ⇒ برشِ سخت
+        return context[:budget]
+    qw = _words(question)
+    items = [i for i, ln in enumerate(lines) if i not in keep]
+    scored = sorted(items, key=lambda i: (-len(qw & _words(lines[i])), i)) if qw else items
+    for i in scored:
+        ln = lines[i]
+        if used + len(ln) + 1 > budget:
+            if len(ln) > 160 and used + 161 <= budget:    # خطِ بلند را کوتاه کن تا حداقل جا بشود
+                lines[i] = ln[:160] + "…"
+                ln = lines[i]
+            else:
+                continue
+        keep.add(i)
+        used += len(ln) + 1
+    return "\n".join(lines[i] for i in sorted(keep))
+
+
+def _too_large(msg: str) -> bool:
+    m = (msg or "").lower()
+    return any(k in m for k in ("too large", "413", "reduce your message", "tokens per minute", "request too big", "rate_limit_exceeded"))
+
+
 async def ask_ai(provider: str, api_key: str, question: str, context: str = "",
                 system_prompt: str | None = None, bot_id: int | None = None,
                 model: str | None = None) -> str | None:
@@ -313,14 +366,34 @@ async def ask_ai(provider: str, api_key: str, question: str, context: str = "",
     fn = _PROVIDER_FUNCS.get(provider)
     if not fn:
         return None
-    user_content = question.strip()
-    if context:
-        user_content = f"{context}\n\nسؤالِ مشتری: {question.strip()}"
     system_prompt = system_prompt or _SYSTEM_PROMPT
     last_error["msg"] = ""
+
+    def _compose(factor: float) -> str:
+        uc = question.strip()
+        if not context:
+            return uc
+        budget = _char_budget(provider, mdl, tok_limit)
+        if len(question.strip()) <= 20:
+            budget = min(budget, _SHORT_Q_CHARS)
+        ctx_budget = max(1200, int((budget - len(system_prompt) - len(question) - 60) * factor))
+        return f"{fit_context(context, question, ctx_budget)}\n\nسؤالِ مشتری: {question.strip()}"
+
     try:
-        model = model or await _get_model(bot_id, provider)
-        return _clean_ai_answer(await fn(api_key, user_content, system_prompt, model))
+        mdl = model or await _get_model(bot_id, provider)
+        tok_limit = None
+        if bot_id:
+            try:
+                tok_limit = int((await _get_setting(bot_id, "smm_ai_token_limit", "")) or 0) or None
+            except (TypeError, ValueError):
+                tok_limit = None
+        model = mdl
+        user_content = _compose(1.0)
+        res = await fn(api_key, user_content, system_prompt, model)
+        if not res and _too_large(last_error.get("msg", "")) and context:
+            logger.info("[SMM_AI] درخواست بزرگ بود؛ با نصفِ context دوباره تلاش می‌شود")
+            res = await fn(api_key, _compose(0.5), system_prompt, model)
+        return _clean_ai_answer(res)
     except Exception as e:
         last_error["msg"] = f"{type(e).__name__}: {str(e)[:150]}"
         logger.exception(f"[SMM_AI] خطایِ غیرمنتظره در فراخوانیِ {provider}")
