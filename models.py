@@ -8,6 +8,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from secret_box import EncryptedStr
+
 
 class Base(DeclarativeBase):
     pass
@@ -1223,12 +1225,12 @@ class VpnPanel(Base):
     panel_key: Mapped[str] = mapped_column(String(30), default="sanai")
     base_url: Mapped[str] = mapped_column(String(300))
     username: Mapped[str] = mapped_column(String(120))
-    password: Mapped[str] = mapped_column(String(200))
+    password: Mapped[str] = mapped_column(EncryptedStr(200))   # PATCH_SECRET_BOX_V1: رمزنگاریِ شفاف (اختیاری)
     # === PATCH_PANEL_API_KEY_AUTH_V1 ===
     # برخی پنل‌ها (مثلاً پاسارگارد/PasarGuard از نسخهٔ ۵.۱ به بعد) علاوه بر
     # یوزرنیم/پسورد، اتصال با «API Key» ثابت رو هم پشتیبانی می‌کنن. اگه این
     # ستون پر باشه، اتصال با کلید انجام می‌شه (بدون نیاز به لاگینِ یوزر/پس).
-    api_key: Mapped[str | None] = mapped_column(String(300))
+    api_key: Mapped[str | None] = mapped_column(EncryptedStr(300))   # PATCH_SECRET_BOX_V1
     sub_base: Mapped[str | None] = mapped_column(String(300))
     inbound_ids: Mapped[str | None] = mapped_column(Text)  # "1,2,3" یا خالی=همه فعال‌ها
     # === PATCH_PANEL_INBOUND_PICKER_V1 ===
