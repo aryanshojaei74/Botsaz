@@ -62,14 +62,26 @@ async def role_for(api, panel) -> int:
                      f"نقش‌هایِ موجود: {names}")
 
 
-async def create_admin_on(api, panel, username: str, password: str) -> None:
-    """ساختِ ادمین؛ اگر پنل «role_id» خواست (پاسارگاردِ جدید) نقش را پیدا و یک‌بار دوباره امتحان می‌کند."""
+GB_BYTES = 1024 ** 3
+
+
+async def create_admin_on(api, panel, username: str, password: str, data_gb: int = 0) -> None:
+    """ساختِ ادمین؛ اگر پنل «role_id» خواست (پاسارگاردِ جدید) نقش را پیدا و یک‌بار دوباره (همراهِ سقفِ حجمِ بومی) امتحان می‌کند."""
     try:
         await api.create_admin(username, password)
     except PanelError as e:
         if "role_id" not in str(e):
             raise
-        await api.create_admin(username, password, role_id=await role_for(api, panel))
+        await api.create_admin(username, password, role_id=await role_for(api, panel),
+                               data_limit_bytes=(int(data_gb) * GB_BYTES if data_gb and int(data_gb) > 0 else None))
+
+
+async def apply_native_limit(api, username: str, gb: int) -> None:
+    """بهترین‌تلاش: سقفِ حجم را روی خودِ پاسارگاردِ جدید هم بگذار (کنترلِ بومی؛ کنترلِ سمتِ ربات هم می‌ماند). خطا خرید را نمی‌شکند."""
+    try:
+        await api.apply_data_limit(username, int(gb or 0))
+    except Exception as e:      # noqa: BLE001
+        logger.warning("panel_seller: اعمالِ سقفِ حجمِ بومی ناموفق بود (%s): %s", username, e)
 
 
 def _api(panel):
@@ -162,7 +174,7 @@ async def buy(bot_id: int, buyer_tg: int, package_id: int, api_factory=None, bot
     try:
         api = api_factory(panel)
         try:
-            await create_admin_on(api, panel, username, password)
+            await create_admin_on(api, panel, username, password, data_gb=int(pk.data_gb or 0))
         finally:
             await api.close()
     except Exception as e:  # noqa: BLE001
@@ -223,9 +235,10 @@ async def renew(bot_id: int, account_id: int, buyer_tg: int, api_factory=None) -
                 await api.set_password(acc.admin_username, new_pw)
                 await api.activate_users(acc.admin_username)
             try:
-                await api.c._request("POST", f"/api/admin/usage/reset/{acc.admin_username}")
+                await api.reset_usage(acc.admin_username)
             except Exception:       # noqa: BLE001 — ریستِ مصرف اختیاری است
                 logger.info("panel_seller: ریستِ مصرفِ ادمین ممکن نشد (بی‌اهمیت)")
+            await apply_native_limit(api, acc.admin_username, int(pk.data_gb or 0))
         finally:
             await api.close()
     except Exception as e:  # noqa: BLE001
@@ -332,7 +345,7 @@ async def buy_test(bot_id: int, buyer_tg: int, api_factory=None, bot=None, row=N
     try:
         api = api_factory(panel)
         try:
-            await create_admin_on(api, panel, username, password)
+            await create_admin_on(api, panel, username, password, data_gb=int(cfg["gb"]))
         finally:
             await api.close()
     except Exception as e:  # noqa: BLE001
@@ -426,6 +439,15 @@ async def add_volume(bot_id: int, account_id: int, buyer_tg: int, gb: int, api_f
             acc.status, acc.suspend_reason = "active", None
         await s.commit()
         new_gb, uname = acc.data_gb, acc.admin_username
+    if panel is not None:                                   # PATCH_PSEL_NATIVE_LIMIT_V1 — سقفِ بومیِ پنلِ جدید هم بالا برود
+        try:
+            api = api_factory(panel)
+            try:
+                await apply_native_limit(api, uname, int(new_gb))
+            finally:
+                await api.close()
+        except Exception as e:      # noqa: BLE001
+            logger.warning("panel_seller: به‌روزرسانیِ سقفِ بومیِ حجمِ اضافه ناموفق (acc=%s): %s", account_id, e)
     if bot is not None and row is not None:
         try:
             from tenant import _purchase_alert

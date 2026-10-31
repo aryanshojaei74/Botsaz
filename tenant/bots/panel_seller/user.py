@@ -58,13 +58,13 @@ async def show_buy(event, bot: Bot, row, uid: int) -> None:
             .order_by(PanelSellerPackage.price_toman))).all()
         panels = {p.id: p for p in (await s.scalars(select(VpnPanel).where(VpnPanel.bot_id == row.id))).all()}
     pks = [p for p in pks if panels.get(p.panel_id) and panels[p.panel_id].enabled and AD.supports(panels[p.panel_id].panel_key)]
-    if not pks:
-        return await edit_or_send(event, "📦 فعلاً بسته‌ای برایِ فروش نیست؛ بعداً سر بزن.", kb(HOME_ROW))
     rows = [[btn(f"{p.title[:28]} — {n(p.price_toman)} تومان", f"psel:b:{p.id}", style=ButtonStyle.SUCCESS)] for p in pks]
     if (await SV.custom_settings(row.id))["price"] > 0:      # PATCH_PSEL_CUSTOM_VOLUME_V1
         rows.insert(0, [btn("📦 خریدِ حجمِ دلخواه", "psel:cvb", style=ButtonStyle.SUCCESS)])
     if await SV.test_available(row.id, uid):          # PATCH_PSEL_FREE_TEST_V1
         rows.insert(0, [btn("🧪 تستِ رایگان", "psel:tst", style=ButtonStyle.PRIMARY)])
+    if not rows:     # PATCH_PSEL_NO_PACKAGES_BUT_CUSTOM_V1 — «فروشِ حجمِ دلخواه فعاله ولی بات هیچی نمیاره»: بدونِ بسته هم حجمِ دلخواه/تست دیده شود
+        return await edit_or_send(event, "📦 فعلاً بسته‌ای برایِ فروش نیست؛ بعداً سر بزن.", kb(HOME_ROW))
     rows.append(HOME_ROW)
     await edit_or_send(event, "🧩 <b>خریدِ پنل</b>\n\nیک بسته را انتخاب کن؛ بعد از پرداخت، ادمینِ پنل با نام‌کاربری و رمز برایت ساخته می‌شود.",
                        kb(*rows))
@@ -332,15 +332,14 @@ async def my_list(cb: CallbackQuery, bot: Bot):
 
 
 async def _live_usage(acc, panel):
-    """(مصرف‌گیگ, تعدادِ کاربر) یا None اگر پنل جواب نداد — فقط نمایشی."""
+    """(مصرف‌گیگ, تعدادِ کاربر, پنلِ جدید؟) یا None اگر پنل جواب نداد — فقط نمایشی. یک درخواست (snapshot)."""
     try:
         api = AD.PanelAdminAPI.for_panel(panel)
         try:
-            used = await asyncio.wait_for(api.usage_bytes(acc.admin_username), 15)
-            users = await asyncio.wait_for(api.user_count(acc.admin_username), 15)
+            snap = await asyncio.wait_for(api.snapshot(acc.admin_username), 20)
         finally:
             await api.close()
-        return used / SV.GB, users
+        return snap["used_bytes"] / SV.GB, snap["users"], bool(snap.get("new_style"))
     except Exception:      # noqa: BLE001
         return None
 
@@ -368,10 +367,11 @@ async def my_detail(cb: CallbackQuery, bot: Bot):
     text = (f"🗂 <b>{esc(a.title)}</b>\n\n🌐 <code>{esc(panel.base_url) if panel else '—'}</code>\n"
             f"🆔 <code>{esc(a.admin_username)}</code>\nوضعیت: {STATUS_FA.get(a.status, a.status)}{why}\n"
             f"⏳ پایان: {exp_text(a.expires_at)}")
+    new_style = False
     if panel and a.status == "active":
         live = await _live_usage(a, panel)
         if live:
-            used, users = live
+            used, users, new_style = live
             text += (f"\n📊 مصرف: {fa(f'{used:.1f}')} از {gb_text(a.data_gb)}\n👥 کاربران: {fa(users)} از {users_text(a.max_users)}")
     rows = []
     aid = a.id
@@ -379,14 +379,10 @@ async def my_detail(cb: CallbackQuery, bot: Bot):
     rows.append([btn("📊 مشخصات و مصرف", f"psel:a:{aid}", style=ButtonStyle.SUCCESS)])
     if panel and (panel.base_url or "").startswith(("http://", "https://")):
         rows.append([btn("🌐 ورود به پنل وب", url=panel.base_url, style=ButtonStyle.PRIMARY)])
-    try:
-        from tenant import get_setting
-        from tenant.shared.support_ticket import _support_contact_url
-        _sup = _support_contact_url(await get_setting(row.id, "support_direct_contact", ""))
-        if _sup:
-            rows.append([btn("🆘 آدرسِ پشتیبانی", url=_sup, style=ButtonStyle.PRIMARY)])
-    except Exception:      # noqa: BLE001
-        logger.exception("panel_seller: ساختِ دکمهٔ پشتیبانی ناموفق بود")
+    rows.append([btn("✏️ تغییرِ نامِ سرویس", f"psel:rnm:{aid}", style=ButtonStyle.PRIMARY)])
+    if new_style and a.status == "active":       # PATCH_PSEL_CONTACT_FIELDS_V1 — فیلدهایِ رسمیِ ادمینِ پاسارگاردِ جدید
+        rows.append([btn("🆘 آدرسِ پشتیبانی", f"psel:cf:{aid}:s", style=ButtonStyle.PRIMARY),
+                     btn("🏷 عنوانِ پروفایل", f"psel:cf:{aid}:t", style=ButtonStyle.PRIMARY)])
     if await _perm(row, "psel_allow_renew"):
         rows.append([btn("🔁 تمدید", f"psel:rn:{aid}", style=ButtonStyle.SUCCESS)])
     if a.status == "active":
@@ -427,6 +423,116 @@ async def delete_flow(cb: CallbackQuery, bot: Bot):
     if not await SV.delete_account(row.id, a.id):
         return await edit_or_send(cb, "❌ حذف انجام نشد؛ کمی بعد دوباره امتحان کن یا به پشتیبانی بگو.", kb(back_row(f"psel:a:{a.id}")))
     await edit_or_send(cb, "✅ پنل برایِ همیشه حذف شد.", kb(back_row("psel:my")))
+
+
+class PselAccFSM(StatesGroup):
+    rename = State()
+    contact = State()
+
+
+def _support_url(raw: str) -> str | None:
+    """«@id»/«id»/«t.me/id»/«https://…» ⇒ لینکِ https (مقدارِ support_url که در لینکِ اشتراکِ مشتری‌هایِ همین ادمین نشان داده می‌شود)."""
+    import re
+    v = (raw or "").strip()
+    if not v or len(v) > 200 or re.search(r"[\s<>\"']", v):
+        return None
+    if v.startswith(("http://", "https://")):
+        return v
+    if v.startswith(("t.me/", "telegram.me/")):
+        return "https://" + v
+    v = v.lstrip("@")
+    return f"https://t.me/{v}" if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{3,31}", v) else None
+
+
+@psel_user_router.callback_query(F.data.regexp(r"^psel:rnm:\d+$"))
+async def rename_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row, a = await _acc_for(cb, bot, int(cb.data.split(":")[2]))
+    if not a:
+        return
+    await state.clear()
+    await state.set_state(PselAccFSM.rename)
+    await state.update_data(acc_id=a.id)
+    await edit_or_send(cb, "✏️ نامِ جدیدِ سرویس را بفرست (حداکثر ۶۰ نویسه؛ فقط برایِ خودت نمایش داده می‌شود):", kb(back_row(f"psel:a:{a.id}", "✖️ لغو")))
+    await cb.answer()
+
+
+@psel_user_router.message(PselAccFSM.rename, F.text)
+async def rename_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _row(bot)
+    d = await state.get_data()
+    name = (msg.text or "").strip()
+    if not row or not d.get("acc_id") or not (1 <= len(name) <= 60):
+        return await msg.answer("❌ نام ۱ تا ۶۰ نویسه باشد.")
+    async with Session() as s:
+        a = await s.get(PanelSellerAccount, int(d["acc_id"]), with_for_update=True)
+        if not a or a.bot_id != row.id or a.buyer_tg != msg.from_user.id or a.status == "deleted":
+            await state.clear()
+            return
+        a.title = name
+        await s.commit()
+        aid = a.id
+    await state.clear()
+    await msg.answer("✅ نامِ سرویس عوض شد.", reply_markup=kb(back_row(f"psel:a:{aid}", "🗂 بازگشت به پنل")))
+
+
+@psel_user_router.callback_query(F.data.regexp(r"^psel:cf:\d+:[st]$"))
+async def contact_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    parts = cb.data.split(":")
+    row, a = await _acc_for(cb, bot, int(parts[2]))
+    if not a:
+        return
+    if a.status != "active":
+        return await cb.answer("فقط برایِ پنلِ فعال.", show_alert=True)
+    await state.clear()
+    await state.set_state(PselAccFSM.contact)
+    await state.update_data(acc_id=a.id, field=parts[3])
+    if parts[3] == "s":
+        txt = ("🆘 <b>آدرسِ پشتیبانیِ مشتری‌هایِ تو</b>\n\nآیدی یا لینکِ پشتیبانی‌ات را بفرست (مثلاً <code>@my_support</code> یا لینکِ تلگرام). "
+               "این آدرس در <b>لینکِ اشتراکِ مشتری‌هایِ همین پنل</b> نشان داده می‌شود.")
+    else:
+        txt = ("🏷 <b>عنوانِ پروفایل</b>\n\nعنوانی که در برنامهٔ مشتری‌هایِ تو بالایِ اشتراک دیده می‌شود را بفرست (مثلاً نامِ برندِ خودت).")
+    await edit_or_send(cb, txt, kb(back_row(f"psel:a:{a.id}", "✖️ لغو")))
+    await cb.answer()
+
+
+@psel_user_router.message(PselAccFSM.contact, F.text)
+async def contact_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _row(bot)
+    d = await state.get_data()
+    if not row or not d.get("acc_id"):
+        return await state.clear()
+    raw = (msg.text or "").strip()
+    if d.get("field") == "s":
+        val = _support_url(raw)
+        if not val:
+            return await msg.answer("❌ آیدی/لینکِ نامعتبر. مثلاً <code>@my_support</code> یا <code>https://t.me/my_support</code> بفرست.", parse_mode="HTML")
+        kw = {"support_url": val}
+    else:
+        if not (1 <= len(raw) <= 80):
+            return await msg.answer("❌ عنوان ۱ تا ۸۰ نویسه باشد.")
+        kw = {"profile_title": raw}
+    async with Session() as s:
+        a = await s.get(PanelSellerAccount, int(d["acc_id"]))
+        panel = await s.get(VpnPanel, a.panel_id) if a else None
+    if not a or a.bot_id != row.id or a.buyer_tg != msg.from_user.id or a.status != "active" or not panel:
+        await state.clear()
+        return
+    try:
+        api = AD.PanelAdminAPI.for_panel(panel)
+        try:
+            if not await api.is_new_style(a.admin_username):
+                await state.clear()
+                return await msg.answer("این پنل از این قابلیت پشتیبانی نمی‌کند.")
+            await api.put_admin(a.admin_username, **kw)
+        finally:
+            await api.close()
+    except Exception as e:      # noqa: BLE001
+        logger.warning("panel_seller: تنظیمِ فیلدِ تماسِ ادمین ناموفق (acc=%s): %s", a.id, e)
+        await tell_owner_failure(bot, row, msg.from_user.id, "تنظیمِ اطلاعاتِ پروفایلِ پنل", str(e))
+        return await msg.answer("❌ پنل جواب نداد؛ کمی بعد دوباره امتحان کن.")
+    await state.clear()
+    await msg.answer("✅ در پنل ثبت شد." + ("\nدر لینکِ اشتراکِ مشتری‌هایِ تو نشان داده می‌شود." if "support_url" in kw else ""),
+                     reply_markup=kb(back_row(f"psel:a:{a.id}", "🗂 بازگشت به پنل")))
 
 
 _XG_PICKS = (5, 10, 20, 50, 100)

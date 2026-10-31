@@ -269,3 +269,72 @@ async def test_old_marzban_style_keeps_old_endpoints():
             return await OldM._request(self, method, path, json=json, params=params)
     api2 = AD.PanelAdminAPI(NoAdminsEndpoint())
     assert await api2.usage_bytes("u1") == 2048                                  # /api/admins نبود ⇒ همان رفتارِ قبلی
+
+
+# ─────────── سقفِ حجمِ بومی + آدرسِ پشتیبانی/عنوانِ پروفایل + صفحهٔ خریدِ بدونِ بسته (Whale) ───────────
+class PGWrite(NewPG):
+    """پاسارگاردِ جدید با ثبتِ همهٔ درخواست‌ها."""
+    log: list = []
+
+    async def _request(self, method, path, json=None, params=None):
+        PGWrite.log.append((method, path, dict(json or {})))
+        if path == "/api/admins":
+            return {"admins": [{"username": "psabc", "used_traffic": 0, "total_users": 0}], "total": 1}
+        return await NewPG._request(self, method, path, json=json, params=params)
+
+
+@pytest.mark.asyncio
+async def test_native_data_limit_is_sent_on_create_and_updates(monkeypatch):
+    PGWrite.log = []
+    NewPG.created = []
+    api = AD.PanelAdminAPI(PGWrite())
+    panel = type("P", (), {"id": 3, "bot_id": 7})()
+
+    async def _gs(bid, k, d=""): return d
+    import tenant as T
+    monkeypatch.setattr(T, "get_setting", _gs)
+    await SV.create_admin_on(api, panel, "psabc", SV.gen_password(), data_gb=100)
+    assert NewPG.created[0]["data_limit"] == 100 * 1024 ** 3                       # «۱۰۰ گیگ» روی خودِ پنل (قبلاً نامحدود می‌ماند)
+    PGWrite.log = []
+    await SV.apply_native_limit(api, "psabc", 120)
+    assert ("PUT", "/api/admin/psabc", {"data_limit": 120 * 1024 ** 3}) in PGWrite.log
+    PGWrite.log = []
+    await SV.apply_native_limit(api, "psabc", 0)                                   # نامحدود ⇒ ۰ (طبقِ کدِ رسمی)
+    assert ("PUT", "/api/admin/psabc", {"data_limit": 0}) in PGWrite.log
+    await api.reset_usage("psabc")
+    assert ("POST", "/api/admin/psabc/reset", {}) in PGWrite.log                    # مسیرِ ریستِ پاسارگاردِ جدید
+
+
+@pytest.mark.asyncio
+async def test_native_limit_failure_never_breaks_and_old_panels_untouched():
+    class Boom(PGWrite):
+        async def _request(self, method, path, json=None, params=None):
+            if method == "PUT":
+                raise PanelError("PUT 500")
+            return await PGWrite._request(self, method, path, json=json, params=params)
+    await SV.apply_native_limit(AD.PanelAdminAPI(Boom()), "psabc", 10)           # استثنا نمی‌دهد
+    class Old:
+        calls = []
+        async def _request(self, method, path, json=None, params=None):
+            Old.calls.append((method, path))
+            return [{"username": "u1"}] if path == "/api/admins" else {}
+        async def close(self): pass
+    assert await AD.PanelAdminAPI(Old()).apply_data_limit("u1", 10) is False
+    assert not any(m == "PUT" for m, _p in Old.calls)                              # پنلِ قدیمی: هیچ PUT ای نمی‌رود
+
+
+def test_support_url_normalisation():
+    from tenant.bots.panel_seller.user import _support_url
+    assert _support_url("@my_support") == "https://t.me/my_support"
+    assert _support_url("my_support") == "https://t.me/my_support"
+    assert _support_url("t.me/my_support") == "https://t.me/my_support"
+    assert _support_url("https://t.me/x_yz1") == "https://t.me/x_yz1"
+    for bad in ("", "a b", "@ab", "javascript:alert(1)", "<x>", "x" * 300):
+        assert _support_url(bad) is None, bad
+
+
+@pytest.mark.asyncio
+async def test_snapshot_single_request_for_new_style_and_fallback_for_old():
+    NewPGStats.calls = []
+    snap = await AD.PanelAdminAPI(NewPGStats()).snapshot("psabc")
+    assert snap == {"used_bytes": 5_000_000_000, "users": 7, "new_style": True} and len(NewPGStats.calls) == 1

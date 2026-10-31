@@ -54,10 +54,13 @@ class PanelAdminAPI:
         """لیستِ ادمین‌ها؛ اگر اتصال یا دسترسیِ sudo مشکل داشته باشد PanelError می‌دهد."""
         return await self.c.list_admins()
 
-    async def create_admin(self, username: str, password: str, role_id: int | None = None) -> None:
+    async def create_admin(self, username: str, password: str, role_id: int | None = None,
+                           data_limit_bytes: int | None = None) -> None:
         body = {"username": username, "password": password, "is_sudo": False}
         if role_id is not None:             # PATCH_PSEL_PASARGUARD_ROLE_V1 — پاسارگاردِ جدید «role_id» اجباری می‌خواهد
             body["role_id"] = int(role_id)
+            if data_limit_bytes and data_limit_bytes > 0:
+                body["data_limit"] = int(data_limit_bytes)     # PATCH_PSEL_NATIVE_LIMIT_V1 — سقفِ حجمِ بومیِ پنل
         res = await self.c._request("POST", "/api/admin", json=body)
         if res is None:
             raise PanelError("ساختِ ادمین روی پنل جواب نداد (دسترسیِ sudo را بررسی کن).")
@@ -101,6 +104,41 @@ class PanelAdminAPI:
             if isinstance(it, dict) and str(it.get("username") or "").lower() == username.lower():
                 return it, new_style
         return None, new_style
+
+    # ── PATCH_PSEL_NATIVE_LIMIT_V1 / PATCH_PSEL_CONTACT_FIELDS_V1: قابلیت‌هایِ پاسارگاردِ جدید (مستنداتِ رسمیِ AdminModify) ──
+    async def is_new_style(self, username: str) -> bool:
+        try:
+            _row, new_style = await self._admin_row(username)
+        except PanelError:
+            return False
+        return new_style
+
+    async def put_admin(self, username: str, **fields) -> None:
+        """PUT /api/admin/{username} — به‌روزرسانیِ جزئی (فقط فیلدهایِ غیر-None اعمال می‌شود؛ طبقِ کدِ رسمی)."""
+        await self.c._request("PUT", f"/api/admin/{quote(username)}", json={k: v for k, v in fields.items() if v is not None})
+
+    async def apply_data_limit(self, username: str, gb: int) -> bool:
+        """سقفِ حجمِ بومیِ ادمین (بایت؛ ۰ = نامحدود). فقط روی پنلِ جدید؛ خروجی: True اگر اعمال شد."""
+        if not await self.is_new_style(username):
+            return False
+        await self.put_admin(username, data_limit=(int(gb) * (1024 ** 3) if int(gb or 0) > 0 else 0))
+        return True
+
+    async def reset_usage(self, username: str) -> None:
+        if await self.is_new_style(username):
+            await self.c._request("POST", f"/api/admin/{quote(username)}/reset")
+        else:
+            await self.c._request("POST", f"/api/admin/usage/reset/{quote(username)}")
+
+    async def snapshot(self, username: str) -> dict:
+        """{used_bytes, users, new_style} با یک درخواست (نمایشِ صفحهٔ پنل)."""
+        try:
+            row, new_style = await self._admin_row(username)
+        except PanelError:
+            row, new_style = None, False
+        if new_style and row is not None:
+            return {"used_bytes": int(float(row.get("used_traffic") or 0)), "users": int(row.get("total_users") or 0), "new_style": True}
+        return {"used_bytes": await self.usage_bytes(username), "users": await self.user_count(username), "new_style": new_style}
 
     async def usage_bytes(self, username: str) -> int:
         """مصرفِ کلِ کاربرانِ این ادمین (بایت). پنلِ جدید: used_traffic از لیستِ ادمین‌ها (یکایِ بایت تأییدِ رسمی ندارد)."""

@@ -41,6 +41,26 @@ class FakeAPI:
     async def activate_users(self, u):
         FakeAPI.log.append(("on", u))
 
+    new_style = False                      # PATCH_PSEL_NATIVE_LIMIT_V1: شبیه‌سازِ پاسارگاردِ جدید
+
+    async def is_new_style(self, u):
+        return FakeAPI.new_style
+
+    async def put_admin(self, u, **fields):
+        FakeAPI.log.append(("put", u, dict(fields)))
+
+    async def apply_data_limit(self, u, gb):
+        if not FakeAPI.new_style:
+            return False
+        FakeAPI.log.append(("limit", u, int(gb)))
+        return True
+
+    async def reset_usage(self, u):
+        FakeAPI.log.append(("reset", u))
+
+    async def snapshot(self, u):
+        return {"used_bytes": FakeAPI.usage, "users": FakeAPI.users, "new_style": FakeAPI.new_style}
+
     async def usage_bytes(self, u):
         return FakeAPI.usage
 
@@ -65,7 +85,7 @@ async def env(monkeypatch):
     maker = async_sessionmaker(engine, expire_on_commit=False)
     for mod in (config, GT, SV):
         monkeypatch.setattr(mod, "Session", maker)
-    FakeAPI.log, FakeAPI.usage, FakeAPI.users, FakeAPI.fail_create = [], 0, 0, False
+    FakeAPI.log, FakeAPI.usage, FakeAPI.users, FakeAPI.fail_create, FakeAPI.new_style = [], 0, 0, False, False
     async with maker() as s:
         s.add(models.Bot(id=7, owner_id=500, token="7:T", username="pbot", field="panel_seller", plan="pro", status="active"))
         s.add(models.BotUser(id=1, bot_id=7, telegram_id=1001, full_name="Ali", username="ali", balance=1_000_000))
@@ -453,12 +473,11 @@ async def test_login_button_support_button_and_buyer_delete_flow(ui):
     assert "https://p.example.com:8000" in _urls(cb.message)                      # «🌐 ورود به پنل» زیرِ پیامِ «پنلِ تو آماده است»
     async with ui.maker() as s:
         a = await s.scalar(select(models.PanelSellerAccount))
-    await ui.tenant.set_setting(7, "support_direct_contact", "@whale_support")
-    ui.tenant._SETTING_CACHE.clear()
     cb = _Cb(f"psel:a:{a.id}")
     await UM.my_detail(cb, None)
     urls, cbs = _urls(cb.message), _cbs(cb.message)
-    assert "https://p.example.com:8000" in urls and "https://t.me/whale_support" in urls         # ورود + پشتیبانی
+    assert "https://p.example.com:8000" in urls                                                  # ورود به پنل وب
+    assert f"psel:cf:{a.id}:s" not in cbs                                                        # پنلِ قدیمی: دکمهٔ آدرسِ پشتیبانیِ ادمین نیست
     assert f"psel:a:{a.id}" in cbs                                                               # «📊 مشخصات و مصرف»
     assert f"psel:dl:{a.id}" not in cbs                                                          # حذف: پیش‌فرض ممنوع
     cb = _Cb(f"psel:dlok:{a.id}")
@@ -484,3 +503,81 @@ async def test_login_button_support_button_and_buyer_delete_flow(ui):
     cb = _Cb(f"psel:dlok:{a.id}", uid=999)
     await UM.delete_flow(cb, None)
     assert cb.alerts and not cb.message.out
+
+
+@pytest.mark.asyncio
+async def test_buy_page_shows_custom_and_test_even_with_no_packages(ui):
+    """PATCH_PSEL_NO_PACKAGES_BUT_CUSTOM_V1 — «فروشِ حجمِ دلخواه فعاله ولی بات هیچی نمیاره»."""
+    async with ui.maker() as s:
+        pk = await s.get(models.PanelSellerPackage, 1)
+        pk.active = False
+        await s.commit()
+    m = _Msg()
+    await ui.UM.show_buy(m, None, ui.row, 1001)
+    assert "بسته‌ای برایِ فروش نیست" in m.out[-1][0] and "psel:cvb" not in _cbs(m)                # هیچ‌چیز فعال نیست
+    await ui.tenant.set_setting(7, "psel_custom_price_gb", "3000")
+    await ui.tenant.set_setting(7, "psel_test_enabled", "1")
+    ui.tenant._SETTING_CACHE.clear()
+    m = _Msg()
+    await ui.UM.show_buy(m, None, ui.row, 1001)
+    assert "psel:cvb" in _cbs(m) and "psel:tst" in _cbs(m)
+
+
+@pytest.mark.asyncio
+async def test_new_style_panel_shows_contact_buttons_and_sets_support_url_profile_title_and_name(ui):
+    UM = ui.UM
+    cb = _Cb("psel:bok:1")
+    await UM.buy_do(cb, None, _St())
+    async with ui.maker() as s:
+        a = await s.scalar(select(models.PanelSellerAccount))
+    FakeAPI.new_style = True
+    cb = _Cb(f"psel:a:{a.id}")
+    await UM.my_detail(cb, None)
+    cbs = _cbs(cb.message)
+    assert f"psel:cf:{a.id}:s" in cbs and f"psel:cf:{a.id}:t" in cbs and f"psel:rnm:{a.id}" in cbs
+    # آدرسِ پشتیبانی ⇒ support_url روی خودِ ادمین در پنل
+    st = _St()
+    cb = _Cb(f"psel:cf:{a.id}:s")
+    await UM.contact_ask(cb, None, st)
+    assert st.d == {"acc_id": a.id, "field": "s"}
+    m = _Msg(text="@whale_support")
+    await UM.contact_save(m, None, st)
+    assert ("put", a.admin_username, {"support_url": "https://t.me/whale_support"}) in FakeAPI.log and "ثبت شد" in m.out[-1][0]
+    bad = _Msg(text="javascript:alert(1)")
+    st2 = _St(); st2.d = {"acc_id": a.id, "field": "s"}
+    await UM.contact_save(bad, None, st2)
+    assert "نامعتبر" in bad.out[-1][0] and not any(l[0] == "put" and "javascript" in str(l) for l in FakeAPI.log)
+    # عنوانِ پروفایل
+    st3 = _St(); st3.d = {"acc_id": a.id, "field": "t"}
+    await UM.contact_save(_Msg(text="Whale VPN"), None, st3)
+    assert ("put", a.admin_username, {"profile_title": "Whale VPN"}) in FakeAPI.log
+    # خریدارِ دیگر نمی‌تواند فیلدِ پنلِ دیگری را عوض کند
+    n0 = len(FakeAPI.log)
+    st4 = _St(); st4.d = {"acc_id": a.id, "field": "t"}
+    await UM.contact_save(_Msg(uid=999, text="hack"), None, st4)
+    assert len(FakeAPI.log) == n0
+    # تغییرِ نامِ سرویس (محلی)
+    st5 = _St(); st5.d = {"acc_id": a.id}
+    await UM.rename_save(_Msg(text="پنلِ فروشگاه"), None, st5)
+    async with ui.maker() as s:
+        assert (await s.get(models.PanelSellerAccount, a.id)).title == "پنلِ فروشگاه"
+
+
+@pytest.mark.asyncio
+async def test_native_limit_applied_on_new_style_create_renew_and_extra_volume(ui, monkeypatch):
+    FakeAPI.new_style = True
+    # ساخت: FakeAPI.create_admin نقش نمی‌خواهد؛ سقف را اعمالِ بومی (PUT) می‌کنیم فقط در تمدید/حجم؛ ساخت از مسیرِ role_id است (تستِ جدا)
+    r = await SV.buy(7, 1001, 1, api_factory=FakeAPI)
+    assert r["status"] == "ok"
+    FakeAPI.log.clear()
+    rr = await SV.renew(7, r["account_id"], 1001, api_factory=FakeAPI)
+    assert rr["status"] == "ok" and ("reset", r_username(r)) in FakeAPI.log and ("limit", r_username(r), 100) in FakeAPI.log
+    FakeAPI.log.clear()
+    await ui.tenant.set_setting(7, "psel_extra_gb_price", "1000")
+    ui.tenant._SETTING_CACHE.clear()
+    ev = await SV.add_volume(7, r["account_id"], 1001, 20, api_factory=FakeAPI)
+    assert ev["status"] == "ok" and ("limit", r_username(r), 120) in FakeAPI.log          # ۱۰۰ + ۲۰ روی خودِ پنل
+
+
+def r_username(r):
+    return r["username"]
