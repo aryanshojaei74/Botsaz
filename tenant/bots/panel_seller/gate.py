@@ -78,5 +78,20 @@ async def status(tg_id: int, now: datetime | None = None) -> tuple[bool, str]:
     return False, "expired"
 
 
+async def remaining_days(tg_id: int, now: datetime | None = None) -> int | None:
+    """روزهایِ باقی‌ماندهٔ دسترسیِ *محدود* (گردشده به بالا، حداقل ۱)؛ None = دسترسی ندارد یا دائمی است."""
+    d = await _load()
+    exp = d.get(str(int(tg_id)))
+    if not exp:
+        return None
+    try:
+        left = datetime.fromisoformat(exp) - (now or datetime.utcnow())
+    except ValueError:
+        return None
+    if left.total_seconds() <= 0:
+        return None
+    return max(1, -(-int(left.total_seconds()) // 86400))
+
+
 async def allowed(tg_id: int) -> bool:
     return (await status(tg_id))[0]

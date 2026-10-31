@@ -5417,6 +5417,12 @@ async def show_pitch(cb: CallbackQuery, state: FSMContext):
         from platform_panel_seller import create_gate as _ps_gate
         if not await _ps_gate(cb):
             return
+        # PATCH_PSEL_FREE_TRIAL_V1: کسانی که قبل از این اصلاح دسترسیِ چندروزه گرفته‌اند هم تستِ رایگان بگیرند
+        try:
+            from platform_panel_seller import ensure_trial as _ps_trial
+            await _ps_trial(cb.from_user.id, cb.from_user.full_name or "")
+        except Exception:
+            logger.exception("panel_seller: ساختِ تستِ رایگان هنگامِ نمایشِ پلن‌ها ناموفق بود")
     await state.update_data(field=cb.data.split(":", 1)[1])
     data = await state.get_data()
     is_first = data.get("is_first", True)

@@ -28,6 +28,21 @@ def _btn(text, cb, style=None):
     return InlineKeyboardButton(text=text, callback_data=cb, style=style)
 
 
+async def ensure_trial(tg_id: int, name: str = "") -> bool:
+    """PATCH_PSEL_FREE_TRIAL_V1 — دسترسیِ «چند روزه»ی تست یعنی ساختِ رایگان.
+
+    قبلاً دسترسی فقط اجازهٔ ورود به ساخت بود و بعدش «حرفه‌ای ۲۵۱٬۹۰۰ تومان/ماه» پولی می‌ماند (کاربر می‌گفت «میگه بخر»).
+    حالا برایِ دسترسیِ محدود (۳/۷/۳۰ روز) یک «تستِ رایگانِ پلنِ حرفه‌ای» با همان مدت ساخته می‌شود تا ربات بدونِ پرداخت ساخته شود.
+    دسترسیِ دائمی همچنان پلنِ پولی می‌خواهد. خروجی: True اگر تستِ فعالِ حرفه‌ای هست."""
+    from tenant.bots.panel_seller import gate
+    days = await gate.remaining_days(tg_id)
+    if not days:
+        return False
+    import plan_trials
+    st, _info = await plan_trials.grant_direct(int(tg_id), name or "", "pro", days)
+    return st in ("ok", "exists_active")
+
+
 async def create_gate(cb: CallbackQuery) -> bool:
     """True = اجازهٔ ادامه؛ وگرنه صفحهٔ «در حال تست + ثبتِ درخواست» نشان داده می‌شود."""
     from tenant.bots.panel_seller import gate
@@ -80,6 +95,11 @@ async def admin_decide(cb: CallbackQuery):
         txt, note = "❌ رد شد.", "❌ درخواستِ دسترسیِ تو به «ربات پنل‌فروشی» رد شد."
     else:
         await gate.grant(tg, days)
+        if days > 0:
+            try:
+                await ensure_trial(tg)
+            except Exception:      # noqa: BLE001
+                logger.exception("panel_seller: ساختِ تستِ رایگانِ پلنِ حرفه‌ای ناموفق بود")
         span = "دائمی" if days == 0 else f"{days} روز"
         txt, note = f"✅ دسترسی داده شد ({span}).", f"✅ دسترسیِ تست به «ربات پنل‌فروشی» برایِ تو فعال شد ({span}). از «ساخت ربات» بساز."
     try:
@@ -103,6 +123,11 @@ async def cmd_grant(msg: Message):
         return await msg.answer("فرمت: <code>/pselgrant آیدی-عددی [روز]</code> (بدونِ روز = دائمی)", parse_mode="HTML")
     days = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
     await gate.grant(int(parts[0]), days)
+    if days > 0:
+        try:
+            await ensure_trial(int(parts[0]))
+        except Exception:      # noqa: BLE001
+            logger.exception("panel_seller: ساختِ تستِ رایگانِ پلنِ حرفه‌ای ناموفق بود")
     await msg.answer(f"✅ دسترسی داده شد: <code>{parts[0]}</code> — {'دائمی' if not days else f'{days} روز'}", parse_mode="HTML")
 
 
