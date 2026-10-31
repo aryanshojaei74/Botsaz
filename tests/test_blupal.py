@@ -649,3 +649,59 @@ def test_payer_card_extraction_variants():
     assert payer_card_of({"payer_card": "6037****7890"}) == "6037****7890"
     assert payer_card_of({"payer": {"card_number": "5022 29** **** 1234"}}) == "5022 29** **** 1234"
     assert payer_card_of({"status": "PAID"}) == ""
+
+
+async def _kyc_user(maker, level, card):
+    async with maker() as s:
+        u = await s.scalar(select(models.BotUser).where(models.BotUser.telegram_id == 777))
+        u.kyc_level, u.kyc_card = level, card
+        await s.commit()
+
+
+async def _blocked(maker):
+    async with maker() as s:
+        u = await s.scalar(select(models.BotUser).where(models.BotUser.telegram_id == 777))
+        return bool(u.kyc_blocked), float(u.balance)
+
+
+@pytest.mark.asyncio
+async def test_kyc_card_mismatch_blocks_but_still_credits(env, monkeypatch):
+    """PATCH_BLUPAL_KYC_CARD_V1 — کارتِ پرداخت‌کننده با کارتِ ثبت‌شده نخواند ⇒ شارژ می‌شود ولی حساب محدود می‌شود."""
+    maker, fb, _n = env
+    sent = []
+    import tenant.gateways.zibal_wallet as ZW
+
+    async def _mm(bot_id, tg, last4): sent.append(last4)
+    monkeypatch.setattr(ZW, "_kyc_mismatch_notify", _mm)
+    await _kyc_user(maker, 1, "6037991111111111")                    # ۴ رقمِ آخر: 1111؛ پرداخت با ...7890
+    await BP.create_invoice(KEY, 1_000_000)
+    await _add_charge(maker, "bpk1", 101)
+    fb.invoices[101]["status"] = "PAID"
+    ok, _m, _c = await BP.settle_charge(5, "bpk1")
+    assert ok and await _blocked(maker) == (True, 100_000.0) and sent == ["7890"]
+
+
+@pytest.mark.asyncio
+async def test_kyc_card_match_or_unknown_card_never_blocks(env, monkeypatch):
+    maker, fb, _n = env
+    await _kyc_user(maker, 1, "5022291234567890")                    # همان ۷۸۹۰ ⇒ تطابق
+    await BP.create_invoice(KEY, 1_000_000)
+    await _add_charge(maker, "bpk2", 101)
+    fb.invoices[101]["status"] = "PAID"
+    assert (await BP.settle_charge(5, "bpk2"))[0] and (await _blocked(maker))[0] is False
+    # کارتِ ناشناخته/ماسکِ بی‌رقم (مثلاً بلو به بلو) ⇒ هرگز محدود نشود، حتی با کارتِ ثبت‌شدهٔ متفاوت
+    await _kyc_user(maker, 1, "6037991111111111")
+    monkeypatch.setattr(BP, "payer_card_of", lambda res: "****")
+    await BP.create_invoice(KEY, 1_000_000)
+    await _add_charge(maker, "bpk3", 102)
+    fb.invoices[102]["status"] = "PAID"
+    ok, _m, _c = await BP.settle_charge(5, "bpk3")
+    assert ok and (await _blocked(maker))[0] is False
+    # سطحِ ۰ (احرازِ خاموش) هم هرگز با ناهمخوانی محدود نمی‌شود
+    monkeypatch.setattr(BP, "payer_card_of", lambda res: "6037991234567890")
+    await _kyc_user(maker, 0, "6037991111111111")
+    await BP.create_invoice(KEY, 1_000_000)
+    await _add_charge(maker, "bpk4", 103)
+    fb.invoices[103]["status"] = "PAID"
+    ok, _m, _c = await BP.settle_charge(5, "bpk4")
+    assert ok and (await _blocked(maker))[0] is False

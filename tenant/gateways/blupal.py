@@ -309,7 +309,17 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
         ch.payer_name = ((str(res.get("payer_name") or "") + (" | " + _pcard if _pcard else "")).strip(" |")[:80] or None)
         u = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id,
                                                  BotUser.telegram_id == ch.user_telegram_id).with_for_update())
+        _mismatch, _paid4 = False, ""
         if u:
+            # === PATCH_BLUPAL_KYC_CARD_V1 === (SINA) همان قفلِ کارتِ زیبال/زرین‌پال: کاربرِ سطح ۱ با کارتِ غیرِ ثبت‌شده ⇒ شارژ می‌شود ولی محدود.
+            # فقط وقتی ۴ رقمِ آخرِ کارت در پاسخِ بلوپال هست مقایسه می‌شود؛ پرداختِ «بلو به بلو» یا کارتِ نامشخص هرگز بی‌دلیل محدود نمی‌شود.
+            _locked = "".join(c for c in str(u.kyc_card or "") if c.isdigit())
+            _pd = "".join(c for c in str(_pcard or "") if c.isdigit())
+            _paid4 = _pd[-4:] if len(_pd) >= 4 else ""
+            _mismatch = bool(int(u.kyc_level or 0) == 1 and len(_locked) >= 4 and _paid4 and _locked[-4:] != _paid4)
+            if _mismatch:
+                u.kyc_blocked = True
+                u.kyc_note = f"پرداخت با کارتِ غیرِثبت‌شده (…{_paid4})"
             u.balance = float(u.balance or 0) + credit
             s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=credit, kind="blupal_charge",
                             note=f"شارژ با بلوپال؛ ref={ch.tracking_code or ch.invoice_id}" + (f" کارت={_pcard}" if _pcard else "")))
@@ -321,6 +331,12 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
     if _kyc_uid:
         from tenant.shared.kyc import after_charge as _ac
         await _ac(bot_id, _kyc_uid)
+    if _mismatch and _uid:
+        try:
+            from tenant.gateways.zibal_wallet import _kyc_mismatch_notify
+            await _kyc_mismatch_notify(bot_id, _uid, _paid4)
+        except Exception:
+            logger.exception("blupal: اطلاعِ عدمِ تطابقِ کارت ناموفق بود")
     if _uid:
         # PATCH_BLUPAL_UX_V1: همان پیامِ فاکتور به «پرداخت شد» تبدیل می‌شود؛ فقط اگر ویرایش ممکن نبود پیامِ جدید می‌رود
         edited = False
