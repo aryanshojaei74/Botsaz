@@ -4126,3 +4126,21 @@ class StatusSample(Base):
     key: Mapped[str] = mapped_column(String(24), index=True)
     ok: Mapped[bool] = mapped_column(Boolean, default=True)
     ms: Mapped[int | None] = mapped_column(Integer)
+
+
+# === PATCH_BOT_CHANGE_LOG_V1 === تاریخچهٔ تغییراتِ هر ربات (پلن/نوع/وضعیت/سررسید/مالک/توکن/…) به‌همراهِ علت و عامل
+class BotChangeLog(Base):
+    __tablename__ = "bot_change_log"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    ts: Mapped[datetime] = mapped_column(DateTime, index=True)
+    col: Mapped[str] = mapped_column(String(24))
+    old: Mapped[str | None] = mapped_column(String(160))
+    new: Mapped[str | None] = mapped_column(String(160))
+    reason: Mapped[str | None] = mapped_column(String(200))     # علتِ فارسی (از روی تابعِ صدازننده)
+    src: Mapped[str | None] = mapped_column(String(100))        # تابع@فایل — برای ردیابیِ فنی
+    actor: Mapped[int | None] = mapped_column(BigInteger)       # آیدیِ تلگرامِ کسی که دکمه را زده (اگر پیدا شود)
+
+
+from bot_change_log import install as _install_bot_change_log   # noqa: E402
+_install_bot_change_log(Bot, BotChangeLog)

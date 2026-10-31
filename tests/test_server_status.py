@@ -85,3 +85,33 @@ def test_status_routes_exist_on_both_apps():
     for mod in (main_platform, main_tenant):
         paths = {getattr(r, "path", "") for r in mod.app.routes}
         assert "/status" in paths and "/status/api" in paths, mod.__name__
+
+
+@pytest.mark.asyncio
+async def test_transient_restart_failure_is_retried_not_recorded(monkeypatch):
+    calls = []
+    async def flaky(port):
+        calls.append(port)
+        return (True, 30) if len(calls) == 3 else (False, None)      # دو بار قطع (ری‌استارت)، بار سوم برگشت
+    monkeypatch.setattr(SS, "RETRY_DELAY", 0)
+    assert await SS._with_retry(flaky, 8012) == (True, 30) and len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_real_outage_still_reported_after_retries(monkeypatch):
+    async def dead(port): return False, None
+    monkeypatch.setattr(SS, "RETRY_DELAY", 0)
+    assert await SS._with_retry(dead, 1) == (False, None)
+
+
+@pytest.mark.asyncio
+async def test_maintenance_marker_skips_recording(maker, monkeypatch, tmp_path):
+    f = tmp_path / ".maintenance"
+    f.write_text("x")
+    monkeypatch.setattr(SS, "MAINT_FILE", str(f))
+    assert SS.maintenance_active() is True
+    assert await SS.probe_once() == 0                                   # چیزی ثبت نمی‌شود
+    import os, time
+    old = time.time() - 3600
+    os.utime(f, (old, old))
+    assert SS.maintenance_active() is False                             # فایلِ قدیمی دیگر اثر ندارد

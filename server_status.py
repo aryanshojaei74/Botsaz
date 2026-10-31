@@ -43,7 +43,35 @@ ORDER = [k for k, _n, _p in _HTTP_COMPONENTS] + ["telegram", "database"]
 
 
 # ───────────────────────────── اندازه‌گیری ─────────────────────────────
-async def _probe_http(port: int) -> tuple[bool, int | None]:
+# === ری‌استارتِ آپدیت نباید «اختلال» حساب شود ===
+# ۱) هر اندازه‌گیریِ ناموفق تا ۳ بار با فاصلهٔ چندثانیه تکرار می‌شود (ری‌استارتِ سرویس چند ثانیه طول می‌کشد؛ پس ثبت نمی‌شود).
+# ۲) برای دیپلویِ طولانی‌تر: فایلِ نشانهٔ .maintenance (مثلاً `touch /opt/botsaz/.maintenance` قبلِ نصب) — تا ۱۰ دقیقه بعد
+#    از آخرین لمس، نمونه‌ای ثبت نمی‌شود (در نمودار «بدونِ داده» می‌شود، نه قرمز) و صفحه «در حالِ به‌روزرسانی» نشان می‌دهد.
+RETRIES = 3
+RETRY_DELAY = 4.0
+MAINT_FILE = os.environ.get("STATUS_MAINT_FILE") or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".maintenance")
+MAINT_WINDOW = 600
+
+
+def maintenance_active() -> bool:
+    try:
+        return time.time() - os.path.getmtime(MAINT_FILE) < MAINT_WINDOW
+    except OSError:
+        return False
+
+
+async def _with_retry(fn, *a) -> tuple[bool, int | None]:
+    res: tuple[bool, int | None] = (False, None)
+    for i in range(RETRIES):
+        res = await fn(*a)
+        if res[0]:
+            return res
+        if i < RETRIES - 1:
+            await asyncio.sleep(RETRY_DELAY)
+    return res
+
+
+async def _http_once(port: int) -> tuple[bool, int | None]:
     import aiohttp
     t0 = time.perf_counter()
     try:
@@ -56,7 +84,15 @@ async def _probe_http(port: int) -> tuple[bool, int | None]:
     return ok, int((time.perf_counter() - t0) * 1000)
 
 
+async def _probe_http(port: int) -> tuple[bool, int | None]:
+    return await _with_retry(_http_once, port)
+
+
 async def _probe_telegram() -> tuple[bool, int | None]:
+    return await _with_retry(_telegram_once)
+
+
+async def _telegram_once() -> tuple[bool, int | None]:
     if not PLATFORM_BOT_TOKEN:
         return False, None
     import aiohttp
@@ -81,6 +117,8 @@ async def _probe_db() -> tuple[bool, int | None]:
 
 
 async def probe_once(now: datetime | None = None) -> int:
+    if maintenance_active():
+        return 0                                           # در حالِ به‌روزرسانی: چیزی ثبت نمی‌شود
     now = now or datetime.utcnow()
     jobs = {k: _probe_http(p) for k, _n, p in _HTTP_COMPONENTS}
     jobs["telegram"], jobs["database"] = _probe_telegram(), _probe_db()
@@ -181,7 +219,8 @@ def build_from_rows(rows24: list[tuple], daily: dict, now: datetime) -> dict:
         })
     states = [c["state"] for c in comps]
     overall = "down" if "down" in states else ("degraded" if "degraded" in states else ("up" if states else "unknown"))
-    return {"now": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "overall": overall, "components": comps, "bucket_s": BUCKET}
+    return {"now": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "overall": overall, "components": comps, "bucket_s": BUCKET,
+            "maintenance": maintenance_active()}
 
 
 _CACHE: dict = {"t": 0.0, "v": None}

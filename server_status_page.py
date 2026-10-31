@@ -95,8 +95,10 @@ function card(c){
 }
 function render(d){
   var cs=d.components,col=COL[d.overall]||COL.unknown;
+  if(d.maintenance){col='#4f8cff'}
   var msg={up:'همهٔ سرویس‌ها فعال و پایدار هستند',degraded:'در بخشی از سرویس‌ها افت سرعت داریم',down:'در بخشی از سرویس‌ها اختلال داریم',unknown:'در حال جمع‌آوری اطلاعات…'}[d.overall];
   var ic={up:'✓',degraded:'!',down:'✕',unknown:'…'}[d.overall];
+  if(d.maintenance){msg='در حال به‌روزرسانی هستیم؛ تا چند دقیقهٔ دیگر برمی‌گردیم';ic='⟳'}
   var ups=cs.filter(function(c){return c.uptime24!=null}).map(function(c){return c.uptime24});
   var avgUp=ups.length?ups.reduce(function(a,b){return a+b},0)/ups.length:null;
   var ms=cs.map(function(c){return c.ms}).filter(function(v){return v!=null});

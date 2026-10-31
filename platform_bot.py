@@ -17044,6 +17044,8 @@ async def _build_bot_detail(bot_id: int, src: str = "bots", viewer_id: int | Non
         # === PATCH_ADM_BOT_HOURS_V1 === برای تمدیدهای کوتاه (تست، مهلتِ چندساعته)
         [hx_button("➕ افزودن ساعت", callback_data=f"abothours:add:{bot_id}:{src}"),
          hx_button("➖ کسر ساعت", callback_data=f"abothours:sub:{bot_id}:{src}")],
+        [hx_button("📜 تاریخچهٔ تغییرات (علت‌ها)", callback_data=f"abotlog:{bot_id}:{src}:0",
+                   style=ButtonStyle.PRIMARY)],   # PATCH_BOT_CHANGE_LOG_V1
         [hx_button("👤 انتقال ربات به کاربر دیگر", callback_data=f"abotxfer:{bot_id}")],
         # === PATCH_ADM_BOT_ADMINS_LIST_V1 === ادمین‌های پشتیبانِ این ربات: نمایش + حذف
         [hx_button("👥 ادمین‌هایِ این ربات (نمایش / حذف)", callback_data=f"abotadm:{bot_id}:{src}")],
@@ -17146,6 +17148,70 @@ async def _apply_bot_menu_button(row: BotRow) -> str | None:
         except Exception:
             logger.exception("بستنِ سشنِ رباتِ تنانت ناموفق بود")
     return err
+
+
+# === PATCH_BOT_CHANGE_LOG_V1 === تاریخچهٔ تغییراتِ یک ربات (پلن/نوع/وضعیت/سررسید/…) با علت و عامل
+_BCL_STATUS = {"active": "🟢 فعال", "paused": "⏸ غیرفعال", "locked": "🔒 قفل", "admin_paused": "⏸ غیرفعالِ ادمین"}
+
+
+def _bcl_val(col: str, v: str | None) -> str:
+    if v is None or v == "":
+        return "—"
+    try:
+        if col == "field":
+            return FIELDS.get(v, v)
+        if col in ("plan", "banked_plan"):
+            return PLAN_INFO[Plan(v)]["title"]
+        if col == "status":
+            return _BCL_STATUS.get(v, v)
+        if col == "plan_expires_at":
+            return to_jalali(datetime.datetime.strptime(v, "%Y-%m-%d %H:%M"))
+        if col == "miniapp_enabled":
+            return "🟢 روشن" if v in ("True", "1") else "🔴 خاموش"
+    except Exception:
+        pass
+    return v
+
+
+@router.callback_query(F.data.startswith("abotlog:"))
+async def adm_bot_change_log(cb: CallbackQuery):
+    if not await has_perm(cb.from_user.id, "adm:bots"):
+        await cb.answer("دسترسی ندارید", show_alert=True)
+        return
+    from models import BotChangeLog
+    from bot_change_log import TRACKED
+    parts = cb.data.split(":")        # abotlog:{bot_id}:{src}:{page}
+    bot_id, src = int(parts[1]), (parts[2] if len(parts) > 2 else "bots")
+    page = max(0, int(parts[3])) if len(parts) > 3 else 0
+    PER = 8
+    async with Session() as s:
+        rows = (await s.scalars(select(BotChangeLog).where(BotChangeLog.bot_id == bot_id)
+                                .order_by(BotChangeLog.id.desc()).offset(page * PER).limit(PER + 1))).all()
+    more = len(rows) > PER
+    rows = rows[:PER]
+    if not rows and page == 0:
+        body = "هنوز تغییری ثبت نشده است.\n(تاریخچه از لحظهٔ نصبِ این قابلیت شروع می‌شود.)"
+    else:
+        lines = []
+        for r in rows:
+            who = f" · 👤 <code>{r.actor}</code>" if r.actor else ""
+            lines.append(
+                f"🕒 {to_jalali(r.ts)}\n"
+                f"• <b>{TRACKED.get(r.col, r.col)}</b>: {_bcl_val(r.col, r.old)} ← {_bcl_val(r.col, r.new)}\n"
+                f"  علت: {r.reason or '—'}{who}")
+        body = "\n\n".join(lines)
+    nav = []
+    if page > 0:
+        nav.append(hx_button("◀️ جدیدتر", callback_data=f"abotlog:{bot_id}:{src}:{page - 1}"))
+    if more:
+        nav.append(hx_button("قدیمی‌تر ▶️", callback_data=f"abotlog:{bot_id}:{src}:{page + 1}"))
+    kb = InlineKeyboardMarkup(inline_keyboard=[*([nav] if nav else []),
+        [hx_button("⬅️ بازگشت به ربات", callback_data=f"abot:{bot_id}:{src}", style=ButtonStyle.DANGER)]])
+    try:
+        await cb.message.edit_text(f"📜 <b>تاریخچهٔ تغییراتِ ربات</b> (صفحهٔ {page + 1})\n\n{body}", reply_markup=kb)
+    except Exception:
+        await cb.message.answer(f"📜 <b>تاریخچهٔ تغییراتِ ربات</b> (صفحهٔ {page + 1})\n\n{body}", reply_markup=kb)
+    await cb.answer()
 
 
 @router.callback_query(F.data.startswith("abotminiapp:"))
