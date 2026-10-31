@@ -136,9 +136,22 @@ async def ask_redeem(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 @wallet_codes_router.callback_query(F.data == "wcode:x")
-async def cancel(cb: CallbackQuery, state: FSMContext):
+async def cancel(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """انصراف ⇒ پیامِ «کد را بفرست» پاک می‌شود و دوباره صفحهٔ کیف‌پول نشان داده می‌شود (نه فقط یک نوتیف)."""
     await state.clear()
     await cb.answer("انصراف داده شد.")
+    try:
+        await cb.message.delete()
+    except Exception:      # noqa: BLE001
+        logger.info("wallet_codes: پاک‌کردنِ پیامِ پرسشِ کد ممکن نشد")
+    try:
+        from tenant import get_bot_row, get_or_create_user, show_wallet
+        row = await get_bot_row(bot)
+        if row:
+            u = await get_or_create_user(row.id, cb.from_user.id, cb.from_user.full_name or "", cb.from_user.username or "")
+            await show_wallet(cb.message, row.id, u)
+    except Exception:      # noqa: BLE001
+        logger.exception("wallet_codes: بازگشت به کیف‌پول ناموفق بود")
 
 
 @wallet_codes_router.message(WcFSM.redeem, F.text)

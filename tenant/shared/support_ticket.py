@@ -975,6 +975,10 @@ async def _show_tickets(cb: CallbackQuery, bot: Bot, status_filter: str = "open"
     if nav:
         b_rows.append(nav)
 
+    # === PATCH_TICKET_CLOSE_ALL_V1 === بستنِ یک‌جایِ همهٔ تیکت‌هایِ باز/جواب‌داده‌شده
+    if status_filter != "closed" and total_in_filter:
+        b_rows.append([InlineKeyboardButton(text="🧹 بستنِ همهٔ تیکت‌ها", callback_data="tkt:closeall",
+                                            style=ButtonStyle.DANGER)])
     # === PATCH_TICKET_ORDER_SETTINGS_V1 === (فدایی) کلیدهایِ پیگیریِ سفارش و بستنِ خودکار
     from tenant import get_setting as _gs
     _ob = (await _gs(row.id, "order_support_btn", "1")) != "0"
@@ -1008,6 +1012,47 @@ async def _show_tickets(cb: CallbackQuery, bot: Bot, status_filter: str = "open"
     except Exception:
         await cb.message.answer(txt, reply_markup=InlineKeyboardMarkup(inline_keyboard=b_rows))
     await cb.answer()
+
+
+# === PATCH_TICKET_CLOSE_ALL_V1 ===
+async def close_all_tickets(bot_id: int) -> int:
+    """همهٔ تیکت‌هایِ باز و جواب‌داده‌شدهٔ این ربات را می‌بندد (بدونِ پیام به مشتری‌ها). خروجی: تعدادِ بسته‌شده."""
+    from sqlalchemy import update as _upd
+    async with Session() as s:
+        n = int(await s.scalar(select(func.count(TenantTicket.id)).where(
+            TenantTicket.bot_id == bot_id, TenantTicket.status != "closed")) or 0)
+        if n:
+            await s.execute(_upd(TenantTicket).where(
+                TenantTicket.bot_id == bot_id, TenantTicket.status != "closed").values(status="closed"))
+            await s.commit()
+    return n
+
+
+@ticket_router.callback_query(F.data.in_({"tkt:closeall", "tkt:closeallok"}))
+async def tkt_close_all(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    if cb.data == "tkt:closeall":
+        async with Session() as s:
+            n = int(await s.scalar(select(func.count(TenantTicket.id)).where(
+                TenantTicket.bot_id == row.id, TenantTicket.status != "closed")) or 0)
+        if not n:
+            return await cb.answer("تیکتِ بازی نیست.", show_alert=True)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=f"✅ بله، {n} تیکت بسته شود", callback_data="tkt:closeallok", style=ButtonStyle.DANGER),
+            InlineKeyboardButton(text="⬅️ نه، بازگشت", callback_data="tadm:tickets")]])
+        try:
+            await cb.message.edit_text(f"🧹 همهٔ <b>{n}</b> تیکتِ باز و جواب‌داده‌شده بسته شود؟\n"
+                                       "به مشتری‌ها پیامی فرستاده نمی‌شود و هر وقت خواستی تیکت را «بازگشایی» می‌کنی.",
+                                       reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            await cb.message.answer(f"🧹 همهٔ {n} تیکتِ باز بسته شود؟", reply_markup=kb)
+        return await cb.answer()
+    n = await close_all_tickets(row.id)
+    await cb.answer(f"✅ {n} تیکت بسته شد.", show_alert=True)
+    await _show_tickets(cb, bot, status_filter="open", page=0)
 
 
 @ticket_router.callback_query(F.data.startswith("tkt:view:"))
