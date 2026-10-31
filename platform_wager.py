@@ -333,7 +333,7 @@ async def _timeout_locked(s, w: PlatformWager) -> None:
         loser = w.turn_id
         winner = w.opponent_id if loser == w.creator_id else w.creator_id
         await _settle_win(s, w, winner, "forfeit")
-    elif w.game in ("guess", "pattern") and w.turn_id:  # حدس عدد/الگوی نوبتی: نوبتِ‌دارِ ساکت می‌بازد
+    elif w.game == "guess" and w.turn_id:               # حدس عدد نوبتی: نوبتِ‌دارِ ساکت می‌بازد
         winner = w.opponent_id if w.turn_id == w.creator_id else w.creator_id
         await _settle_win(s, w, winner, "forfeit")
     elif w.game == "rps":

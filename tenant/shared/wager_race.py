@@ -214,7 +214,7 @@ async def twr_answer(msg: Message, bot: Bot):
     if not live:
         raise SkipHandler
     uid, now = msg.from_user.id, time.monotonic()
-    if live["kind"] in ("guess", "pattern"):
+    if live["kind"] == "guess":
         if now - R._LAST_GUESS.get((msg.chat.id, uid), -1e9) < R.GUESS_GAP:
             return
         R._LAST_GUESS[(msg.chat.id, uid)] = now
