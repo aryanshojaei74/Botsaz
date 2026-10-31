@@ -108,3 +108,32 @@ async def test_manual_command_reads_custom_emoji_entity_and_is_admin_only(env, m
     m = _M("/gifte 555 🎃", [ent], 42)
     await PG.cmd_manual(m)
     assert "ثبت شد" in m.out[-1] and await PG.get_map(fresh=True) == {"555": "CE-1"}
+
+
+@pytest.mark.asyncio
+async def test_dump_lists_gifts_and_pack_for_diagnosis(env, monkeypatch):
+    monkeypatch.setattr(PG, "PLATFORM_ADMIN_ID", 42)
+    sent = []
+
+    class B(FakeBot):
+        pass
+
+    def st(uid, cid=None, emoji="🧸"):
+        return NS(file_unique_id=uid, custom_emoji_id=cid, emoji=emoji, file_size=1234, width=512, height=512, type="regular",
+                  is_animated=True, is_video=False, set_name="s", thumbnail=NS(file_unique_id="th-" + uid))
+    gifts = [NS(id="g1", star_count=50, total_count=None, sticker=st("u1"))]
+    bot = B(gifts, [st("p1", "C1"), st("p2", "C2")])
+
+    class M(_M):
+        async def answer_document(self, doc, **k):
+            sent.append(doc.data.decode() if hasattr(doc, "data") else doc)
+    m = M("/giftdump", [], 42)
+    m.bot = bot
+    await PG.cmd_dump(m)
+    txt = sent[0]
+    assert "g1 | 50" in txt and "u1" in txt and "p2" in txt and "th-p1" in txt and "# پک" in txt
+    m2 = M("/giftdump", [], 7)                                   # غیرِ مدیر
+    m2.bot = bot
+    sent.clear()
+    await PG.cmd_dump(m2)
+    assert sent == []

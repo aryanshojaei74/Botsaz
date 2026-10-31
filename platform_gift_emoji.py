@@ -140,6 +140,38 @@ async def cmd_pack(msg: Message):
     await msg.answer("✅ ثبت شد؛ حالا /giftmap را بزن.")
 
 
+def _row(s) -> str:
+    th = getattr(s, "thumbnail", None)
+    return " | ".join(str(x) for x in (
+        getattr(s, "emoji", None), getattr(s, "file_unique_id", None), getattr(s, "file_size", None),
+        f"{getattr(s, 'width', '')}x{getattr(s, 'height', '')}", getattr(s, "type", None),
+        "anim" if getattr(s, "is_animated", False) else ("video" if getattr(s, "is_video", False) else "static"),
+        getattr(s, "set_name", None), getattr(s, "custom_emoji_id", None), getattr(th, "file_unique_id", None) if th else None))
+
+
+@gift_emoji_router.message(Command("giftdump"), lambda m: m.chat.type == "private")
+async def cmd_dump(msg: Message):
+    """فایلِ تشخیصی: مشخصاتِ استیکرِ گیفت‌ها و ایموجی‌هایِ پک کنارِ هم، تا کلیدِ تطبیق پیدا شود."""
+    if not _is_admin(msg):
+        return
+    from aiogram.types import BufferedInputFile
+    pack_name = (await _get(KEY_PACK, DEFAULT_PACK)).strip() or DEFAULT_PACK
+    try:
+        gifts = (await msg.bot.get_available_gifts()).gifts
+        pack = await msg.bot.get_sticker_set(pack_name)
+    except Exception as e:  # noqa: BLE001
+        return await msg.answer(f"❌ {type(e).__name__}: {str(e)[:160]}")
+    cols = "emoji | unique_id | size | WxH | type | kind | set_name | custom_emoji_id | thumb_unique_id"
+    lines = [f"# گیفت‌ها ({len(gifts)})", "gift_id | stars | total | " + cols]
+    for g in gifts:
+        lines.append(f"{g.id} | {g.star_count} | {getattr(g, 'total_count', None)} | {_row(g.sticker)}")
+    lines += ["", f"# پک {pack_name} ({len(pack.stickers)})", "idx | " + cols]
+    for i, s in enumerate(pack.stickers):
+        lines.append(f"{i} | {_row(s)}")
+    await msg.answer_document(BufferedInputFile("\n".join(lines).encode(), filename="gift-dump.txt"),
+                              caption="این فایل را برایِ بررسیِ کلیدِ تطبیق بفرست.")
+
+
 @gift_emoji_router.message(Command("giftmaplist"), lambda m: m.chat.type == "private")
 async def cmd_list(msg: Message):
     if not _is_admin(msg):
