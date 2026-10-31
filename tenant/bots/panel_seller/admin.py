@@ -45,6 +45,7 @@ class PselFSM(StatesGroup):
     users = State()
     days = State()
     price = State()
+    extra_price = State()      # PATCH_PSEL_EXTRA_VOLUME_V1
 
 
 async def _guard(event, bot: Bot):
@@ -470,6 +471,10 @@ async def _set_view(row):
         on = (await get_setting(row.id, key, default)) == "1"
         rows.append([btn(f"{label}: {'✅ مجاز' if on else '⛔️ ممنوع'}", f"psel:set:{key}",
                          style=ButtonStyle.SUCCESS if on else ButtonStyle.DANGER)])
+    from tenant.bots.panel_seller.service import extra_gb_price
+    _xp = await extra_gb_price(row.id)
+    rows.append([btn(f"📈 حجمِ اضافه: {fa(f'{_xp:,}') + ' تومان/گیگ' if _xp else '⛔️ خاموش'}", "psel:xp",
+                     style=ButtonStyle.SUCCESS if _xp else ButtonStyle.DANGER)])
     rows.append(back_row(MENU))
     return ("⚙️ <b>دسترسی‌هایِ مشتری</b>\n\nمشخص کن مشتری از «🗂 پنل‌هایِ من» چه کارهایی بتواند بکند. "
             "هر کدام را بزنی جابه‌جا می‌شود."), kb(*rows)
@@ -499,3 +504,32 @@ async def set_toggle(cb: CallbackQuery, bot: Bot):
     text, markup = await _set_view(row)
     await edit_or_send(cb, text, markup)
     await cb.answer("انجام شد.")
+
+
+# === PATCH_PSEL_EXTRA_VOLUME_V1 === قیمتِ هر گیگ حجمِ اضافه (۰ = خاموش)
+@psel_admin_router.callback_query(F.data == "psel:xp")
+async def extra_price_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.set_state(PselFSM.extra_price)
+    await edit_or_send(cb, "📈 قیمتِ <b>هر گیگ</b> حجمِ اضافه را به تومان بفرست.\n"
+                           "مشتری از «🗂 پنل‌هایِ من» هر مقدار (۵/۱۰/۲۰/۵۰/۱۰۰ گیگ) بخرد، به همین نرخ حساب می‌شود.\n"
+                           "برایِ خاموش‌کردنِ فروشِ حجمِ اضافه <code>0</code> بفرست.", kb(back_row("psel:set", "✖️ لغو")))
+    await cb.answer()
+
+
+@psel_admin_router.message(PselFSM.extra_price, F.text)
+async def extra_price_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard(msg, bot)
+    if not row:
+        return
+    v = _num(msg.text)
+    if v is None or v > 100_000_000:
+        return await msg.answer("❌ یک عددِ معتبر (تومان) بفرست؛ یا 0 برایِ خاموش.")
+    from tenant import set_setting
+    await set_setting(row.id, "psel_extra_gb_price", str(int(v)))
+    await state.clear()
+    text, markup = await _set_view(row)
+    await msg.answer(("✅ فروشِ حجمِ اضافه روشن شد.\n\n" if v else "✅ فروشِ حجمِ اضافه خاموش شد.\n\n") + text,
+                     reply_markup=markup, parse_mode="HTML")

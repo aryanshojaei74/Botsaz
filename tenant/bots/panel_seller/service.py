@@ -173,6 +173,84 @@ async def renew(bot_id: int, account_id: int, buyer_tg: int, api_factory=None) -
     return {"status": "ok", "expires_at": exp, "new_password": new_pw, "username": acc.admin_username}
 
 
+# === PATCH_PSEL_EXTRA_VOLUME_V1 === خریدِ حجمِ اضافه (درخواستِ Whale Support): سقفِ حجمِ همین دوره بالا می‌رود؛ با تمدید به حجمِ بسته برمی‌گردد.
+EXTRA_GB_MAX = 1000
+
+
+async def extra_gb_price(bot_id: int) -> int:
+    """قیمتِ هر گیگ حجمِ اضافه (تومان)؛ ۰ = خاموش."""
+    from tenant import get_setting
+    try:
+        return max(0, int(float((await get_setting(bot_id, "psel_extra_gb_price", "0")) or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+async def add_volume(bot_id: int, account_id: int, buyer_tg: int, gb: int, api_factory=None, bot=None, row=None) -> dict:
+    """status: ok | disabled | bad_amount | not_found | unlimited | insufficient | panel_failed (+ new_gb / new_password)."""
+    api_factory = api_factory or _api
+    unit = await extra_gb_price(bot_id)
+    if unit <= 0:
+        return {"status": "disabled"}
+    if not (1 <= int(gb) <= EXTRA_GB_MAX):
+        return {"status": "bad_amount"}
+    gb = int(gb)
+    async with Session() as s:
+        acc = await s.get(PanelSellerAccount, account_id)
+        if not acc or acc.bot_id != bot_id or acc.buyer_tg != buyer_tg or acc.status not in ("active", "suspended"):
+            return {"status": "not_found"}
+        if not acc.data_gb:
+            return {"status": "unlimited"}               # حجمِ نامحدود نیازی به افزودن ندارد
+        panel = await s.get(VpnPanel, acc.panel_id)
+        was_traffic_suspended = acc.status == "suspended" and acc.suspend_reason == "traffic"
+        if acc.status == "suspended" and not was_traffic_suspended:
+            return {"status": "not_found"}                # تعلیقِ انقضا/مدیر با حجم باز نمی‌شود
+    price = unit * gb
+    async with Session() as s:
+        u, bal = await _wallet_debit(s, bot_id, buyer_tg, price, f"حجمِ اضافه {gb}G — پنل {acc.admin_username}")
+        if u is None:
+            return {"status": "insufficient", "need": price, "balance": bal}
+        await s.commit()
+    new_pw = None
+    if was_traffic_suspended:
+        if not panel:
+            await _refund(bot_id, buyer_tg, price, "بازگشتِ وجهِ حجمِ اضافه (پنل در دسترس نیست)")
+            return {"status": "panel_failed", "error": "panel missing"}
+        try:
+            api = api_factory(panel)
+            try:
+                new_pw = gen_password()
+                await api.set_password(acc.admin_username, new_pw)
+                await api.activate_users(acc.admin_username)
+            finally:
+                await api.close()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("panel_seller: بازکردنِ تعلیقِ حجم ناموفق (acc=%s): %s", account_id, e)
+            await _refund(bot_id, buyer_tg, price, "بازگشتِ وجهِ حجمِ اضافه (خطایِ پنل)")
+            return {"status": "panel_failed", "error": str(e)[:300]}
+    async with Session() as s:
+        acc = await s.get(PanelSellerAccount, account_id, with_for_update=True)
+        acc.data_gb = int(acc.data_gb or 0) + gb
+        acc.price_toman = int(acc.price_toman or 0) + price
+        fl = _flags(acc)
+        fl.discard("tr80")                               # هشدارِ ۸۰٪ دوباره قابلِ ارسال می‌شود
+        _set_flags(acc, fl)
+        if was_traffic_suspended:
+            acc.status, acc.suspend_reason = "active", None
+        await s.commit()
+        new_gb, uname = acc.data_gb, acc.admin_username
+    if bot is not None and row is not None:
+        try:
+            from tenant import _purchase_alert
+            async with Session() as s:
+                buyer = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == buyer_tg))
+            await _purchase_alert(bot, row, buyer=buyer, section="پنل‌فروشی", detail=f"حجمِ اضافه {gb} گیگ — {uname}",
+                                  amount=price, tracking_code=None)
+        except Exception:      # noqa: BLE001
+            logger.exception("panel_seller: اعلانِ خریدِ حجمِ اضافه ناموفق بود")
+    return {"status": "ok", "new_gb": new_gb, "price": price, "new_password": new_pw, "username": uname}
+
+
 async def change_password(bot_id: int, account_id: int, buyer_tg: int, api_factory=None) -> dict:
     api_factory = api_factory or _api
     async with Session() as s:

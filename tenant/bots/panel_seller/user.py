@@ -198,9 +198,58 @@ async def my_detail(cb: CallbackQuery, bot: Bot):
             rows.append(pw_btn)
         if tg_btns:
             rows.append(tg_btns)
+    # === PATCH_PSEL_EXTRA_VOLUME_V1 ===
+    if a.data_gb and (a.status == "active" or (a.status == "suspended" and a.suspend_reason == "traffic")) \
+            and await SV.extra_gb_price(row.id) > 0:
+        rows.append([btn("📈 خریدِ حجمِ اضافه", f"psel:xg:{aid}", style=ButtonStyle.SUCCESS)])
     rows.append(back_row("psel:my"))
     await edit_or_send(cb, text, kb(*rows))
     await cb.answer()
+
+
+_XG_PICKS = (5, 10, 20, 50, 100)
+
+
+@psel_user_router.callback_query(F.data.regexp(r"^psel:xg:\d+$"))
+async def extra_gb_menu(cb: CallbackQuery, bot: Bot):
+    row, a = await _acc_for(cb, bot, int(cb.data.split(":")[2]))
+    if not a:
+        return
+    unit = await SV.extra_gb_price(row.id)
+    if unit <= 0 or not a.data_gb:
+        return await cb.answer("خریدِ حجمِ اضافه برایِ این پنل فعال نیست.", show_alert=True)
+    picks = [btn(f"{fa(g)} گیگ · {n(g * unit)} ت", f"psel:xb:{a.id}:{g}", style=ButtonStyle.PRIMARY) for g in _XG_PICKS]
+    rows = [picks[i:i + 2] for i in range(0, len(picks), 2)]
+    rows.append(back_row(f"psel:a:{a.id}"))
+    await edit_or_send(cb, f"📈 <b>حجمِ اضافه برایِ {esc(a.title)}</b>\n\n💵 هر گیگ: <b>{n(unit)}</b> تومان\n"
+                           f"📦 حجمِ فعلی: {gb_text(a.data_gb)}\n\nاز کیف‌پول کسر می‌شود و همین‌جا به حجمِ همین دوره اضافه می‌شود "
+                           "(با تمدید، حجم به مقدارِ بسته برمی‌گردد).", kb(*rows))
+    await cb.answer()
+
+
+@psel_user_router.callback_query(F.data.regexp(r"^psel:xb:\d+:\d+$"))
+async def extra_gb_buy(cb: CallbackQuery, bot: Bot):
+    parts = cb.data.split(":")
+    row, a = await _acc_for(cb, bot, int(parts[2]))
+    if not a:
+        return
+    ok, why = await sales_gate(row)
+    if not ok:
+        return await cb.answer(why, show_alert=True)
+    await cb.answer("در حالِ ثبت…")
+    r = await SV.add_volume(row.id, a.id, cb.from_user.id, int(parts[3]), bot=bot, row=row)
+    st = r["status"]
+    if st == "insufficient":
+        from tenant.shared import vs_pay
+        return await vs_pay.insufficient_notice(cb.message, row.id, cb.from_user.id, int(r["need"]), cb.data)
+    if st != "ok":
+        msg = {"disabled": "خریدِ حجمِ اضافه فعال نیست.", "unlimited": "حجمِ این پنل نامحدود است.",
+               "bad_amount": "مقدارِ نامعتبر.", "not_found": "این پنل الان قابلِ افزودنِ حجم نیست."}.get(st)
+        if st == "panel_failed":
+            msg = "پنل جواب نداد؛ مبلغی کم نشد. کمی بعد دوباره امتحان کن."
+        return await edit_or_send(cb, "❌ " + (msg or "انجام نشد."), kb(back_row(f"psel:a:{a.id}")))
+    extra = f"\n🔑 رمزِ تازه (چون پنل بسته شده بود): <code>{esc(r['new_password'])}</code>" if r.get("new_password") else ""
+    await edit_or_send(cb, f"✅ حجمِ اضافه ثبت شد. حجمِ جدید: <b>{gb_text(r['new_gb'])}</b>{extra}", kb(back_row(f"psel:a:{a.id}")))
 
 
 @psel_user_router.callback_query(F.data.regexp(r"^psel:(rn|rnok):\d+$"))
