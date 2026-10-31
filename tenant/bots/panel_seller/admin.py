@@ -47,6 +47,7 @@ class PselFSM(StatesGroup):
     price = State()
     extra_price = State()      # PATCH_PSEL_EXTRA_VOLUME_V1
     test_cfg = State()         # PATCH_PSEL_FREE_TEST_V1
+    custom_cfg = State()       # PATCH_PSEL_CUSTOM_VOLUME_V1
 
 
 async def _guard(event, bot: Bot):
@@ -92,6 +93,7 @@ async def menu_content(row):
          btn("👤 ادمین‌هایِ فروخته‌شده", "psel:ac:0", style=ButtonStyle.PRIMARY)],
         [btn("🔄 ریستارتِ پنل", "psel:rs", style=ButtonStyle.PRIMARY),
          btn("⚙️ دسترسی‌هایِ مشتری", "psel:set", style=ButtonStyle.PRIMARY)],
+        [btn("🛡 نقشِ ادمینِ پنل (پاسارگاردِ جدید)", "psel:role", style=ButtonStyle.PRIMARY)],
         HOME_ROW)
 
 
@@ -472,7 +474,13 @@ async def _set_view(row):
         on = (await get_setting(row.id, key, default)) == "1"
         rows.append([btn(f"{label}: {'✅ مجاز' if on else '⛔️ ممنوع'}", f"psel:set:{key}",
                          style=ButtonStyle.SUCCESS if on else ButtonStyle.DANGER)])
-    from tenant.bots.panel_seller.service import extra_gb_price, test_settings
+    from tenant.bots.panel_seller.service import custom_settings, extra_gb_price, pick_username_enabled, test_settings
+    _pu = await pick_username_enabled(row.id)
+    rows.append([btn(f"👤 انتخابِ نام‌کاربری توسطِ مشتری: {'✅ روشن' if _pu else '⛔️ خاموش'}", "psel:pu",
+                     style=ButtonStyle.SUCCESS if _pu else ButtonStyle.DANGER)])
+    _cv = await custom_settings(row.id)
+    _cv_label = ("📦 فروشِ حجمِ دلخواه: " + (fa(f"{_cv['price']:,}") + f" تومان/گیگ · حداقل {fa(_cv['min_gb'])}" if _cv["price"] else "⛔️ خاموش"))
+    rows.append([btn(_cv_label, "psel:cv", style=ButtonStyle.SUCCESS if _cv["price"] else ButtonStyle.PRIMARY)])
     _tc = await test_settings(row.id)
     rows.append([btn(f"🧪 تستِ رایگان: {'✅ روشن' if _tc['enabled'] else '⛔️ خاموش'}", "psel:tt",
                      style=ButtonStyle.SUCCESS if _tc["enabled"] else ButtonStyle.DANGER)])
@@ -585,3 +593,118 @@ async def test_cfg_save(msg: Message, bot: Bot, state: FSMContext):
     await state.clear()
     text, markup = await _set_view(row)
     await msg.answer("✅ مشخصاتِ تست ذخیره شد.\n\n" + text, reply_markup=markup, parse_mode="HTML")
+
+
+# === PATCH_PSEL_PASARGUARD_ROLE_V1 === انتخابِ نقشِ ادمینِ فروخته‌شده (پاسارگاردِ جدید «role_id» اجباری می‌خواهد)
+@psel_admin_router.callback_query(F.data == "psel:role")
+async def role_panels(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    sup = [p for p in await _panels(row.id) if AD.supports(p.panel_key)]
+    if not sup:
+        return await cb.answer("پنلِ قابلِ‌فروشی متصل نیست.", show_alert=True)
+    from tenant import get_setting
+    rows = []
+    for p in sup:
+        cur = (await get_setting(row.id, f"psel_role_{p.id}", "")) or "خودکار"
+        rows.append([btn(f"{(p.base_url or '')[:30]} — نقش: {cur}", f"psel:roleP:{p.id}", style=ButtonStyle.PRIMARY)])
+    rows.append(back_row(MENU))
+    await edit_or_send(cb, "🛡 <b>نقشِ ادمینِ پنل</b>\n\nپاسارگاردِ جدید برایِ هر ادمین یک «نقش» می‌خواهد. نقشی را انتخاب کن که "
+                           "فقط کاربرانِ خودِ مشتری را مدیریت می‌کند (بدونِ دسترسیِ مدیریتِ ادمین‌ها/تنظیمات). "
+                           "اگر نقشی انتخاب نکنی و پنل فقط یک نقشِ غیرِمالک داشته باشد، همان استفاده می‌شود.", kb(*rows))
+    await cb.answer()
+
+
+@psel_admin_router.callback_query(F.data.regexp(r"^psel:roleP:\d+$"))
+async def role_list(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    pid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        panel = await s.get(VpnPanel, pid)
+    if not panel or panel.bot_id != row.id or not AD.supports(panel.panel_key):
+        return await cb.answer("پنل معتبر نیست.", show_alert=True)
+    try:
+        async with AD.PanelAdminAPI.for_panel(panel) as api:
+            roles = await api.list_roles()
+    except Exception as e:      # noqa: BLE001
+        return await edit_or_send(cb, f"❌ خواندنِ نقش‌ها ممکن نشد:\n<code>{_html.escape(str(e)[:300])}</code>", kb(back_row("psel:role")))
+    cand = [r for r in roles if not r.get("is_owner")]
+    if not cand:
+        return await edit_or_send(cb, "این پنل نقشی برایِ ادمین ندارد (پنلِ نسخهٔ قدیمی)؛ نیازی به انتخاب نیست.", kb(back_row("psel:role")))
+    rows = [[btn(f"{str(r.get('name'))[:30]} (#{r['id']})", f"psel:roleS:{pid}:{int(r['id'])}", style=ButtonStyle.SUCCESS)] for r in cand]
+    rows.append([btn("🔄 خودکار (پیش‌فرض)", f"psel:roleS:{pid}:0", style=ButtonStyle.PRIMARY)])
+    rows.append(back_row("psel:role"))
+    await edit_or_send(cb, "🛡 یکی از نقش‌هایِ زیر را برایِ ادمین‌هایِ فروخته‌شده انتخاب کن:", kb(*rows))
+    await cb.answer()
+
+
+@psel_admin_router.callback_query(F.data.regexp(r"^psel:roleS:\d+:\d+$"))
+async def role_set(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    _, _, pid, rid = cb.data.split(":")
+    async with Session() as s:
+        panel = await s.get(VpnPanel, int(pid))
+    if not panel or panel.bot_id != row.id:
+        return await cb.answer("پنل معتبر نیست.", show_alert=True)
+    from tenant import set_setting
+    await set_setting(row.id, f"psel_role_{int(pid)}", "" if int(rid) == 0 else str(int(rid)))
+    await cb.answer("ذخیره شد ✅")
+    await role_panels(cb, bot)
+
+
+# === PATCH_PSEL_PICK_USERNAME_V1 ===
+@psel_admin_router.callback_query(F.data == "psel:pu")
+async def pick_username_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    from tenant import get_setting, set_setting
+    cur = (await get_setting(row.id, "psel_pick_username", "0")) == "1"
+    await set_setting(row.id, "psel_pick_username", "0" if cur else "1")
+    text, markup = await _set_view(row)
+    await edit_or_send(cb, text, markup)
+    await cb.answer("مشتری نام‌کاربری را خودش انتخاب می‌کند ✅" if not cur else "نامِ تصادفی (پیش‌فرض).")
+
+
+# === PATCH_PSEL_CUSTOM_VOLUME_V1 === فروشِ حجمیِ دلخواه: قیمتِ هر گیگ، حداقل/حداکثر، سقفِ کاربر، روز (۰ = نامحدود)
+@psel_admin_router.callback_query(F.data == "psel:cv")
+async def custom_cfg_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.set_state(PselFSM.custom_cfg)
+    await edit_or_send(
+        cb, "📦 <b>فروشِ حجمیِ دلخواه</b>\n\nمشتری تعدادِ گیگ را خودش می‌نویسد (با حداقل) و پنل با همان حجم ساخته می‌شود.\n\n"
+            "پنج عدد را در <b>یک پیام</b> و با فاصله بفرست:\n"
+            "<code>قیمتِ‌هرگیگ  حداقلِ‌گیگ  حداکثرِ‌گیگ  حداکثرِ‌کاربر  روز</code>\n\n"
+            "مثلاً <code>5000 10 500 0 0</code> یعنی هر گیگ ۵٬۰۰۰ تومان، حداقل ۱۰ و حداکثر ۵۰۰ گیگ، کاربرِ نامحدود، <b>زمانِ نامحدود</b> "
+            "(برایِ کاربر و روز، ۰ = نامحدود).\nبرایِ خاموش‌کردنِ این فروش قیمت را <code>0</code> بفرست (مثلاً <code>0 0 0 0 0</code>).",
+        kb(back_row("psel:set", "✖️ لغو")))
+    await cb.answer()
+
+
+@psel_admin_router.message(PselFSM.custom_cfg, F.text)
+async def custom_cfg_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard(msg, bot)
+    if not row:
+        return
+    parts = [_num(x) for x in (msg.text or "").replace("،", " ").replace(",", " ").replace("٬", " ").split()]
+    if len(parts) != 5 or any(v is None for v in parts):
+        return await msg.answer("❌ پنج عدد بفرست؛ مثلاً <code>5000 10 500 0 0</code>", parse_mode="HTML")
+    price, mn, mx, users, days = parts
+    if price > 0 and not (1 <= mn <= mx <= 100000 and users <= 100000 and days <= 3650):
+        return await msg.answer("❌ شرط: حداقل ≥ ۱ و ≤ حداکثر، کاربر ≤ ۱۰۰۰۰۰، روز ≤ ۳۶۵۰.")
+    from tenant import set_setting
+    await set_setting(row.id, "psel_custom_price_gb", str(price))
+    if price > 0:
+        for k, v in (("min_gb", mn), ("max_gb", mx), ("users", users), ("days", days)):
+            await set_setting(row.id, f"psel_custom_{k}", str(v))
+    await state.clear()
+    text, markup = await _set_view(row)
+    await msg.answer(("✅ فروشِ حجمیِ دلخواه روشن شد.\n\n" if price else "✅ فروشِ حجمیِ دلخواه خاموش شد.\n\n") + text,
+                     reply_markup=markup, parse_mode="HTML")

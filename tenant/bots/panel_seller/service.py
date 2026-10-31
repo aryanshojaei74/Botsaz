@@ -16,6 +16,7 @@ from config import Session
 from models import BotUser, PanelSellerAccount, PanelSellerPackage, VpnPanel, WalletTxn
 
 from tenant.bots.panel_seller import adapter as AD
+from tenant.shared.panel_clients.vpn_panel import PanelError
 
 from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
@@ -29,8 +30,46 @@ def gen_username() -> str:
     return "ps" + "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(8))
 
 
+_PW_SPECIAL = "!@#$%^&*-_=+"          # بدونِ " و بدونِ نمادهایِ مشکل‌ساز؛ همهٔ پنل‌ها می‌پذیرند
+
+
 def gen_password() -> str:
-    return "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(14))
+    """PATCH_PSEL_STRONG_PASSWORD_V1 — پاسارگاردِ جدید: ≥۱۲ نویسه، ≥۲ رقم، ≥۲ بزرگ، ≥۲ کوچک، ≥۱ نمادِ خاص (۴۲۲ می‌داد)."""
+    chars = ([secrets.choice(string.ascii_uppercase) for _ in range(3)]
+             + [secrets.choice(string.ascii_lowercase) for _ in range(5)]
+             + [secrets.choice(string.digits) for _ in range(4)]
+             + [secrets.choice(_PW_SPECIAL) for _ in range(2)])
+    secrets.SystemRandom().shuffle(chars)
+    return "".join(chars)
+
+
+async def role_for(api, panel) -> int:
+    """نقشِ ادمینِ فروخته‌شده در پاسارگاردِ جدید: انتخابِ مالک (psel_role_<panel_id>)، وگرنه اگر فقط یک نقشِ غیرِمالک هست همان.
+    چند نقش ⇒ حدس نمی‌زنیم (ممکن است نقشِ پرسطح‌دسترسی باشد) و از مالک می‌خواهیم انتخاب کند."""
+    from tenant import get_setting
+    try:
+        saved = int((await get_setting(panel.bot_id, f"psel_role_{panel.id}", "")) or 0)
+    except (TypeError, ValueError):
+        saved = 0
+    roles = await api.list_roles()
+    if saved and any(int(r["id"]) == saved for r in roles):
+        return saved
+    cand = [r for r in roles if not r.get("is_owner")]
+    if len(cand) == 1:
+        return int(cand[0]["id"])
+    names = "، ".join(f"{r.get('name')}#{r['id']}" for r in cand) or "هیچ"
+    raise PanelError("نقشِ ادمین در این پنل مشخص نیست؛ از «🛡 نقشِ ادمینِ پنل» در تنظیماتِ پنل‌فروشی یکی را انتخاب کن. "
+                     f"نقش‌هایِ موجود: {names}")
+
+
+async def create_admin_on(api, panel, username: str, password: str) -> None:
+    """ساختِ ادمین؛ اگر پنل «role_id» خواست (پاسارگاردِ جدید) نقش را پیدا و یک‌بار دوباره امتحان می‌کند."""
+    try:
+        await api.create_admin(username, password)
+    except PanelError as e:
+        if "role_id" not in str(e):
+            raise
+        await api.create_admin(username, password, role_id=await role_for(api, panel))
 
 
 def _api(panel):
@@ -67,13 +106,46 @@ async def _refund(bot_id: int, tg: int, price: int, note: str) -> None:
             await s.commit()
 
 
-async def buy(bot_id: int, buyer_tg: int, package_id: int, api_factory=None, bot=None, row=None) -> dict:
-    """status: ok | no_package | no_panel | unsupported | insufficient | panel_failed (+ account/username/password/…)."""
-    api_factory = api_factory or _api
+USERNAME_RE = r"^[A-Za-z][A-Za-z0-9_]{2,31}$"
+
+
+def valid_username(u: str) -> bool:
+    import re
+    return bool(re.match(USERNAME_RE, u or ""))
+
+
+async def username_taken(bot_id: int, username: str) -> bool:
+    """نامِ ادمین در هیچ پنلِ همین ربات (به‌جز حذف‌شده‌ها) نباید تکراری باشد (مقایسه بدونِ حساسیت به حروف)."""
+    from sqlalchemy import func
     async with Session() as s:
-        pk = await s.get(PanelSellerPackage, package_id)
-        if not pk or pk.bot_id != bot_id or not pk.active:
-            return {"status": "no_package"}
+        n = await s.scalar(select(func.count(PanelSellerAccount.id)).where(
+            PanelSellerAccount.bot_id == bot_id, PanelSellerAccount.status != "deleted",
+            func.lower(PanelSellerAccount.admin_username) == (username or "").lower()))
+    return bool(n)
+
+
+async def pick_username_enabled(bot_id: int) -> bool:
+    from tenant import get_setting
+    return (await get_setting(bot_id, "psel_pick_username", "0")) == "1"
+
+
+async def buy(bot_id: int, buyer_tg: int, package_id: int, api_factory=None, bot=None, row=None,
+              username: str | None = None, pk_override=None) -> dict:
+    """status: ok | no_package | no_panel | unsupported | insufficient | panel_failed | bad_username | username_taken
+    (+ account/username/password/…). username: نامِ دلخواهِ مشتری (اختیاری)؛ pk_override: بستهٔ موقت (فروشِ حجمیِ دلخواه)."""
+    api_factory = api_factory or _api
+    if username is not None:
+        if not valid_username(username):
+            return {"status": "bad_username"}
+        if await username_taken(bot_id, username):
+            return {"status": "username_taken"}
+    async with Session() as s:
+        if pk_override is not None:
+            pk = pk_override
+        else:
+            pk = await s.get(PanelSellerPackage, package_id)
+            if not pk or pk.bot_id != bot_id or not pk.active:
+                return {"status": "no_package"}
         panel = await s.get(VpnPanel, pk.panel_id)
     if not panel or panel.bot_id != bot_id or not panel.enabled:
         return {"status": "no_panel"}
@@ -86,11 +158,11 @@ async def buy(bot_id: int, buyer_tg: int, package_id: int, api_factory=None, bot
             if u is None:
                 return {"status": "insufficient", "need": price, "balance": bal}
         await s.commit()
-    username, password = gen_username(), gen_password()
+    username, password = (username or gen_username()), gen_password()
     try:
         api = api_factory(panel)
         try:
-            await api.create_admin(username, password)
+            await create_admin_on(api, panel, username, password)
         finally:
             await api.close()
     except Exception as e:  # noqa: BLE001
@@ -102,8 +174,8 @@ async def buy(bot_id: int, buyer_tg: int, package_id: int, api_factory=None, bot
     async with Session() as s:
         trk = await alloc_tracking_in(s, bot_id)
         acc = PanelSellerAccount(
-            bot_id=bot_id, buyer_tg=buyer_tg, panel_id=panel.id, package_id=pk.id, title=pk.title,
-            admin_username=username, data_gb=pk.data_gb, max_users=pk.max_users,
+            bot_id=bot_id, buyer_tg=buyer_tg, panel_id=panel.id, package_id=(getattr(pk, "id", None) if pk_override is None else None),
+            title=pk.title, admin_username=username, data_gb=pk.data_gb, max_users=pk.max_users,
             expires_at=(datetime.utcnow() + timedelta(days=int(pk.days)) if int(pk.days or 0) > 0 else None), status="active",   # ۰ = نامحدود
             price_toman=price, tracking_code=trk)
         s.add(acc)
@@ -176,6 +248,43 @@ async def renew(bot_id: int, account_id: int, buyer_tg: int, api_factory=None) -
     return {"status": "ok", "expires_at": exp, "new_password": new_pw, "username": acc.admin_username}
 
 
+# === PATCH_PSEL_CUSTOM_VOLUME_V1 === (Whale Support) «فروشِ حجمیِ دلخواه»: مشتری گیگ را خودش می‌نویسد (با حداقل)، زمانِ نامحدود
+async def custom_settings(bot_id: int) -> dict:
+    from tenant import get_setting
+
+    async def _i(key, default, lo, hi):
+        try:
+            return max(lo, min(hi, int(float((await get_setting(bot_id, key, str(default))) or default))))
+        except (TypeError, ValueError):
+            return default
+    return {"price": await _i("psel_custom_price_gb", 0, 0, 100_000_000),      # ۰ = خاموش
+            "min_gb": await _i("psel_custom_min_gb", 10, 1, 100000),
+            "max_gb": await _i("psel_custom_max_gb", 1000, 1, 100000),
+            "users": await _i("psel_custom_users", 0, 0, 100000),               # ۰ = نامحدود
+            "days": await _i("psel_custom_days", 0, 0, 3650)}                   # ۰ = نامحدود (بدونِ انقضا)
+
+
+async def buy_custom(bot_id: int, buyer_tg: int, gb: int, api_factory=None, bot=None, row=None,
+                     username: str | None = None) -> dict:
+    """status مثلِ buy + disabled | bad_amount."""
+    cfg = await custom_settings(bot_id)
+    if cfg["price"] <= 0:
+        return {"status": "disabled"}
+    if not (cfg["min_gb"] <= int(gb) <= max(cfg["min_gb"], cfg["max_gb"])):
+        return {"status": "bad_amount", "min_gb": cfg["min_gb"], "max_gb": cfg["max_gb"]}
+    async with Session() as s:
+        panels = (await s.scalars(select(VpnPanel).where(VpnPanel.bot_id == bot_id, VpnPanel.enabled == True)   # noqa: E712
+                                  .order_by(VpnPanel.id))).all()
+    panel = next((p for p in panels if AD.supports(p.panel_key)), None)
+    if panel is None:
+        return {"status": "no_panel" if not panels else "unsupported"}
+    from types import SimpleNamespace
+    gb = int(gb)
+    pk = SimpleNamespace(id=None, panel_id=panel.id, title=f"📦 حجمِ دلخواه {gb} گیگ", data_gb=gb, max_users=cfg["users"],
+                         days=cfg["days"], price_toman=gb * cfg["price"], active=True)
+    return await buy(bot_id, buyer_tg, 0, api_factory=api_factory, bot=bot, row=row, username=username, pk_override=pk)
+
+
 # === PATCH_PSEL_FREE_TEST_V1 === (Whale Support) «تستِ رایگان»: هر مشتری یک بار، با مشخصاتِ کوچکِ تعیین‌شده توسطِ مالک
 TEST_TITLE = "🧪 تستِ رایگان"
 
@@ -223,7 +332,7 @@ async def buy_test(bot_id: int, buyer_tg: int, api_factory=None, bot=None, row=N
     try:
         api = api_factory(panel)
         try:
-            await api.create_admin(username, password)
+            await create_admin_on(api, panel, username, password)
         finally:
             await api.close()
     except Exception as e:  # noqa: BLE001

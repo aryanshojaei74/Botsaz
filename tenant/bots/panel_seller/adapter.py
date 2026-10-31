@@ -54,14 +54,32 @@ class PanelAdminAPI:
         """لیستِ ادمین‌ها؛ اگر اتصال یا دسترسیِ sudo مشکل داشته باشد PanelError می‌دهد."""
         return await self.c.list_admins()
 
-    async def create_admin(self, username: str, password: str) -> None:
-        res = await self.c._request("POST", "/api/admin", json={
-            "username": username, "password": password, "is_sudo": False})
+    async def create_admin(self, username: str, password: str, role_id: int | None = None) -> None:
+        body = {"username": username, "password": password, "is_sudo": False}
+        if role_id is not None:             # PATCH_PSEL_PASARGUARD_ROLE_V1 — پاسارگاردِ جدید «role_id» اجباری می‌خواهد
+            body["role_id"] = int(role_id)
+        res = await self.c._request("POST", "/api/admin", json=body)
         if res is None:
             raise PanelError("ساختِ ادمین روی پنل جواب نداد (دسترسیِ sudo را بررسی کن).")
 
+    async def list_roles(self) -> list[dict]:
+        """نقش‌هایِ ادمین (پاسارگاردِ جدید): GET /api/admin-roles/simple → [{id, name, is_owner}]. پنلِ بدونِ نقش ⇒ []."""
+        try:
+            res = await self.c._request("GET", "/api/admin-roles/simple")
+        except PanelError:
+            return []
+        if isinstance(res, dict):
+            res = res.get("roles") or []
+        return [r for r in (res or []) if isinstance(r, dict) and r.get("id") is not None]
+
     async def set_password(self, username: str, password: str) -> None:
-        await self.c.modify_admin_password(username, password)
+        try:
+            await self.c.modify_admin_password(username, password)
+        except PanelError as e:
+            # پاسارگاردِ جدید فیلدِ is_sudo ندارد (نقش دارد) و بدنهٔ مرزبانی را رد می‌کند؛ یک‌بار فقط با رمز
+            if "422" not in str(e) and "is_sudo" not in str(e):
+                raise
+            await self.c._request("PUT", f"/api/admin/{quote(username)}", json={"password": password})
 
     async def delete_admin(self, username: str) -> None:
         await self.c.delete_admin(username)

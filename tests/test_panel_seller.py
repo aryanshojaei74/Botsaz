@@ -15,6 +15,14 @@ from tenant.bots.panel_seller import gate as GT
 from tenant.bots.panel_seller import service as SV
 
 
+class _St:
+    """FSMContextِ ساختگی (buy_do حالا برایِ «انتخابِ نام‌کاربری» state می‌گیرد)."""
+    async def clear(self): pass
+    async def set_state(self, *a): pass
+    async def update_data(self, **k): pass
+    async def get_data(self): return {}
+
+
 class FakeAPI:
     log: list = []
     usage = 0
@@ -314,7 +322,7 @@ async def test_buyer_flow_buy_then_manage_by_permissions(ui):
     await UM.buy_detail(cb, None)
     assert "psel:bok:1" in _cbs(cb.message)
     cb = _Cb("psel:bok:1")
-    await UM.buy_do(cb, None)
+    await UM.buy_do(cb, None, _St())
     text = cb.message.out[-1][0]
     assert "پنلِ تو آماده است" in text and "https://p.example.com:8000" in text and "ps" in text
     async with ui.maker() as s:
@@ -349,7 +357,7 @@ async def test_buyer_blocked_when_beta_access_missing(ui):
     await ui.UM.show_buy(m, None, ui.row, 1001)
     assert "تست" in m.out[-1][0]
     cb = _Cb("psel:bok:1")
-    await ui.UM.buy_do(cb, None)
+    await ui.UM.buy_do(cb, None, _St())
     assert cb.alerts and "تست" in cb.alerts[-1]
     async with ui.maker() as s:
         assert await s.scalar(select(models.PanelSellerAccount)) is None
