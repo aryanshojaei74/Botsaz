@@ -276,7 +276,7 @@ async def ps_menu(cb: CallbackQuery, bot: Bot, state: FSMContext = None):
         _txt = ("⏳ فروشِ ربات در حالِ حاضر در دسترس نیست؛ کمی بعد دوباره امتحان کن یا به پشتیبانی پیام بده."
                 + (f"\n\n🛠 (فقط مدیر) علت: {why}" if _staff else ""))
         try:
-            await cb.message.answer(_txt)
+            await cb.message.edit_text(_txt)        # (در حالتِ کیبوردی edit_text همان پیامِ تازه را می‌فرستد)
         except Exception:
             logger.exception("partner ps_menu: ارسالِ پیامِ خطا ناموفق بود")
         await cb.answer()

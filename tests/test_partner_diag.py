@@ -14,6 +14,7 @@ import tenant.partner_bot.partner_sales as PS
 class _Msg:
     def __init__(self): self.sent = []
     async def answer(self, text, **k): self.sent.append(text)
+    async def edit_text(self, text, **k): self.sent.append(text)
 
 
 class _Cb:
