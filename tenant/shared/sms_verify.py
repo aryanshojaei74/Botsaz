@@ -223,7 +223,7 @@ async def got_number(msg: Message, bot: Bot, state: FSMContext):
             await bot.send_message(row.owner_id, f"⚠️ ارسالِ کدِ پیامکیِ تأیید ناموفق بود:\n<code>{err}</code>\nتنظیمِ «پنل پیامکی» را بررسی کن.",
                                    parse_mode="HTML")
         except Exception:      # noqa: BLE001
-            pass
+            logger.info("sms_verify: خبرِ خطا به مالک نرسید")
         await state.clear()
         return await msg.answer("❌ ارسالِ پیامک ممکن نشد؛ کمی بعد دوباره امتحان کن یا به پشتیبانی بگو.")
     salt = secrets.token_hex(4)
