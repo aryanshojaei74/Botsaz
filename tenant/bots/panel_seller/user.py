@@ -62,7 +62,7 @@ async def show_buy(event, bot: Bot, row, uid: int) -> None:
         return await edit_or_send(event, "📦 فعلاً بسته‌ای برایِ فروش نیست؛ بعداً سر بزن.", kb(HOME_ROW))
     rows = [[btn(f"{p.title[:28]} — {n(p.price_toman)} تومان", f"psel:b:{p.id}", style=ButtonStyle.SUCCESS)] for p in pks]
     if (await SV.custom_settings(row.id))["price"] > 0:      # PATCH_PSEL_CUSTOM_VOLUME_V1
-        rows.insert(0, [btn("📦 خریدِ حجمِ دلخواه", "psel:cv", style=ButtonStyle.SUCCESS)])
+        rows.insert(0, [btn("📦 خریدِ حجمِ دلخواه", "psel:cvb", style=ButtonStyle.SUCCESS)])
     if await SV.test_available(row.id, uid):          # PATCH_PSEL_FREE_TEST_V1
         rows.insert(0, [btn("🧪 تستِ رایگان", "psel:tst", style=ButtonStyle.PRIMARY)])
     rows.append(HOME_ROW)
@@ -130,8 +130,14 @@ async def _provision(event, bot: Bot, row, uid: int, *, pid: int | None = None, 
                    f"🌐 آدرس: <code>{esc(r['panel_url'])}</code>\n🆔 نام‌کاربری: <code>{esc(r['username'])}</code>\n"
                    f"🔑 رمز: <code>{esc(r['password'])}</code>\n🔖 کدِ پیگیری: <code>{esc(r['tracking'])}</code>\n\n"
                    "رمز را جایی امن نگه دار. وضعیتِ پنل از «🗂 پنل‌هایِ من» قابلِ مشاهده است.",
-            kb([btn("🗂 پنل‌هایِ من", "psel:my", style=ButtonStyle.PRIMARY)], HOME_ROW))
+            kb(*_login_rows(r.get("panel_url")), [btn("🗂 پنل‌هایِ من", "psel:my", style=ButtonStyle.PRIMARY)], HOME_ROW))
     return r
+
+
+def _login_rows(url: str | None) -> list:
+    """PATCH_PSEL_LOGIN_BUTTON_V1 — دکمهٔ «ورود به پنل» (لینکِ مستقیم) اگر آدرسِ پنل http(s) باشد."""
+    u = (url or "").strip()
+    return [[btn("🌐 ورود به پنل", url=u, style=ButtonStyle.SUCCESS)]] if u.startswith(("http://", "https://")) else []
 
 
 _USERNAME_PROMPT = ("🆔 <b>نام‌کاربریِ دلخواهِ پنل</b> را بفرست.\n\n"
@@ -188,7 +194,7 @@ async def username_in(msg: Message, bot: Bot, state: FSMContext):
 
 # ═══════════════════════ فروشِ حجمیِ دلخواه ═══════════════════════
 
-@psel_user_router.callback_query(F.data == "psel:cv")
+@psel_user_router.callback_query(F.data == "psel:cvb")      # (قبلاً psel:cv بود و با دکمهٔ مدیر تداخل داشت ⇒ «فقط مدیرِ ربات»)
 async def custom_menu(cb: CallbackQuery, bot: Bot, state: FSMContext):
     row = await _row(bot)
     if not row:
@@ -300,7 +306,7 @@ async def free_test(cb: CallbackQuery, bot: Bot):
             f"🔑 رمز: <code>{esc(r['password'])}</code>\n\n"
             f"⏳ {fa(r['hours'])} ساعت · 📊 {gb_text(r['gb'])} · 👥 {users_text(r['users'])}\n"
             "بعد از پایانِ تست برایِ ادامه از «🧩 خریدِ پنل» بسته بخر.",
-        kb([btn("🗂 پنل‌هایِ من", "psel:my", style=ButtonStyle.PRIMARY)], HOME_ROW))
+        kb(*_login_rows(r.get("panel_url")), [btn("🗂 پنل‌هایِ من", "psel:my", style=ButtonStyle.PRIMARY)], HOME_ROW))
 
 
 # ═══════════════════════ پنل‌هایِ من ═══════════════════════
@@ -369,6 +375,18 @@ async def my_detail(cb: CallbackQuery, bot: Bot):
             text += (f"\n📊 مصرف: {fa(f'{used:.1f}')} از {gb_text(a.data_gb)}\n👥 کاربران: {fa(users)} از {users_text(a.max_users)}")
     rows = []
     aid = a.id
+    # === PATCH_PSEL_ACCOUNT_BUTTONS_V1 === (Whale Support) مثلِ صفحهٔ سرویس در رباتِ VPN
+    rows.append([btn("📊 مشخصات و مصرف", f"psel:a:{aid}", style=ButtonStyle.SUCCESS)])
+    if panel and (panel.base_url or "").startswith(("http://", "https://")):
+        rows.append([btn("🌐 ورود به پنل وب", url=panel.base_url, style=ButtonStyle.PRIMARY)])
+    try:
+        from tenant import get_setting
+        from tenant.shared.support_ticket import _support_contact_url
+        _sup = _support_contact_url(await get_setting(row.id, "support_direct_contact", ""))
+        if _sup:
+            rows.append([btn("🆘 آدرسِ پشتیبانی", url=_sup, style=ButtonStyle.PRIMARY)])
+    except Exception:      # noqa: BLE001
+        logger.exception("panel_seller: ساختِ دکمهٔ پشتیبانی ناموفق بود")
     if await _perm(row, "psel_allow_renew"):
         rows.append([btn("🔁 تمدید", f"psel:rn:{aid}", style=ButtonStyle.SUCCESS)])
     if a.status == "active":
@@ -384,9 +402,31 @@ async def my_detail(cb: CallbackQuery, bot: Bot):
     if a.data_gb and (a.status == "active" or (a.status == "suspended" and a.suspend_reason == "traffic")) \
             and await SV.extra_gb_price(row.id) > 0:
         rows.append([btn("📈 خریدِ حجمِ اضافه", f"psel:xg:{aid}", style=ButtonStyle.SUCCESS)])
+    if await _perm(row, "psel_allow_delete"):
+        rows.append([btn("🗑 حذفِ دائمیِ سرویس", f"psel:dl:{aid}", style=ButtonStyle.DANGER)])
     rows.append(back_row("psel:my"))
     await edit_or_send(cb, text, kb(*rows))
     await cb.answer()
+
+
+@psel_user_router.callback_query(F.data.regexp(r"^psel:(dl|dlok):\d+$"))
+async def delete_flow(cb: CallbackQuery, bot: Bot):
+    """PATCH_PSEL_ACCOUNT_BUTTONS_V1 — حذفِ دائمیِ پنل توسطِ خودِ مشتری (فقط اگر مالک اجازه داده؛ با تأییدِ دو مرحله‌ای)."""
+    parts = cb.data.split(":")
+    row, a = await _acc_for(cb, bot, int(parts[2]))
+    if not a:
+        return
+    if not await _perm(row, "psel_allow_delete"):
+        return await cb.answer("حذفِ پنل توسطِ مدیر بسته است.", show_alert=True)
+    if parts[1] == "dl":
+        return await edit_or_send(
+            cb, f"🗑 <b>حذفِ دائمیِ {esc(a.title)}</b>\n\nادمینِ <code>{esc(a.admin_username)}</code> و <b>همهٔ کاربرانش</b> از پنل پاک می‌شود "
+                "و قابلِ برگشت نیست. مبلغی برگردانده نمی‌شود.\n\nمطمئنی؟",
+            kb([btn("✅ بله، برای همیشه حذف کن", f"psel:dlok:{a.id}", style=ButtonStyle.DANGER)], back_row(f"psel:a:{a.id}")))
+    await cb.answer("در حالِ حذف…")
+    if not await SV.delete_account(row.id, a.id):
+        return await edit_or_send(cb, "❌ حذف انجام نشد؛ کمی بعد دوباره امتحان کن یا به پشتیبانی بگو.", kb(back_row(f"psel:a:{a.id}")))
+    await edit_or_send(cb, "✅ پنل برایِ همیشه حذف شد.", kb(back_row("psel:my")))
 
 
 _XG_PICKS = (5, 10, 20, 50, 100)

@@ -36,6 +36,7 @@ PERMS = {
     "psel_allow_renew": ("🔁 تمدیدِ پنل توسطِ مشتری", "1"),
     "psel_allow_pw": ("🔑 تغییرِ رمزِ پنل توسطِ مشتری", "0"),
     "psel_allow_toggle": ("⏯ خاموش/روشنِ اشتراک‌ها توسطِ مشتری", "0"),
+    "psel_allow_delete": ("🗑 حذفِ دائمیِ پنل توسطِ مشتری", "0"),     # PATCH_PSEL_ACCOUNT_BUTTONS_V1
 }
 
 

@@ -15,14 +15,6 @@ from tenant.bots.panel_seller import gate as GT
 from tenant.bots.panel_seller import service as SV
 
 
-class _St:
-    """FSMContextِ ساختگی (buy_do حالا برایِ «انتخابِ نام‌کاربری» state می‌گیرد)."""
-    async def clear(self): pass
-    async def set_state(self, *a): pass
-    async def update_data(self, **k): pass
-    async def get_data(self): return {}
-
-
 class FakeAPI:
     log: list = []
     usage = 0
@@ -445,3 +437,50 @@ def test_worker_modules_import_cleanly():
     for name in ("tenant.bots.panel_seller.loop", "tenant.bots.vpn.autorenew"):
         mod = importlib.import_module(name)
         assert callable(getattr(mod, "panel_seller_loop", None) or getattr(mod, "autorenew_loop"))
+
+
+def _urls(m):
+    kbm = m.out[-1][1]
+    return [b.url for r in kbm.inline_keyboard for b in r if getattr(b, "url", None)] if kbm else []
+
+
+@pytest.mark.asyncio
+async def test_login_button_support_button_and_buyer_delete_flow(ui):
+    """PATCH_PSEL_LOGIN_BUTTON_V1 / PATCH_PSEL_ACCOUNT_BUTTONS_V1 (Whale Support)."""
+    UM = ui.UM
+    cb = _Cb("psel:bok:1")
+    await UM.buy_do(cb, None, _St())
+    assert "https://p.example.com:8000" in _urls(cb.message)                      # «🌐 ورود به پنل» زیرِ پیامِ «پنلِ تو آماده است»
+    async with ui.maker() as s:
+        a = await s.scalar(select(models.PanelSellerAccount))
+    await ui.tenant.set_setting(7, "support_direct_contact", "@whale_support")
+    ui.tenant._SETTING_CACHE.clear()
+    cb = _Cb(f"psel:a:{a.id}")
+    await UM.my_detail(cb, None)
+    urls, cbs = _urls(cb.message), _cbs(cb.message)
+    assert "https://p.example.com:8000" in urls and "https://t.me/whale_support" in urls         # ورود + پشتیبانی
+    assert f"psel:a:{a.id}" in cbs                                                               # «📊 مشخصات و مصرف»
+    assert f"psel:dl:{a.id}" not in cbs                                                          # حذف: پیش‌فرض ممنوع
+    cb = _Cb(f"psel:dlok:{a.id}")
+    await UM.delete_flow(cb, None)
+    assert "بسته است" in cb.alerts[-1]
+    async with ui.maker() as s:
+        assert (await s.get(models.PanelSellerAccount, a.id)).status == "active"
+    # مالک اجازه می‌دهد ⇒ دکمه با تأییدِ دو مرحله‌ای؛ حذف از پنل و دیتابیس
+    await ui.tenant.set_setting(7, "psel_allow_delete", "1")
+    ui.tenant._SETTING_CACHE.clear()
+    cb = _Cb(f"psel:a:{a.id}")
+    await UM.my_detail(cb, None)
+    assert f"psel:dl:{a.id}" in _cbs(cb.message)
+    cb = _Cb(f"psel:dl:{a.id}")
+    await UM.delete_flow(cb, None)
+    assert "psel:dlok:%d" % a.id in _cbs(cb.message) and "قابلِ برگشت نیست" in cb.message.out[-1][0]
+    cb = _Cb(f"psel:dlok:{a.id}")
+    await UM.delete_flow(cb, None)
+    async with ui.maker() as s:
+        assert (await s.get(models.PanelSellerAccount, a.id)).status == "deleted"
+    assert ("del", a.admin_username) in FakeAPI.log
+    # خریدارِ دیگر نمی‌تواند پنلِ کسِ دیگر را حذف کند
+    cb = _Cb(f"psel:dlok:{a.id}", uid=999)
+    await UM.delete_flow(cb, None)
+    assert cb.alerts and not cb.message.out
