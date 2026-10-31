@@ -867,7 +867,7 @@ async def _active_check_tenant(draft) -> bool:
 
 # === PATCH_TX_LOG_CHANNEL_V1 ===
 async def _tx_log_tenant(bot_id: int, tg_id: int, amt: float,
-                         new_balance: float, gateway: str) -> None:
+                         new_balance: float, gateway: str, card: str = "") -> None:
     """لاگِ تراکنش در کانالِ رباتِ مستأجر (با توکن خودِ همان ربات)."""
     from aiogram import Bot
     from aiogram.client.default import DefaultBotProperties
@@ -886,7 +886,7 @@ async def _tx_log_tenant(bot_id: int, tg_id: int, amt: float,
         from tenant.shared.tx_channel import tx_log
         await tx_log(tbot, bot_id, buyer=u, amount=amt, gateway=gateway,
                      old_balance=(float(new_balance) - float(amt)),
-                     new_balance=new_balance)
+                     new_balance=new_balance, card=card)
     finally:
         try:
             await tbot.session.close()

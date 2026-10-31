@@ -9756,7 +9756,15 @@ async def smmu_request_cancel(cb: CallbackQuery, bot: Bot):
     else:
         ok, note = _parse_cancel_response(d, o.panel_order_id)
     if not ok:
-        logger.info("[cancel] پاسخِ پنل (order=%s): %s", oid, note)
+        logger.warning("[cancel] پنل لغو را نپذیرفت (order=%s panel_order=%s): %s", oid, o.panel_order_id, str(note)[:300])
+        try:   # علتِ خامِ پنل برایِ مالک در یادداشتِ سفارش می‌ماند (به مشتری نشان داده نمی‌شود)
+            async with Session() as s:
+                oo = await s.get(SmmOrder, oid, with_for_update=True)
+                if oo is not None and not await _is_foreign(oo, bot):
+                    oo.note = ((oo.note or "") + f" | پاسخِ پنل به لغو: {str(note)[:120]}")[-900:]
+                    await s.commit()
+        except Exception:
+            logger.exception("[cancel] ثبتِ علتِ خطا در یادداشتِ سفارش ناموفق بود")
         await cb.message.answer("❌ " + panel_err_friendly(note, "درخواستِ لغو"))
         return
     if note == "already":   # PATCH_SMM_PANEL_ERR_FRIENDLY_V1

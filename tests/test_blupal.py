@@ -210,7 +210,7 @@ async def test_settle_credits_requested_amount_once(env):
     assert notified == [(777, 100_000, 100_000.0)]
     async with maker() as s:
         ch = await s.scalar(select(models.BluPalCharge))
-    assert ch.tracking_code == "456" and ch.payer_name == "علی رضایی" and ch.paid_at is not None
+    assert ch.tracking_code == "456" and ch.payer_name == "علی رضایی | 6037991234567890" and ch.paid_at is not None
 
 
 @pytest.mark.asyncio
@@ -642,3 +642,10 @@ async def test_orders_page_lists_paid_blupal_charges_and_detail_opens(env, monke
     c2.message.answer = ans
     await BA.bpl_detail(c2, SimpleNamespace())
     assert "<code>12</code>" in out[-1] and "456" in out[-1] and "پرداخت‌شده" in out[-1]
+
+
+def test_payer_card_extraction_variants():
+    from tenant.gateways.blupal import payer_card_of
+    assert payer_card_of({"payer_card": "6037****7890"}) == "6037****7890"
+    assert payer_card_of({"payer": {"card_number": "5022 29** **** 1234"}}) == "5022 29** **** 1234"
+    assert payer_card_of({"status": "PAID"}) == ""

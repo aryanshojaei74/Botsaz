@@ -226,6 +226,26 @@ async def validate_key(api_key: str) -> tuple[bool, str]:
 
 # ─────────────────────────── تسویه ───────────────────────────
 
+# === PATCH_BLUPAL_PAYER_CARD_V1 === کارتِ پرداخت‌کننده (اگر بلوپال در پاسخ بدهد). نامِ فیلد در مستندات ثابت نیست؛
+# چند نامِ محتمل را می‌خوانیم، و اگر هیچ‌کدام نبود کلیدهای پاسخ یک‌بار در لاگ می‌آید تا نامِ درست مشخص شود.
+_PAYER_CARD_KEYS = ("payer_card", "payer_card_number", "source_card", "source_card_number", "sender_card",
+                    "from_card", "paid_card", "card_pan", "payer_pan", "masked_card", "payer_card_masked")
+
+
+def payer_card_of(res: dict) -> str:
+    for k in _PAYER_CARD_KEYS:
+        v = res.get(k)
+        if v:
+            return str(v).strip()[:32]
+    for sub in ("payer", "payment", "transaction"):
+        d = res.get(sub)
+        if isinstance(d, dict):
+            for k in ("card", "card_number", "pan", "masked_card") + _PAYER_CARD_KEYS:
+                if d.get(k):
+                    return str(d[k]).strip()[:32]
+    return ""
+
+
 def _status(res: dict) -> str:
     return str(res.get("status") or "").upper()
 
@@ -283,13 +303,16 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
         ch.status = "paid"
         ch.paid_at = datetime.utcnow()
         ch.tracking_code = str(res.get("transaction_id") or "")[:64] or None
-        ch.payer_name = (str(res.get("payer_name") or "")[:80] or None)
+        _pcard = payer_card_of(res)
+        if not _pcard:
+            logger.info("blupal: پاسخِ PAID فیلدِ کارتِ پرداخت‌کننده نداشت؛ کلیدها: %s", sorted(res.keys()))
+        ch.payer_name = ((str(res.get("payer_name") or "") + (" | " + _pcard if _pcard else "")).strip(" |")[:80] or None)
         u = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id,
                                                  BotUser.telegram_id == ch.user_telegram_id).with_for_update())
         if u:
             u.balance = float(u.balance or 0) + credit
             s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=credit, kind="blupal_charge",
-                            note=f"شارژ با بلوپال؛ ref={ch.tracking_code or ch.invoice_id}"))
+                            note=f"شارژ با بلوپال؛ ref={ch.tracking_code or ch.invoice_id}" + (f" کارت={_pcard}" if _pcard else "")))
             _uid, _bal, _kyc_uid = u.telegram_id, float(u.balance), u.id
         else:
             _uid = _bal = _kyc_uid = None
@@ -315,7 +338,7 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
                 logger.exception("blupal: اطلاع به کاربر ناموفق بود")
         try:
             from tenant.gateways.payment_page import _tx_log_tenant
-            await _tx_log_tenant(bot_id, _uid, credit, _bal, "blupal")
+            await _tx_log_tenant(bot_id, _uid, credit, _bal, "blupal", card=_pcard)
         except Exception:
             logger.exception("blupal: tx_log ناموفق بود")
     return True, "پرداخت تأیید و کیفِ پول شارژ شد.", credit
