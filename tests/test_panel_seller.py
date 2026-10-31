@@ -547,6 +547,18 @@ async def test_new_style_panel_shows_contact_buttons_and_sets_support_url_profil
     st2 = _St(); st2.d = {"acc_id": a.id, "field": "s"}
     await UM.contact_save(bad, None, st2)
     assert "نامعتبر" in bad.out[-1][0] and not any(l[0] == "put" and "javascript" in str(l) for l in FakeAPI.log)
+    # پاک‌کردن: ارسالِ «-» و دکمهٔ «پاک کردن» ⇒ رشتهٔ خالی (کدِ رسمی فقط None را نادیده می‌گیرد)
+    st_c = _St(); st_c.d = {"acc_id": a.id, "field": "s"}
+    mc = _Msg(text="-")
+    await UM.contact_save(mc, None, st_c)
+    assert ("put", a.admin_username, {"support_url": ""}) in FakeAPI.log and "پاک شد" in mc.out[-1][0]
+    cbc = _Cb(f"psel:cfc:{a.id}:t")
+    await UM.contact_clear(cbc, None, _St())
+    assert ("put", a.admin_username, {"profile_title": ""}) in FakeAPI.log and "پاک شد" in cbc.message.out[-1][0]
+    # صفحهٔ راهنما مثلِ رباتِ VPN: «این فیلد چیست؟ / چه چیزی بفرستی؟» + دکمهٔ پاک کردن
+    cba = _Cb(f"psel:cf:{a.id}:s")
+    await UM.contact_ask(cba, None, _St())
+    assert "این فیلد چیست" in cba.message.out[-1][0] and f"psel:cfc:{a.id}:s" in _cbs(cba.message)
     # عنوانِ پروفایل
     st3 = _St(); st3.d = {"acc_id": a.id, "field": "t"}
     await UM.contact_save(_Msg(text="Whale VPN"), None, st3)

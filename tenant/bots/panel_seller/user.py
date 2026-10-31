@@ -487,11 +487,57 @@ async def contact_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await state.set_state(PselAccFSM.contact)
     await state.update_data(acc_id=a.id, field=parts[3])
     if parts[3] == "s":
-        txt = ("🆘 <b>آدرسِ پشتیبانیِ مشتری‌هایِ تو</b>\n\nآیدی یا لینکِ پشتیبانی‌ات را بفرست (مثلاً <code>@my_support</code> یا لینکِ تلگرام). "
-               "این آدرس در <b>لینکِ اشتراکِ مشتری‌هایِ همین پنل</b> نشان داده می‌شود.")
+        txt = ("🆘 <b>تنظیمِ آدرسِ پشتیبانی</b>\n\n"
+               "<b>این فیلد چیست؟</b>\nآدرسِ پشتیبانی‌ای که در صفحهٔ اشتراکِ کلاینت‌هایِ (مشتری‌هایِ) تو نشان داده می‌شود.\n\n"
+               "<b>چه چیزی بفرستی؟</b>\nیوزرنیم با @ یا لینکِ کاملِ تلگرام.\n"
+               "مثال: <code>@MySupport</code>\nیا: <code>https://t.me/MySupport</code>\n\n"
+               "⚠️ آدرسِ اشتباه = لینکِ خراب برایِ مشتری‌هایِ تو.\n\n"
+               "📌 مقدار را همین الان بفرست.\n📌 برایِ پاک‌کردن: دکمهٔ «پاک کردن» یا ارسالِ <code>-</code>.")
     else:
-        txt = ("🏷 <b>عنوانِ پروفایل</b>\n\nعنوانی که در برنامهٔ مشتری‌هایِ تو بالایِ اشتراک دیده می‌شود را بفرست (مثلاً نامِ برندِ خودت).")
-    await edit_or_send(cb, txt, kb(back_row(f"psel:a:{a.id}", "✖️ لغو")))
+        txt = ("🏷 <b>عنوانِ پروفایل</b>\n\n<b>این فیلد چیست؟</b>\nعنوانی که در برنامهٔ مشتری‌هایِ تو بالایِ اشتراک دیده می‌شود "
+               "(مثلاً نامِ برندِ خودت).\n\n📌 عنوان را همین الان بفرست (حداکثر ۸۰ نویسه).\n📌 برایِ پاک‌کردن: دکمهٔ «پاک کردن» یا ارسالِ <code>-</code>.")
+    await edit_or_send(cb, txt, kb([btn("🗑 پاک کردن", f"psel:cfc:{a.id}:{parts[3]}", style=ButtonStyle.DANGER)],
+                                   back_row(f"psel:a:{a.id}", "✖️ لغو")))
+    await cb.answer()
+
+
+async def _apply_contact(bot: Bot, row, uid: int, aid: int, kw: dict, reply) -> bool:
+    """PUT روی ادمینِ پنلِ جدید (مشترکِ «ثبت» و «پاک کردن»). reply: تابعِ ارسالِ پیام."""
+    async with Session() as s:
+        a = await s.get(PanelSellerAccount, aid)
+        panel = await s.get(VpnPanel, a.panel_id) if a else None
+    if not a or a.bot_id != row.id or a.buyer_tg != uid or a.status != "active" or not panel:
+        return False
+    try:
+        api = AD.PanelAdminAPI.for_panel(panel)
+        try:
+            if not await api.is_new_style(a.admin_username):
+                await reply("این پنل از این قابلیت پشتیبانی نمی‌کند.")
+                return False
+            await api.put_admin(a.admin_username, **kw)       # رشتهٔ خالی = پاک‌کردن (کدِ رسمی فقط None را نادیده می‌گیرد)
+        finally:
+            await api.close()
+    except Exception as e:      # noqa: BLE001
+        logger.warning("panel_seller: تنظیمِ فیلدِ تماسِ ادمین ناموفق (acc=%s): %s", aid, e)
+        await tell_owner_failure(bot, row, uid, "تنظیمِ اطلاعاتِ پروفایلِ پنل", str(e))
+        await reply("❌ پنل جواب نداد؛ کمی بعد دوباره امتحان کن.")
+        return False
+    return True
+
+
+@psel_user_router.callback_query(F.data.regexp(r"^psel:cfc:\d+:[st]$"))
+async def contact_clear(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    parts = cb.data.split(":")
+    row, a = await _acc_for(cb, bot, int(parts[2]))
+    if not a:
+        return
+    await state.clear()
+    kw = {"support_url": ""} if parts[3] == "s" else {"profile_title": ""}
+
+    async def _reply(txt):
+        await cb.message.answer(txt)
+    if await _apply_contact(bot, row, cb.from_user.id, a.id, kw, _reply):
+        await edit_or_send(cb, "✅ پاک شد.", kb(back_row(f"psel:a:{a.id}", "🗂 بازگشت به پنل")))
     await cb.answer()
 
 
@@ -502,7 +548,9 @@ async def contact_save(msg: Message, bot: Bot, state: FSMContext):
     if not row or not d.get("acc_id"):
         return await state.clear()
     raw = (msg.text or "").strip()
-    if d.get("field") == "s":
+    if raw in ("-", "—", "پاک", "پاک کردن"):                      # پاک‌کردن (مثلِ رباتِ VPN)
+        kw = {"support_url": ""} if d.get("field") == "s" else {"profile_title": ""}
+    elif d.get("field") == "s":
         val = _support_url(raw)
         if not val:
             return await msg.answer("❌ آیدی/لینکِ نامعتبر. مثلاً <code>@my_support</code> یا <code>https://t.me/my_support</code> بفرست.", parse_mode="HTML")
@@ -511,28 +559,15 @@ async def contact_save(msg: Message, bot: Bot, state: FSMContext):
         if not (1 <= len(raw) <= 80):
             return await msg.answer("❌ عنوان ۱ تا ۸۰ نویسه باشد.")
         kw = {"profile_title": raw}
-    async with Session() as s:
-        a = await s.get(PanelSellerAccount, int(d["acc_id"]))
-        panel = await s.get(VpnPanel, a.panel_id) if a else None
-    if not a or a.bot_id != row.id or a.buyer_tg != msg.from_user.id or a.status != "active" or not panel:
-        await state.clear()
-        return
-    try:
-        api = AD.PanelAdminAPI.for_panel(panel)
-        try:
-            if not await api.is_new_style(a.admin_username):
-                await state.clear()
-                return await msg.answer("این پنل از این قابلیت پشتیبانی نمی‌کند.")
-            await api.put_admin(a.admin_username, **kw)
-        finally:
-            await api.close()
-    except Exception as e:      # noqa: BLE001
-        logger.warning("panel_seller: تنظیمِ فیلدِ تماسِ ادمین ناموفق (acc=%s): %s", a.id, e)
-        await tell_owner_failure(bot, row, msg.from_user.id, "تنظیمِ اطلاعاتِ پروفایلِ پنل", str(e))
-        return await msg.answer("❌ پنل جواب نداد؛ کمی بعد دوباره امتحان کن.")
+    aid = int(d["acc_id"])
+    ok = await _apply_contact(bot, row, msg.from_user.id, aid, kw, msg.answer)
     await state.clear()
-    await msg.answer("✅ در پنل ثبت شد." + ("\nدر لینکِ اشتراکِ مشتری‌هایِ تو نشان داده می‌شود." if "support_url" in kw else ""),
-                     reply_markup=kb(back_row(f"psel:a:{a.id}", "🗂 بازگشت به پنل")))
+    if not ok:
+        return
+    cleared = all(v == "" for v in kw.values())
+    await msg.answer(("✅ پاک شد." if cleared else "✅ در پنل ثبت شد.")
+                     + ("\nدر لینکِ اشتراکِ مشتری‌هایِ تو نشان داده می‌شود." if "support_url" in kw and not cleared else ""),
+                     reply_markup=kb(back_row(f"psel:a:{aid}", "🗂 بازگشت به پنل")))
 
 
 _XG_PICKS = (5, 10, 20, 50, 100)
