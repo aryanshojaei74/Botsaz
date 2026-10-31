@@ -13048,13 +13048,39 @@ async def gift_pick(cb: CallbackQuery, bot: Bot):
         await _gift_qty_text(g, row.id, 1),
         reply_markup=_gift_qty_kb(gift_id, 1), parse_mode="HTML")
     # === PATCH_GIFT_EMOJI_V1 === استیکرِ واقعیِ گیفت (تدیِ هالووین با تدیِ معمولی فرق دارد)
+    await _send_gift_sticker_preview(cb.message, bot, row.id, gift_id)
+
+
+async def _send_gift_sticker_preview(msg, bot: Bot, bot_id: int, gift_id: str) -> bool:
+    """PATCH_GIFT_STICKER_PREVIEW_V2 — استیکرِ واقعیِ گیفت را برایِ مشتری می‌فرستد.
+
+    قبلاً: اگر استیکر هنوز ذخیره نشده بود (همگام‌سازیِ نیم‌ساعته هنوز اجرا نشده) یا ارسال خطا می‌داد، هیچ‌چیز نشان داده نمی‌شد و
+    خطا هم دیده نمی‌شد (فقط info). حالا: اگر ذخیره نبود همان لحظه از تلگرام (getAvailableGifts) گرفته و ذخیره می‌شود؛ و خطایِ
+    ارسال با علتِ دقیق در لاگ (warning) می‌آید. خروجی: True اگر فرستاده شد."""
     try:
-        if (await _get_setting(row.id, "gift_sticker_preview", "1")) == "1":
-            _fid = (await _get_setting(row.id, f"gift_sticker:{gift_id}", "")).strip()
-            if _fid:
-                await cb.message.answer_sticker(_fid)
-    except Exception:
-        logger.info("نمایشِ استیکرِ گیفت ممکن نشد (بی‌اهمیت)")
+        if (await _get_setting(bot_id, "gift_sticker_preview", "1")) != "1":
+            return False
+        fid = (await _get_setting(bot_id, f"gift_sticker:{gift_id}", "")).strip()
+        if not fid:
+            try:
+                res = await bot.get_available_gifts()
+                for g in res.gifts:
+                    st = getattr(g, "sticker", None)
+                    f2 = getattr(st, "file_id", None)
+                    if f2:
+                        await _set_setting(bot_id, f"gift_sticker:{g.id}", f2)
+                        if g.id == gift_id:
+                            fid = f2
+            except Exception as e:
+                logger.warning("gift preview: گرفتنِ استیکر از تلگرام ناموفق بود (bot=%s gift=%s): %s", bot_id, gift_id, e)
+        if not fid:
+            logger.warning("gift preview: استیکری برایِ گیفتِ %s پیدا نشد (bot=%s)", gift_id, bot_id)
+            return False
+        await msg.answer_sticker(fid)
+        return True
+    except Exception as e:
+        logger.warning("gift preview: ارسالِ استیکر ناموفق بود (bot=%s gift=%s): %s", bot_id, gift_id, e)
+        return False
 
 
 @smm_router.callback_query(F.data.startswith("gift:qty:"))
