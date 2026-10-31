@@ -73,6 +73,7 @@ from platform_offsite_backup import offsite_backup_loop
 # === PATCH_PLATFORM_SADMIN_V1 ===
 from platform_sadmin import sadmin_loop
 from platform_selfsaz_pro import selfsaz_watch_loop
+from server_status import probe_loop as server_status_probe_loop   # PATCH_SERVER_STATUS_V1
 
 
 async def _worker_startup():
@@ -120,6 +121,8 @@ async def _worker_startup():
         sadmin_loop(mp.platform_bot),
         # === PATCH_SELFSAZ_WATCH_V1 === یادآور انقضا، هشدار قطعیِ سرویس و خطای حساب‌ها
         selfsaz_watch_loop(mp.platform_bot),
+        # === PATCH_SERVER_STATUS_V1 === اندازه‌گیریِ سلامت/سرعتِ سرورها برایِ مینی‌اپِ وضعیت
+        server_status_probe_loop(),
     ):
         mp.spawn(_coro)
 

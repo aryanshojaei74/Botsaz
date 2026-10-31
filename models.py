@@ -4116,3 +4116,13 @@ class WalletCodeUse(Base):
 
 
 TENANT_OWNED_MODELS += [WalletCodeUse, WalletCode]
+
+
+# === PATCH_SERVER_STATUS_V1 === نمونه‌هایِ سلامتِ سرورها برایِ مینی‌اپِ «وضعیت سرورها» (هر دقیقه یک ردیف به ازایِ هر بخش)
+class StatusSample(Base):
+    __tablename__ = "status_samples"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ts: Mapped[datetime] = mapped_column(DateTime, index=True)
+    key: Mapped[str] = mapped_column(String(24), index=True)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    ms: Mapped[int | None] = mapped_column(Integer)

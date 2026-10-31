@@ -855,6 +855,9 @@ def _home_kb_button(entry: str, viewer_id: int | None = None) -> "KeyboardButton
             style = _HCB_COLOR_STYLE.get(b.get("color") or "")
         if style:
             kw["style"] = style
+        # === PATCH_SERVER_STATUS_V1 === مینی‌اپِ «وضعیتِ سرورها» (آدرسش خودکار از دامنهٔ پلتفرم ساخته می‌شود)
+        if b.get("type") == "server_status" and not (b.get("rule") or "").strip() and _status_url():
+            kw["web_app"] = WebAppInfo(url=_status_url())
         if b.get("type") == "web_app" and (b.get("url") or "").startswith("https://") \
                 and not (b.get("rule") or "").strip():
             # === PATCH_HOSTING_KB_TOKEN_V1 ===
@@ -1204,7 +1207,16 @@ _HCB_COLOR_STYLE = {"danger": ButtonStyle.DANGER, "success": ButtonStyle.SUCCESS
 _HCB_COLOR_LABEL = {"danger": "🔴 قرمز", "success": "🟢 سبز", "primary": "🔵 آبی", "": "پیش‌فرض"}
 _HCB_TYPE_LABEL = {"text": "📝 نمایش متن", "web_app": "🌐 مینی‌اپ", "url": "🔗 لینک",
                    "invite_campaign": "🎁 قرعه‌کشی دعوت دوستان", "submenu": "📁 زیرمنو",
-                   "trial_request": "🧪 درخواست ربات تست"}  # PATCH_PLATFORM_HOME_SUBMENUS_COMMANDS_V1
+                   "trial_request": "🧪 درخواست ربات تست",
+                   "server_status": "📡 وضعیت سرورها"}  # PATCH_PLATFORM_HOME_SUBMENUS_COMMANDS_V1 / PATCH_SERVER_STATUS_V1
+
+
+def _status_url() -> str:
+    """PATCH_SERVER_STATUS_V1 — آدرسِ صفحهٔ /status؛ STATUS_URL در env اولویت دارد، وگرنه WEBHOOK_BASE/status."""
+    u = (os.environ.get("STATUS_URL") or "").strip()
+    if not u and WEBHOOK_BASE:
+        u = WEBHOOK_BASE.rstrip("/") + "/status"
+    return u if u.startswith("https://") else ""
 
 
 def _hcb_find(bid: str) -> dict | None:
@@ -1405,6 +1417,13 @@ async def _run_custom_home_btn(b: dict, msg: Message, state: FSMContext | None =
             await trial_request_start(msg, state, bot)
         else:
             await msg.answer("این دکمه در حال حاضر قابل اجرا نیست، دوباره تلاش کن.")
+    elif btype == "server_status":
+        _su = _status_url()
+        if not _su:
+            await msg.answer("آدرسِ امنِ (https) صفحهٔ وضعیت تنظیم نشده؛ به مدیر خبر بده.")
+        else:
+            await msg.answer(text or "برای دیدنِ وضعیتِ زندهٔ سرورها روی دکمهٔ زیر بزنید 👇", reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[hx_button("📡 باز کردن وضعیت سرورها", web_app=WebAppInfo(url=_su), style=ButtonStyle.SUCCESS)]]))
     elif btype == "web_app" and url.startswith("https://"):
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             hx_button(f"🌐 باز کردن {b.get('label') or 'مینی‌اپ'}",
@@ -2702,6 +2721,8 @@ async def hcb_new_label(msg: Message, state: FSMContext):
                               callback_data=f"hcb:settype:invite_campaign:{bid}", style=ButtonStyle.PRIMARY)],
         [hx_button("🧪 درخواست ربات تست",
                               callback_data=f"hcb:settype:trial_request:{bid}", style=ButtonStyle.PRIMARY)],
+        [hx_button("📡 وضعیت سرورها (مینی‌اپ زنده)",
+                              callback_data=f"hcb:settype:server_status:{bid}", style=ButtonStyle.SUCCESS)],
     ])
     await msg.answer("🎯 حالا نوع دکمه را انتخاب کن:", reply_markup=kb)
 
@@ -2738,6 +2759,8 @@ async def hcb_type_menu(cb: CallbackQuery):
                               callback_data=f"hcb:settype:invite_campaign:{bid}", style=ButtonStyle.PRIMARY)],
         [hx_button("🧪 درخواست ربات تست",
                               callback_data=f"hcb:settype:trial_request:{bid}", style=ButtonStyle.PRIMARY)],
+        [hx_button("📡 وضعیت سرورها (مینی‌اپ زنده)",
+                              callback_data=f"hcb:settype:server_status:{bid}", style=ButtonStyle.SUCCESS)],
         [hx_button("⬅️ بازگشت", callback_data=f"hcb:pick:{bid}",
                               style=ButtonStyle.DANGER)],
     ])
@@ -2751,8 +2774,14 @@ async def hcb_set_type(cb: CallbackQuery, state: FSMContext):
         return
     _, _, btype, bid = cb.data.split(":")
     b = _hcb_find(bid)
-    if not b or btype not in ("text", "web_app", "url", "invite_campaign", "submenu", "trial_request"):  # PATCH_PLATFORM_HOME_SUBMENUS_COMMANDS_2_V1
+    if not b or btype not in ("text", "web_app", "url", "invite_campaign", "submenu", "trial_request", "server_status"):  # PATCH_PLATFORM_HOME_SUBMENUS_COMMANDS_2_V1
         await cb.answer("نامعتبر", show_alert=True)
+        return
+    if btype == "server_status":      # PATCH_SERVER_STATUS_V1
+        b["type"] = btype
+        await _hcb_save()
+        await _hcb_show_menu(cb, b)
+        await cb.answer("✅ این دکمه حالا مینی‌اپِ زندهٔ «وضعیت سرورها» را باز می‌کند.")
         return
     if btype == "invite_campaign":
         b["type"] = btype

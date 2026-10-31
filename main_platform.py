@@ -1462,6 +1462,23 @@ async def health():
     return {"ok": True}
 
 
+# === PATCH_SERVER_STATUS_V1 === مینی‌اپِ «وضعیتِ سرورها» (عمومی؛ بدونِ هیچ منبعِ خارجی تا در ایران هم باز شود)
+@app.get("/status", response_class=HTMLResponse)
+async def server_status_page():
+    from server_status_page import PAGE
+    return HTMLResponse(PAGE, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/status/api")
+async def server_status_api():
+    from server_status import build_report
+    try:
+        return JSONResponse(await build_report(), headers={"Cache-Control": "no-store"})
+    except Exception:
+        logger.exception("server_status: ساختِ گزارش ناموفق بود")
+        return JSONResponse({"error": "unavailable"}, status_code=503)
+
+
 # === PATCH_PLATFORM_SMS_AUTOCHARGE_V1 ===
 @app.post("/sms/platform/deposit/{secret}")
 async def sms_platform_deposit(secret: str, request: Request):
