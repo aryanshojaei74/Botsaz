@@ -99,3 +99,39 @@ async def test_crafted_file_cannot_write_to_other_bot(monkeypatch):
     async with mk() as s:
         assert await s.scalar(select(models.BotUser.bot_id).where(models.BotUser.telegram_id == 31337)) == 9
     await eng.dispose()
+
+
+@pytest.mark.asyncio
+async def test_restore_skips_rows_conflicting_with_another_bot_instead_of_failing_everything(monkeypatch):
+    """PATCH_BACKUP_RESTORE_SKIP_CONFLICTS_V1 — بک‌آپِ رباتِ A را در رباتِ B ریستور می‌کنیم در حالی که A هنوز هست و
+    BotUser.api_key (یکتایِ سراسری) در هر دو یکی است. قبلاً کلِ بازگردانی می‌ترکید؛ حالا فقط ردیفِ متعارض رد می‌شود."""
+    eng, mk = await _mk()
+    monkeypatch.setattr(bf, "Session", mk)
+    async with mk() as s:
+        s.add(models.Bot(id=1, owner_id=1, token="1:T", username="a", field="virtual_service", plan="pro", status="active"))
+        s.add(models.Bot(id=2, owner_id=2, token="2:T", username="b", field="virtual_service", plan="pro", status="active"))
+        s.add(models.BotUser(bot_id=1, telegram_id=11, balance=Decimal(5), api_key="SAMEKEY"))
+        s.add(models.BotUser(bot_id=1, telegram_id=12, balance=Decimal(6), api_key="OKKEY"))
+        s.add(models.Setting(bot_id=1, key="k", value="v"))
+        await s.commit()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        data = bf.load_bytes(bf.dump_bytes(await bf.build_full_backup(1)))
+    stats = await bf.restore_full_backup(2, data)                    # A هنوز هست ⇒ api_key یکی از کاربران تداخل دارد
+    assert stats["skipped"] >= 2 and stats["conflicts"].get("bot_users", 0) >= 2
+    async with mk() as s:
+        b2 = (await s.scalars(select(models.BotUser).where(models.BotUser.bot_id == 2))).all()
+        assert await s.scalar(select(models.Setting.value).where(models.Setting.bot_id == 2, models.Setting.key == "k")) == "v"
+        a_users = (await s.scalars(select(models.BotUser).where(models.BotUser.bot_id == 1))).all()
+    assert len(a_users) == 2                                         # رباتِ A دست‌نخورده
+    assert stats["inserted"] >= 1 and isinstance(len(b2), int)       # بقیهٔ دادهٔ B بازگشت (کلِ عملیات نترکید)
+    await eng.dispose()
+
+
+def test_short_error_has_no_sql_or_params():
+    class _Orig(Exception):
+        pass
+    e = Exception("(sqlite3.IntegrityError) UNIQUE constraint failed: bot_users.api_key\n[SQL: INSERT INTO bot_users ...]\n[parameters: ('secret',)]")
+    e.orig = _Orig("UNIQUE constraint failed: bot_users.api_key")
+    out = bf.short_error(e)
+    assert "UNIQUE constraint failed" in out and "secret" not in out and "SQL" not in out

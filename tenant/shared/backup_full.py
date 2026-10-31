@@ -153,6 +153,46 @@ def summarize(data: dict) -> str:
             f"📦 جمعِ ردیف‌ها: {total:,} در {len(t)} جدول")
 
 
+async def _insert_batch(s, M, table: str, batch: list, stats: dict) -> list:
+    """PATCH_BACKUP_RESTORE_SKIP_CONFLICTS_V1 — ردیف‌ها را درج می‌کند و [(old_id, obj, pend)] برایِ ردیف‌هایِ درج‌شده برمی‌گرداند.
+
+    قبلاً یک ردیفِ متعارض (مثلاً ستونِ یکتایِ سراسری که رباتِ دیگری همان مقدار را دارد: دامنه، آیدی، نام‌کاربری…) کلِ بازگردانی را
+    می‌ترکاند («تراکنش برگشت خورد») و هیچ‌چیز برنمی‌گشت. حالا اول کلِ دسته در یک SAVEPOINT؛ اگر IntegrityError شد، تک‌تک با SAVEPOINTِ
+    جدا و فقط ردیفِ متعارض رد می‌شود (و نامِ جدول در stats['conflicts'] ثبت می‌شود)."""
+    from sqlalchemy.exc import IntegrityError
+    if not batch:
+        return []
+    objs = [M(**kw) for _o, kw, _p in batch]
+    try:
+        async with s.begin_nested():
+            s.add_all(objs)
+            await s.flush()
+        return [(o, obj, p) for (o, _kw, p), obj in zip(batch, objs)]
+    except IntegrityError:
+        logger.warning("بک‌آپ کامل: تداخلِ یکتایی در جدولِ %s؛ ردیف‌ها یکی‌یکی درج می‌شوند", table)
+    out = []
+    for old_id, kw, pend in batch:
+        obj = M(**kw)
+        try:
+            async with s.begin_nested():
+                s.add(obj)
+                await s.flush()
+            out.append((old_id, obj, pend))
+        except IntegrityError as e:
+            stats["skipped"] += 1
+            stats.setdefault("conflicts", {})
+            stats["conflicts"][table] = stats["conflicts"].get(table, 0) + 1
+            logger.warning("بک‌آپ کامل: ردیفِ جدولِ %s رد شد: %s", table, (str(e.orig) if getattr(e, "orig", None) else str(e)).splitlines()[0][:200])
+    return out
+
+
+def short_error(e: BaseException) -> str:
+    """علتِ کوتاهِ خطا برایِ نمایش به مالک (بدونِ SQL/پارامترها)."""
+    inner = getattr(e, "orig", None) or e
+    msg = (str(inner) or type(inner).__name__).splitlines()[0][:200]
+    return f"{type(inner).__name__}: {msg}"
+
+
 async def restore_full_backup(bot_id: int, data: dict) -> dict:
     """دادهٔ فعلیِ ربات را پاک و از رویِ بک‌آپ بازسازی می‌کند (تراکنشِ واحد؛ خطا = هیچ تغییری)."""
     from sqlalchemy import inspect as _inspect
@@ -215,10 +255,8 @@ async def restore_full_backup(bot_id: int, data: dict) -> dict:
                     if skip:
                         stats["skipped"] += 1
                         continue
-                    batch.append((old_id, M(**kwargs), pend))
-                if batch:
-                    s.add_all([b[1] for b in batch])
-                    await s.flush()
+                    batch.append((old_id, kwargs, pend))
+                batch = await _insert_batch(s, M, t.name, batch, stats)
                 for old_id, obj, pend in batch:
                     if old_id is not None:
                         id_map[(t.name, old_id)] = obj.id
@@ -363,15 +401,19 @@ async def full_import_confirm(cb: CallbackQuery, bot: Bot, state: FSMContext):
             _data = load_bytes(fh.read())
         stats = await restore_full_backup(row.id, _data)
         os.remove(_path)
-    except Exception:
+    except Exception as _exc:
         logger.exception("خطا در بازگردانیِ بک‌آپِ کامل (bot=%s)", row.id)
-        await cb.message.answer("❌ بازگردانی با خطا مواجه شد و هیچ تغییری اعمال نشد (تراکنش برگشت خورد). "
-                                "فایل را به پشتیبانی بده تا بررسی کنند.")
+        import html as _h
+        await cb.message.answer("❌ بازگردانی با خطا مواجه شد و هیچ تغییری اعمال نشد (تراکنش برگشت خورد).\n"
+                                f"🔎 علت: <code>{_h.escape(short_error(_exc))}</code>\n\n"
+                                "این متن را همراهِ فایل به پشتیبانی بده تا بررسی کنند.", parse_mode="HTML")
         return
     await cb.message.answer(
         f"✅ بازگردانی انجام شد. {stats['inserted']:,} ردیف برگشت"
         + (f" ({stats['skipped']:,} ردیفِ ناسازگار رد شد)" if stats["skipped"] else "") + ".\n"
-        "اگر منو یا تنظیماتی کهنه دیده شد، یک بار /start بزن.")
+        + (("⚠️ ردیف‌هایِ متعارض با رباتِ دیگر (رد شد): "
+            + "، ".join(f"{k} ×{v}" for k, v in sorted(stats["conflicts"].items())) + "\n") if stats.get("conflicts") else "")
+        + "اگر منو یا تنظیماتی کهنه دیده شد، یک بار /start بزن.")
 
 
 _AUTO_CYCLE = ["0", "7", "1"]
