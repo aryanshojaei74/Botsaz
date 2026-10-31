@@ -22737,6 +22737,12 @@ async def _new_user_alert(bot: Bot, row: BotRow, u: "BotUser") -> None:
             return
     except Exception:
         return
+    # مدیرِ اصلیِ بات‌ساز (حالتِ پشتیبانی) و خودِ مالک/ادمین‌هایِ همین ربات اعلانِ «کاربر جدید» نمی‌سازند
+    try:
+        if _is_platform_admin(u.telegram_id) or await is_owner_or_admin(row.id, u.telegram_id, row.owner_id):
+            return
+    except Exception:
+        logger.exception("بررسیِ معافیتِ اعلانِ کاربرِ جدید ناموفق بود")
     uname = f"@{u.username}" if u.username else "—"
     jdate, jtime = _jalali_date_time(_dt.datetime.utcnow())
     text = (
