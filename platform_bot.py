@@ -17169,7 +17169,7 @@ def _bcl_val(col: str, v: str | None) -> str:
         if col == "miniapp_enabled":
             return "🟢 روشن" if v in ("True", "1") else "🔴 خاموش"
     except Exception:
-        pass
+        logger.debug("bot_change_log: قالب‌بندیِ مقدار ناموفق بود (%s=%r)", col, v, exc_info=True)
     return v
 
 

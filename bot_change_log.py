@@ -91,7 +91,7 @@ def _frames() -> list:
             g = g.parent
             hops += 1
     except Exception:
-        pass
+        logger.debug("bot_change_log: خواندنِ زنجیرهٔ greenlet ناموفق بود", exc_info=True)
     return out
 
 
@@ -130,6 +130,7 @@ def who_and_why() -> tuple[str | None, str | None, int | None]:
             if actor:
                 break
     except Exception:
+        logger.debug("bot_change_log: یافتنِ عامل ناموفق بود", exc_info=True)
         actor = None
     return reason, src, actor
 
