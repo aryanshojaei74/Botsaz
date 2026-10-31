@@ -1842,6 +1842,26 @@ async def health():
 
 
 # === PATCH_CUSTOM_DOMAIN_V1 ===
+# === PATCH_SERVER_STATUS_V1 === همان مینی‌اپِ «وضعیتِ سرورها» روی اپِ تننت هم هست: nginx مسیرِ پیش‌فرض (location /) را به
+# این پورت می‌فرستد، پس بدونِ هیچ تغییری در nginx هم آدرسِ https://<دامنه>/status کار می‌کند. هر دو از یک دیتابیس می‌خوانند.
+@app.get("/status")
+async def server_status_page_t():
+    from fastapi.responses import HTMLResponse
+    from server_status_page import PAGE
+    return HTMLResponse(PAGE, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/status/api")
+async def server_status_api_t():
+    from fastapi.responses import JSONResponse
+    from server_status import build_report
+    try:
+        return JSONResponse(await build_report(), headers={"Cache-Control": "no-store"})
+    except Exception:
+        logger.exception("server_status: ساختِ گزارش ناموفق بود")
+        return JSONResponse({"error": "unavailable"}, status_code=503)
+
+
 @app.get("/domain-ask")
 async def domain_ask(domain: str = ""):
     """اندپوینتِ «ask» برایِ on-demand TLSِ Caddy — قبل از اینکه Caddy برایِ

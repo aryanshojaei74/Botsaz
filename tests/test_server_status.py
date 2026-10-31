@@ -77,3 +77,11 @@ def test_server_status_button_type_registered():
     import platform_bot as PB
     assert "server_status" in PB._HCB_TYPE_LABEL
     assert PB._status_url() == "" or PB._status_url().startswith("https://")
+
+
+def test_status_routes_exist_on_both_apps():
+    """nginx مسیرِ پیش‌فرض را به اپِ تننت (۸۰۰۱) می‌فرستد؛ پس /status باید روی هر دو اپ باشد (وگرنه {"detail":"Not Found"})."""
+    import main_platform, main_tenant
+    for mod in (main_platform, main_tenant):
+        paths = {getattr(r, "path", "") for r in mod.app.routes}
+        assert "/status" in paths and "/status/api" in paths, mod.__name__
