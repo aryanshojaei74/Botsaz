@@ -325,6 +325,7 @@ class SmmFSM(StatesGroup):
     ton_margin_in = State()       # PATCH_AUTO_RATE_TON_V1 — درصدِ سودِ نرخِ خودکار
     ton_min_in = State()          # ادمین حداقلِ مقدار را می‌نویسد
     ton_max_in = State()          # ادمین حداکثرِ مقدار را می‌نویسد
+    gift_emoji_in = State()       # PATCH_GIFT_EMOJI_V1 — ادمین ایموجیِ نمایشیِ یک گیفت را می‌فرستد
 
 
 # ═══════════════════════ کمکی‌ها ═══════════════════════
@@ -12107,7 +12108,9 @@ async def _gift_price_and_label(g: "TelegramGiftConfig", bot_id: int) -> tuple[i
         return price, label
     rate, margin = await _gift_settings(bot_id)
     price = _gift_price(g.star_count, rate, margin)
-    label = f"گیفتِ {g.emoji or '🎁'} ({g.star_count} استارز)"
+    # === PATCH_GIFT_EMOJI_V1 === ایموجیِ دلخواهِ مالک برایِ همین گیفت (مثلاً 🎃🧸 برایِ تدیِ هالووین)
+    _emj = (await _get_setting(bot_id, f"gift_emoji:{g.gift_id}", "")).strip() or g.emoji or "🎁"
+    label = f"گیفتِ {_emj} ({g.star_count} استارز)"
     return price, label
 
 
@@ -12259,6 +12262,7 @@ async def gift_admin_content(bot_id: int, bot: "Bot | None" = None) -> tuple[str
     rows = [
         [InlineKeyboardButton(text="🔄 به‌روزرسانیِ فهرست از تلگرام", callback_data="gift:refresh")],
         [InlineKeyboardButton(text="🗂 مدیریتِ گیفت‌ها (فعال/غیرفعال)", callback_data="gift:list:0")],
+        [InlineKeyboardButton(text="🎨 ایموجیِ گیفت‌ها", callback_data="gifte:list:0")],   # PATCH_GIFT_EMOJI_V1
         # === PATCH_GLOBAL_MANUAL_DELIVERY_V1 ===
         [InlineKeyboardButton(text=manual_toggle_text, callback_data="gift:manualdelivery:toggle",
                               style=ButtonStyle.PRIMARY)],
@@ -12323,6 +12327,7 @@ async def gift_refresh(cb: CallbackQuery, bot: Bot):
     async with Session() as s:
         existing = {g.gift_id: g for g in (await s.scalars(select(TelegramGiftConfig).where(
             TelegramGiftConfig.bot_id == row.id))).all()}
+        new_gifts = []
         for g in result.gifts:
             emoji = getattr(getattr(g, "sticker", None), "emoji", None)
             if g.id in existing:
@@ -12332,11 +12337,95 @@ async def gift_refresh(cb: CallbackQuery, bot: Bot):
                 s.add(TelegramGiftConfig(bot_id=row.id, gift_id=g.id, star_count=g.star_count,
                                          emoji=emoji, active=False))
                 n_new += 1
+                new_gifts.append((g.id, emoji or "🎁", g.star_count))
         await s.commit()
+    # === PATCH_GIFT_EMOJI_V1 === استیکرِ واقعیِ هر گیفت ذخیره می‌شود تا مشتری شکلِ دقیقِ همان گیفت را ببیند
+    for g in result.gifts:
+        fid = getattr(getattr(g, "sticker", None), "file_id", None)
+        if fid:
+            try:
+                await _set_setting(row.id, f"gift_sticker:{g.id}", fid)
+            except Exception:
+                logger.exception("ذخیرهٔ استیکرِ گیفت ناموفق بود")
     text, kb = await gift_admin_content(row.id, bot)
     await cb.message.answer(f"✅ فهرست به‌روز شد — {len(result.gifts)} گیفت خوانده شد "
                             f"({n_new} موردِ تازه، غیرفعال).")
+    if new_gifts:
+        from collections import Counter
+        cnt = Counter(e for e in (x.emoji for x in result.gifts if getattr(x, "sticker", None) is not None) if e)
+        lines = [f"• {e}{' ⚠️ ایموجیِ تکراری' if cnt.get(e, 0) > 1 else ''} — {sc:,} استارز" for _gid, e, sc in new_gifts[:15]]
+        await cb.message.answer("🎁 <b>گیفتِ تازه از تلگرام آمد:</b>\n" + "\n".join(lines)
+                                + "\n\nتلگرام برایِ چند گیفت ایموجیِ یکسان (مثلاً 🧸) می‌دهد. برایِ اینکه مشتری تفاوت را ببیند، "
+                                  "از «🎨 ایموجیِ گیفت‌ها» برایِ هر کدام ایموجیِ دلخواه بگذار؛ ضمناً مشتری استیکرِ واقعیِ گیفت را هم می‌بیند.",
+                                parse_mode="HTML")
     await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+# === PATCH_GIFT_EMOJI_V1 === ایموجیِ دلخواه برایِ هر گیفت (مالک)
+@smm_router.callback_query(F.data.regexp(r"^gifte:list:\d+$"))
+async def gift_emoji_list(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    page, per = int(cb.data.split(":")[2]), 8
+    async with Session() as s:
+        gifts = (await s.scalars(select(TelegramGiftConfig).where(
+            TelegramGiftConfig.bot_id == row.id, TelegramGiftConfig.is_manual == False)   # noqa: E712
+            .order_by(TelegramGiftConfig.star_count))).all()
+    if not gifts:
+        return await cb.answer("اول «به‌روزرسانیِ فهرست از تلگرام» را بزن.", show_alert=True)
+    rows = []
+    for g in gifts[page * per:(page + 1) * per]:
+        cur = (await _get_setting(row.id, f"gift_emoji:{g.gift_id}", "")).strip()
+        rows.append([InlineKeyboardButton(text=f"{cur or g.emoji or '🎁'} — {g.star_count} استارز" + (" ✏️" if cur else ""),
+                                          callback_data=f"gifte:set:{g.gift_id}:{page}")])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"gifte:list:{page - 1}"))
+    if (page + 1) * per < len(gifts):
+        nav.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"gifte:list:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="gift:menu", style=ButtonStyle.DANGER)])
+    text = ("🎨 <b>ایموجیِ گیفت‌ها</b>\n\nروی هر گیفت بزن و ایموجیِ دلخواهت را بفرست "
+            "(مثلاً <code>🎃🧸</code>)؛ همان در فروشگاه و فاکتور نشان داده می‌شود.")
+    try:
+        await cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    await cb.answer()
+
+
+@smm_router.callback_query(F.data.startswith("gifte:set:"))
+async def gift_emoji_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    _, _, gid, page = cb.data.split(":")
+    await state.set_state(SmmFSM.gift_emoji_in)
+    await state.update_data(gifte_gid=gid, gifte_page=int(page))
+    await cb.message.answer("✏️ ایموجیِ این گیفت را بفرست (۱ تا ۸ نماد). برایِ برگشت به ایموجیِ تلگرام <code>-</code> بفرست.",
+                            parse_mode="HTML")
+    await cb.answer()
+
+
+@smm_router.message(SmmFSM.gift_emoji_in, F.text)
+async def gift_emoji_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner(msg, bot)
+    if not row:
+        return
+    d = await state.get_data()
+    val = (msg.text or "").strip()
+    if val == "-":
+        val = ""
+    elif len(val) > 16 or any(ch.isascii() and ch.isalnum() for ch in val):
+        return await msg.answer("فقط ایموجی بفرست (بدونِ حرف و عدد، حداکثر ۸ نماد).")
+    await state.clear()
+    await _set_setting(row.id, f"gift_emoji:{d.get('gifte_gid')}", val)
+    await msg.answer("✅ ذخیره شد." if val else "✅ به ایموجیِ تلگرام برگشت.",
+                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                         text="🎨 ایموجیِ گیفت‌ها", callback_data=f"gifte:list:{d.get('gifte_page', 0)}")]]))
 
 
 async def _gift_list_render(cb: CallbackQuery, bot_id: int, page: int) -> None:
@@ -12902,6 +12991,14 @@ async def gift_pick(cb: CallbackQuery, bot: Bot):
     await _EditFirstV(cb.message).answer(
         await _gift_qty_text(g, row.id, 1),
         reply_markup=_gift_qty_kb(gift_id, 1), parse_mode="HTML")
+    # === PATCH_GIFT_EMOJI_V1 === استیکرِ واقعیِ گیفت (تدیِ هالووین با تدیِ معمولی فرق دارد)
+    try:
+        if (await _get_setting(row.id, "gift_sticker_preview", "1")) == "1":
+            _fid = (await _get_setting(row.id, f"gift_sticker:{gift_id}", "")).strip()
+            if _fid:
+                await cb.message.answer_sticker(_fid)
+    except Exception:
+        logger.info("نمایشِ استیکرِ گیفت ممکن نشد (بی‌اهمیت)")
 
 
 @smm_router.callback_query(F.data.startswith("gift:qty:"))
