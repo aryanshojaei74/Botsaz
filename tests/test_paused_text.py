@@ -104,5 +104,7 @@ def test_webhook_alert_text_is_plain_and_short():
 
 
 def test_main_tenant_uses_custom_paused_text_for_owner_pause():
-    src = open(__import__("main_tenant").__file__, encoding="utf-8").read()
+    import pathlib
+    # main_tenant را import نمی‌کنیم: ساختنِ اپ روترِ tenant را به Dispatcher وصل می‌کند و تست‌هایِ دیگر را می‌شکند
+    src = (pathlib.Path(__file__).resolve().parent.parent / "main_tenant.py").read_text(encoding="utf-8")
     assert 'get_setting as _gs_pt' in src and '"paused_text"' in src
