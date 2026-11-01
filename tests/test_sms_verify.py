@@ -67,6 +67,29 @@ async def test_send_code_requests_per_provider():
     assert (await SV.send_code(kv, "0912", "1", http=http_boom))[0] is False
 
 
+@pytest.mark.asyncio
+async def test_melipayamak_pattern_send():
+    """PATCH_SMS_MELIPAYAMAK_V1 — شکلِ درخواست طبقِ مستنداتِ «ارسال با پترن» (با سرویسِ واقعی تست نشده)."""
+    calls = []
+
+    async def ok(method, url, **kw):
+        calls.append((method, url, kw))
+        return 200, {"Value": "5612345678901234", "RetStatus": 1, "StrRetStatus": "Ok"}
+    c = {"provider": "melipayamak", "key": "user1:p@ss:word", "template": "12345", "param": "CODE"}
+    assert (await SV.send_code(c, "09123456789", "54321", http=ok))[0] is True
+    m, url, kw = calls[-1]
+    assert m == "POST" and url == "https://rest.payamak-panel.com/api/SendSMS/BaseServiceNumber"
+    assert kw["data"] == {"username": "user1", "password": "p@ss:word", "text": "54321", "to": "09123456789", "bodyId": 12345}
+
+    async def fail(method, url, **kw):
+        return 200, {"Value": "0", "RetStatus": 35, "StrRetStatus": "InvalidPattern"}
+    ok_, err = await SV.send_code(c, "0912", "1", http=fail)
+    assert ok_ is False and "InvalidPattern" in err
+    assert (await SV.send_code({**c, "key": "nopass"}, "0912", "1", http=ok))[0] is False          # کلیدِ ناقص
+    assert (await SV.send_code({**c, "template": "abc"}, "0912", "1", http=ok))[0] is False        # bodyId غیرعددی
+    assert "melipayamak" in SV.PROVIDERS and SV.ready({**c})
+
+
 @pytest_asyncio.fixture
 async def env(monkeypatch):
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")

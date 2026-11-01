@@ -5,7 +5,7 @@ sms_verify.py — تأییدِ شماره با «کدِ پیامکی» (PATCH_SM
 کاربر شمارهٔ ایرانی‌اش را می‌نویسد، یک کدِ ۵رقمی با پنلِ پیامکیِ مالک برایش می‌رود و با واردکردنِ کد تأیید می‌شود.
 همان گیت‌هایِ موجود (تأیید در ورود / پیش از پرداخت) از همین روش استفاده می‌کنند؛ خاموش/روشنِ خودِ گیت‌ها تغییر نکرده.
 
-پنل‌هایِ پشتیبانی‌شده: کاوه‌نگار (verify/lookup) و sms.ir (send/verify) — هر دو با «قالبِ تأیید».
+پنل‌هایِ پشتیبانی‌شده: کاوه‌نگار (verify/lookup)، sms.ir (send/verify) و ملی پیامک (BaseServiceNumber) — همه با «قالبِ تأیید».
 محدودیت‌ها: فاصلهٔ ۶۰ ثانیه، حداکثر ۳ ارسال در ۳۰ دقیقه برایِ هر کاربر و ۵ ارسال در روز برایِ هر شماره، اعتبارِ کد ۵ دقیقه،
 حداکثر ۵ تلاش؛ یک شماره فقط روی یک حسابِ تاییدشده در همین ربات.
 callbackها: phv:sms (دریافتِ کد) · psms:* (تنظیماتِ مالک)
@@ -32,7 +32,7 @@ logger = _get_logger(__name__)
 
 sms_verify_router = Router(name="sms_verify")
 
-PROVIDERS = {"kavenegar": "کاوه‌نگار", "smsir": "sms.ir"}
+PROVIDERS = {"kavenegar": "کاوه‌نگار", "smsir": "sms.ir", "melipayamak": "ملی پیامک"}   # PATCH_SMS_MELIPAYAMAK_V1
 CODE_TTL = 300
 SEND_GAP = 60
 MAX_TRIES = 5
@@ -120,6 +120,16 @@ async def send_code(c: dict, mobile_local: str, code: str, http=None) -> tuple[b
                                       "parameters": [{"name": c["param"], "value": code}]})
             ok = st == 200 and isinstance(js, dict) and js.get("status") == 1
             return ok, "" if ok else f"HTTP {st}: {str((js or {}).get('message') or js)[:120]}"
+        if c["provider"] == "melipayamak":
+            # PATCH_SMS_MELIPAYAMAK_V1: «ارسال با پترن» (BaseServiceNumber). «کلید» = «نام‌کاربری:رمز» پنل، «قالب» = bodyId (کدِ متنِ تاییدشده)
+            user, _, pw = c["key"].partition(":")
+            if not user or not pw or not str(c["template"]).isdigit():
+                return False, "کلید باید به شکل «نام‌کاربری:رمز» و قالب باید bodyIdِ عددی باشد."
+            st, js = await http("POST", "https://rest.payamak-panel.com/api/SendSMS/BaseServiceNumber",
+                                data={"username": user, "password": pw, "text": code, "to": mobile_local, "bodyId": int(c["template"])})
+            val = str((js or {}).get("Value") or "") if isinstance(js, dict) else ""
+            ok = st == 200 and isinstance(js, dict) and int((js.get("RetStatus") or 0)) == 1 and val not in ("", "0")
+            return ok, "" if ok else f"HTTP {st}: {str((js or {}).get('StrRetStatus') or js)[:120]}"
     except Exception as e:  # noqa: BLE001
         return False, f"{type(e).__name__}: {str(e)[:100]}"
     return False, "پنلِ پیامکیِ نامعتبر"
@@ -331,8 +341,8 @@ async def cycle(cb: CallbackQuery, bot: Bot):
     await cb.answer("انجام شد.")
 
 
-_ASK = {"key": (SmsCfgFSM.key, "🔑 کلیدِ API پنلِ پیامکی را بفرست (بعد از دریافت، پیامت پاک می‌شود):"),
-        "tpl": (SmsCfgFSM.template, "🧾 نامِ قالبِ تأیید را بفرست (کاوه‌نگار: نامِ قالب؛ sms.ir: شناسهٔ عددیِ قالب). "
+_ASK = {"key": (SmsCfgFSM.key, "🔑 کلیدِ API پنلِ پیامکی را بفرست (ملی پیامک: به شکلِ <code>نام‌کاربری:رمز</code>). بعد از دریافت، پیامت پاک می‌شود:"),
+        "tpl": (SmsCfgFSM.template, "🧾 نامِ قالبِ تأیید را بفرست (کاوه‌نگار: نامِ قالب؛ sms.ir: شناسهٔ عددیِ قالب؛ ملی پیامک: bodyIdِ عددی). "
                                     "قالب باید یک متغیرِ کد داشته باشد:"),
         "param": (SmsCfgFSM.param, "🏷 نامِ پارامترِ کد در قالبِ sms.ir را بفرست (مثلاً <code>CODE</code>):"),
         "test": (SmsCfgFSM.test, "🧪 شمارهٔ موبایلی که پیامکِ تست به آن برود را بفرست:")}

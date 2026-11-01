@@ -374,6 +374,15 @@ def _command(text: str) -> tuple[str | None, str]:
     return (token if token in _COMMANDS else None), (parts[1].strip() if len(parts) > 1 else "")
 
 
+async def _is_chat_admin(msg: Message, bot: Bot) -> bool:
+    """فقط برایِ تصمیمِ «جواب بدهم یا ساکت بمانم»؛ خطا ⇒ False (ساکت)."""
+    try:
+        m = await bot.get_chat_member(msg.chat.id, msg.from_user.id)
+        return getattr(m, "status", "") in ("creator", "administrator")
+    except Exception:      # noqa: BLE001
+        return False
+
+
 async def _command_help(msg: Message, bot: Bot):
     await msg.reply(await _full_help_text(bot), parse_mode="HTML")
 
@@ -399,12 +408,19 @@ async def tenant_guard_commands(msg: Message, bot: Bot):
             await _audit(bot, row, msg.chat.id, "guard_disconnect", actor=msg.from_user.id, details="محافظ خاموش شد")
             await msg.reply("✅ محافظ این گروه خاموش شد.")
         return
+    # PATCH_GUARD_QUIET_V1 (SINA): محافظ خاموش یا گروه وصل‌نشده ⇒ ربات در گروه‌ها ساکت است. قبلاً هر پیامی که فقط یک کلمهٔ
+    # «بن/اخطار/سکوت…» داشت جوابِ «محافظ خاموش است» می‌گرفت و گروه‌ها پر از این پیام می‌شد. فقط دستورِ صریحِ «/…» جواب می‌گیرد.
+    _explicit = (msg.text or "").lstrip().startswith("/")
     if (await _get(row.id, "group_guard_enabled", "0")) != "1":
-        await msg.reply("❌ محافظ این گروه خاموش است. از تنظیمات گروه آن را روشن کن یا دستور /فعال_محافظ را بفرست.")
-        return
+        if _explicit and await _is_chat_admin(msg, bot):
+            await msg.reply("❌ محافظ خاموش است. از پنل ربات (تنظیمات گروه ← محافظ) روشنش کن یا /فعال_محافظ را بفرست.")
+            return
+        raise SkipHandler
     if (str((await _get(row.id, "group_guard_chat_id", "")).strip()) != str(msg.chat.id)):
-        await msg.reply("❌ این گروه هنوز به محافظ متصل نشده است. ابتدا دستور /فعال_محافظ را اجرا کن.")
-        return
+        if _explicit and await _is_chat_admin(msg, bot):
+            await msg.reply("❌ این گروه هنوز به محافظ متصل نشده است. ابتدا دستور /فعال_محافظ را اجرا کن.")
+            return
+        raise SkipHandler
     if not await _require_group_admin(msg, bot, bot_moderation=True):
         return
     target = await _target(msg)
@@ -684,7 +700,7 @@ async def _guard_menu(cb: CallbackQuery, bot: Bot):
         "۳) کانال گزارش را متصل و سپس تنظیمات دلخواه را فعال کنید."
     )
     rows = [
-        [hx_button("🔴 خاموش کردن" if v["enabled"] == "1" else "🟢 روشن کردن", callback_data="tgg:toggle", style=ButtonStyle.DANGER if v["enabled"] == "1" else ButtonStyle.SUCCESS)],
+        [hx_button("🔴 خاموش کردنِ کاملِ محافظ (ساکت در همهٔ گروه‌ها)" if v["enabled"] == "1" else "🟢 روشن کردنِ محافظ", callback_data="tgg:toggle", style=ButtonStyle.DANGER if v["enabled"] == "1" else ButtonStyle.SUCCESS)],
         [hx_button("🔗 راهنمای اتصال همین گروه", callback_data="tgg:connect")],
         [hx_button("📢 تنظیم کانال گزارش‌ها", callback_data="tgg:log")],
         [hx_button("👋 پیام خوش‌آمد", callback_data="tgg:welcome"), hx_button("🌙 حالت شب", callback_data="tgg:night")],
