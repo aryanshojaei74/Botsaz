@@ -118,3 +118,37 @@ def test_partner_settings_page_has_the_edit_button():
     # و حالتِ آپدیتِ همکار همان پیشوندی را دارد که main_tenant برایِ متنِ سفارشی چک می‌کند
     mt = (pathlib.Path(__file__).resolve().parent.parent / "main_tenant.py").read_text(encoding="utf-8")
     assert "حالت آپدیت (توسط مالک ربات)" in mt and "حالت آپدیت (توسط مالک ربات)" in src
+
+
+# ───────── «در همهٔ ربات‌ها» (DevelOper): همهٔ نوع‌ها × همهٔ پلن‌ها × هر دو حالتِ منو ─────────
+import itertools
+
+_ALL_FIELDS = ["vpn_sales", "digital_shop", "virtual_service", "ad_bot", "booking", "support_desk", "general", "file_link",
+               "community_mgmt", "panel_yar", "funstat", "escrow_bot", "giveaway", "panel_seller"]
+_PLANS = ["free", "growth", "pro"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field,plan,mode", list(itertools.product(_ALL_FIELDS, _PLANS, ["inline", "reply"])))
+async def test_button_exists_for_every_bot_kind_plan_and_menu_mode(env, field, plan, mode):
+    async with config.Session() as s:
+        b = await s.get(models.Bot, 5)
+        b.field, b.plan = field, plan
+        await s.commit()
+    kb = await tenant._sec_settings_kb(5, plan, mode, False)
+    if mode == "inline":
+        found = [b.callback_data for r in kb.inline_keyboard for b in r]
+        assert "set:paused_text" in found, (field, plan, mode)
+    else:
+        found = [b.text for r in kb.keyboard for b in r]
+        assert "✏️ متن خاموش بودن ربات" in found, (field, plan, mode)
+
+
+def test_every_pause_toggle_has_the_edit_button_next_to_it():
+    """هر جا ربات را خاموش/روشن می‌کنند، دکمهٔ ویرایشِ متن هم کنارش هست: تنظیماتِ همهٔ ربات‌ها + تنظیماتِ همکار."""
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    tenant_src = (root / "tenant" / "__init__.py").read_text(encoding="utf-8")
+    assert '"set:paused_text"' in tenant_src and 'opts.append(("✏️ متن خاموش بودن ربات"' in tenant_src
+    partner = (root / "tenant" / "partner_bot" / "partner_menu.py").read_text(encoding="utf-8")
+    assert '"pp:update"' in partner and '"set:paused_text"' in partner
