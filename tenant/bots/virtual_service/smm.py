@@ -9765,6 +9765,18 @@ async def smmu_request_cancel(cb: CallbackQuery, bot: Bot):
                     await s.commit()
         except Exception:
             logger.exception("[cancel] ثبتِ علتِ خطا در یادداشتِ سفارش ناموفق بود")
+        # === PATCH_SMM_CANCEL_OWNER_NOTICE_V1 === (SINA) «درخواستِ لغو ثبت نشد» بدونِ هیچ علتی؛ علتِ خامِ پنل برایِ مالک هم فرستاده شود
+        try:
+            from log_throttle import should_log
+            if should_log(f"cancelfail:{row.id}:{oid}", 900):
+                import html as _h
+                from tenant import _notify_admins
+                await _notify_admins(bot, row, (
+                    f"⚠️ <b>درخواستِ لغوِ سفارش #{_h.escape(str(o.tracking_code or oid))} را پنل نپذیرفت</b>\n\n"
+                    f"🔎 پاسخِ پنل:\n<code>{_h.escape(str(note)[:300])}</code>\n\n"
+                    "اگر مشتری باید پول را پس بگیرد، سفارش را از «سفارش‌ها» دستی لغو/برگشت بزن."))
+        except Exception:
+            logger.exception("[cancel] اطلاعِ علتِ ردِ لغو به مالک ناموفق بود")
         await cb.message.answer("❌ " + panel_err_friendly(note, "درخواستِ لغو"))
         return
     if note == "already":   # PATCH_SMM_PANEL_ERR_FRIENDLY_V1

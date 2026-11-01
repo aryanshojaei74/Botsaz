@@ -98,3 +98,45 @@ async def test_product_page_back_button_row(db, notified, monkeypatch):
     assert rows[-1] == [("⬅️ بازگشت به لیست", "smmu:type:telegram:members:3"), ("🏠 منوی اصلی", "mbtn:home")]
     ok = await smm.send_smm_product_page(cb, None, sid, St())
     assert [(b.text, b.callback_data) for b in shown["kb"].inline_keyboard[-1]] == [("🏠 منوی اصلی", "mbtn:home")]
+
+
+@pytest.mark.asyncio
+async def test_rejected_cancel_tells_owner_the_exact_panel_reply_once(db, notified, monkeypatch):
+    """PATCH_SMM_CANCEL_OWNER_NOTICE_V1 — «درخواستِ لغو ثبت نشد» بدونِ علت: متنِ خامِ پنل برایِ مالک می‌رود (throttle شده)."""
+    import tenant
+    from types import SimpleNamespace as NS
+    bot_id, oid = await _make(db, status="sent")
+    row = NS(id=bot_id, owner_id=1, field="virtual_service")
+
+    async def gbr(bot):
+        return row
+
+    async def creds(bid, pk):
+        return "https://panel", "KEY", None
+
+    async def api_cancel(url, key, pid):
+        return {"error": "Order is in a state that can not be cancelled (WEIRD-123)"}
+    sent = []
+
+    async def na(bot, r, text, *a, **k):
+        sent.append(text)
+    monkeypatch.setattr(tenant, "get_bot_row", gbr)
+    monkeypatch.setattr(tenant, "_notify_admins", na)
+    monkeypatch.setattr(smm, "_panel_creds", creds)
+    monkeypatch.setattr(smm.smm_api, "cancel_order", api_cancel)
+    import log_throttle
+    monkeypatch.setattr(log_throttle, "should_log", lambda key, secs: not sent)        # دومی throttle می‌شود
+
+    class Msg:
+        def __init__(self): self.out = []
+        async def answer(self, text, **k): self.out.append(text)
+
+    class Cb:
+        def __init__(self): self.data, self.message, self.from_user = f"smmu:reqcancel:{oid}:1", Msg(), NS(id=555)
+        async def answer(self, *a, **k): pass
+    cb = Cb()
+    await smm.smmu_request_cancel(cb, None)
+    assert cb.message.out and cb.message.out[-1].startswith("❌")                       # مشتری همچنان پیامِ روشن می‌بیند
+    assert len(sent) == 1 and "WEIRD-123" in sent[0] and "پنل نپذیرفت" in sent[0]
+    await smm.smmu_request_cancel(Cb(), None)
+    assert len(sent) == 1                                                              # تکراری ارسال نمی‌شود
