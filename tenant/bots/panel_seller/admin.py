@@ -54,6 +54,7 @@ class PselFSM(StatesGroup):
     test_channel = State()     # PATCH_PSEL_TEST_NOTIFY_V1
     lookup = State()           # PATCH_PSEL_ADMIN_LOOKUP_V1
     vol_delta = State()        # PATCH_PSEL_ADMIN_LOOKUP_V1
+    note = State()             # PATCH_PSEL_NOTES_V1
 
 
 async def _guard(event, bot: Bot):
@@ -354,6 +355,8 @@ async def _acc_view(row, aid: int, live: bool = False):
     elif a.status == "suspended":
         rows.append([btn("🟢 فعال‌سازیِ دوباره (رمزِ تازه)", f"psel:are:{aid}", style=ButtonStyle.SUCCESS)])
     rows.append([btn("🗑 حذفِ ادمین از پنل", f"psel:adl:{aid}", style=ButtonStyle.DANGER)])
+    if a.status in ("active", "suspended") and int(a.price_toman or 0) > 0:       # PATCH_PSEL_REFUND_V1
+        rows.append([btn(f"💸 بازگشتِ وجه ({n(a.price_toman)} تومان) و حذفِ پنل", f"psel:rfd:{aid}", style=ButtonStyle.DANGER)])
     rows.append(back_row("psel:ac:0"))
     return text, kb(*rows)
 
@@ -518,6 +521,35 @@ async def ac_delete(cb: CallbackQuery, bot: Bot):
         await edit_or_send(cb, "🗑 ادمین حذف شد.", kb(back_row("psel:ac:0")))
 
 
+@psel_admin_router.callback_query(F.data.regexp(r"^psel:rfd(ok)?:\d+$"))
+async def ac_refund(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    parts = cb.data.split(":")
+    aid = int(parts[2])
+    async with Session() as s:
+        a = await s.get(PanelSellerAccount, aid)
+    if not a or a.bot_id != row.id or a.status == "deleted":
+        return await cb.answer("پیدا نشد.", show_alert=True)
+    if parts[1] == "rfd":
+        return await _ask_confirm(
+            cb, f"💸 <b>بازگشتِ وجه</b>\n\nمبلغِ <b>{n(a.price_toman)}</b> تومان به کیف‌پولِ خریدار (<code>{a.buyer_tg}</code>) برمی‌گردد و "
+                f"پنلِ <code>{esc(a.admin_username)}</code> از سرور <b>حذف</b> می‌شود.\nاین کار برگشت‌پذیر نیست. مطمئنی؟",
+            f"psel:rfdok:{aid}", f"psel:ac:v:{aid}")
+    r = await SV.refund_account(row.id, aid)
+    if r["status"] != "ok":
+        err = {"nothing_to_refund": "مبلغی برای بازگشت ثبت نشده.", "not_found": "پیدا نشد (شاید قبلاً انجام شده)."}
+        return await cb.answer("❌ " + (err.get(r["status"]) or f"حذفِ پنل انجام نشد: {r.get('error')}")[:190], show_alert=True)
+    try:
+        await bot.send_message(r["buyer_tg"], f"💸 مبلغِ <b>{n(r['amount'])}</b> تومان بابتِ پنلِ <code>{esc(r['username'])}</code> به کیف‌پولت برگشت.\n"
+                               f"💰 موجودیِ فعلی: <b>{n(r['balance'])}</b> تومان", parse_mode="HTML")
+    except Exception:      # noqa: BLE001
+        logger.info("panel_seller: خبرِ بازگشتِ وجه به خریدار نرسید")
+    await edit_or_send(cb, f"✅ <b>{n(r['amount'])}</b> تومان به کیف‌پولِ خریدار برگشت و پنل حذف شد.", kb(back_row("psel:ac:0")))
+    await cb.answer()
+
+
 async def _ask_confirm(cb: CallbackQuery, text: str, yes_cb: str, no_cb: str) -> None:
     await edit_or_send(cb, text, kb([btn("✅ بله", yes_cb, style=ButtonStyle.DANGER), btn("⬅️ نه، بازگشت", no_cb)]))
     await cb.answer()
@@ -596,6 +628,11 @@ async def _set_view(row):
         from tenant.shared.buyer_ident import LABELS as _BL, get_mode as _gm
         rows.append([btn(f"🆔 نمایشِ مشتری در اعلان: {_BL[await _gm(row.id)]}", "psel:tid", style=ButtonStyle.PRIMARY),
                      btn("🧪 اعلانِ نمونه", "psel:tsm", style=ButtonStyle.SUCCESS)])
+    from tenant import get_setting as _gs
+    _ni = bool((await _gs(row.id, "psel_note_invoice", "")).strip())
+    _nd = bool((await _gs(row.id, "psel_note_delivery", "")).strip())
+    rows.append([btn(f"🧾 یادداشتِ پیش‌فاکتور: {'✅ دارد' if _ni else '—'}", "psel:nti", style=ButtonStyle.PRIMARY),
+                 btn(f"📨 یادداشتِ تحویل: {'✅ دارد' if _nd else '—'}", "psel:ntd", style=ButtonStyle.PRIMARY)])
     _xp = await extra_gb_price(row.id)
     rows.append([btn(f"📈 حجمِ اضافه: {fa(f'{_xp:,}') + ' تومان/گیگ' if _xp else '⛔️ خاموش'}", "psel:xp",
                      style=ButtonStyle.SUCCESS if _xp else ButtonStyle.DANGER)])
@@ -832,6 +869,48 @@ async def test_notify_toggle(cb: CallbackQuery, bot: Bot):
     text, markup = await _set_view(row)
     await edit_or_send(cb, text, markup)
     await cb.answer("از این به بعد با هر تست به ادمین‌ها پیام می‌آید ✅" if not cur else "خاموش شد.")
+
+
+# ═══════════════════════ یادداشتِ پیش‌فاکتور / تحویل ═══════════════════════
+# === PATCH_PSEL_NOTES_V1 === مثلِ «یادداشت در فاکتور» و «یادداشتِ تحویل» رباتِ VPN
+NOTE_KEYS = {"i": ("psel_note_invoice", "🧾 یادداشتِ پیش‌فاکتور", "زیرِ قیمت، در صفحهٔ هر بسته (قبل از خرید) به مشتری نمایش داده می‌شود."),
+             "d": ("psel_note_delivery", "📨 یادداشتِ تحویل", "زیرِ پیامِ «پنلِ تو آماده است» بعد از هر خرید/تست می‌آید (مثلاً آموزشِ ورود یا قوانین).")}
+NOTE_MAX = 600
+
+
+@psel_admin_router.callback_query(F.data.regexp(r"^psel:nt[id]$"))
+async def note_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    from tenant import get_setting
+    k = cb.data[-1]
+    key, title, where = NOTE_KEYS[k]
+    cur = (await get_setting(row.id, key, "")).strip()
+    await state.set_state(PselFSM.note)
+    await state.update_data(note_k=k)
+    await edit_or_send(cb, f"<b>{title}</b>\n\n{where}\n\nمتنِ فعلی: " + (f"\n<blockquote>{esc(cur)}</blockquote>" if cur else "—") +
+                       f"\n\nمتنِ جدید را بفرست (حداکثر {fa(NOTE_MAX)} نویسه). برایِ حذف <code>-</code> بفرست.", kb(back_row("psel:set", "✖️ لغو")))
+    await cb.answer()
+
+
+@psel_admin_router.message(PselFSM.note, F.text)
+async def note_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard(msg, bot)
+    if not row:
+        return await state.clear()
+    from tenant import set_setting
+    d = await state.get_data()
+    k = d.get("note_k")
+    if k not in NOTE_KEYS:
+        return await state.clear()
+    t = (msg.text or "").strip()
+    if len(t) > NOTE_MAX:
+        return await msg.answer(f"❌ بیش از {fa(NOTE_MAX)} نویسه است ({fa(len(t))}). کوتاه‌ترش کن.")
+    await set_setting(row.id, NOTE_KEYS[k][0], "" if t in ("-", "—") else t)
+    await state.clear()
+    text, markup = await _set_view(row)
+    await msg.answer(("🗑 حذف شد." if t in ("-", "—") else "✅ ذخیره شد.") + "\n\n" + text, reply_markup=markup, parse_mode="HTML")
 
 
 @psel_admin_router.callback_query(F.data == "psel:tid")

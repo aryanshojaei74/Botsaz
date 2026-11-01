@@ -44,7 +44,8 @@ group_wallet_router = Router()
 
 def _group_feature_allowed(row) -> bool:
     """گروه و کیف‌پول برای خدمات مجازی و پلن‌های پولی VPN."""
-    return bool(row and (row.field == "virtual_service" or (row.field == "vpn_sales" and row.plan in ("growth", "pro"))))
+    return bool(row and (row.field == "virtual_service" or (row.field == "vpn_sales" and row.plan in ("growth", "pro"))
+                          or (row.field == "panel_seller" and row.plan == "pro")))      # PATCH_PSEL_GAMES_V1
 
 _MIN_TRANSFER_DEFAULT = 1000  # کمترین مبلغِ قابلِ‌انتقال (تومان) — جلویِ سوءاستفاده‌هایِ ریز رو می‌گیره
 

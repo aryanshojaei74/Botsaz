@@ -141,3 +141,57 @@ async def test_notify_uses_saved_ident_mode(env):
     row = SimpleNamespace(id=7, owner_id=500)
     ok = await SV.notify_test_taken(B(), row, SimpleNamespace(full_name="Ali", username="ali", telegram_id=9), "u", 1, 1, 0, "T")
     assert ok and sent[0][0] == "@chan_x1" and "@ali" not in sent[0][1] and "<code>9</code>" in sent[0][1]
+
+
+# ───────── بازگشتِ وجه ─────────
+@pytest.mark.asyncio
+async def test_refund_credits_wallet_deletes_panel_and_cannot_run_twice(env):
+    async with env() as s:
+        s.add(models.BotUser(id=1, bot_id=7, telegram_id=1001, full_name="Ali", balance=5_000))
+        (await s.get(models.PanelSellerAccount, 11)).price_toman = 40_000
+        await s.commit()
+    r = await SV.refund_account(7, 11, api_factory=FakeAPI)
+    assert r["status"] == "ok" and r["amount"] == 40_000 and r["balance"] == 45_000
+    assert ("del", "Shop_Ali") in FakeAPI.log
+    async with env() as s:
+        a = await s.get(models.PanelSellerAccount, 11)
+        txn = (await s.scalars(select(models.WalletTxn))).all()
+    assert a.status == "deleted" and len(txn) == 1 and txn[0].amount == 40_000
+    assert (await SV.refund_account(7, 11, api_factory=FakeAPI))["status"] == "not_found"      # دوباره پول نمی‌دهد
+    async with env() as s:
+        assert (await s.get(models.BotUser, 1)).balance == 45_000
+
+
+@pytest.mark.asyncio
+async def test_refund_panel_failure_returns_no_money(env):
+    async with env() as s:
+        s.add(models.BotUser(id=1, bot_id=7, telegram_id=1001, full_name="Ali", balance=0))
+        (await s.get(models.PanelSellerAccount, 11)).price_toman = 40_000
+        await s.commit()
+
+    class Boom(FakeAPI):
+        async def delete_admin(self, u):
+            raise RuntimeError("down")
+    r = await SV.refund_account(7, 11, api_factory=Boom)
+    assert r["status"] == "panel_failed"
+    async with env() as s:
+        assert (await s.get(models.BotUser, 1)).balance == 0 and (await s.get(models.PanelSellerAccount, 11)).status == "active"
+
+
+@pytest.mark.asyncio
+async def test_refund_rejects_free_other_bot_and_missing_buyer(env):
+    assert (await SV.refund_account(7, 12, api_factory=FakeAPI))["status"] == "nothing_to_refund"      # تست/رایگان
+    assert (await SV.refund_account(7, 13, api_factory=FakeAPI))["status"] == "not_found"               # ربات دیگر
+    async with env() as s:
+        (await s.get(models.PanelSellerAccount, 11)).price_toman = 40_000
+        await s.commit()
+    assert (await SV.refund_account(7, 11, api_factory=FakeAPI))["status"] == "not_found"               # خریدار کیف‌پول ندارد
+
+
+def test_notes_have_settings_and_are_shown_to_customer():
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent / "tenant" / "bots" / "panel_seller"
+    u = (root / "user.py").read_text(encoding="utf-8")
+    assert u.count("psel_note_delivery") == 2 and u.count("psel_note_invoice") == 1       # تحویلِ خرید + تحویلِ تست، و پیش‌فاکتور
+    from tenant.bots.panel_seller import admin as A
+    assert {v[0] for v in A.NOTE_KEYS.values()} == {"psel_note_invoice", "psel_note_delivery"}

@@ -21,7 +21,9 @@ _cache: dict[tuple[int, str], tuple[bool, float]] = {}
 def wager_eligible(field: str | None, plan: str | None) -> bool:
     """همان قاعدهٔ tenant.shared.group_wallet._group_feature_allowed (قابلیت‌های گروه کیف‌پولی):
     خدمات مجازی، یا VPN با پلن رشد/حرفه‌ای. (تست برابری در tests/test_wager_tenant.py)"""
-    return bool(field == "virtual_service" or (field == "vpn_sales" and plan in ("growth", "pro")))
+    # PATCH_PSEL_GAMES_V1: «پنل‌فروشی» همیشه پلنِ حرفه‌ای است (gate.py) ⇒ بازی/شرط‌بندی/کیف‌پولِ گروهی برایش هم باز است
+    return bool(field == "virtual_service" or (field == "vpn_sales" and plan in ("growth", "pro"))
+                or (field == "panel_seller" and plan == "pro"))
 
 
 async def addon_active(bot_id: int, addon: str = WAGER_ADDON) -> bool:

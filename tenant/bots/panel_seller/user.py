@@ -35,6 +35,11 @@ _ERR_FA = {"no_package": "این بسته دیگر موجود نیست.", "no_pa
            "inactive": "این پنل فعال نیست."}
 
 
+async def get_setting(bot_id: int, key: str, default: str = "") -> str:
+    from tenant import get_setting as _g
+    return await _g(bot_id, key, default)
+
+
 async def _row(bot: Bot):
     from tenant import get_bot_row
     return await get_bot_row(bot)
@@ -83,7 +88,9 @@ async def buy_detail(cb: CallbackQuery, bot: Bot):
         p = await s.get(PanelSellerPackage, pid)
     if not p or p.bot_id != row.id or not p.active:
         return await cb.answer("این بسته دیگر موجود نیست.", show_alert=True)
-    await edit_or_send(cb, f"{pk_line(p)}\n\nپرداخت از کیف‌پولِ ربات انجام می‌شود (اگر موجودی کم بود، شارژِ حساب باز می‌شود).",
+    note = (await get_setting(row.id, "psel_note_invoice", "")).strip()          # PATCH_PSEL_NOTES_V1
+    await edit_or_send(cb, f"{pk_line(p)}\n\nپرداخت از کیف‌پولِ ربات انجام می‌شود (اگر موجودی کم بود، شارژِ حساب باز می‌شود)."
+                           + (f"\n\n📝 {esc(note)}" if note else ""),
                        kb([btn("✅ خرید با کیف‌پول", f"psel:bok:{pid}", style=ButtonStyle.SUCCESS)],
                           [btn("🏷 کد تخفیف دارم", f"psel:dc:p:{pid}", style=ButtonStyle.PRIMARY)], back_row("psel:buy")))
     await cb.answer()
@@ -133,7 +140,8 @@ async def _provision(event, bot: Bot, row, uid: int, *, pid: int | None = None, 
             event, "✅ <b>پنلِ تو آماده است!</b>\n\n"
                    f"🌐 آدرس: <code>{esc(r['panel_url'])}</code>\n🆔 نام‌کاربری: <code>{esc(r['username'])}</code>\n"
                    f"🔑 رمز: <code>{esc(r['password'])}</code>\n🔖 کدِ پیگیری: <code>{esc(r['tracking'])}</code>\n\n"
-                   "رمز را جایی امن نگه دار. وضعیتِ پنل از «🗂 پنل‌هایِ من» قابلِ مشاهده است.",
+                   "رمز را جایی امن نگه دار. وضعیتِ پنل از «🗂 پنل‌هایِ من» قابلِ مشاهده است."
+                   + (f"\n\n📝 {esc(note)}" if (note := (await get_setting(row.id, "psel_note_delivery", "")).strip()) else ""),
             kb(*_login_rows(r.get("panel_url")), [btn("🗂 پنل‌هایِ من", "psel:my", style=ButtonStyle.PRIMARY)], HOME_ROW))
         if r.get("discount"):
             try:
@@ -383,7 +391,8 @@ async def free_test(cb: CallbackQuery, bot: Bot):
             f"🌐 آدرس: <code>{esc(r['panel_url'])}</code>\n🆔 نام‌کاربری: <code>{esc(r['username'])}</code>\n"
             f"🔑 رمز: <code>{esc(r['password'])}</code>\n\n"
             f"⏳ {fa(r['hours'])} ساعت · 📊 {gb_text(r['gb'])} · 👥 {users_text(r['users'])}\n"
-            "بعد از پایانِ تست برایِ ادامه از «🧩 خریدِ پنل» بسته بخر.",
+            "بعد از پایانِ تست برایِ ادامه از «🧩 خریدِ پنل» بسته بخر."
+            + (f"\n\n📝 {esc(note)}" if (note := (await get_setting(row.id, "psel_note_delivery", "")).strip()) else ""),
         kb(*_login_rows(r.get("panel_url")), [btn("🗂 پنل‌هایِ من", "psel:my", style=ButtonStyle.PRIMARY)], HOME_ROW))
 
 

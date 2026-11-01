@@ -737,6 +737,47 @@ async def admin_adjust_volume(bot_id: int, account_id: int, delta_gb: int, api_f
     return {"status": "ok", "new_gb": new_gb, "reopened": reopen, "new_password": new_pw, "buyer_tg": buyer, "username": uname}
 
 
+# === PATCH_PSEL_REFUND_V1 === (Whale Support) «بازگشت وجه»: مبلغِ پرداخت‌شدهٔ پنل به کیف‌پولِ خریدار برمی‌گردد و پنل از سرور حذف می‌شود
+async def refund_account(bot_id: int, account_id: int, api_factory=None) -> dict:
+    """بازگشتِ کاملِ مبلغِ ثبت‌شدهٔ این پنل (price_toman) + حذفِ ادمین از پنل. status: ok | not_found | nothing_to_refund | panel_failed.
+    اول حذفِ پنل (اگر نشد، هیچ پولی برنمی‌گردد)؛ بعد در یک تراکنش: وضعیتِ «deleted» + اعتبارِ کیف‌پول ⇒ دوبار زدن دوبار پول نمی‌دهد."""
+    api_factory = api_factory or _api
+    async with Session() as s:
+        acc = await s.get(PanelSellerAccount, account_id)
+        if not acc or acc.bot_id != bot_id or acc.status == "deleted":
+            return {"status": "not_found"}
+        amount = int(acc.price_toman or 0)
+        if amount <= 0:
+            return {"status": "nothing_to_refund"}
+        panel = await s.get(VpnPanel, acc.panel_id)
+        uname, buyer = acc.admin_username, acc.buyer_tg
+    if panel:
+        try:
+            api = api_factory(panel)
+            try:
+                await api.delete_admin(uname)
+            finally:
+                await api.close()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("panel_seller: حذفِ پنل هنگامِ بازگشتِ وجه ناموفق (acc=%s): %s", account_id, e)
+            return {"status": "panel_failed", "error": str(e)[:300]}
+    async with Session() as s:
+        acc = await s.get(PanelSellerAccount, account_id, with_for_update=True)
+        if acc is None or acc.status == "deleted":
+            return {"status": "not_found"}                   # هم‌زمان کسِ دیگری انجام داد
+        u = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == buyer).with_for_update())
+        if u is None:
+            return {"status": "not_found"}
+        u.balance = float(u.balance or 0) + amount
+        s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=amount, kind="refund", note=f"بازگشتِ وجهِ پنل {uname}"))
+        acc.status = "deleted"
+        acc.price_toman = 0
+        await s.commit()
+        bal = int(u.balance)
+    await save_secret(account_id, None)
+    return {"status": "ok", "amount": amount, "buyer_tg": buyer, "username": uname, "balance": bal}
+
+
 async def suspend(account_id: int, reason: str, api_factory=None) -> bool:
     """تعلیق: اشتراک‌هایِ ادمین خاموش و رمزِ ادمین تصادفی می‌شود (ورودِ مشتری بسته)."""
     api_factory = api_factory or _api

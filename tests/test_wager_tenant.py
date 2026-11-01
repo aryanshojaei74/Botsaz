@@ -427,7 +427,7 @@ async def test_expiry_loop_settles_and_edits_with_the_bots_own_token(db, monkeyp
 # ───────── فروش افزونه از ربات اصلی ─────────
 
 def test_eligibility_parity_with_group_wallet_rule():
-    for field in ("virtual_service", "vpn_sales", "digital_shop", "booking", None):
+    for field in ("virtual_service", "vpn_sales", "digital_shop", "booking", "panel_seller", None):
         for plan in ("free", "growth", "pro", "partner", None):
             row = SimpleNamespace(field=field, plan=plan)
             assert bot_addons.wager_eligible(field, plan) == _group_feature_allowed(row), (field, plan)
