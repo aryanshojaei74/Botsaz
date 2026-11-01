@@ -7920,6 +7920,10 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         if _cmd and _BTN_CMD_RE.match(_cmd):
             btn = await _find_btn_by_command(bot_id, _cmd)
         if btn is None:
+            # PATCH_BUILD_ID_V1: این هندلرِ همه‌گیر زودتر از هر @Command ثبت شده و هر «/…»ی ناشناخته را بی‌پاسخ می‌بلعد؛
+            # پس /version را همین‌جا صدا می‌زنیم (وگرنه هرگز اجرا نمی‌شد).
+            if _cmd == "version":
+                await tenant_version(msg, bot)
             return  # کامند ناشناخته — مثل قبل بی‌پاسخ می‌ماند
 
     # جستجوی دکمه در همه سطح‌ها (از جمله زیرمنوهای تودرتو)
@@ -13924,6 +13928,24 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
     txt, kbm = await _chpost_menu(row.id)
     await cb.message.answer(txt, reply_markup=kbm)
     await cb.answer()
+
+
+# === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
+BUILD_ID = "393"
+
+
+@tenant_router.message(Command("version"))
+async def tenant_version(msg: Message, bot: Bot):
+    row = await get_bot_row(bot)
+    if not row or not await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id):
+        return
+    kinds = ",".join(sorted(_TENANT_BOT_KINDS)) or "همه"
+    await msg.answer(
+        f"🔖 نسخهٔ کدِ در حال اجرا: <b>{BUILD_ID}</b>\n"
+        f"🧩 نوعِ ربات: <code>{row.field}</code> · پلن: <code>{row.plan}</code>\n"
+        f"⚙️ این پروسه به نوع‌های زیر سرویس می‌دهد: <code>{kinds}</code>\n"
+        f"✏️ دکمهٔ «متن خاموش بودن ربات»: ✅ موجود (تنظیمات ← زیرِ «🤖 ربات: روشن/خاموش»)",
+        parse_mode="HTML")
 
 
 @tenant_router.message(Command("admin"))
