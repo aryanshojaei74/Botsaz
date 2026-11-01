@@ -398,13 +398,21 @@ def parse_channel(raw: str) -> str | None:
     return f"@{v}" if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", v) else None
 
 
-def test_notice_text(buyer, username: str, hours: int, gb: int, users: int, tracking) -> str:
+def test_notice_text(buyer, username: str, hours: int, gb: int, users: int, tracking, ident_mode: str = "both") -> str:
+    """ident_mode (همان «نمایشِ مشتری» رباتِ VPN): both | id | username — رمزِ پنل هرگز در اعلان نمی‌آید."""
     import html as _h
+    from tenant.shared.buyer_ident import normalize
+    mode = normalize(ident_mode)
     name = _h.escape(getattr(buyer, "full_name", "") or "—")
     uname = getattr(buyer, "username", None)
     tg = getattr(buyer, "telegram_id", "—")
-    return ("🧪 <b>تستِ رایگانِ جدید</b>\n\n"
-            f"👤 {name}" + (f" (@{_h.escape(uname)})" if uname else "") + f"\n🆔 <code>{tg}</code>\n\n"
+    if mode == "id":
+        who = f"🆔 <code>{tg}</code>"
+    elif mode == "username":
+        who = f"👤 {name} (@{_h.escape(uname)})" if uname else f"🆔 <code>{tg}</code>"      # یوزرنیم نداشت ⇒ آیدی
+    else:
+        who = f"👤 {name}" + (f" (@{_h.escape(uname)})" if uname else "") + f"\n🆔 <code>{tg}</code>"
+    return ("🧪 <b>تستِ رایگانِ جدید</b>\n\n" + who + "\n\n"
             f"📊 حجم: <b>{gb} گیگ</b>\n⏳ مدت: <b>{hours} ساعت</b>\n👥 حداکثرِ کاربر: <b>{users if users else 'نامحدود'}</b>\n"
             f"🔑 نامِ کاربریِ پنل: <code>{_h.escape(username)}</code>\n🔖 کدِ پیگیری: <code>{_h.escape(str(tracking or '—'))}</code>")
 
@@ -414,7 +422,8 @@ async def notify_test_taken(bot, row, buyer, username: str, hours: int, gb: int,
     cfg = await test_notify_settings(row.id)
     if not cfg["admins"] and not cfg["channel"]:
         return False
-    text = test_notice_text(buyer, username, hours, gb, users, tracking)
+    from tenant.shared.buyer_ident import get_mode
+    text = test_notice_text(buyer, username, hours, gb, users, tracking, ident_mode=await get_mode(row.id))
     if cfg["admins"]:
         try:
             from tenant import _notify_admins
@@ -613,6 +622,77 @@ async def set_users_enabled(bot_id: int, account_id: int, buyer_tg: int | None, 
     except Exception as e:  # noqa: BLE001
         return {"status": "panel_failed", "error": str(e)[:300]}
     return {"status": "ok"}
+
+
+# === PATCH_PSEL_ADMIN_LOOKUP_V1 === (Whale Support) مدیر با نام‌کاربری/کدِ پیگیری/آیدیِ خریدار پنل را پیدا و مدیریت می‌کند
+async def find_accounts(bot_id: int, query: str, limit: int = 10) -> list:
+    """جستجو در پنل‌هایِ فروخته‌شدهٔ همین ربات (به‌جز حذف‌شده): نام‌کاربریِ ادمین (بدونِ حساسیت به حروف)،
+    کدِ پیگیری، یا آیدیِ عددیِ خریدار. تازه‌ترین اول."""
+    from sqlalchemy import func, or_
+    q = (query or "").strip().lstrip("@")
+    if not q:
+        return []
+    conds = [func.lower(PanelSellerAccount.admin_username) == q.lower(),
+             func.lower(PanelSellerAccount.tracking_code) == q.lower()]
+    if q.lstrip("-").isdigit():
+        conds.append(PanelSellerAccount.buyer_tg == int(q))
+    async with Session() as s:
+        return list((await s.scalars(select(PanelSellerAccount).where(
+            PanelSellerAccount.bot_id == bot_id, PanelSellerAccount.status != "deleted", or_(*conds))
+            .order_by(PanelSellerAccount.id.desc()).limit(limit))).all())
+
+
+async def admin_adjust_volume(bot_id: int, account_id: int, delta_gb: int, api_factory=None) -> dict:
+    """افزایش/کاهشِ سقفِ حجمِ یک پنل توسطِ مدیر (بدونِ کسرِ کیف‌پول). status: ok | not_found | unlimited | bad_amount | below_min
+    | panel_failed (+ new_gb, reopened). حجمِ نامحدود با این ابزار تغییر نمی‌کند. کمتر از ۱ گیگ نمی‌شود."""
+    api_factory = api_factory or _api
+    delta_gb = int(delta_gb)
+    if delta_gb == 0 or abs(delta_gb) > 100000:
+        return {"status": "bad_amount"}
+    async with Session() as s:
+        acc = await s.get(PanelSellerAccount, account_id)
+        if not acc or acc.bot_id != bot_id or acc.status not in ("active", "suspended"):
+            return {"status": "not_found"}
+        if not acc.data_gb:
+            return {"status": "unlimited"}
+        new_gb = int(acc.data_gb) + delta_gb
+        if new_gb < 1:
+            return {"status": "below_min", "current": int(acc.data_gb)}
+        panel = await s.get(VpnPanel, acc.panel_id)
+        reopen = delta_gb > 0 and acc.status == "suspended" and acc.suspend_reason == "traffic"
+        uname = acc.admin_username
+    if not panel:
+        return {"status": "no_panel"}
+    new_pw = None
+    try:
+        api = api_factory(panel)
+        try:
+            if reopen:
+                if await get_secret(account_id) is not None:
+                    await api.activate_users(uname)
+                else:
+                    new_pw = gen_password()
+                    await api.set_password(uname, new_pw)
+                    await api.activate_users(uname)
+            await apply_native_limit(api, uname, new_gb)
+        finally:
+            await api.close()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("panel_seller: تغییرِ حجم توسطِ مدیر ناموفق (acc=%s): %s", account_id, e)
+        return {"status": "panel_failed", "error": str(e)[:300]}
+    async with Session() as s:
+        acc = await s.get(PanelSellerAccount, account_id, with_for_update=True)
+        acc.data_gb = new_gb
+        fl = _flags(acc)
+        fl.discard("tr80")
+        _set_flags(acc, fl)
+        if reopen:
+            acc.status, acc.suspend_reason = "active", None
+        buyer = acc.buyer_tg
+        await s.commit()
+    if new_pw:
+        await save_secret(account_id, new_pw)
+    return {"status": "ok", "new_gb": new_gb, "reopened": reopen, "new_password": new_pw, "buyer_tg": buyer, "username": uname}
 
 
 async def suspend(account_id: int, reason: str, api_factory=None) -> bool:

@@ -52,6 +52,8 @@ class PselFSM(StatesGroup):
     test_cfg = State()         # PATCH_PSEL_FREE_TEST_V1
     custom_cfg = State()       # PATCH_PSEL_CUSTOM_VOLUME_V1
     test_channel = State()     # PATCH_PSEL_TEST_NOTIFY_V1
+    lookup = State()           # PATCH_PSEL_ADMIN_LOOKUP_V1
+    vol_delta = State()        # PATCH_PSEL_ADMIN_LOOKUP_V1
 
 
 async def _guard(event, bot: Bot):
@@ -95,6 +97,7 @@ async def menu_content(row):
         [btn("🗂 پنل‌هایِ متصل (اتصال/حذف)", "pyar:menu", style=ButtonStyle.PRIMARY)],
         [btn("📦 بسته‌هایِ فروش", "psel:pk", style=ButtonStyle.SUCCESS),
          btn("👤 ادمین‌هایِ فروخته‌شده", "psel:ac:0", style=ButtonStyle.PRIMARY)],
+        [btn("🔎 جستجو و مدیریتِ یک پنل (نام‌کاربری/کد)", "psel:lk", style=ButtonStyle.SUCCESS)],
         [btn("🔄 ریستارتِ پنل", "psel:rs", style=ButtonStyle.PRIMARY),
          btn("⚙️ دسترسی‌هایِ مشتری", "psel:set", style=ButtonStyle.PRIMARY)],
         [btn("🛡 نقشِ ادمینِ پنل (پاسارگاردِ جدید)", "psel:role", style=ButtonStyle.PRIMARY)],
@@ -324,7 +327,7 @@ async def ac_list(cb: CallbackQuery, bot: Bot):
     await cb.answer()
 
 
-async def _acc_view(row, aid: int):
+async def _acc_view(row, aid: int, live: bool = False):
     async with Session() as s:
         a = await s.get(PanelSellerAccount, aid)
         panel = await s.get(VpnPanel, a.panel_id) if a else None
@@ -335,7 +338,15 @@ async def _acc_view(row, aid: int):
             f"خریدار: <code>{a.buyer_tg}</code>\nوضعیت: {STATUS_FA.get(a.status, a.status)}{why}\n"
             f"📊 {gb_text(a.data_gb)} · 👥 {users_text(a.max_users)}\n⏳ پایان: {exp_text(a.expires_at)}\n"
             f"🔖 {esc(a.tracking_code or '—')}\n🌐 <code>{esc(panel.base_url) if panel else '—'}</code>")
+    if live and panel and a.status in ("active", "suspended"):             # PATCH_PSEL_ADMIN_LOOKUP_V1
+        from tenant.bots.panel_seller.user import _live_usage
+        lv = await _live_usage(a, panel)
+        text += (f"\n📈 مصرفِ زنده: {fa(f'{lv[0]:.1f}')} از {gb_text(a.data_gb)} · 👥 {fa(lv[1])} کاربر" if lv
+                 else "\n📈 مصرفِ زنده: ❌ پنل جواب نداد")
     rows = []
+    if a.data_gb and a.status in ("active", "suspended"):
+        rows.append([btn("➕ افزایشِ حجم", f"psel:avl:{aid}:p", style=ButtonStyle.SUCCESS),
+                     btn("➖ کاهشِ حجم", f"psel:avl:{aid}:m", style=ButtonStyle.DANGER)])
     if a.status == "active":
         rows.append([btn("⏸ خاموشِ اشتراک‌ها", f"psel:ato:{aid}:0", style=ButtonStyle.PRIMARY),
                      btn("▶️ روشنِ اشتراک‌ها", f"psel:ato:{aid}:1", style=ButtonStyle.SUCCESS)])
@@ -352,11 +363,96 @@ async def ac_view(cb: CallbackQuery, bot: Bot):
     row = await _guard(cb, bot)
     if not row:
         return
-    text, markup = await _acc_view(row, int(cb.data.split(":")[3]))
+    text, markup = await _acc_view(row, int(cb.data.split(":")[3]), live=True)
     if not text:
         return await cb.answer("پیدا نشد.", show_alert=True)
     await edit_or_send(cb, text, markup)
     await cb.answer()
+
+
+# ═══════════════════════ جستجو و مدیریتِ یک پنل ═══════════════════════
+# === PATCH_PSEL_ADMIN_LOOKUP_V1 === (Whale Support) مثلِ «مدیریت کدِ سرویس» در رباتِ کانفیگ‌فروش
+
+@psel_admin_router.callback_query(F.data == "psel:lk")
+async def lk_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.set_state(PselFSM.lookup)
+    await edit_or_send(cb, "🔎 <b>جستجوی پنل</b>\n\nیکی از این‌ها را بفرست:\n• نام‌کاربریِ ادمینِ پنل\n• کدِ پیگیری\n• آیدیِ عددیِ خریدار",
+                       kb(back_row(MENU, "✖️ لغو")))
+    await cb.answer()
+
+
+def _acc_pick_kb(accs) -> object:
+    rows = [[btn(f"{STATUS_FA.get(a.status, a.status)[:1]} {a.admin_username} · {a.buyer_tg}", f"psel:ac:v:{a.id}")] for a in accs]
+    rows.append(back_row(MENU))
+    return kb(*rows)
+
+
+@psel_admin_router.message(PselFSM.lookup, F.text)
+async def lk_in(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard(msg, bot)
+    if not row:
+        return await state.clear()
+    accs = await SV.find_accounts(row.id, msg.text or "")
+    if not accs:
+        return await msg.answer("❌ پنلی پیدا نشد. نام‌کاربری، کدِ پیگیری یا آیدیِ خریدار را دوباره بفرست (یا «✖️ لغو»).",
+                                reply_markup=kb(back_row(MENU, "✖️ لغو")))
+    await state.clear()
+    if len(accs) == 1:
+        text, markup = await _acc_view(row, accs[0].id, live=True)
+        return await msg.answer(text, reply_markup=markup, parse_mode="HTML")
+    await msg.answer(f"🔎 {fa(len(accs))} پنل پیدا شد؛ یکی را انتخاب کن:", reply_markup=_acc_pick_kb(accs))
+
+
+@psel_admin_router.callback_query(F.data.regexp(r"^psel:avl:\d+:[pm]$"))
+async def vol_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    _, _, aid, sign = cb.data.split(":")
+    async with Session() as s:
+        a = await s.get(PanelSellerAccount, int(aid))
+    if not a or a.bot_id != row.id or not a.data_gb:
+        return await cb.answer("این پنل حجمِ مشخص ندارد.", show_alert=True)
+    await state.set_state(PselFSM.vol_delta)
+    await state.update_data(vl_aid=int(aid), vl_sign=sign)
+    word = "افزایش" if sign == "p" else "کاهش"
+    await edit_or_send(cb, f"{'➕' if sign == 'p' else '➖'} چند گیگ <b>{word}</b> پیدا کند؟ (عدد)\nحجمِ فعلی: <b>{gb_text(a.data_gb)}</b>",
+                       kb(back_row(f"psel:ac:v:{aid}", "✖️ لغو")))
+    await cb.answer()
+
+
+@psel_admin_router.message(PselFSM.vol_delta, F.text)
+async def vol_do(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard(msg, bot)
+    if not row:
+        return await state.clear()
+    t = (msg.text or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    if not t.isdigit() or not (1 <= int(t) <= 100000):
+        return await msg.answer("❌ یک عددِ صحیحِ مثبت بفرست (مثلاً 20).")
+    d = await state.get_data()
+    aid, sign = int(d.get("vl_aid") or 0), d.get("vl_sign")
+    await state.clear()
+    r = await SV.admin_adjust_volume(row.id, aid, int(t) * (1 if sign == "p" else -1))
+    err = {"unlimited": "این پنل حجمِ نامحدود دارد.", "below_min": "حجم نمی‌تواند کمتر از ۱ گیگ شود.",
+           "not_found": "پنل پیدا نشد.", "no_panel": "پنلِ متصل پیدا نشد.", "bad_amount": "مقدارِ نامعتبر."}
+    if r["status"] != "ok":
+        return await msg.answer("❌ " + (err.get(r["status"]) or f"روی پنل انجام نشد:\n{esc(r.get('error') or r['status'])}"),
+                                parse_mode="HTML", reply_markup=kb(back_row(f"psel:ac:v:{aid}")))
+    note = f"\n🔓 پنل دوباره فعال شد." if r.get("reopened") else ""
+    note += f"\n🔑 رمزِ تازه: <code>{esc(r['new_password'])}</code>" if r.get("new_password") else ""
+    try:
+        verb = "افزایش" if sign == "p" else "کاهش"
+        await bot.send_message(r["buyer_tg"], f"📊 حجمِ پنلِ <code>{esc(r['username'])}</code> توسطِ مدیر {verb} یافت.\n"
+                               f"حجمِ جدید: <b>{gb_text(r['new_gb'])}</b>" + (f"\n🔑 رمزِ تازه: <code>{esc(r['new_password'])}</code>" if r.get("new_password") else ""),
+                               parse_mode="HTML")
+    except Exception:      # noqa: BLE001
+        logger.info("panel_seller: خبرِ تغییرِ حجم به خریدار نرسید")
+    text, markup = await _acc_view(row, aid)
+    await msg.answer(f"✅ حجمِ جدید: <b>{gb_text(r['new_gb'])}</b> (به خریدار هم اطلاع داده شد).{note}\n\n{text}",
+                     reply_markup=markup, parse_mode="HTML")
 
 
 @psel_admin_router.callback_query(F.data.regexp(r"^psel:ato:\d+:[01]$"))
@@ -496,6 +592,10 @@ async def _set_view(row):
                      style=ButtonStyle.SUCCESS if _tn["admins"] else ButtonStyle.DANGER)])
     rows.append([btn("📢 کانالِ لاگِ تست‌ها: " + (_tn["channel"] if _tn["channel"] else "❌ متصل نیست"), "psel:tch",
                      style=ButtonStyle.SUCCESS if _tn["channel"] else ButtonStyle.PRIMARY)])
+    if _tn["admins"] or _tn["channel"]:                # PATCH_PSEL_TEST_REPORT_PARITY_V1
+        from tenant.shared.buyer_ident import LABELS as _BL, get_mode as _gm
+        rows.append([btn(f"🆔 نمایشِ مشتری در اعلان: {_BL[await _gm(row.id)]}", "psel:tid", style=ButtonStyle.PRIMARY),
+                     btn("🧪 اعلانِ نمونه", "psel:tsm", style=ButtonStyle.SUCCESS)])
     _xp = await extra_gb_price(row.id)
     rows.append([btn(f"📈 حجمِ اضافه: {fa(f'{_xp:,}') + ' تومان/گیگ' if _xp else '⛔️ خاموش'}", "psel:xp",
                      style=ButtonStyle.SUCCESS if _xp else ButtonStyle.DANGER)])
@@ -732,6 +832,29 @@ async def test_notify_toggle(cb: CallbackQuery, bot: Bot):
     text, markup = await _set_view(row)
     await edit_or_send(cb, text, markup)
     await cb.answer("از این به بعد با هر تست به ادمین‌ها پیام می‌آید ✅" if not cur else "خاموش شد.")
+
+
+@psel_admin_router.callback_query(F.data == "psel:tid")
+async def test_ident_cycle(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    from tenant.shared.buyer_ident import LABELS, cycle
+    new = await cycle(row.id)
+    text, markup = await _set_view(row)
+    await edit_or_send(cb, text, markup)
+    await cb.answer("✅ " + LABELS[new])
+
+
+@psel_admin_router.callback_query(F.data == "psel:tsm")
+async def test_sample(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    from types import SimpleNamespace
+    fake = SimpleNamespace(full_name=cb.from_user.full_name, username=cb.from_user.username, telegram_id=cb.from_user.id)
+    sent = await SV.notify_test_taken(bot, row, fake, "sample_admin", 24, 1, 5, "نمونه")
+    await cb.answer("✅ اعلانِ نمونه فرستاده شد (به همان مقصدهایِ روشن)." if sent else "هیچ مقصدی روشن نیست.", show_alert=True)
 
 
 @psel_admin_router.callback_query(F.data == "psel:tch")
