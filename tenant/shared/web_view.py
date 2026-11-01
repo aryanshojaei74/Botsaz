@@ -247,6 +247,12 @@ def _apps_html() -> str:
     return '<div class="plat-list">' + "".join(groups) + '</div>'
 
 
+def _qr(text: str) -> str:
+    """PATCH_QR_INLINE_V1 — QR ساخته‌شده روی سرور (data-URI)؛ '' اگر جا نشد. لینک هرگز به سرویسِ بیرونی داده نمی‌شود."""
+    from tenant.shared.qr_inline import data_uri
+    return data_uri(text) or ""
+
+
 def _servers_html(servers: list[str]) -> str:
     if not servers:
         return '<div class="empty-note">فعلاً سروری برای نمایش تکی وجود ندارد؛ از لینک اشتراک بالا استفاده کن.</div>'
@@ -258,7 +264,7 @@ def _servers_html(servers: list[str]) -> str:
             '<div class="srv-row">'
             f'<div class="srv-proto">{_esc(proto)}</div>'
             f'<div class="srv-link" id="srv-{i}">{safe}</div>'
-            f'<button class="icon-btn" data-qr-target="srv-{i}" title="نمایش QR" aria-label="نمایش QR">▦</button>'
+            f'<button class="icon-btn" data-qr-target="srv-{i}" data-qr-src="{_esc(_qr(link))}" title="نمایش QR" aria-label="نمایش QR">▦</button>'
             f'<button class="icon-btn" data-copy-target="srv-{i}" title="کپی" aria-label="کپی">⧉</button>'
             '</div>'
         )
@@ -538,7 +544,7 @@ _PAGE_TEMPLATE = """<!doctype html>
     <div class="sub-box" id="sub-link">{sub_link_disp}</div>
     <div style="display:flex; gap:8px;">
       <button class="copy-btn full-copy" data-copy-target="sub-link" style="flex:1;">📋 کپی لینک اشتراک</button>
-      <button class="icon-btn" data-qr-target="sub-link" title="نمایش QR" aria-label="نمایش QR"
+      <button class="icon-btn" data-qr-target="sub-link" data-qr-src="{sub_qr}" title="نمایش QR" aria-label="نمایش QR"
               style="width:46px; height:auto;">▦</button>
     </div>
   </div>
@@ -625,16 +631,18 @@ _PAGE_TEMPLATE = """<!doctype html>
   // از یک سرویسِ عمومیِ رندرِ QR استفاده می‌کنیم (بدونِ نیاز به کتابخانه‌ی
   // جاوااسکریپت)؛ فقط وقتی کاربر رویِ دکمه‌ی QR بزنه لود می‌شه، نه پیش‌فرض
   // برایِ همه‌ی لینک‌ها — که هم سریع‌تره هم لینک‌ها رو بی‌دلیل به بیرون درز نمی‌ده.
-  function openQr(text) {{
+  function openQr(text, src) {{
+    // PATCH_QR_INLINE_V1: QR روی سرورِ خودمان ساخته شده (data-URI)؛ هیچ لینکی به سرویسِ بیرونی نمی‌رود
+    if (!src) {{ showToast('این لینک برایِ QR بیش‌ازحد بلند است؛ کپیش کن'); return; }}
     const img = document.getElementById('qr-img');
-    img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=' + encodeURIComponent(text);
+    img.src = src;
     document.getElementById('qr-modal').classList.add('show');
   }}
   document.addEventListener('click', function (e) {{
     const qbtn = e.target.closest('[data-qr-target]');
     if (qbtn) {{
       const el = document.getElementById(qbtn.getAttribute('data-qr-target'));
-      if (el) openQr(el.textContent.trim());
+      if (el) openQr(el.textContent.trim(), qbtn.getAttribute('data-qr-src') || '');
       return;
     }}
     if (e.target.id === 'qr-close' || e.target.id === 'qr-modal') {{
@@ -760,6 +768,7 @@ def _render_page(token: str, data: dict) -> str:
         last_online_row=last_online_row,
         updated_at=_esc(data["updated_at"]),
         sub_link_disp=_esc(sub_link),
+        sub_qr=_esc(_qr(data["sub_link"] or "")),
         servers_html=_servers_html(data["servers"]),
         apps_html=_apps_html(),
         token_json=json.dumps(token),
@@ -779,4 +788,9 @@ async def cfg_web_api(token: str):
     data = await _gather_data(token)
     if not data:
         return JSONResponse(content={"ok": False}, status_code=404)
+    try:        # PATCH_QR_INLINE_V1 — برایِ مینی‌اپ: QRِ لینکِ اشتراک از روی سرورِ خودمان
+        data = dict(data)
+        data["qr"] = _qr(data.get("sub_link") or "") or None
+    except Exception:      # noqa: BLE001
+        logger.exception("web_view: ساختِ QR ناموفق بود")
     return JSONResponse(content=data)

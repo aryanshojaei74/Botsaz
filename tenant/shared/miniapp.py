@@ -530,6 +530,11 @@ async def api_home(bot_id: int, x_init_data: str | None = Header(default=None),
     # === PATCH_MINIAPP_REF_REWARD_V1 === پاداشِ واقعی طبقِ تنظیماتِ ربات (نه فیلدِ قدیمیِ لینک)
     if referral_info:
         referral_info.update(await _ref_reward_info(bot_id))
+        try:        # PATCH_QR_INLINE_V1 — QR روی خودِ سرور (نه سرویسِ بیرونی)
+            from tenant.shared.qr_inline import data_uri as _qr_uri
+            referral_info["qr"] = _qr_uri(referral_link)
+        except Exception:      # noqa: BLE001
+            logger.exception("miniapp: ساختِ QRِ دعوت ناموفق بود")
 
     return JSONResponse({
         "ok": True,
@@ -2331,6 +2336,28 @@ _PAGE_HTML = r"""<!doctype html>
   if (tg) { try{tg.ready();}catch(e){} try{tg.expand();}catch(e){}
     try{tg.disableVerticalSwipes();}catch(e){} }
 
+  /* === PATCH_MINIAPP_NATIVE_UX_V1 === حس و رفتارِ بومیِ تلگرام: پیامِ هشدارِ خودِ تلگرام، لرزشِ ظریف روی لمس، و دکمهٔ «بازگشت» تلگرام برایِ بستنِ پنجره‌ها */
+  function uiAlert(msg){
+    try { if (tg && tg.showAlert && tg.isVersionAtLeast && tg.isVersionAtLeast('6.2')) { tg.showAlert(String(msg)); return; } } catch(e){}
+    window.alert(msg);
+  }
+  document.addEventListener('click', function(e){
+    try { if (tg && tg.HapticFeedback && e.target.closest && e.target.closest('.jelly, .tab, button')) tg.HapticFeedback.impactOccurred('light'); } catch(_){}
+  }, true);
+  try {
+    if (tg && tg.BackButton) {
+      var _syncBack = function(){
+        var ovs = document.querySelectorAll('.modal-overlay');
+        if (ovs.length) tg.BackButton.show(); else tg.BackButton.hide();
+      };
+      tg.BackButton.onClick(function(){
+        var ovs = document.querySelectorAll('.modal-overlay');
+        if (ovs.length) { ovs[ovs.length - 1].remove(); _syncBack(); }
+      });
+      new MutationObserver(_syncBack).observe(document.body, {childList: true});
+    }
+  } catch(e){}
+
   var BOT_ID = "__BOT_ID__";
   /* === PATCH_MINIAPP_TERMS_V1 === واژگان بر اساسِ نوعِ ربات */
   var T = __TERMS__;
@@ -2575,7 +2602,7 @@ _PAGE_HTML = r"""<!doctype html>
     if (!ref || !ref.link) return;
     var overlay = document.createElement('div');
     overlay.className = 'modal-overlay jelly';
-    var qr = 'https://api.qrserver.com/v1/create-qr-code/?size=170x170&data=' + encodeURIComponent(ref.link);
+    var qr = ref.qr || '';   // PATCH_QR_INLINE_V1: QR از سرورِ خودمان
     overlay.innerHTML =
       '<div class="modal-card">' +
         '<div class="modal-head"><div class="ttl" style="font-size:15px;font-weight:800">دعوت از دوستان</div>' +
@@ -2588,7 +2615,7 @@ _PAGE_HTML = r"""<!doctype html>
         (ref.reward_note ? '<div style="font-size:12px;color:var(--sub);margin-top:10px;line-height:1.7">💡 '+esc(ref.reward_note)+'</div>' : '') +
         '<div class="row" style="align-items:flex-start;gap:12px;margin-top:14px">' +
           '<div class="sub-box" id="ref-link" style="flex:1">'+esc(ref.link)+'</div>' +
-          '<img src="'+qr+'" style="width:64px;height:64px;border-radius:10px;background:#fff;padding:4px"/>' +
+          (qr ? '<img src="'+qr+'" style="width:64px;height:64px;border-radius:10px;background:#fff;padding:4px"/>' : '') +
         '</div>' +
         '<div class="btn-row" style="margin-top:10px">' +
           '<button class="back-btn jelly" id="ref-copy" style="flex:1"><span class="row" style="justify-content:center;gap:6px">'+ICON.copy+'<span>کپی لینک</span></span></button>' +
@@ -2648,7 +2675,7 @@ _PAGE_HTML = r"""<!doctype html>
       });
       document.getElementById('topup-next').onclick = function(){
         var v = parseInt(document.getElementById('topup-custom').value, 10);
-        if (!v || v < 1000) { alert('مبلغ معتبر وارد کن.'); return; }
+        if (!v || v < 1000) { uiAlert('مبلغ معتبر وارد کن.'); return; }
         chosenAmount = v;
         stepMethod(info);
       };
@@ -2658,7 +2685,7 @@ _PAGE_HTML = r"""<!doctype html>
     function stepMethod(info){
       var hasCard = info.card_enabled !== false, ap = info.apay;
       if (!ap) { stepReceipt(info); return; }
-      if (ap.min && chosenAmount < ap.min) { if (!hasCard) { alert('حداقل مبلغ ' + ap.min.toLocaleString('en-US') + ' تومان است.'); stepAmount(info); return; } }
+      if (ap.min && chosenAmount < ap.min) { if (!hasCard) { uiAlert('حداقل مبلغ ' + ap.min.toLocaleString('en-US') + ' تومان است.'); stepAmount(info); return; } }
       if (!hasCard) { stepApay(info); return; }
       box.innerHTML =
         '<div class="stat-box" style="margin-bottom:14px"><b>'+chosenAmount.toLocaleString('en-US')+' تومان</b><span>مبلغ انتخابی</span></div>' +
@@ -2827,7 +2854,7 @@ _PAGE_HTML = r"""<!doctype html>
         }).catch(function(){
           sendBtn.disabled = false;
           sendBtn.textContent = 'ارسال رسید';
-          alert('ارسال رسید ناموفق بود. دوباره امتحان کن.');
+          uiAlert('ارسال رسید ناموفق بود. دوباره امتحان کن.');
         });
       };
     }
@@ -2950,7 +2977,7 @@ _PAGE_HTML = r"""<!doctype html>
         el.onclick = function(){
           var m = 'ظرفیتِ فروشِ «'+el.getAttribute('data-full')+'» پر شده؛ لطفاً دستهٔ دیگری را انتخاب کنید.';
           if (window.Telegram && Telegram.WebApp && Telegram.WebApp.showAlert) { Telegram.WebApp.showAlert(m); }
-          else { alert(m); }
+          else { uiAlert(m); }
         };
       });
       /* === PATCH_MINIAPP_VSERVICES_V1 === */
@@ -3224,7 +3251,7 @@ _PAGE_HTML = r"""<!doctype html>
     function renderLive(data){
       liveBox.className = '';
       var subBlock = data.sub_link
-        ? subLinkBlock(data.sub_link)
+        ? subLinkBlock(data.sub_link, data.qr)
         : '<div class="empty-note" style="padding:14px 0">این سرویس ساب‌لینک ذخیره‌شده‌ای ندارد.</div>';
       var progressBlock = '';
       if (!data.unlimited && data.cap_gb) {
@@ -3253,12 +3280,12 @@ _PAGE_HTML = r"""<!doctype html>
       bindModalActions(data.sub_link);
     }
 
-    function subLinkBlock(link){
-      var qr = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(link);
+    function subLinkBlock(link, qr){
+      // PATCH_QR_INLINE_V1: QR فقط وقتی از سرورِ خودمان آمده باشد؛ لینکِ اشتراک هرگز به سرویسِ بیرونی داده نمی‌شود
       return '<div class="section-title" style="margin-top:16px"><span>لینک اشتراک (Subscription)</span></div>' +
         '<div class="row" style="align-items:flex-start;gap:12px">' +
           '<div class="sub-box" id="modal-sub" style="flex:1">'+esc(link)+'</div>' +
-          '<img src="'+qr+'" style="width:64px;height:64px;border-radius:10px;background:#fff;padding:4px"/>' +
+          (qr ? '<img src="'+qr+'" style="width:64px;height:64px;border-radius:10px;background:#fff;padding:4px"/>' : '') +
         '</div>' +
         '<div class="btn-row" style="margin-top:8px">' +
           '<button class="back-btn jelly" id="modal-copy" style="flex:1"><span class="row" style="justify-content:center;gap:6px">'+ICON.copy+'<span>کپی</span></span></button>' +
@@ -3298,7 +3325,7 @@ _PAGE_HTML = r"""<!doctype html>
         }).catch(function(){
           resetBtn.disabled = false;
           resetBtn.innerHTML = '<span class="row" style="justify-content:center;gap:6px">'+ICON.history+'<span>لینک جدید</span></span>';
-          alert('تولید لینک جدید ناموفق بود. دوباره امتحان کن.');
+          uiAlert('تولید لینک جدید ناموفق بود. دوباره امتحان کن.');
         });
       };
       var delBtn = document.getElementById('modal-delete');
@@ -3311,7 +3338,7 @@ _PAGE_HTML = r"""<!doctype html>
           renderServices();
         }).catch(function(){
           delBtn.disabled = false;
-          alert('حذف ناموفق بود. دوباره امتحان کن.');
+          uiAlert('حذف ناموفق بود. دوباره امتحان کن.');
         });
       };
     }
@@ -3412,7 +3439,7 @@ _PAGE_HTML = r"""<!doctype html>
         .catch(function(err){
           btn.disabled = false; btn.textContent = 'خرید';
           var m = (err && err.body && err.body.message) || 'ثبتِ سفارش ناموفق بود.';
-          try{ tg && tg.showAlert(m); }catch(e){ alert(m); }
+          try{ tg && tg.showAlert(m); }catch(e){ uiAlert(m); }
         });
     };
   }
@@ -3735,7 +3762,7 @@ _PAGE_HTML = r"""<!doctype html>
           }).catch(function(err){
             btn.disabled = false; btn.textContent = 'ثبتِ سفارش';
             var m = (err && err.body && err.body.message) || 'ثبتِ سفارش ناموفق بود.';
-            try{ tg && tg.showAlert(m); }catch(e){ alert(m); }
+            try{ tg && tg.showAlert(m); }catch(e){ uiAlert(m); }
           });
         };
       }
@@ -3874,7 +3901,7 @@ _PAGE_HTML = r"""<!doctype html>
         }).catch(function(err){
           goEl.disabled = false; goEl.textContent = 'ثبتِ سفارش';
           var m = (err && err.body && err.body.message) || 'ثبتِ سفارش ناموفق بود.';
-          try{ tg && tg.showAlert(m); }catch(e){ alert(m); }
+          try{ tg && tg.showAlert(m); }catch(e){ uiAlert(m); }
           quote();
         });
       };
