@@ -334,7 +334,7 @@ async def settle_charge(bot_id: int, order_id: str) -> tuple[bool, str, int]:
     if _mismatch and _uid:
         try:
             from tenant.gateways.zibal_wallet import _kyc_mismatch_notify
-            await _kyc_mismatch_notify(bot_id, _uid, _paid4)
+            await _kyc_mismatch_notify(bot_id, _uid, _paid4, _pcard)
         except Exception:
             logger.exception("blupal: اطلاعِ عدمِ تطابقِ کارت ناموفق بود")
     if _uid:

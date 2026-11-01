@@ -205,7 +205,7 @@ async def _settle_zarinpal_order(order_id: int) -> tuple[str, str, int, int | No
     await _ac(bot_id, _kyc_uid)
     if _mismatch:
         try:
-            await _kyc_mismatch_notify(bot_id, telegram_id, _paid4)
+            await _kyc_mismatch_notify(bot_id, telegram_id, _paid4, _card_pan)
         except Exception:
             logger.exception("kyc: اطلاعِ عدمِ تطابقِ کارت ناموفق بود")
     return ("credited", "شارژ با موفقیت انجام شد.", amount, bot_id,
@@ -214,38 +214,10 @@ async def _settle_zarinpal_order(order_id: int) -> tuple[str, str, int, int | No
 
 
 # === PATCH_KYC_CARD_LOCK_V1 ===
-async def _kyc_mismatch_notify(bot_id: int, telegram_id: int, last4: str) -> None:
-    """به کاربر و ادمینها خبر می‌دهد که چرا حساب محدود شد."""
-    from aiogram.client.default import DefaultBotProperties
-    from aiogram.enums import ParseMode
-    async with Session() as s:
-        brow = await s.get(BotRow, bot_id)
-    if not brow:
-        return
-    tbot = Bot(token=brow.token,
-               default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    try:
-        await tbot.send_message(telegram_id, (
-            "⚠️ <b>شارژ انجام شد، ولی حسابِ شما محدود شد.</b>\n\n"
-            f"این پرداخت با کارتی انجام شد (…{last4}) که با کارتِ ثبت‌شدهٔ "
-            "شما یکی نیست.\n\n"
-            "مبلغ به کیفِ پولِ شما اضافه شده، اما تا انجامِ احرازِ هویتِ "
-            "سطح ۲ امکانِ استفاده از آن نیست.\n"
-            "از دکمهٔ «🛡 احرازِ هویت» اقدام کن."))
-        try:
-            from tenant import _notify_admins
-            await _notify_admins(tbot, brow, (
-                "🛡 <b>عدمِ تطابقِ کارت</b>\n\n"
-                f"کاربر <code>{telegram_id}</code> با کارتِ …{last4} پرداخت "
-                "کرد که با کارتِ ثبت‌شده‌اش یکی نیست.\n"
-                "شارژ انجام شد و حساب تا احرازِ سطح ۲ مسدود شد."))
-        except Exception:
-            logger.exception("kyc: اطلاع به ادمین ناموفق بود")
-    finally:
-        try:
-            await tbot.session.close()
-        except Exception:
-            logger.exception("kyc: بستنِ سشنِ ربات ناموفق بود")
+async def _kyc_mismatch_notify(bot_id: int, telegram_id: int, last4: str, paid_card=None) -> None:
+    """به کاربر و ادمینها خبر می‌دهد که چرا حساب محدود شد (PATCH_KYC_MISMATCH_CARDS_V1: یک پیاده‌سازیِ مشترک با زیبال)."""
+    from tenant.gateways.zibal_wallet import _kyc_mismatch_notify as _impl
+    await _impl(bot_id, telegram_id, last4, paid_card)
 
 
 async def _notify_credited(bot_id: int, telegram_id: int, amount: int, new_balance: float,

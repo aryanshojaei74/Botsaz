@@ -671,7 +671,7 @@ async def test_kyc_card_mismatch_blocks_but_still_credits(env, monkeypatch):
     sent = []
     import tenant.gateways.zibal_wallet as ZW
 
-    async def _mm(bot_id, tg, last4): sent.append(last4)
+    async def _mm(bot_id, tg, last4, paid_card=None): sent.append(last4)
     monkeypatch.setattr(ZW, "_kyc_mismatch_notify", _mm)
     await _kyc_user(maker, 1, "6037991111111111")                    # ۴ رقمِ آخر: 1111؛ پرداخت با ...7890
     await BP.create_invoice(KEY, 1_000_000)

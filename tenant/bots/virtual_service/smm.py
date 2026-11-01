@@ -9587,10 +9587,24 @@ def _parse_cancel_response(d, order_id) -> tuple[bool, str]:
         _cv = it.get("cancel")
         if not status and (_cv is True or str(_cv).strip().lower() in ("1", "true", "ok", "success", "requested")):
             return True, "requested"
+        # PATCH_SMM_CANCEL_RAW_REPLY_V1 (SINA، سفارش #14410): بعضی پنل‌ها به‌جای status یک متنِ آزاد یا success=true می‌دهند
+        # («Cancel request sent»). فقط وقتی هیچ نشانهٔ منفی در متن نیست «درخواست ثبت شد» حساب می‌شود؛ باقی همچنان ردّ می‌شود.
+        _NEG = ("error", "fail", "not ", "cannot", "can't", "unable", "denied", "invalid", "reject", "forbid", "no such",
+                "incorrect", "nashod", "ناموفق", "نامعتبر", "خطا")
+        _msg = _cv if isinstance(_cv, str) else (it.get("message") if isinstance(it.get("message"), str) else "")
+        _succ = str(it.get("success")).strip().lower() in ("true", "1")
+        if not status and not any(k in (_msg or "").lower() for k in _NEG) and (
+                _succ or (isinstance(_cv, str) and _cv.strip() and _cv.strip().lower() not in ("0", "false", "null", "none"))):
+            return True, "requested"
         if not status:
             # پنل هیچ وضعیتِ صریحی برای لغو اعلام نکرده — این را تأییدِ
             # لغو حساب نمی‌کنیم، تا سفارش بدونِ تأییدِ واقعیِ پنل لغو نشه.
-            return False, "پنل وضعیتِ لغو را تأیید نکرد (پاسخی بدونِ status دریافت شد)."
+            try:
+                import json as _json
+                _raw = _json.dumps(d, ensure_ascii=False)[:250]
+            except Exception:      # noqa: BLE001
+                _raw = str(d)[:250]
+            return False, f"پنل وضعیتِ لغو را تأیید نکرد (پاسخی بدونِ status دریافت شد). پاسخِ خامِ پنل: {_raw}"
         return True, str(status)
     return False, "پاسخِ نامعتبر از پنل."
 

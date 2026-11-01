@@ -208,7 +208,7 @@ async def _settle_zibal_order(order_id: int) -> tuple[str, str, int, int | None,
     await _ac(bot_id, _kyc_uid)
     if _mismatch:
         try:
-            await _kyc_mismatch_notify(bot_id, telegram_id, _paid4)
+            await _kyc_mismatch_notify(bot_id, telegram_id, _paid4, _card_pan)
         except Exception:
             logger.exception("kyc: اطلاعِ عدمِ تطابقِ کارت ناموفق بود")
     return ("credited", "شارژ با موفقیت انجام شد.", amount, bot_id,
@@ -216,11 +216,26 @@ async def _settle_zibal_order(order_id: int) -> tuple[str, str, int, int | None,
             str(ref_or_msg) + (f"|{_card_pan}" if _card_pan else ""))
 
 
-async def _kyc_mismatch_notify(bot_id: int, telegram_id: int, last4: str) -> None:
+def kyc_mismatch_admin_text(telegram_id, last4: str, registered_card, paid_card=None) -> str:
+    """PATCH_KYC_MISMATCH_CARDS_V1 (SINA): پیامِ مالک باید بگوید کاربر با چه کارتی احراز کرده و با چه کارتی پرداخت کرده.
+    کارت‌ها نیمه‌پنهان نشان داده می‌شوند (۴ رقمِ اول و ۴ رقمِ آخر) تا مقایسه ممکن باشد ولی شماره کامل در پیام نیاید."""
+    def _m(card, fallback="—"):
+        c = "".join(ch for ch in str(card or "") if ch.isdigit())
+        return (c[:4] + " •••• •••• " + c[-4:]) if len(c) >= 12 else (("…" + c[-4:]) if len(c) >= 4 else fallback)
+    paid = _m(paid_card, "") or f"…{last4}"
+    return ("🛡 <b>عدمِ تطابقِ کارت</b>\n\n"
+            f"کاربر: <code>{telegram_id}</code>\n"
+            f"💳 کارتِ احرازشده: <code>{_m(registered_card)}</code>\n"
+            f"💸 کارتِ پرداخت: <code>{paid}</code>\n\n"
+            "شارژ انجام شد و حساب تا احرازِ سطح ۲ مسدود شد.")
+
+
+async def _kyc_mismatch_notify(bot_id: int, telegram_id: int, last4: str, paid_card=None) -> None:
     from aiogram.client.default import DefaultBotProperties
     from aiogram.enums import ParseMode
     async with Session() as s:
         brow = await s.get(BotRow, bot_id)
+        _reg = await s.scalar(select(BotUser.kyc_card).where(BotUser.bot_id == bot_id, BotUser.telegram_id == telegram_id))
     if not brow:
         return
     tbot = Bot(token=brow.token,
@@ -235,11 +250,7 @@ async def _kyc_mismatch_notify(bot_id: int, telegram_id: int, last4: str) -> Non
             "از دکمهٔ «🛡 احرازِ هویت» اقدام کن."))
         try:
             from tenant import _notify_admins
-            await _notify_admins(tbot, brow, (
-                "🛡 <b>عدمِ تطابقِ کارت</b>\n\n"
-                f"کاربر <code>{telegram_id}</code> با کارتِ …{last4} پرداخت "
-                "کرد که با کارتِ ثبت‌شده‌اش یکی نیست.\n"
-                "شارژ انجام شد و حساب تا احرازِ سطح ۲ مسدود شد."))
+            await _notify_admins(tbot, brow, kyc_mismatch_admin_text(telegram_id, last4, _reg, paid_card))
         except Exception:
             logger.exception("kyc: اطلاع به ادمین ناموفق بود")
     finally:
