@@ -106,6 +106,12 @@ async def _group_settings(cb, bot):
     await tadm_groupsettings_show(cb, bot)
 
 
+async def _api_key(cb, bot):
+    """PATCH_VPN_API_SETTINGS_V1 — «🔑 API ربات» (کلیدِ ربات، قیمت/مدتِ دسترسی، «API برایِ همه»، جست‌وجویِ کاربر)."""
+    from tenant.gateways.custom_domain import tadm_apikey_show
+    await tadm_apikey_show(cb, bot)
+
+
 async def _refund_cfg(cb, bot, state):
     from tenant.bots.vpn.vpn_admin import vpn_refund_cfg
     await vpn_refund_cfg(cb, bot, state)
@@ -124,6 +130,14 @@ register_settings_items(KIND, [
         label="✏️ تیترِ صفحه‌هایِ خرید و سرویس‌ها", callback="vtl:menu",
         handler=_page_titles, needs_state=True,
         after=("tadm:cfgnameprompt", "tadm:cfgguide", "tadm:edit_guides"),
+    ),
+    # === PATCH_VPN_API_SETTINGS_V1 === گزارشِ پشتیبانی: «دکمهٔ API ربات را در تنظیمات پیدا نکردم». ماژولِ APIِ فروشِ VPN
+    # (/api/vpn) و صفحهٔ مدیریتش از قبل بود ولی هیچ دکمه‌ای در تنظیماتِ رباتِ VPN به آن نمی‌رسید (فقط خدماتِ مجازی داشت).
+    SettingsItem(
+        label="🔑 API ربات", callback="tadm:apikey",
+        handler=_api_key, owner_only=True,
+        deny_text="🔒 مدیریت API ربات فقط برای مالک ربات در دسترس است.",
+        after=("tadm:backup:menu", "set:homemenutext"),
     ),
     SettingsItem(
         label="💸 برگشت وجه سرویس", callback="vrf:cfg",

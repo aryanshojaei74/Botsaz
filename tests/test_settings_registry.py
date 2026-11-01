@@ -200,6 +200,7 @@ VPN_CALLBACKS = {
     "vtl:menu", "set:cat_icons",   # PATCH_VPN_TITLES_IN_SETTINGS_V1
     "vrf:cfg",    # PATCH_VPN_REFUND_V1
     "stk:menu",   # PATCH_STOCK_ALARM_V1
+    "tadm:apikey",   # PATCH_VPN_API_SETTINGS_V1
 }
 
 
@@ -231,7 +232,7 @@ def test_vpn_menu_order_matches_previous_layout(vpn):
     assert out == ["tadm:homebtns", "tadm:btn_colors", "tadm:edit_guides", "tadm:cfgguide",
                    "tadm:cfgnameprompt", "set:trial", "gwname:menu", "set:buy_onhold", "set:autorenew",
                    "set:welcome", "dga:menu", "qrbg:menu", "pemj:menu:0",
-                   "set:homemenutext", "tadm:backup:menu", "tadm:groupsettings", "miniapp:panel", "vtl:menu", "set:cat_icons", "vrf:cfg", "stk:menu"]
+                   "set:homemenutext", "tadm:backup:menu", "tadm:groupsettings", "tadm:apikey", "miniapp:panel", "vtl:menu", "set:cat_icons", "vrf:cfg", "stk:menu"]
 
 
 def test_vpn_group_settings_only_on_paid_plans(vpn):
@@ -831,3 +832,13 @@ def test_central_home_and_hub_lost_kind_branches():
     assert '.field == "vpn_sales"' not in hub
     assert 'startswith("📘 راهنما و دستیار")' not in src
     assert '_sk("home", row.field)' in src
+
+
+
+def test_vpn_settings_have_owner_only_api_entry(vpn):
+    """PATCH_VPN_API_SETTINGS_V1 — «دکمهٔ API ربات را در تنظیمات پیدا نکردم»: رباتِ VPN هم باید این گزینه را داشته باشد، فقط برایِ مالک."""
+    regmod, mod = vpn
+    item = next(i for i in regmod.registered_items("vpn_sales") if i.callback == "tadm:apikey")
+    assert item.label == "🔑 API ربات" and item.owner_only is True
+    for plan in ("free", "growth", "pro"):
+        assert "tadm:apikey" in {i.callback for i in regmod.visible_items("vpn_sales", plan)}
