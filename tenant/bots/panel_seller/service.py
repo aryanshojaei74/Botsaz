@@ -380,6 +380,55 @@ async def test_available(bot_id: int, buyer_tg: int) -> bool:
     return used is None
 
 
+# === PATCH_PSEL_TEST_NOTIFY_V1 === (Whale) «برایِ نفراتی که تست می‌گیرن: پیام به ادمین یا کانالِ لاگ که چه کسی چه حجمی گرفته»
+async def test_notify_settings(bot_id: int) -> dict:
+    from tenant import get_setting
+    return {"admins": (await get_setting(bot_id, "psel_test_notify", "0")) == "1",
+            "channel": ((await get_setting(bot_id, "psel_test_log_channel", "")) or "").strip()}
+
+
+def parse_channel(raw: str) -> str | None:
+    """«@name» / «t.me/name» / «https://t.me/name» / «-100…» ⇒ مقدارِ قابلِ‌استفاده برایِ send_message؛ نامعتبر ⇒ None."""
+    import re
+    v = (raw or "").strip()
+    v = re.sub(r"^(https?://)?(t\.me|telegram\.me)/", "", v).strip("/ ")
+    if re.fullmatch(r"-100\d{5,15}", v):
+        return v
+    v = v.lstrip("@")
+    return f"@{v}" if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", v) else None
+
+
+def test_notice_text(buyer, username: str, hours: int, gb: int, users: int, tracking) -> str:
+    import html as _h
+    name = _h.escape(getattr(buyer, "full_name", "") or "—")
+    uname = getattr(buyer, "username", None)
+    tg = getattr(buyer, "telegram_id", "—")
+    return ("🧪 <b>تستِ رایگانِ جدید</b>\n\n"
+            f"👤 {name}" + (f" (@{_h.escape(uname)})" if uname else "") + f"\n🆔 <code>{tg}</code>\n\n"
+            f"📊 حجم: <b>{gb} گیگ</b>\n⏳ مدت: <b>{hours} ساعت</b>\n👥 حداکثرِ کاربر: <b>{users if users else 'نامحدود'}</b>\n"
+            f"🔑 نامِ کاربریِ پنل: <code>{_h.escape(username)}</code>\n🔖 کدِ پیگیری: <code>{_h.escape(str(tracking or '—'))}</code>")
+
+
+async def notify_test_taken(bot, row, buyer, username: str, hours: int, gb: int, users: int, tracking) -> bool:
+    """اگر مالک روشن کرده باشد: پیام به ادمین‌هایِ ربات و/یا کانالِ لاگ. خروجی: True اگر اعلانِ اختصاصی فعال بود (⇒ اعلانِ عمومیِ خرید تکراری نشود)."""
+    cfg = await test_notify_settings(row.id)
+    if not cfg["admins"] and not cfg["channel"]:
+        return False
+    text = test_notice_text(buyer, username, hours, gb, users, tracking)
+    if cfg["admins"]:
+        try:
+            from tenant import _notify_admins
+            await _notify_admins(bot, row, text)
+        except Exception:      # noqa: BLE001
+            logger.exception("panel_seller: اعلانِ تست به ادمین‌ها ناموفق بود")
+    if cfg["channel"]:
+        try:
+            await bot.send_message(parse_channel(cfg["channel"]) or cfg["channel"], text, parse_mode="HTML")
+        except Exception as e:      # noqa: BLE001
+            logger.warning("panel_seller: ارسال به کانالِ لاگِ تست ناموفق بود (%s): %s", cfg["channel"], e)
+    return True
+
+
 async def buy_test(bot_id: int, buyer_tg: int, api_factory=None, bot=None, row=None) -> dict:
     """status: ok | disabled | test_used | no_panel | unsupported | panel_failed."""
     api_factory = api_factory or _api
@@ -417,10 +466,12 @@ async def buy_test(bot_id: int, buyer_tg: int, api_factory=None, bot=None, row=N
     await save_secret(acc_id, password)               # PATCH_PSEL_PASSWORD_VAULT_V1
     if bot is not None and row is not None:
         try:
-            from tenant import _purchase_alert
             async with Session() as s:
                 buyer = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == buyer_tg))
-            await _purchase_alert(bot, row, buyer=buyer, section="پنل‌فروشی", detail="تستِ رایگان", amount=0, tracking_code=trk)
+            custom = await notify_test_taken(bot, row, buyer, username, cfg["hours"], cfg["gb"], cfg["users"], trk)
+            if not custom:                                  # اعلانِ اختصاصیِ تست خاموش است ⇒ همان اعلانِ عمومیِ خرید
+                from tenant import _purchase_alert
+                await _purchase_alert(bot, row, buyer=buyer, section="پنل‌فروشی", detail="تستِ رایگان", amount=0, tracking_code=trk)
         except Exception:      # noqa: BLE001
             logger.exception("panel_seller: اعلانِ تستِ رایگان ناموفق بود")
     return {"status": "ok", "account_id": acc_id, "username": username, "password": password,

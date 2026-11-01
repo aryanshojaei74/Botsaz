@@ -51,6 +51,7 @@ class PselFSM(StatesGroup):
     extra_price = State()      # PATCH_PSEL_EXTRA_VOLUME_V1
     test_cfg = State()         # PATCH_PSEL_FREE_TEST_V1
     custom_cfg = State()       # PATCH_PSEL_CUSTOM_VOLUME_V1
+    test_channel = State()     # PATCH_PSEL_TEST_NOTIFY_V1
 
 
 async def _guard(event, bot: Bot):
@@ -489,6 +490,12 @@ async def _set_view(row):
                      style=ButtonStyle.SUCCESS if _tc["enabled"] else ButtonStyle.DANGER)])
     rows.append([btn(f"⚙️ مشخصاتِ تست: {fa(_tc['hours'])} ساعت · {fa(_tc['gb'])} گیگ · {fa(_tc['users'])} کاربر", "psel:tc",
                      style=ButtonStyle.PRIMARY)])
+    from tenant.bots.panel_seller.service import test_notify_settings
+    _tn = await test_notify_settings(row.id)
+    rows.append([btn(f"📣 اعلانِ تست‌ها به ادمین: {'✅ روشن' if _tn['admins'] else '⛔️ خاموش'}", "psel:tn",
+                     style=ButtonStyle.SUCCESS if _tn["admins"] else ButtonStyle.DANGER)])
+    rows.append([btn("📢 کانالِ لاگِ تست‌ها: " + (_tn["channel"] if _tn["channel"] else "❌ متصل نیست"), "psel:tch",
+                     style=ButtonStyle.SUCCESS if _tn["channel"] else ButtonStyle.PRIMARY)])
     _xp = await extra_gb_price(row.id)
     rows.append([btn(f"📈 حجمِ اضافه: {fa(f'{_xp:,}') + ' تومان/گیگ' if _xp else '⛔️ خاموش'}", "psel:xp",
                      style=ButtonStyle.SUCCESS if _xp else ButtonStyle.DANGER)])
@@ -711,3 +718,59 @@ async def custom_cfg_save(msg: Message, bot: Bot, state: FSMContext):
     text, markup = await _set_view(row)
     await msg.answer(("✅ فروشِ حجمیِ دلخواه روشن شد.\n\n" if price else "✅ فروشِ حجمیِ دلخواه خاموش شد.\n\n") + text,
                      reply_markup=markup, parse_mode="HTML")
+
+
+# === PATCH_PSEL_TEST_NOTIFY_V1 === اعلانِ تست‌ها: به ادمین‌هایِ ربات و/یا کانالِ لاگ
+@psel_admin_router.callback_query(F.data == "psel:tn")
+async def test_notify_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    from tenant import get_setting, set_setting
+    cur = (await get_setting(row.id, "psel_test_notify", "0")) == "1"
+    await set_setting(row.id, "psel_test_notify", "0" if cur else "1")
+    text, markup = await _set_view(row)
+    await edit_or_send(cb, text, markup)
+    await cb.answer("از این به بعد با هر تست به ادمین‌ها پیام می‌آید ✅" if not cur else "خاموش شد.")
+
+
+@psel_admin_router.callback_query(F.data == "psel:tch")
+async def test_channel_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.set_state(PselFSM.test_channel)
+    await edit_or_send(
+        cb, "📢 <b>کانالِ لاگِ تست‌ها</b>\n\nبا هر تستِ رایگان، در این کانال پیام می‌آید که <b>چه کسی چه حجمی گرفته</b>.\n\n"
+            "۱) ربات را در کانال <b>ادمین</b> کن (اجازهٔ ارسالِ پیام)\n۲) یوزرنیمِ کانال را بفرست؛ مثلاً <code>@my_channel</code> یا "
+            "<code>https://t.me/my_channel</code> (برایِ کانالِ خصوصی: آیدیِ عددی مثلِ <code>-1001234567890</code>)\n\n"
+            "برایِ قطعِ اتصال <code>-</code> بفرست.", kb(back_row("psel:set", "✖️ لغو")))
+    await cb.answer()
+
+
+@psel_admin_router.message(PselFSM.test_channel, F.text)
+async def test_channel_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard(msg, bot)
+    if not row:
+        return
+    from tenant import set_setting
+    from tenant.bots.panel_seller.service import parse_channel
+    raw = (msg.text or "").strip()
+    if raw in ("-", "—"):
+        await set_setting(row.id, "psel_test_log_channel", "")
+        await state.clear()
+        text, markup = await _set_view(row)
+        return await msg.answer("✅ کانالِ لاگ قطع شد.\n\n" + text, reply_markup=markup, parse_mode="HTML")
+    ch = parse_channel(raw)
+    if not ch:
+        return await msg.answer("❌ نامعتبر. مثلاً <code>@my_channel</code> یا <code>-1001234567890</code> بفرست (یا <code>-</code> برایِ قطع).",
+                                parse_mode="HTML")
+    try:                                      # با یک پیامِ آزمایشی مطمئن می‌شویم ربات واقعاً می‌تواند بنویسد
+        await bot.send_message(ch, "✅ کانالِ لاگِ تست‌هایِ پنل‌فروشی متصل شد؛ از این به بعد با هر تستِ رایگان اینجا اعلان می‌آید.")
+    except Exception as e:      # noqa: BLE001
+        return await msg.answer("❌ ربات نتوانست در این کانال پیام بفرستد. اول ربات را در کانال ادمین کن و دوباره بفرست.\n"
+                                f"🔎 <code>{_html.escape(str(e)[:200])}</code>", parse_mode="HTML")
+    await set_setting(row.id, "psel_test_log_channel", ch)
+    await state.clear()
+    text, markup = await _set_view(row)
+    await msg.answer("✅ کانالِ لاگ متصل شد.\n\n" + text, reply_markup=markup, parse_mode="HTML")

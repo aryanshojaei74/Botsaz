@@ -776,3 +776,14 @@ async def test_owner_can_switch_back_to_closing_login_on_volume_end(ui, _key, mo
 def test_new_permissions_exist_with_right_defaults():
     from tenant.bots.panel_seller.admin import PERMS
     assert PERMS["psel_allow_showpw"][1] == "1" and PERMS["psel_keep_login"][1] == "1"
+
+
+@pytest.mark.asyncio
+async def test_settings_page_has_test_notification_controls(ui):
+    """PATCH_PSEL_TEST_NOTIFY_V1 — دکمه‌هایِ «اعلانِ تست‌ها» و «کانالِ لاگِ تست‌ها» در «دسترسی‌هایِ مشتری»."""
+    cb = _Cb("psel:set", uid=500)
+    await ui.AM.set_menu(cb, None)
+    cbs = _cbs(cb.message)
+    assert "psel:tn" in cbs and "psel:tch" in cbs
+    txt = " ".join(b.text for r in cb.message.out[-1][1].inline_keyboard for b in r)
+    assert "اعلانِ تست‌ها به ادمین" in txt and "کانالِ لاگِ تست‌ها" in txt and "متصل نیست" in txt
