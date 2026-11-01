@@ -478,7 +478,7 @@ async def test_login_button_support_button_and_buyer_delete_flow(ui):
     urls, cbs = _urls(cb.message), _cbs(cb.message)
     assert "https://p.example.com:8000" in urls                                                  # ورود به پنل وب
     assert f"psel:cf:{a.id}:s" not in cbs                                                        # پنلِ قدیمی: دکمهٔ آدرسِ پشتیبانیِ ادمین نیست
-    assert f"psel:a:{a.id}" in cbs                                                               # «📊 مشخصات و مصرف»
+    assert f"psel:sp:{a.id}" in cbs                                                              # «📊 مشخصات و مصرف» ⇒ صفحهٔ کاملِ مشخصات
     assert f"psel:dl:{a.id}" not in cbs                                                          # حذف: پیش‌فرض ممنوع
     cb = _Cb(f"psel:dlok:{a.id}")
     await UM.delete_flow(cb, None)
@@ -593,3 +593,94 @@ async def test_native_limit_applied_on_new_style_create_renew_and_extra_volume(u
 
 def r_username(r):
     return r["username"]
+
+
+def _grid(m):
+    kbm = m.out[-1][1]
+    return [[(b.callback_data or b.url) for b in r] for r in kbm.inline_keyboard]
+
+
+@pytest.mark.asyncio
+async def test_account_buttons_are_a_tidy_two_column_grid(ui):
+    """PATCH_PSEL_ACCOUNT_GRID_V1 — «دکمه‌هایِ بخشِ پنل‌هایِ من مرتب شود»."""
+    await ui.tenant.set_setting(7, "psel_allow_pw", "1")
+    await ui.tenant.set_setting(7, "psel_allow_toggle", "1")
+    await ui.tenant.set_setting(7, "psel_allow_delete", "1")
+    await ui.tenant.set_setting(7, "psel_extra_gb_price", "1000")
+    ui.tenant._SETTING_CACHE.clear()
+    FakeAPI.new_style = True
+    await ui.UM.buy_do(_Cb("psel:bok:1"), None, _St())
+    async with ui.maker() as s:
+        a = await s.scalar(select(models.PanelSellerAccount))
+    cb = _Cb(f"psel:a:{a.id}")
+    await ui.UM.my_detail(cb, None)
+    g = _grid(cb.message)
+    assert g[0] == [f"psel:sp:{a.id}", f"psel:xg:{a.id}"]                              # ردیفِ اول: مشخصات | حجمِ اضافه
+    assert all(len(r) <= 2 for r in g)                                                  # هیچ ردیفی بیش از ۲ دکمه نیست
+    flat = [c for r in g for c in r]
+    for want in (f"psel:rn:{a.id}", f"psel:rnm:{a.id}", f"psel:cf:{a.id}:t", f"psel:cf:{a.id}:s", f"psel:pw:{a.id}",
+                 f"psel:tg:{a.id}:0", f"psel:tg:{a.id}:1", f"psel:dl:{a.id}", "psel:my"):
+        assert want in flat, want
+    assert g[-1] == ["psel:my"] and g[-2] == [f"psel:dl:{a.id}"]                        # حذف تک‌دکمه، آخرین قبل از بازگشت
+
+
+@pytest.mark.asyncio
+async def test_spec_page_shows_full_details_usage_bar_and_notification_toggle(ui, monkeypatch):
+    """PATCH_PSEL_SPEC_PAGE_V1 — «مشخصات و مصرف» اطلاعاتِ کامل (مثلِ رباتِ VPN) نشان می‌دهد."""
+    await ui.UM.buy_do(_Cb("psel:bok:1"), None, _St())
+    async with ui.maker() as s:
+        a = await s.scalar(select(models.PanelSellerAccount))
+    monkeypatch.setattr(FakeAPI, "usage", int(96.5 * 1024 ** 3))     # ۹۶٫۵ از ۱۰۰ گیگ (monkeypatch: به تست‌هایِ دیگر نشت نکند)
+    monkeypatch.setattr(FakeAPI, "users", 3)
+    cb = _Cb(f"psel:sp:{a.id}")
+    await ui.UM.spec_page(cb, None)
+    txt = cb.message.out[-1][0]
+    assert a.admin_username in txt and "سقفِ حجم" in txt and "۱۰۰ GB" in txt
+    assert "مصرف‌شده" in txt and "باقی‌مانده" in txt and "█" in txt and "۹۷٪" in txt          # ۹۶٫۵٪ گرد می‌شود
+    assert "اعلانِ پایانِ حجم" in txt and "فعال" in txt and "کاربران" in txt
+    assert f"psel:nt:{a.id}" in _cbs(cb.message) and "https://p.example.com:8000" in _urls(cb.message)
+    # خاموش‌کردنِ اعلان ⇒ پرچمِ nt0؛ دوباره ⇒ برمی‌گردد
+    cb = _Cb(f"psel:nt:{a.id}")
+    await ui.UM.spec_page(cb, None)
+    assert "🔴 خاموش" in cb.message.out[-1][0]
+    async with ui.maker() as s:
+        assert "nt0" in (await s.get(models.PanelSellerAccount, a.id)).flags
+    cb = _Cb(f"psel:nt:{a.id}")
+    await ui.UM.spec_page(cb, None)
+    assert "🟢 فعال" in cb.message.out[-1][0]
+    # خریدارِ دیگر دسترسی ندارد
+    cb = _Cb(f"psel:nt:{a.id}", uid=999)
+    await ui.UM.spec_page(cb, None)
+    assert cb.alerts and not cb.message.out
+
+
+@pytest.mark.asyncio
+async def test_traffic_warning_at_80_percent_and_suspend_at_100_respect_notification_toggle(ui, monkeypatch):
+    """سؤالِ Whale: «اگر حجمِ پنلِ مشتری تموم شد یا نزدیکِ پایان رسید هشدار می‌ره؟» + خاموش‌کردنِ اعلان."""
+    r = await SV.buy(7, 1001, 1, api_factory=FakeAPI)
+    monkeypatch.setattr(FakeAPI, "usage", int(85 * 1024 ** 3))                                                # ۸۵٪
+    out = await SV.enforce_once(7, api_factory=FakeAPI)
+    assert [m for tg, m in out if tg == 1001 and "۸۰٪" in m]                          # هشدارِ ۸۰٪ به مشتری
+    out2 = await SV.enforce_once(7, api_factory=FakeAPI)
+    assert not [m for tg, m in out2 if "۸۰٪" in m]                                    # تکراری نمی‌شود
+    monkeypatch.setattr(FakeAPI, "usage", int(100 * 1024 ** 3))                                               # تمام
+    out3 = await SV.enforce_once(7, api_factory=FakeAPI)
+    assert [m for tg, m in out3 if tg == 1001 and "تمام شد" in m] and [1 for tg, _m in out3 if tg == 0]   # مشتری + مالک
+    async with ui.maker() as s:
+        assert (await s.get(models.PanelSellerAccount, r["account_id"])).status == "suspended"
+    # مشتریِ دیگر با اعلانِ خاموش: هشدارِ ۸۰٪ نمی‌رود ولی تعلیقِ ۱۰۰٪ هنوز اطلاع می‌دهد
+    r2 = await SV.buy(7, 1001, 1, api_factory=FakeAPI, username="second1")
+    async with ui.maker() as s:
+        acc = await s.get(models.PanelSellerAccount, r2["account_id"])
+        acc.flags = "nt0"
+        await s.commit()
+    monkeypatch.setattr(FakeAPI, "usage", int(85 * 1024 ** 3))
+    out4 = await SV.enforce_once(7, api_factory=FakeAPI)
+    assert not [m for tg, m in out4 if "second1" in m and "۸۰٪" in m]
+    monkeypatch.setattr(FakeAPI, "usage", int(100 * 1024 ** 3))
+    out5 = await SV.enforce_once(7, api_factory=FakeAPI)
+    assert [m for tg, m in out5 if tg == 1001 and "second1" in m and "تمام شد" in m]
+    # تمدید پرچمِ nt0 را نگه می‌دارد
+    await SV.renew(7, r2["account_id"], 1001, api_factory=FakeAPI)
+    async with ui.maker() as s:
+        assert (await s.get(models.PanelSellerAccount, r2["account_id"])).flags == "nt0"

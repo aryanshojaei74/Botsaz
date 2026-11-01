@@ -373,35 +373,93 @@ async def my_detail(cb: CallbackQuery, bot: Bot):
         if live:
             used, users, new_style = live
             text += (f"\n📊 مصرف: {fa(f'{used:.1f}')} از {gb_text(a.data_gb)}\n👥 کاربران: {fa(users)} از {users_text(a.max_users)}")
-    rows = []
     aid = a.id
-    # === PATCH_PSEL_ACCOUNT_BUTTONS_V1 === (Whale Support) مثلِ صفحهٔ سرویس در رباتِ VPN
-    rows.append([btn("📊 مشخصات و مصرف", f"psel:a:{aid}", style=ButtonStyle.SUCCESS)])
-    if panel and (panel.base_url or "").startswith(("http://", "https://")):
-        rows.append([btn("🌐 ورود به پنل وب", url=panel.base_url, style=ButtonStyle.PRIMARY)])
-    rows.append([btn("✏️ تغییرِ نامِ سرویس", f"psel:rnm:{aid}", style=ButtonStyle.PRIMARY)])
-    if new_style and a.status == "active":       # PATCH_PSEL_CONTACT_FIELDS_V1 — فیلدهایِ رسمیِ ادمینِ پاسارگاردِ جدید
-        rows.append([btn("🆘 آدرسِ پشتیبانی", f"psel:cf:{aid}:s", style=ButtonStyle.PRIMARY),
-                     btn("🏷 عنوانِ پروفایل", f"psel:cf:{aid}:t", style=ButtonStyle.PRIMARY)])
+    # === PATCH_PSEL_ACCOUNT_GRID_V1 === (Whale Support) دکمه‌ها مرتب و جفت‌جفت، مثلِ صفحهٔ سرویس در رباتِ VPN
+    can_extra = bool(a.data_gb) and (a.status == "active" or (a.status == "suspended" and a.suspend_reason == "traffic")) \
+        and await SV.extra_gb_price(row.id) > 0
+    cells = [btn("📊 مشخصات و مصرف", f"psel:sp:{aid}", style=ButtonStyle.SUCCESS)]
+    if can_extra:
+        cells.append(btn("📈 خریدِ حجمِ اضافه", f"psel:xg:{aid}", style=ButtonStyle.SUCCESS))
     if await _perm(row, "psel_allow_renew"):
-        rows.append([btn("🔁 تمدید", f"psel:rn:{aid}", style=ButtonStyle.SUCCESS)])
-    if a.status == "active":
-        pw_btn = [btn("🔑 رمزِ تازه", f"psel:pw:{aid}", style=ButtonStyle.PRIMARY)] if await _perm(row, "psel_allow_pw") else []
-        tg_btns = ([btn("⏸ خاموشِ اشتراک‌ها", f"psel:tg:{aid}:0", style=ButtonStyle.PRIMARY),
-                    btn("▶️ روشنِ اشتراک‌ها", f"psel:tg:{aid}:1", style=ButtonStyle.SUCCESS)]
-                   if await _perm(row, "psel_allow_toggle") else [])
-        if pw_btn:
-            rows.append(pw_btn)
-        if tg_btns:
-            rows.append(tg_btns)
-    # === PATCH_PSEL_EXTRA_VOLUME_V1 ===
-    if a.data_gb and (a.status == "active" or (a.status == "suspended" and a.suspend_reason == "traffic")) \
-            and await SV.extra_gb_price(row.id) > 0:
-        rows.append([btn("📈 خریدِ حجمِ اضافه", f"psel:xg:{aid}", style=ButtonStyle.SUCCESS)])
+        cells.append(btn("🔁 تمدید", f"psel:rn:{aid}", style=ButtonStyle.SUCCESS))
+    if panel and (panel.base_url or "").startswith(("http://", "https://")):
+        cells.append(btn("🌐 ورود به پنل وب", url=panel.base_url, style=ButtonStyle.PRIMARY))
+    cells.append(btn("✏️ تغییرِ نامِ سرویس", f"psel:rnm:{aid}", style=ButtonStyle.PRIMARY))
+    if new_style and a.status == "active":       # PATCH_PSEL_CONTACT_FIELDS_V1 — فیلدهایِ رسمیِ ادمینِ پاسارگاردِ جدید
+        cells.append(btn("🏷 عنوانِ پروفایل", f"psel:cf:{aid}:t", style=ButtonStyle.PRIMARY))
+        cells.append(btn("🆘 آدرسِ پشتیبانی", f"psel:cf:{aid}:s", style=ButtonStyle.PRIMARY))
+    if a.status == "active" and await _perm(row, "psel_allow_pw"):
+        cells.append(btn("🔑 رمزِ تازه", f"psel:pw:{aid}", style=ButtonStyle.PRIMARY))
+    rows = [cells[k:k + 2] for k in range(0, len(cells), 2)]
+    if a.status == "active" and await _perm(row, "psel_allow_toggle"):
+        rows.append([btn("⏸ خاموشِ سرویس", f"psel:tg:{aid}:0", style=ButtonStyle.DANGER),
+                     btn("▶️ روشنِ سرویس", f"psel:tg:{aid}:1", style=ButtonStyle.SUCCESS)])
     if await _perm(row, "psel_allow_delete"):
         rows.append([btn("🗑 حذفِ دائمیِ سرویس", f"psel:dl:{aid}", style=ButtonStyle.DANGER)])
     rows.append(back_row("psel:my"))
     await edit_or_send(cb, text, kb(*rows))
+    await cb.answer()
+
+
+def _bar(pct: float, n_blocks: int = 10) -> str:
+    pct = max(0.0, min(100.0, pct))
+    filled = int(round(pct / 100 * n_blocks))
+    return "█" * filled + "░" * (n_blocks - filled)
+
+
+@psel_user_router.callback_query(F.data.regexp(r"^psel:(sp|nt):\d+$"))
+async def spec_page(cb: CallbackQuery, bot: Bot):
+    """PATCH_PSEL_SPEC_PAGE_V1 — «📊 مشخصات و مصرف»: صفحهٔ کاملِ سرویس (مثلِ رباتِ VPN) + «اعلانِ حجم» روشن/خاموش."""
+    parts = cb.data.split(":")
+    row, a = await _acc_for(cb, bot, int(parts[2]))
+    if not a:
+        return
+    if parts[1] == "nt":                                # روشن/خاموشِ هشدارِ نزدیکِ-پایانِ حجم (پرچمِ nt0 = خاموش)
+        async with Session() as s:
+            acc = await s.get(PanelSellerAccount, a.id, with_for_update=True)
+            fl = SV._flags(acc)
+            fl.symmetric_difference_update({"nt0"})
+            SV._set_flags(acc, fl)
+            await s.commit()
+            a = acc
+    async with Session() as s:
+        panel = await s.get(VpnPanel, a.panel_id)
+    notif_on = "nt0" not in SV._flags(a)
+    lines = ["📋 <b>مشخصاتِ سرویس</b>", "", "📌 این اطلاعات برایِ ورود به پنل و پیگیریِ سرویسِ شماست.", "",
+             f"• نامِ نمایشی: <b>{esc(a.title)}</b>",
+             f"• نامِ کاربریِ ورود به پنل: <code>{esc(a.admin_username)}</code>"]
+    if await _perm(row, "psel_allow_pw"):
+        lines.append("• رمزِ پنل: ذخیره نمی‌شود؛ از «🔑 رمزِ تازه» بگیر")
+    lines.append(f"• کدِ سرویس: <code>{esc(a.tracking_code or a.id)}</code>")
+    lines.append("")
+    live = await _live_usage(a, panel) if (panel and a.status == "active") else None
+    if a.data_gb:
+        lines.append(f"• سقفِ حجم: <b>{fa(int(a.data_gb))} GB</b>")
+        if live:
+            used = live[0]
+            left = max(0.0, a.data_gb - used)
+            pct = used / a.data_gb * 100
+            lines += [f"• مصرف‌شده: <b>{fa(f'{used:.2f}')} GB</b>", f"• باقی‌مانده: <b>{fa(f'{left:.2f}')} GB</b>",
+                      f"• نمودارِ مصرف: <code>{_bar(pct)}</code> {fa(int(pct + 0.5))}٪"]
+        else:
+            lines.append("• مصرفِ زنده الان از پنل خوانده نشد؛ کمی بعد دوباره امتحان کن.")
+        lines.append(f"• اعلانِ پایانِ حجم: <b>{'🟢 فعال' if notif_on else '🔴 خاموش'}</b>")
+    else:
+        lines.append("• حجم: <b>نامحدود</b>")
+        if live:
+            lines.append(f"• مصرف‌شده: <b>{fa(f'{live[0]:.2f}')} GB</b>")
+    if live:
+        lines.append(f"• کاربران: <b>{fa(live[1])}</b> از {users_text(a.max_users)}")
+    lines += ["", f"• ⏳ پایان: {exp_text(a.expires_at)}", f"• وضعیت: {STATUS_FA.get(a.status, a.status)}"]
+    rows = []
+    if panel and (panel.base_url or "").startswith(("http://", "https://")):
+        rows.append([btn("🌐 ورود به پنل وب", url=panel.base_url, style=ButtonStyle.PRIMARY)])
+    if a.data_gb:
+        rows.append([btn("🔕 خاموش‌کردنِ اعلانِ حجم" if notif_on else "🔔 روشن‌کردنِ اعلانِ حجم", f"psel:nt:{a.id}",
+                         style=ButtonStyle.DANGER if notif_on else ButtonStyle.SUCCESS)])
+    rows.append([btn("🔄 بروزرسانی", f"psel:sp:{a.id}", style=ButtonStyle.PRIMARY)])
+    rows.append(back_row(f"psel:a:{a.id}", "⬅️ بازگشت به پنل"))
+    await edit_or_send(cb, "\n".join(lines), kb(*rows))
     await cb.answer()
 
 

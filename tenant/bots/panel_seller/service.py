@@ -254,7 +254,7 @@ async def renew(bot_id: int, account_id: int, buyer_tg: int, api_factory=None) -
         else:
             acc.expires_at = None                        # بستهٔ نامحدود: بدونِ انقضا
         acc.data_gb, acc.max_users = pk.data_gb, pk.max_users
-        acc.status, acc.suspend_reason, acc.flags = "active", None, None
+        acc.status, acc.suspend_reason, acc.flags = "active", None, ("nt0" if "nt0" in _flags(acc) else None)
         acc.price_toman = int(acc.price_toman or 0) + price
         await s.commit()
         exp = acc.expires_at
@@ -555,7 +555,7 @@ async def resume(bot_id: int, account_id: int, api_factory=None) -> dict:
         return {"status": "panel_failed", "error": str(e)[:300]}
     async with Session() as s:
         acc = await s.get(PanelSellerAccount, account_id, with_for_update=True)
-        acc.status, acc.suspend_reason, acc.flags = "active", None, None
+        acc.status, acc.suspend_reason, acc.flags = "active", None, ("nt0" if "nt0" in _flags(acc) else None)
         await s.commit()
     return {"status": "ok", "password": pw, "username": uname, "buyer_tg": acc.buyer_tg}
 
@@ -632,7 +632,8 @@ async def enforce_once(bot_id: int, api_factory=None, now: datetime | None = Non
                 continue
             if used >= limit * WARN_TRAFFIC and "tr80" not in fl:
                 fl.add("tr80")
-                out.append((a.buyer_tg, f"⚠️ بیش از ۸۰٪ حجمِ پنلِ {label} مصرف شده."))
+                if "nt0" not in fl:                    # PATCH_PSEL_SPEC_PAGE_V1: مشتری اعلانِ حجم را خاموش کرده؛ (تعلیقِ ۱۰۰٪ همیشه اطلاع می‌دهد)
+                    out.append((a.buyer_tg, f"⚠️ بیش از ۸۰٪ حجمِ پنلِ {label} مصرف شده."))
         if users is not None and a.max_users and users > a.max_users and "usr" not in fl:
             fl.add("usr")
             out.append((a.buyer_tg, f"⚠️ تعدادِ کاربرانِ پنلِ {label} ({users}) از سقفِ بسته ({a.max_users}) بیشتر است."))
