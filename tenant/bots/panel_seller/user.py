@@ -84,7 +84,8 @@ async def buy_detail(cb: CallbackQuery, bot: Bot):
     if not p or p.bot_id != row.id or not p.active:
         return await cb.answer("این بسته دیگر موجود نیست.", show_alert=True)
     await edit_or_send(cb, f"{pk_line(p)}\n\nپرداخت از کیف‌پولِ ربات انجام می‌شود (اگر موجودی کم بود، شارژِ حساب باز می‌شود).",
-                       kb([btn("✅ خرید با کیف‌پول", f"psel:bok:{pid}", style=ButtonStyle.SUCCESS)], back_row("psel:buy")))
+                       kb([btn("✅ خرید با کیف‌پول", f"psel:bok:{pid}", style=ButtonStyle.SUCCESS)],
+                          [btn("🏷 کد تخفیف دارم", f"psel:dc:p:{pid}", style=ButtonStyle.PRIMARY)], back_row("psel:buy")))
     await cb.answer()
 
 
@@ -100,16 +101,17 @@ async def buy_back(cb: CallbackQuery, bot: Bot, state: FSMContext):
 class PselBuyFSM(StatesGroup):
     username = State()       # PATCH_PSEL_PICK_USERNAME_V1
     custom_gb = State()      # PATCH_PSEL_CUSTOM_VOLUME_V1
+    discount = State()       # PATCH_PSEL_DISCOUNT_V1
 
 
 _TAKEN_HINTS = ("exist", "already", "409", "duplicate", "taken", "unique")
 
 
 async def _provision(event, bot: Bot, row, uid: int, *, pid: int | None = None, gb: int | None = None,
-                     username: str | None = None, retry_cb: str = "") -> dict:
+                     username: str | None = None, retry_cb: str = "", discount_code: str | None = None) -> dict:
     """خریدِ بسته (pid) یا حجمِ دلخواه (gb) و نمایشِ نتیجه. event: CallbackQuery یا Message. خروجی: دیکشنریِ نتیجه (status…)."""
-    r = (await SV.buy_custom(row.id, uid, int(gb), bot=bot, row=row, username=username) if gb is not None
-         else await SV.buy(row.id, uid, int(pid), bot=bot, row=row, username=username))
+    r = (await SV.buy_custom(row.id, uid, int(gb), bot=bot, row=row, username=username, discount_code=discount_code) if gb is not None
+         else await SV.buy(row.id, uid, int(pid), bot=bot, row=row, username=username, discount_code=discount_code))
     st = r["status"]
     msg_obj = event.message if isinstance(event, CallbackQuery) else event
     if st == "insufficient":
@@ -120,6 +122,8 @@ async def _provision(event, bot: Bot, row, uid: int, *, pid: int | None = None, 
         if not (username and any(h in (r.get("error") or "").lower() for h in _TAKEN_HINTS)):
             await edit_or_send(event, "❌ ساختِ پنل با خطا روبه‌رو شد؛ مبلغی کم نشد (اگر کم شده بود برگشته).\n"
                                       "کمی بعد دوباره امتحان کن یا به پشتیبانی بگو.", kb(back_row("psel:buy")))
+    elif st == "bad_discount":
+        await edit_or_send(event, "❌ " + (r.get("reason") or "کد تخفیف معتبر نیست.") + "\nبدونِ کد هم می‌توانی بخری.", kb(back_row("psel:buy")))
     elif st != "ok":
         msg = {"bad_username": "نام‌کاربری نامعتبر است.", "username_taken": "این نام‌کاربری قبلاً گرفته شده.",
                "bad_amount": "مقدارِ نامعتبر.", "disabled": "این بخش فعال نیست."}.get(st) or _ERR_FA.get(st, "خرید انجام نشد.")
@@ -131,7 +135,30 @@ async def _provision(event, bot: Bot, row, uid: int, *, pid: int | None = None, 
                    f"🔑 رمز: <code>{esc(r['password'])}</code>\n🔖 کدِ پیگیری: <code>{esc(r['tracking'])}</code>\n\n"
                    "رمز را جایی امن نگه دار. وضعیتِ پنل از «🗂 پنل‌هایِ من» قابلِ مشاهده است.",
             kb(*_login_rows(r.get("panel_url")), [btn("🗂 پنل‌هایِ من", "psel:my", style=ButtonStyle.PRIMARY)], HOME_ROW))
+        if r.get("discount"):
+            try:
+                await msg_obj.answer(f"🏷 تخفیفِ این خرید: <b>{n(r['discount'])}</b> تومان · پرداختی: <b>{n(r['paid'])}</b> تومان", parse_mode="HTML")
+            except Exception:      # noqa: BLE001
+                logger.info("panel_seller: پیامِ تخفیف ارسال نشد")
     return r
+
+
+def _ctx(pid=None, gb=None) -> str:
+    return f"p:{pid}" if pid is not None else f"g:{gb}"
+
+
+async def _disc_code(state: FSMContext, ctx: str) -> str | None:
+    """کدِ تخفیفِ تأییدشده برایِ همین خرید (اگر مشتری برای خریدِ دیگری کد زده بود اعمال نمی‌شود)."""
+    d = await state.get_data()
+    return d.get("dc_code") if d.get("dc_ctx") == ctx else None
+
+
+async def _clear_disc(state: FSMContext) -> None:
+    d = await state.get_data()
+    if "dc_code" in d or "dc_ctx" in d:
+        d.pop("dc_code", None)
+        d.pop("dc_ctx", None)
+        await state.set_data(d)
 
 
 def _login_rows(url: str | None) -> list:
@@ -156,14 +183,17 @@ async def buy_do(cb: CallbackQuery, bot: Bot, state: FSMContext):
     pid = int(cb.data.split(":")[2])
     uid = cb.from_user.id
     await get_or_create_user(row.id, uid, cb.from_user.full_name or "", cb.from_user.username or "")
+    code = await _disc_code(state, _ctx(pid=pid))                 # PATCH_PSEL_DISCOUNT_V1
     if await SV.pick_username_enabled(row.id):                    # PATCH_PSEL_PICK_USERNAME_V1
         await state.clear()
         await state.set_state(PselBuyFSM.username)
-        await state.update_data(pu_pid=pid, pu_gb=None)
+        await state.update_data(pu_pid=pid, pu_gb=None, pu_code=code)
         await edit_or_send(cb, _USERNAME_PROMPT, kb(back_row("psel:buy", "✖️ لغو")))
         return await cb.answer()
     await cb.answer("در حالِ ساختِ پنل…")
-    await _provision(cb, bot, row, uid, pid=pid, retry_cb=cb.data)
+    r = await _provision(cb, bot, row, uid, pid=pid, retry_cb=cb.data, discount_code=code)
+    if r["status"] in ("ok", "bad_discount"):
+        await _clear_disc(state)
 
 
 @psel_user_router.message(PselBuyFSM.username, F.text)
@@ -177,7 +207,7 @@ async def username_in(msg: Message, bot: Bot, state: FSMContext):
     if await SV.username_taken(row.id, u):
         return await msg.answer("❌ این نام‌کاربری قبلاً گرفته شده؛ یکی دیگر بفرست.", parse_mode="HTML")
     d = await state.get_data()
-    pid, gb = d.get("pu_pid"), d.get("pu_gb")
+    pid, gb, code = d.get("pu_pid"), d.get("pu_gb"), d.get("pu_code")
     if pid is None and gb is None:
         await state.clear()
         return
@@ -185,7 +215,7 @@ async def username_in(msg: Message, bot: Bot, state: FSMContext):
     if not ok:
         await state.clear()
         return await msg.answer(f"⛔️ {why}")
-    r = await _provision(msg, bot, row, msg.from_user.id, pid=pid, gb=gb, username=u,
+    r = await _provision(msg, bot, row, msg.from_user.id, pid=pid, gb=gb, username=u, discount_code=code,
                          retry_cb=(f"psel:cgo:{gb}" if gb is not None else f"psel:bok:{pid}"))
     if r["status"] == "panel_failed" and any(h in (r.get("error") or "").lower() for h in _TAKEN_HINTS):
         return await msg.answer("❌ این نام‌کاربری روی پنل گرفته شده؛ یکی دیگر بفرست.", parse_mode="HTML")
@@ -228,7 +258,8 @@ async def custom_gb_in(msg: Message, bot: Bot, state: FSMContext):
     await state.clear()
     await msg.answer(f"📦 <b>{fa(v)} گیگ</b>\n💰 مبلغ: <b>{n(v * cfg['price'])}</b> تومان از کیف‌پول کسر می‌شود.\n"
                      f"⏳ مدت: {days_text(cfg['days'])}", parse_mode="HTML",
-                     reply_markup=kb([btn("✅ خرید با کیف‌پول", f"psel:cgo:{v}", style=ButtonStyle.SUCCESS)], back_row("psel:buy")))
+                     reply_markup=kb([btn("✅ خرید با کیف‌پول", f"psel:cgo:{v}", style=ButtonStyle.SUCCESS)],
+                                     [btn("🏷 کد تخفیف دارم", f"psel:dc:g:{v}", style=ButtonStyle.PRIMARY)], back_row("psel:buy")))
 
 
 @psel_user_router.callback_query(F.data.regexp(r"^psel:cgo:\d+$"))
@@ -242,14 +273,61 @@ async def custom_buy(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return await cb.answer(why, show_alert=True)
     gb, uid = int(cb.data.split(":")[2]), cb.from_user.id
     await get_or_create_user(row.id, uid, cb.from_user.full_name or "", cb.from_user.username or "")
+    code = await _disc_code(state, _ctx(gb=gb))                   # PATCH_PSEL_DISCOUNT_V1
     if await SV.pick_username_enabled(row.id):
         await state.clear()
         await state.set_state(PselBuyFSM.username)
-        await state.update_data(pu_pid=None, pu_gb=gb)
+        await state.update_data(pu_pid=None, pu_gb=gb, pu_code=code)
         await edit_or_send(cb, _USERNAME_PROMPT, kb(back_row("psel:buy", "✖️ لغو")))
         return await cb.answer()
     await cb.answer("در حالِ ساختِ پنل…")
-    await _provision(cb, bot, row, uid, gb=gb, retry_cb=cb.data)
+    r = await _provision(cb, bot, row, uid, gb=gb, retry_cb=cb.data, discount_code=code)
+    if r["status"] in ("ok", "bad_discount"):
+        await _clear_disc(state)
+
+
+# ═══════════════════════ کد تخفیف ═══════════════════════
+# === PATCH_PSEL_DISCOUNT_V1 === همان موتورِ کد تخفیفِ رباتِ VPN (درصدی/ثابت، انقضا، سقفِ استفاده، هر نفر یک‌بار)
+
+@psel_user_router.callback_query(F.data.regexp(r"^psel:dc:[pg]:\d+$"))
+async def disc_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _row(bot)
+    if not row:
+        return await cb.answer()
+    ok, why = await sales_gate(row)
+    if not ok:
+        return await cb.answer(why, show_alert=True)
+    from tenant import get_setting
+    if (await get_setting(row.id, "discount_purchase_enabled", "1")) == "0":
+        return await cb.answer("استفاده از کد تخفیف فعلاً غیرفعال است.", show_alert=True)
+    _, _, kind, num = cb.data.split(":")
+    back = f"psel:b:{num}" if kind == "p" else "psel:cvb"
+    await state.clear()
+    await state.set_state(PselBuyFSM.discount)
+    await state.update_data(dc_kind=kind, dc_num=int(num))
+    await edit_or_send(cb, "🏷 <b>کد تخفیف</b> را بفرست:", kb(back_row(back, "✖️ لغو")))
+    await cb.answer()
+
+
+@psel_user_router.message(PselBuyFSM.discount, F.text)
+async def disc_in(msg: Message, bot: Bot, state: FSMContext):
+    row = await _row(bot)
+    if not row:
+        return await state.clear()
+    d = await state.get_data()
+    kind, num = d.get("dc_kind"), int(d.get("dc_num") or 0)
+    code = (msg.text or "").strip()
+    q = await SV.quote_discount(row.id, msg.from_user.id, code, **({"package_id": num} if kind == "p" else {"gb": num}))
+    if not q["ok"]:
+        return await msg.answer(f"❌ {q['reason']}\nکدِ دیگری بفرست یا لغو کن.",
+                                reply_markup=kb(back_row(f"psel:b:{num}" if kind == "p" else "psel:cvb", "✖️ لغو")))
+    ctx = _ctx(pid=num) if kind == "p" else _ctx(gb=num)
+    await state.set_state(None)
+    await state.set_data({"dc_code": code, "dc_ctx": ctx})
+    buy_cb = f"psel:bok:{num}" if kind == "p" else f"psel:cgo:{num}"
+    await msg.answer(f"✅ {esc(q['label'])}\n💰 قیمت: <s>{n(q['price'])}</s> → <b>{n(q['final'])}</b> تومان\n\nپرداخت از کیف‌پول:",
+                     parse_mode="HTML", reply_markup=kb([btn("✅ خرید با کیف‌پول", buy_cb, style=ButtonStyle.SUCCESS)],
+                                                       back_row("psel:buy")))
 
 
 async def tell_owner_failure(bot: Bot, row, buyer_tg: int, what: str, error: str | None) -> None:

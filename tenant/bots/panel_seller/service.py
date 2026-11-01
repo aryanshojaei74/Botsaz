@@ -188,10 +188,36 @@ async def pick_username_enabled(bot_id: int) -> bool:
     return (await get_setting(bot_id, "psel_pick_username", "0")) == "1"
 
 
+async def quote_discount(bot_id: int, buyer_tg: int, code: str, *, package_id: int | None = None, gb: int | None = None) -> dict:
+    """PATCH_PSEL_DISCOUNT_V1 — پیش‌نمایشِ کد تخفیف (بدونِ ثبتِ مصرف). خروجی: {ok, reason, price, final, discount, label}."""
+    from tenant.gateways.discount_engine import validate_discount
+    panel_key = None
+    async with Session() as s:
+        if gb is not None:
+            cfg = await custom_settings(bot_id)
+            if cfg["price"] <= 0:
+                return {"ok": False, "reason": "این بخش فعال نیست.", "price": 0, "final": 0, "discount": 0, "label": ""}
+            price = int(gb) * cfg["price"]
+            panels = (await s.scalars(select(VpnPanel).where(VpnPanel.bot_id == bot_id, VpnPanel.enabled == True)   # noqa: E712
+                                      .order_by(VpnPanel.id))).all()
+            pn = next((p for p in panels if AD.supports(p.panel_key)), None)
+        else:
+            pk = await s.get(PanelSellerPackage, int(package_id or 0))
+            if not pk or pk.bot_id != bot_id or not pk.active:
+                return {"ok": False, "reason": "این بسته دیگر موجود نیست.", "price": 0, "final": 0, "discount": 0, "label": ""}
+            price = int(pk.price_toman or 0)
+            pn = await s.get(VpnPanel, pk.panel_id)
+        panel_key = pn.panel_key if pn else None
+    d = await validate_discount(bot_id=bot_id, code=code, telegram_id=buyer_tg, price=price, panel_key=panel_key)
+    return {"ok": d.ok, "reason": d.reason, "price": price, "final": d.final_price if d.ok else price,
+            "discount": d.discount if d.ok else 0, "label": d.label}
+
+
 async def buy(bot_id: int, buyer_tg: int, package_id: int, api_factory=None, bot=None, row=None,
-              username: str | None = None, pk_override=None) -> dict:
-    """status: ok | no_package | no_panel | unsupported | insufficient | panel_failed | bad_username | username_taken
-    (+ account/username/password/…). username: نامِ دلخواهِ مشتری (اختیاری)؛ pk_override: بستهٔ موقت (فروشِ حجمیِ دلخواه)."""
+              username: str | None = None, pk_override=None, discount_code: str | None = None) -> dict:
+    """status: ok | no_package | no_panel | unsupported | insufficient | panel_failed | bad_username | username_taken | bad_discount
+    (+ account/username/password/…). username: نامِ دلخواهِ مشتری (اختیاری)؛ pk_override: بستهٔ موقت (فروشِ حجمیِ دلخواه)؛
+    discount_code: کد تخفیف (اعتبارسنجیِ دوباره + ثبتِ مصرف در همان تراکنشِ کسرِ کیف‌پول؛ با خطای پنل مصرف برمی‌گردد)."""
     api_factory = api_factory or _api
     if username is not None:
         if not valid_username(username):
@@ -211,11 +237,21 @@ async def buy(bot_id: int, buyer_tg: int, package_id: int, api_factory=None, bot
     if not AD.supports(panel.panel_key):
         return {"status": "unsupported"}
     price = int(pk.price_toman or 0)
+    disc = None
     async with Session() as s:
+        if discount_code:                                           # PATCH_PSEL_DISCOUNT_V1
+            from tenant.gateways.discount_engine import record_usage, validate_discount
+            disc = await validate_discount(bot_id=bot_id, code=discount_code, telegram_id=buyer_tg, price=price,
+                                           panel_key=panel.panel_key, session=s)
+            if not disc.ok:
+                return {"status": "bad_discount", "reason": disc.reason}
+            price = int(disc.final_price)
         if price > 0:
             u, bal = await _wallet_debit(s, bot_id, buyer_tg, price, f"خریدِ پنل: {pk.title}")
             if u is None:
                 return {"status": "insufficient", "need": price, "balance": bal}
+        if disc is not None:
+            await record_usage(s, code_id=disc.code_id, bot_id=bot_id, telegram_id=buyer_tg, saved_amount=int(disc.discount))
         await s.commit()
     username, password = (username or gen_username()), gen_password()
     try:
@@ -228,6 +264,11 @@ async def buy(bot_id: int, buyer_tg: int, package_id: int, api_factory=None, bot
         logger.warning("panel_seller: ساختِ ادمین ناموفق (bot=%s): %s", bot_id, e)
         if price > 0:
             await _refund(bot_id, buyer_tg, price, "بازگشتِ وجهِ خریدِ پنل (خطایِ پنل)")
+        if disc is not None:
+            from tenant.gateways.discount_engine import revert_usage
+            async with Session() as s:
+                await revert_usage(s, code_id=disc.code_id, telegram_id=buyer_tg)
+                await s.commit()
         return {"status": "panel_failed", "error": str(e)[:300]}
     from models import alloc_tracking_in
     async with Session() as s:
@@ -251,7 +292,7 @@ async def buy(bot_id: int, buyer_tg: int, package_id: int, api_factory=None, bot
         except Exception:      # noqa: BLE001
             logger.exception("panel_seller: اعلانِ خرید ناموفق بود")
     return {"status": "ok", "account_id": acc_id, "username": username, "password": password,
-            "panel_url": panel.base_url, "tracking": trk}
+            "panel_url": panel.base_url, "tracking": trk, "discount": int(disc.discount) if disc is not None else 0, "paid": price}
 
 
 async def renew(bot_id: int, account_id: int, buyer_tg: int, api_factory=None) -> dict:
@@ -331,7 +372,7 @@ async def custom_settings(bot_id: int) -> dict:
 
 
 async def buy_custom(bot_id: int, buyer_tg: int, gb: int, api_factory=None, bot=None, row=None,
-                     username: str | None = None) -> dict:
+                     username: str | None = None, discount_code: str | None = None) -> dict:
     """status مثلِ buy + disabled | bad_amount."""
     cfg = await custom_settings(bot_id)
     if cfg["price"] <= 0:
@@ -348,7 +389,8 @@ async def buy_custom(bot_id: int, buyer_tg: int, gb: int, api_factory=None, bot=
     gb = int(gb)
     pk = SimpleNamespace(id=None, panel_id=panel.id, title=f"📦 حجمِ دلخواه {gb} گیگ", data_gb=gb, max_users=cfg["users"],
                          days=cfg["days"], price_toman=gb * cfg["price"], active=True)
-    return await buy(bot_id, buyer_tg, 0, api_factory=api_factory, bot=bot, row=row, username=username, pk_override=pk)
+    return await buy(bot_id, buyer_tg, 0, api_factory=api_factory, bot=bot, row=row, username=username, pk_override=pk,
+                     discount_code=discount_code)
 
 
 # === PATCH_PSEL_FREE_TEST_V1 === (Whale Support) «تستِ رایگان»: هر مشتری یک بار، با مشخصاتِ کوچکِ تعیین‌شده توسطِ مالک
