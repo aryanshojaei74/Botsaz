@@ -547,6 +547,30 @@ async def gg_help(msg: Message):
     await msg.reply(await help_text(), parse_mode="HTML")
 
 
+# ───────────────────────── قوانینِ ساختِ ربات در گروه ─────────────────────────
+# === PATCH_GROUP_RULES_V1 === هر کس در گروه بنویسد «قوانین بات ساز» / «قوانین ساخت ربات»، همان قوانینی را می‌بیند که موقعِ ساختِ ربات نشان داده می‌شود.
+_RULES = re.compile(r"^\s*(?:/rules(?:@\w+)?|قوانین[\s‌]*(?:بات[\s‌]*ساز|ساخت[\s‌]*(?:ربات|بات)))\s*$", re.I)
+_LAST_RULES: dict[int, float] = {}
+
+
+def _is_rules(m: Message) -> bool:
+    return bool(m.text and _RULES.match(m.text))
+
+
+@platform_group_game_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_rules))
+async def gg_rules(msg: Message):
+    if not msg.from_user or msg.from_user.is_bot or msg.sender_chat:
+        raise SkipHandler
+    if not await _group_allowed(msg.chat.id):          # فقط گروهِ بات‌ساز؛ بازی‌ها روشن بودن لازم نیست
+        raise SkipHandler
+    now = time.monotonic()
+    if now - _LAST_RULES.get(msg.chat.id, -1e9) < HELP_COOLDOWN:
+        return                                          # تکرارِ پشتِ‌سرهم: بی‌صدا
+    _LAST_RULES[msg.chat.id] = now
+    from platform_bot import bot_creation_rules_text
+    await msg.reply(bot_creation_rules_text(), parse_mode="HTML", disable_web_page_preview=True)
+
+
 # ───────────────────────── «شیرینی من» و تنظیمِ جایزه ─────────────────────────
 # === PATCH_CANDY_REWARD_V1 ===
 _MYC = re.compile(r"^\s*(?:/mycandy(?:@\w+)?|شیرینی[\s‌]*(?:من|های[\s‌]*من))\s*$", re.I)

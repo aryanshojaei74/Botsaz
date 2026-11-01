@@ -452,3 +452,41 @@ async def test_no_empty_second_message_when_nothing_extra(env, monkeypatch):
     monkeypatch.setattr(R, "enabled", off)                                  # مسابقه‌ها خاموش
     sent = await _run_help(monkeypatch, set())
     assert len(sent) == 1 and "مسابقه‌هایِ پولی را هر چند نفر" not in sent[0]
+
+
+# ───────── PATCH_GROUP_RULES_V1: «قوانین بات ساز» در گروه ─────────
+@pytest.mark.asyncio
+async def test_group_rules_command_shows_all_creation_rules_once(env, monkeypatch):
+    for ok in ("قوانین بات ساز", "قوانین بات‌ساز", "قوانین ساخت ربات", "/rules"):
+        assert G._is_rules(NS(text=ok)), ok
+    for no in ("قوانین", "قوانین بات ساز چیه", "سلام"):
+        assert not G._is_rules(NS(text=no)), no
+
+    G._LAST_RULES.clear()
+    m = _Reply()
+    m.text = "قوانین بات ساز"
+    m.sender_chat = None
+    await G.gg_rules(m)
+    assert len(m.sent) == 1
+    t = m.sent[0]
+    assert "قوانین ربات رایگان" in t and "قوانین خرید" in t and "قوانین و ضوابطِ استفاده از بات‌ساز" in t
+    assert len(t) < 4096
+    m2 = _Reply(); m2.text = "قوانین بات ساز"; m2.sender_chat = None
+    await G.gg_rules(m2)                                   # پشتِ‌سرهم ⇒ بی‌صدا (گروه شلوغ نشود)
+    assert m2.sent == []
+
+
+@pytest.mark.asyncio
+async def test_group_rules_ignored_in_other_groups(env, monkeypatch):
+    from aiogram.dispatcher.event.bases import SkipHandler
+    G._LAST_RULES.clear()
+    m = _Reply(); m.text = "قوانین بات ساز"; m.sender_chat = None; m.chat = NS(id=-999)
+    with pytest.raises(SkipHandler):
+        await G.gg_rules(m)
+
+
+def test_free_and_purchase_terms_are_single_sourced():
+    import platform_bot as PB
+    src = open(PB.__file__, encoding="utf-8").read()
+    assert src.count("قوانین ربات رایگان</b>") == 1        # فقط در FREE_BOT_TERMS، نه کپیِ جدا
+    assert PB.FREE_BOT_TERMS in PB.bot_creation_rules_text() and PB.PURCHASE_TERMS in PB.bot_creation_rules_text()

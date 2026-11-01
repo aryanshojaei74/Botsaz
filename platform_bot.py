@@ -524,6 +524,24 @@ PURCHASE_TERMS = (
 )
 
 
+# قوانینِ رباتِ رایگان — یک‌جا (هم موقعِ ساخت نشان داده می‌شود هم با «قوانین بات ساز» در گروه)
+FREE_BOT_TERMS = (
+    "⚠️ <b>قوانین ربات رایگان</b>\n"
+    "• ممکن است در ربات‌های رایگان تبلیغات نمایش داده شود."
+)
+
+
+def bot_creation_rules_text() -> str:
+    """PATCH_GROUP_RULES_V1 — همهٔ قوانینی که موقعِ ساختِ ربات به کاربر نشان داده می‌شود، در «یک» پیام (برایِ گروه):
+    رباتِ رایگان، خرید/تمدید، و ضوابطِ استفاده (تخلف). VIOLATION_RULES_TEXT پایین‌تر در همین ماژول تعریف می‌شود."""
+    return "\n\n".join((
+        "🤖 <b>قوانین ساختِ ربات در بات‌ساز</b>",
+        FREE_BOT_TERMS,
+        PURCHASE_TERMS,
+        VIOLATION_RULES_TEXT,
+    ))
+
+
 BTN_TICKET   = "🎫 ثبت تیکت"
 BTN_ADMIN    = "🛠 پنل مدیریت"
 BTN_CANCEL   = "❌ لغو"
@@ -5701,8 +5719,7 @@ async def choose_plan(cb: CallbackQuery, state: FSMContext):
         ])
         await cb.message.answer(
             # PATCH_REMOVE_BIO_LOCK_V1 — بندِ «بیو قابلِ تغییر نیست» حذف شد
-            "⚠️ <b>قوانین ربات رایگان</b>\n"
-            "• ممکن است در ربات‌های رایگان تبلیغات نمایش داده شود.",
+            FREE_BOT_TERMS,
             reply_markup=kb,
         )
         await cb.answer()
