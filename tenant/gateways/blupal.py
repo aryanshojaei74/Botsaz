@@ -232,17 +232,47 @@ _PAYER_CARD_KEYS = ("payer_card", "payer_card_number", "source_card", "source_ca
                     "from_card", "paid_card", "card_pan", "payer_pan", "masked_card", "payer_card_masked")
 
 
+def plausible_card(v) -> str:
+    """PATCH_BLUPAL_NO_SHEBA_V1 (SINA): در پرداختِ «بلو به بلو» بلوپال گاهی شمارهٔ شبا/حساب را در فیلدِ کارتِ پرداخت‌کننده می‌گذارد و
+    کاربر الکی «عدم تطابقِ کارت» می‌خورد. فقط چیزی که شبیهِ شمارهٔ کارتِ بانکی است برگردانده می‌شود؛ شبا (IR…، ۲۴+ رقم)، شمارهٔ حساب
+    و چیزی که با ۰/۱ شروع شود (کارتِ بانکی با این ارقام شروع نمی‌شود) رد می‌شود ⇒ مقایسه انجام نمی‌شود و حسابِ کسی محدود نمی‌شود.
+    کارتِ کامل (۱۶ رقم) باید Luhn را هم بگذراند؛ کارتِ نیمه‌پنهان (با * یا •) باید ۴ رقمِ آخرِ مشخص داشته باشد."""
+    t = str(v or "").strip()
+    if not t or t.upper().startswith("IR") or "IBAN" in t.upper() or "SHEBA" in t.upper():
+        return ""
+    digits = "".join(c for c in t if c.isdigit())
+    masked = any(c in t for c in "*•xX×")
+    if not digits or digits[0] in "01":
+        return ""
+    if masked:
+        tail = "".join(c for c in t.replace(" ", "").replace("-", "")[-4:] if c.isdigit())
+        return t[:32] if (len(tail) == 4 and 8 <= len(digits) <= 12) else ""
+    if len(digits) != 16:
+        return ""
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        d = int(ch)
+        if i % 2 == 1:
+            d = d * 2 - 9 if d * 2 > 9 else d * 2
+        total += d
+    return t[:32] if total % 10 == 0 else ""
+
+
 def payer_card_of(res: dict) -> str:
     for k in _PAYER_CARD_KEYS:
         v = res.get(k)
         if v:
-            return str(v).strip()[:32]
+            c = plausible_card(v)
+            if c:
+                return c
     for sub in ("payer", "payment", "transaction"):
         d = res.get(sub)
         if isinstance(d, dict):
             for k in ("card", "card_number", "pan", "masked_card") + _PAYER_CARD_KEYS:
                 if d.get(k):
-                    return str(d[k]).strip()[:32]
+                    c = plausible_card(d[k])
+                    if c:
+                        return c
     return ""
 
 

@@ -61,7 +61,7 @@ class FakeBlu:
             return web.json_response({"success": False, "error": "not_found"}, status=404)
         out = dict(inv)
         if inv["status"] == "PAID":
-            out.update(transaction_id=456, payer_name="علی رضایی", payer_card="6037991234567890")
+            out.update(transaction_id=456, payer_name="علی رضایی", payer_card="6037991234567893")
         return web.json_response(out)
 
 
@@ -210,7 +210,7 @@ async def test_settle_credits_requested_amount_once(env):
     assert notified == [(777, 100_000, 100_000.0)]
     async with maker() as s:
         ch = await s.scalar(select(models.BluPalCharge))
-    assert ch.tracking_code == "456" and ch.payer_name == "علی رضایی | 6037991234567890" and ch.paid_at is not None
+    assert ch.tracking_code == "456" and ch.payer_name == "علی رضایی | 6037991234567893" and ch.paid_at is not None
 
 
 @pytest.mark.asyncio
@@ -673,18 +673,18 @@ async def test_kyc_card_mismatch_blocks_but_still_credits(env, monkeypatch):
 
     async def _mm(bot_id, tg, last4, paid_card=None): sent.append(last4)
     monkeypatch.setattr(ZW, "_kyc_mismatch_notify", _mm)
-    await _kyc_user(maker, 1, "6037991111111111")                    # ۴ رقمِ آخر: 1111؛ پرداخت با ...7890
+    await _kyc_user(maker, 1, "6037991111111111")                    # ۴ رقمِ آخر: 1111؛ پرداخت با ...7893
     await BP.create_invoice(KEY, 1_000_000)
     await _add_charge(maker, "bpk1", 101)
     fb.invoices[101]["status"] = "PAID"
     ok, _m, _c = await BP.settle_charge(5, "bpk1")
-    assert ok and await _blocked(maker) == (True, 100_000.0) and sent == ["7890"]
+    assert ok and await _blocked(maker) == (True, 100_000.0) and sent == ["7893"]
 
 
 @pytest.mark.asyncio
 async def test_kyc_card_match_or_unknown_card_never_blocks(env, monkeypatch):
     maker, fb, _n = env
-    await _kyc_user(maker, 1, "5022291234567890")                    # همان ۷۸۹۰ ⇒ تطابق
+    await _kyc_user(maker, 1, "5022291234567893")                    # همان ۷۸۹۳ ⇒ تطابق
     await BP.create_invoice(KEY, 1_000_000)
     await _add_charge(maker, "bpk2", 101)
     fb.invoices[101]["status"] = "PAID"
@@ -698,10 +698,48 @@ async def test_kyc_card_match_or_unknown_card_never_blocks(env, monkeypatch):
     ok, _m, _c = await BP.settle_charge(5, "bpk3")
     assert ok and (await _blocked(maker))[0] is False
     # سطحِ ۰ (احرازِ خاموش) هم هرگز با ناهمخوانی محدود نمی‌شود
-    monkeypatch.setattr(BP, "payer_card_of", lambda res: "6037991234567890")
+    monkeypatch.setattr(BP, "payer_card_of", lambda res: "6037991234567893")
     await _kyc_user(maker, 0, "6037991111111111")
     await BP.create_invoice(KEY, 1_000_000)
     await _add_charge(maker, "bpk4", 103)
     fb.invoices[103]["status"] = "PAID"
     ok, _m, _c = await BP.settle_charge(5, "bpk4")
     assert ok and (await _blocked(maker))[0] is False
+
+
+# ───────── PATCH_BLUPAL_NO_SHEBA_V1 (SINA): شبا/حسابِ بلو به بلو نباید به‌عنوانِ «کارتِ پرداخت‌کننده» حساب شود ─────────
+def test_sheba_and_account_numbers_are_never_treated_as_payer_card():
+    from tenant.gateways.blupal import payer_card_of, plausible_card
+    assert payer_card_of({"payer_card": "IR110570000000100000000001"}) == ""
+    assert payer_card_of({"payer_card": "11056100000000004501"}) == ""            # شبای بدونِ IR (۲۰+ رقم)
+    assert payer_card_of({"payer": {"card_number": "1105 6100 0000 4501"}}) == ""  # با ۱ شروع می‌شود
+    assert payer_card_of({"payer_card": "0123456789"}) == ""                        # شمارهٔ حساب
+    assert payer_card_of({"payer_card": "6037991234567890"}) == ""                  # ۱۶ رقمِ کامل ولی Luhn نمی‌گذرد
+    assert payer_card_of({"payer_card": "6037991234567893"}) == "6037991234567893"
+    assert plausible_card("6219 86** **** 5008") == "6219 86** **** 5008"
+    assert plausible_card("6037****7890") == "6037****7890"
+    assert plausible_card("") == "" and plausible_card(None) == ""
+
+
+@pytest.mark.asyncio
+async def test_sheba_in_payer_field_does_not_block_the_user(env, monkeypatch):
+    """همان گزارشِ SINA: پرداختِ بلو به بلو، فیلدِ پرداخت‌کننده شبا است ⇒ شارژ می‌شود و حساب محدود نمی‌شود."""
+    maker, fb, _n = env
+    import tenant.gateways.zibal_wallet as ZW
+    sent = []
+
+    async def _mm(bot_id, tg, last4, paid_card=None): sent.append(last4)
+    monkeypatch.setattr(ZW, "_kyc_mismatch_notify", _mm)
+    await _kyc_user(maker, 1, "6219861012345004")
+    await BP.create_invoice(KEY, 1_000_000)
+    await _add_charge(maker, "bpk9", 101)
+    fb.invoices[101]["status"] = "PAID"
+    _orig = BP.get_invoice
+
+    async def _sheba(api_key, inv_id):
+        res = await _orig(api_key, inv_id)
+        res["payer_card"] = "11056100000000004501"                     # بلوپال شبا را به‌جای کارت داد
+        return res
+    monkeypatch.setattr(BP, "get_invoice", _sheba)
+    ok, _m, _c = await BP.settle_charge(5, "bpk9")
+    assert ok and await _blocked(maker) == (False, 100_000.0) and sent == []
