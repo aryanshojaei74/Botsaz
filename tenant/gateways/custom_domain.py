@@ -338,8 +338,13 @@ async def _apikey_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     has_ctl = is_smm or is_vpn
     if d and d.status == "verified":
         domain_txt = d.domain
-        status_txt = "✅ تأیید شده"
-        ssl_txt = "🟢 فعال"
+        status_txt = "✅ تأیید شده (رکوردهای DNS دیده شد)"
+        import time as _t
+        _pc = _PROBE_CACHE.get(d.domain)
+        if _pc and _t.monotonic() - _pc[0] < 900:                 # PATCH_CDOM_PROBE_V1: نتیجهٔ واقعیِ آخرین تست
+            ssl_txt = "🟢 فعال و صفحهٔ مستندات باز می‌شود" if _pc[1].get("status") == 200 else "🔴 مشکل دارد — «🩺 تست اتصال دامنه» را بزن"
+        else:
+            ssl_txt = "❔ بررسی نشده — «🩺 تست اتصال دامنه» را بزن"
         base_line = f"\n🌐 آدرسِ API شما: <code>https://{d.domain}/api/v1</code>\n"
         if is_vpn:
             base_line = (f"\n🌐 آدرسِ API فروشِ VPN: <code>https://{d.domain}/api/vpn</code>\n"
@@ -376,7 +381,7 @@ async def _apikey_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
         f"🌐 دامنه: <code>{domain_txt}</code>\n"
         f"وضعیت: {status_txt}\n"
         f"گواهیِ SSL: {ssl_txt}\n"
-        f"وب‌سرویس: 🟢 روشن\n"
+        f"وب‌سرویس: {'🟢 روشن' if (d and d.status == 'verified') else '—'}\n"
         f"{base_line}"
         f"{key_line}\n"
         f"{header_line}"
@@ -405,6 +410,9 @@ async def _apikey_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     # نه بره تنظیماتِ درگاهِ ارزدیجیتال (که مقصدِ پیش‌فرض/قدیمیه).
     kb_rows.append([InlineKeyboardButton(
         text=("🌐 مدیریتِ دامنهٔ اختصاصی" if d else "🌐 افزودنِ دامنهٔ اختصاصی"), callback_data="cdom:menu:apikey")])
+    if d and d.status == "verified":                                   # PATCH_CDOM_PROBE_V1
+        kb_rows.append([InlineKeyboardButton(text="🩺 تستِ اتصالِ دامنه (DNS / SSL / مستندات)", callback_data="cdom:probe",
+                                             style=ButtonStyle.SUCCESS)])
     # === PATCH_API_OPEN_TO_ALL_V1 ===
     # سوئیچِ «API برایِ همه یا فقط بعضی‌ها» — رباتِ خدماتِ مجازی و فروشِ VPN.
     if has_ctl:
@@ -838,6 +846,129 @@ async def _doh_resolves(name: str) -> bool:
         logger.exception("خطای نادیده‌گرفته‌شده (لوکاپِ DNS-over-HTTPS برایِ A/CNAME)")
         return False
     return bool(data.get("Answer"))
+
+
+# ═══════════════ تستِ واقعیِ اتصالِ دامنه ═══════════════
+# === PATCH_CDOM_PROBE_V1 === (Weirdnet) «دامنه تأیید شده، SSL فعال، وب‌سرویس روشن» ولی مستندات باز نمی‌شد. آن سه خط ثابت بودند
+# و چیزی را واقعاً نمی‌سنجیدند؛ «تأیید» فقط یعنی رکوردِ TXT و A دیده شده، نه اینکه به همین سرور برسد یا گواهی صادر شده باشد.
+# این تست از خودِ سرور DNS، گواهی و صفحهٔ مستندات را واقعاً می‌سنجد و علتِ دقیق را می‌گوید.
+import ipaddress as _ip
+
+_CF_NETS = [_ip.ip_network(n) for n in (
+    "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "104.16.0.0/13", "104.24.0.0/14", "108.162.192.0/18",
+    "131.0.72.0/22", "141.101.64.0/18", "162.158.0.0/15", "172.64.0.0/13", "173.245.48.0/20", "188.114.96.0/20",
+    "190.93.240.0/20", "197.234.240.0/22", "198.41.128.0/17", "2606:4700::/32", "2803:f800::/32", "2a06:98c0::/29")]
+_PROBE_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def _is_cloudflare(ip: str) -> bool:
+    try:
+        a = _ip.ip_address(ip)
+        return any(a in n for n in _CF_NETS if n.version == a.version)
+    except ValueError:
+        return False
+
+
+def probe_report_text(domain: str, r: dict) -> str:
+    """متنِ فارسیِ نتیجهٔ تست (تابعِ خالص؛ قابلِ تست)."""
+    lines = [f"🩺 <b>تستِ اتصالِ دامنه</b>\n<code>{domain}</code>\n"]
+    ips = r.get("ips") or []
+    srv = r.get("server_ips") or []
+    if not ips:
+        lines.append("❌ <b>DNS:</b> این دامنه هیچ رکوردِ A/AAAA ندارد یا هنوز منتشر نشده.")
+    elif r.get("cloudflare"):
+        lines.append("☁️ <b>DNS:</b> دامنه هنوز <b>پشتِ پراکسیِ کلودفلر</b> است (ابرِ نارنجی). در کلودفلر ابرِ رکوردِ A را "
+                     "<b>خاکستری (DNS only)</b> کن؛ وگرنه گواهیِ SSL صادر نمی‌شود. IPهایِ دیده‌شده: <code>" + "</code> <code>".join(ips[:3]) + "</code>")
+    elif srv and not (set(ips) & set(srv)):
+        lines.append("❌ <b>DNS:</b> رکوردِ دامنه به <code>" + "</code> <code>".join(ips[:3]) + "</code> اشاره دارد ولی آی‌پیِ سرور "
+                     "<code>" + "</code> <code>".join(srv[:3]) + "</code> است. رکوردِ A را اصلاح کن (اگر رکوردِ AAAA هم داری، پاکش کن).")
+    else:
+        lines.append("✅ <b>DNS:</b> دامنه به همین سرور اشاره دارد.")
+    st = r.get("status")
+    err = r.get("error")
+    if st == 200:
+        lines.append("✅ <b>SSL و وب‌سرویس:</b> گواهی معتبر است و صفحهٔ مستندات با موفقیت باز شد.")
+    elif err == "cert":
+        lines.append("❌ <b>SSL:</b> گواهیِ معتبر برایِ این دامنه روی سرور نیست (هنوز صادر نشده یا نامعتبر است). "
+                     "صدورِ گواهی خودکار و هر ~۱۰ دقیقه انجام می‌شود، به شرطِ اینکه DNS درست باشد و پورتِ ۸۰ باز؛ "
+                     "اگر بعد از ۳۰ دقیقه همین بود به پشتیبانی بگو «cdom_sync برای این دامنه گواهی نگرفته».")
+    elif err == "connect":
+        lines.append("❌ <b>اتصال:</b> به پورتِ ۴۴۳ این دامنه وصل نشدم (DNS درست نیست یا سرور/فایروال این دامنه را نمی‌پذیرد).")
+    elif err == "timeout":
+        lines.append("⏳ <b>اتصال:</b> پاسخی نیامد (تایم‌اوت). معمولاً یعنی DNS هنوز به سرور نمی‌رسد یا فایروال مانع است.")
+    elif st in (404, 405):
+        lines.append(f"❌ <b>وب‌سرویس:</b> سرور جواب داد ولی صفحهٔ مستندات {st} است؛ یعنی دامنه هنوز در nginx به برنامه وصل نشده. "
+                     "تا ~۱۰ دقیقه صبر کن؛ اگر ماند به پشتیبانی بگو.")
+    elif st and st >= 500:
+        lines.append(f"❌ <b>وب‌سرویس:</b> سرور خطای {st} داد (برنامه پشتِ nginx پاسخ نمی‌دهد). به پشتیبانی بگو.")
+    elif st:
+        lines.append(f"⚠️ <b>وب‌سرویس:</b> پاسخِ غیرمنتظره ({st}).")
+    else:
+        lines.append("⚠️ نتیجهٔ اتصال نامشخص بود.")
+    if r.get("url"):
+        lines.append(f"\n🔗 صفحهٔ آزمایش‌شده: <code>{r['url']}</code>")
+    return "\n".join(lines)
+
+
+async def probe_domain(domain: str, docs_path: str = "/api/docs/vpn", *, resolver=None, fetcher=None) -> dict:
+    """از خودِ سرور: DNS (آی‌پی‌ها، کلودفلر؟، تطابق با آی‌پیِ سرور) و GETِ https://domain{docs_path}.
+    resolver/fetcher برایِ تست تزریق می‌شوند. خروجی: {ips, server_ips, cloudflare, status, error, url}."""
+    import asyncio
+    import socket
+    r: dict = {"ips": [], "server_ips": [], "cloudflare": False, "status": None, "error": None,
+               "url": f"https://{domain}{docs_path}"}
+    try:
+        if resolver is not None:
+            r["ips"] = list(await resolver(domain))
+        else:
+            loop = asyncio.get_running_loop()
+            infos = await loop.getaddrinfo(domain, None, type=socket.SOCK_STREAM)
+            r["ips"] = sorted({i[4][0] for i in infos})
+    except Exception:      # noqa: BLE001
+        r["ips"] = []
+    try:
+        _h, srv = await get_dns_target()
+        r["server_ips"] = list(srv)
+    except Exception:      # noqa: BLE001
+        r["server_ips"] = []
+    r["cloudflare"] = bool(r["ips"]) and all(_is_cloudflare(i) for i in r["ips"])
+    try:
+        if fetcher is not None:
+            r["status"] = await fetcher(r["url"])
+        else:
+            import aiohttp
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as sess:
+                async with sess.get(r["url"], allow_redirects=False) as resp:
+                    r["status"] = resp.status
+    except asyncio.TimeoutError:
+        r["error"] = "timeout"
+    except Exception as e:      # noqa: BLE001
+        name = type(e).__name__.lower()
+        r["error"] = "cert" if ("cert" in name or "ssl" in name or "certificate" in str(e).lower()) else "connect"
+    return r
+
+
+@custom_domain_router.callback_query(F.data.startswith("cdom:probe"))
+async def cdom_probe(cb: CallbackQuery, bot: Bot):
+    import time
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    async with Session() as s:
+        d = await s.scalar(select(BotCustomDomain).where(BotCustomDomain.bot_id == row.id))
+    if not d:
+        return await cb.answer("اول یک دامنه وصل کن.", show_alert=True)
+    await cb.answer("در حالِ تست…")
+    path = "/api/docs/vpn" if row.field == "vpn_sales" else "/api/docs"
+    r = await probe_domain(d.domain, path)
+    _PROBE_CACHE[d.domain] = (time.monotonic(), r)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 تستِ دوباره", callback_data="cdom:probe", style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:apikey", style=ButtonStyle.DANGER)]])
+    try:
+        await cb.message.edit_text(probe_report_text(d.domain, r), reply_markup=kb, parse_mode="HTML")
+    except Exception:      # noqa: BLE001
+        await cb.message.answer(probe_report_text(d.domain, r), reply_markup=kb, parse_mode="HTML")
 
 
 @custom_domain_router.callback_query(F.data.startswith("cdom:check"))
