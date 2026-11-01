@@ -415,6 +415,24 @@ def _bot_system_prompt(row) -> str:
 در مورد سفارش‌ها فقط از اطلاعات همان کاربر استفاده کن. هرگز کلید API، اطلاعات کاربران دیگر یا دادهٔ داخلی را افشا نکن. زمان قطعی تکمیل سفارش را وعده نده."""
 
 
+async def _action_path(bot_id: int, action: str) -> str | None:
+    """PATCH_AI_REAL_BUTTON_PATH_V1 — نامِ *واقعیِ* دکمه‌ای (با زیرمنویِ والدش) که این اکشن را اجرا می‌کند؛ None اگر چنین دکمه‌ای در منو نیست.
+    قبلاً متنِ «دکمهٔ استارز و تون در منویِ اصلی» ثابت بود و دستیار به دکمه‌ای ارجاع می‌داد که مالک سال‌ها پیش حذف/عوض کرده بود."""
+    async with Session() as s:
+        rows = (await s.scalars(select(MainButton).where(MainButton.bot_id == bot_id).limit(500))).all()
+    by_id = {b.id: b for b in rows}
+    for b in rows:
+        if (b.action or "") == action and (b.label or "").strip():
+            chain, cur, hops = [b.label.strip()], b, 0
+            while cur.parent_id and cur.parent_id in by_id and hops < 5:
+                cur = by_id[cur.parent_id]
+                if (cur.label or "").strip():
+                    chain.append(cur.label.strip())
+                hops += 1
+            return " ← ".join(reversed(chain))
+    return None
+
+
 async def _live_bot_context(bot_id: int, row, telegram_id: int | None = None) -> str:
     """کاتالوگ زندهٔ همان bot؛ هیچ داده‌ای از ربات دیگر وارد prompt نمی‌شود."""
     sections = ["اطلاعات اختصاصی این ربات — منبع حقیقت فقط همین بخش است:"]
@@ -460,21 +478,40 @@ async def _live_bot_context(bot_id: int, row, telegram_id: int | None = None) ->
             try:
                 from tenant.bots.virtual_service.smm import _stars_sell_settings, _ton_sell_settings
                 _sr, _smin, _smax = await _stars_sell_settings(bot_id)
+                _no_btn = "در منویِ این ربات دکمهٔ مستقیمی برایِ خرید نیست؛ نامِ دکمه را حدس نزن و کاربر را به پشتیبانی/مدیر ارجاع بده."
                 if _sr > 0 and await _get_setting(bot_id, "stars_sell_enabled", "1") != "0":
+                    _sp = await _action_path(bot_id, "stars_shop")
                     sections.append(f"فروش استارز تلگرام: هر ۱ استارز {int(_sr):,} تومان؛ حداقل {_smin:,} و حداکثر {_smax:,} استارز؛ "
-                                    f"مثلاً ۱۰۰ استارز = {int(_sr * 100):,} تومان. مسیر خرید: دکمهٔ «استارز و تون» در منوی اصلی.")
+                                    f"مثلاً ۱۰۰ استارز = {int(_sr * 100):,} تومان. "
+                                    + (f"مسیر خرید: دکمهٔ «{_sp}» در منوی ربات." if _sp else f"مسیر خرید: {_no_btn}"))
                 _tr, _tmin, _tmax = await _ton_sell_settings(bot_id)
                 if _tr > 0:
-                    sections.append(f"فروش تون (TON): هر ۱ تون {int(_tr):,} تومان؛ حداقل {_tmin:g} و حداکثر {_tmax:g} تون.")
+                    _tp = await _action_path(bot_id, "ton_shop")
+                    sections.append(f"فروش تون (TON): هر ۱ تون {int(_tr):,} تومان؛ حداقل {_tmin:g} و حداکثر {_tmax:g} تون. "
+                                    + (f"مسیر خرید: دکمهٔ «{_tp}» در منوی ربات." if _tp else f"مسیر خرید: {_no_btn}"))
             except Exception:
                 logger.exception("[SMM_AI] افزودنِ قیمتِ استارز/تون به context ناموفق بود")
             sections.append("سرویس‌های فعال:")
             if services:
-                sections.append("\n".join(
-                    f"- {s.name}؛ دسته {s.category or 'عمومی'}؛ حداقل {int(s.min_qty or 0)}؛ "
-                    f"حداکثر {int(s.max_qty or 0)}؛ قیمت هر ۱۰۰۰ {int(s.sell_rate or 0):,} تومان"
-                    + (f"؛ توضیح: {(s.description or '')[:180]}" if s.description else "")
-                    for s in services))
+                # === PATCH_AI_REAL_PRICE_V1 === قیمت از همان تابعی که فروشگاه استفاده می‌کند (compute_sell_price).
+                # قبلاً فقط ستونِ sell_rate خوانده می‌شد که در حالتِ «درصد سود» خالی/۰ است ⇒ دستیار «بوست ۰ تومان» می‌گفت.
+                from tenant.bots.virtual_service.smm import compute_sell_price
+                lines = []
+                for s in services:
+                    mn = max(int(s.min_qty or 0), 1)
+                    try:
+                        p_min = int(await compute_sell_price(bot_id, s, mn))
+                        p_1000 = int(await compute_sell_price(bot_id, s, 1000))
+                    except Exception:
+                        logger.exception("[SMM_AI] محاسبهٔ قیمتِ سرویس %s ناموفق بود", getattr(s, "id", "?"))
+                        p_min = p_1000 = 0
+                    price_txt = (f"قیمت حداقلِ سفارش ({mn:,} عدد): {p_min:,} تومان؛ قیمت ۱۰۰۰ عدد: {p_1000:,} تومان"
+                                 if (p_min > 0 or p_1000 > 0) else
+                                 "قیمت: ثبت نشده (عددی حدس نزن؛ کاربر قیمت را در صفحهٔ سرویس می‌بیند)")
+                    lines.append(f"- {s.name}؛ دسته {s.category or 'عمومی'}؛ حداقل {int(s.min_qty or 0)}؛ "
+                                 f"حداکثر {int(s.max_qty or 0)}؛ {price_txt}"
+                                 + (f"؛ توضیح: {(s.description or '')[:180]}" if s.description else ""))
+                sections.append("\n".join(lines))
             else:
                 sections.append("- سرویس فعال ثبت نشده است.")
     return "\n\n".join(sections)[:12000]
@@ -546,6 +583,7 @@ async def smm_ai_settings_content(bot_id: int, origin: str = "smm") -> tuple[str
         [InlineKeyboardButton(text="🧠 تغییرِ مدل", callback_data=f"smmai:setmodel:{origin}")],
         [InlineKeyboardButton(text=("🔴 غیرفعال کن" if enabled else "🟢 فعال کن"),
                               callback_data=f"smmai:toggle:{origin}")],
+        [InlineKeyboardButton(text="📋 مسیرهایِ منو (برایِ پرامپتِ خودت)", callback_data=f"smmai:paths:{origin}")],
         [InlineKeyboardButton(text="📚 راهنمای فعال‌سازی در گروه", callback_data=f"smmai:grouphelp:{origin}")],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=_smmai_back_target(origin), style=ButtonStyle.DANGER)],
     ]
@@ -832,6 +870,57 @@ async def smmai_setkey_in(msg: Message, bot: Bot, state: FSMContext):
     await state.clear()
     text, kb = await smm_ai_settings_content(row.id, origin)
     await msg.answer("✅ کلید تأیید و ذخیره شد؛ دستیار فعال شد.\n\n" + text, reply_markup=kb, parse_mode="HTML")
+
+
+# === PATCH_AI_MENU_PATHS_EXPORT_V1 === (SINA) «بخش مسیرها کجاست؟» — متنِ «مسیرهایِ منو» از رویِ منویِ همان لحظه، تا مالک در پرامپتِ خودش بچسباند
+async def build_menu_paths_text(bot_id: int) -> str:
+    from tenant import _SIMPLE_ACTIONS
+    async with Session() as s:
+        rows = (await s.scalars(select(MainButton).where(MainButton.bot_id == bot_id)
+                                .order_by(MainButton.row, MainButton.col, MainButton.id).limit(500))).all()
+    kids: dict[int | None, list] = {}
+    for b in rows:
+        kids.setdefault(b.parent_id if b.parent_id in {x.id for x in rows} else None, []).append(b)
+    lines: list[str] = []
+
+    def walk(parent, depth):
+        for b in kids.get(parent, []):
+            act = (b.action or "").strip()
+            what = ""
+            if act and act in _SIMPLE_ACTIONS:
+                what = " ← " + _SIMPLE_ACTIONS[act][0]
+            elif act == "submenu" or kids.get(b.id):
+                what = " ← زیرمنو"
+            elif (b.message or "").strip():
+                what = " ← نمایشِ پیام"
+            lines.append("  " * depth + f"- «{b.label}»{what}")
+            walk(b.id, depth + 1)
+    walk(None, 0)
+    if not lines:
+        return "هنوز دکمه‌ای در منویِ اصلیِ این ربات ساخته نشده."
+    return "مسیرهایِ منویِ ربات (از رویِ منویِ همین لحظه):\n" + "\n".join(lines)
+
+
+@smm_ai_router.callback_query(F.data.startswith("smmai:paths:"))
+async def smmai_paths(cb: CallbackQuery, bot: Bot):
+    from tenant.bots.virtual_service.smm import _owner
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    origin = _smmai_origin_from_cb(cb.data)
+    txt = await build_menu_paths_text(row.id)
+    body = html.escape(txt)
+    head = ("📋 <b>مسیرهایِ منو</b>\n\nاین متن از رویِ منویِ همین لحظه ساخته شد. هر وقت دکمه‌ای عوض شد، دوباره همین دکمه را بزن و "
+            "متنِ تازه را در بخشِ «مسیرها»یِ پرامپتِ خودت جایگزین کن.\n\n")
+    if len(head) + len(body) + 30 > 3900:
+        from aiogram.types import BufferedInputFile
+        await cb.message.answer_document(BufferedInputFile(txt.encode("utf-8"), filename="menu_paths.txt"),
+                                         caption="📋 مسیرهایِ منو (فایلِ متنی — کپی کن و در پرامپتت بگذار)")
+    else:
+        await cb.message.answer(head + f"<pre>{body}</pre>", parse_mode="HTML",
+                                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                                    InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"smmai:menu:{origin}", style=ButtonStyle.DANGER)]]))
+    await cb.answer()
 
 
 # ═══════════════════ سمتِ مشتری ═══════════════════
