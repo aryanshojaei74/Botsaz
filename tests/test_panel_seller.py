@@ -83,8 +83,10 @@ async def env(monkeypatch):
     async with engine.begin() as conn:
         await conn.run_sync(models.Base.metadata.create_all)
     maker = async_sessionmaker(engine, expire_on_commit=False)
-    for mod in (config, GT, SV):
+    import tenant as _tenant
+    for mod in (config, GT, SV, _tenant):               # tenant.Session: تنظیماتِ ربات (psel_keep_login و ...) از آن خوانده می‌شود
         monkeypatch.setattr(mod, "Session", maker)
+    getattr(_tenant, "_SETTING_CACHE", {}).clear()
     FakeAPI.log, FakeAPI.usage, FakeAPI.users, FakeAPI.fail_create, FakeAPI.new_style = [], 0, 0, False, False
     async with maker() as s:
         s.add(models.Bot(id=7, owner_id=500, token="7:T", username="pbot", field="panel_seller", plan="pro", status="active"))
@@ -200,7 +202,7 @@ async def test_enforce_expiry_traffic_and_warnings(env):
     async with env() as s:
         a = await s.get(models.PanelSellerAccount, aid)
     assert a.status == "suspended" and a.suspend_reason == "traffic"
-    assert any(x[0] == "pw" and x[1] == uname for x in FakeAPI.log)              # رمز تصادفی ⇒ ورودِ مشتری بسته
+    assert not any(x[0] == "pw" and x[1] == uname for x in FakeAPI.log)         # PATCH_PSEL_KEEP_LOGIN_V1: پایانِ حجم ⇒ ورودِ مشتری باز می‌ماند (فقط کاربران خاموش)
     # انقضا
     aid2, uname2 = await _sell(env)
     async with env() as s:
@@ -211,6 +213,7 @@ async def test_enforce_expiry_traffic_and_warnings(env):
     await SV.enforce_once(7, FakeAPI, now)
     async with env() as s:
         assert (await s.get(models.PanelSellerAccount, aid2)).suspend_reason == "expired"
+    assert any(x[0] == "pw" and x[1] == uname2 for x in FakeAPI.log)             # پایانِ مهلت: مثلِ قبل رمز تصادفی ⇒ ورود بسته
 
 
 @pytest.mark.asyncio
@@ -684,3 +687,91 @@ async def test_traffic_warning_at_80_percent_and_suspend_at_100_respect_notifica
     await SV.renew(7, r2["account_id"], 1001, api_factory=FakeAPI)
     async with ui.maker() as s:
         assert (await s.get(models.PanelSellerAccount, r2["account_id"])).flags == "nt0"
+
+
+# ─────────── نمایشِ رمز + ورودِ باز در پایانِ حجم (Whale Support) ───────────
+@pytest.fixture
+def _key(monkeypatch):
+    monkeypatch.setenv("BOTSAZ_SECRET_KEY", "unit-test-key")
+
+
+@pytest.mark.asyncio
+async def test_password_is_stored_encrypted_and_shown_only_to_its_owner(ui, _key):
+    """PATCH_PSEL_PASSWORD_VAULT_V1 — «رمزِ پنل را گم می‌کنم»: رمز رمزنگاری‌شده ذخیره می‌شود و فقط به خریدارش نشان داده می‌شود."""
+    r = await SV.buy(7, 1001, 1, api_factory=FakeAPI)
+    aid, pw = r["account_id"], r["password"]
+    assert await SV.get_secret(aid) == pw
+    async with ui.maker() as s:
+        raw = (await s.scalar(select(models.PanelSellerSecret))).pw
+    assert raw.startswith("enc1:") and pw not in raw                                    # متنِ ساده در دیتابیس نیست
+    cb = _Cb(f"psel:sp:{aid}")
+    await ui.UM.spec_page(cb, None)
+    assert "psel:pws:%d" % aid in _cbs(cb.message) and pw not in cb.message.out[-1][0]      # صفحهٔ مشخصات رمز را لو نمی‌دهد
+    cb = _Cb(f"psel:pws:{aid}")
+    await ui.UM.show_password(cb, None)
+    assert pw in cb.message.out[-1][0] and "پاک کن" in cb.message.out[-1][0]
+    other = _Cb(f"psel:pws:{aid}", uid=999)                                              # خریدارِ دیگر
+    await ui.UM.show_password(other, None)
+    assert not other.message.out and other.alerts
+    await ui.tenant.set_setting(7, "psel_allow_showpw", "0")                             # مالک بسته است
+    ui.tenant._SETTING_CACHE.clear()
+    cb = _Cb(f"psel:pws:{aid}")
+    await ui.UM.show_password(cb, None)
+    assert not cb.message.out and "بسته است" in cb.alerts[-1]
+    cb = _Cb(f"psel:sp:{aid}")
+    await ui.UM.spec_page(cb, None)
+    assert "psel:pws:%d" % aid not in _cbs(cb.message)
+
+
+@pytest.mark.asyncio
+async def test_password_updates_on_change_and_vanishes_on_delete(ui, _key):
+    r = await SV.buy(7, 1001, 1, api_factory=FakeAPI)
+    aid = r["account_id"]
+    ch = await SV.change_password(7, aid, 1001, api_factory=FakeAPI)
+    assert await SV.get_secret(aid) == ch["password"] and ch["password"] != r["password"]
+    assert await SV.delete_account(7, aid, api_factory=FakeAPI)
+    assert await SV.get_secret(aid) is None
+
+
+@pytest.mark.asyncio
+async def test_volume_end_keeps_customer_login_never_deletes_and_keeps_users_off(ui, _key, monkeypatch):
+    """Whale: «بعد از اتمامِ حجم پنلِ مشتری به هیچ وجه حذف نشه» + مشتری هنوز ببیند هر کاربر چقدر حجم دارد."""
+    r = await SV.buy(7, 1001, 1, api_factory=FakeAPI)
+    aid, uname, pw = r["account_id"], r["username"], r["password"]
+    monkeypatch.setattr(FakeAPI, "usage", 100 * SV.GB)
+    FakeAPI.log.clear()
+    await SV.enforce_once(7, FakeAPI)
+    async with ui.maker() as s:
+        a = await s.get(models.PanelSellerAccount, aid)
+    assert a.status == "suspended" and a.suspend_reason == "traffic"                       # حذف نشد
+    assert ("off", uname) in FakeAPI.log and not any(x[0] in ("pw", "del") for x in FakeAPI.log)   # کاربران خاموش؛ رمز/حذف دست‌نخورده
+    assert await SV.get_secret(aid) == pw                                                  # رمز هنوز قابلِ نمایش
+    # دورِ بعد: اگر مشتری کاربرانش را دوباره روشن کرده باشد، دوباره خاموش می‌شوند (دورزدنِ سقف)
+    FakeAPI.log.clear()
+    await SV.enforce_once(7, FakeAPI)
+    assert ("off", uname) in FakeAPI.log
+    # حجمِ اضافه: فقط کاربران روشن می‌شوند؛ رمزِ مشتری عوض نمی‌شود
+    await ui.tenant.set_setting(7, "psel_extra_gb_price", "1000")
+    ui.tenant._SETTING_CACHE.clear()
+    FakeAPI.log.clear()
+    ev = await SV.add_volume(7, aid, 1001, 20, api_factory=FakeAPI)
+    assert ev["status"] == "ok" and ev["new_password"] is None
+    assert ("on", uname) in FakeAPI.log and not any(x[0] == "pw" for x in FakeAPI.log)
+    assert await SV.get_secret(aid) == pw
+
+
+@pytest.mark.asyncio
+async def test_owner_can_switch_back_to_closing_login_on_volume_end(ui, _key, monkeypatch):
+    await ui.tenant.set_setting(7, "psel_keep_login", "0")
+    ui.tenant._SETTING_CACHE.clear()
+    r = await SV.buy(7, 1001, 1, api_factory=FakeAPI)
+    monkeypatch.setattr(FakeAPI, "usage", 100 * SV.GB)
+    FakeAPI.log.clear()
+    await SV.enforce_once(7, FakeAPI)
+    assert any(x[0] == "pw" and x[1] == r["username"] for x in FakeAPI.log)                # رفتارِ قبلی: رمز تصادفی
+    assert await SV.get_secret(r["account_id"]) is None                                    # رمزِ ناشناخته ⇒ ذخیره‌شده پاک
+
+
+def test_new_permissions_exist_with_right_defaults():
+    from tenant.bots.panel_seller.admin import PERMS
+    assert PERMS["psel_allow_showpw"][1] == "1" and PERMS["psel_keep_login"][1] == "1"

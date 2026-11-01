@@ -4070,6 +4070,16 @@ class PanelSellerAccount(Base):
 TENANT_OWNED_MODELS += [PanelSellerAccount, PanelSellerPackage]
 
 
+# === PATCH_PSEL_PASSWORD_VAULT_V1 === (Whale Support) رمزِ پنلِ مشتری — همیشه رمزنگاری‌شده (Fernet)، جدولِ جدا (بدونِ ستونِ تازه رویِ جدولِ موجود)
+# عمداً در TENANT_OWNED_MODELS نیست تا در بک‌آپ/بازگردانی وارد نشود.
+class PanelSellerSecret(Base):
+    __tablename__ = "panel_seller_secrets"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    pw: Mapped[str] = mapped_column(String(400))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 # === PATCH_VPN_AUTORENEW_V1 === تمدیدِ خودکار از کیف‌پول برایِ هر سرویس (مشتری خودش روشن می‌کند)
 class VpnAutoRenew(Base):
     __tablename__ = "vpn_auto_renew"

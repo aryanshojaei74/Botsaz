@@ -428,8 +428,12 @@ async def spec_page(cb: CallbackQuery, bot: Bot):
     lines = ["📋 <b>مشخصاتِ سرویس</b>", "", "📌 این اطلاعات برایِ ورود به پنل و پیگیریِ سرویسِ شماست.", "",
              f"• نامِ نمایشی: <b>{esc(a.title)}</b>",
              f"• نامِ کاربریِ ورود به پنل: <code>{esc(a.admin_username)}</code>"]
-    if await _perm(row, "psel_allow_pw"):
-        lines.append("• رمزِ پنل: ذخیره نمی‌شود؛ از «🔑 رمزِ تازه» بگیر")
+    _has_pw = await SV.get_secret(a.id) is not None
+    _show_pw = await _perm(row, "psel_allow_showpw") and _has_pw and a.status in ("active", "suspended")
+    if _show_pw:
+        lines.append("• رمزِ پنل: با دکمهٔ «🔑 نمایشِ رمز» ببین")
+    elif await _perm(row, "psel_allow_pw"):
+        lines.append("• رمزِ پنل: برایِ این سرویس ذخیره نشده؛ از «🔑 رمزِ تازه» بگیر")
     lines.append(f"• کدِ سرویس: <code>{esc(a.tracking_code or a.id)}</code>")
     lines.append("")
     live = await _live_usage(a, panel) if (panel and a.status == "active") else None
@@ -454,12 +458,31 @@ async def spec_page(cb: CallbackQuery, bot: Bot):
     rows = []
     if panel and (panel.base_url or "").startswith(("http://", "https://")):
         rows.append([btn("🌐 ورود به پنل وب", url=panel.base_url, style=ButtonStyle.PRIMARY)])
+    if _show_pw:
+        rows.append([btn("🔑 نمایشِ رمزِ پنل", f"psel:pws:{a.id}", style=ButtonStyle.PRIMARY)])
     if a.data_gb:
         rows.append([btn("🔕 خاموش‌کردنِ اعلانِ حجم" if notif_on else "🔔 روشن‌کردنِ اعلانِ حجم", f"psel:nt:{a.id}",
                          style=ButtonStyle.DANGER if notif_on else ButtonStyle.SUCCESS)])
     rows.append([btn("🔄 بروزرسانی", f"psel:sp:{a.id}", style=ButtonStyle.PRIMARY)])
     rows.append(back_row(f"psel:a:{a.id}", "⬅️ بازگشت به پنل"))
     await edit_or_send(cb, "\n".join(lines), kb(*rows))
+    await cb.answer()
+
+
+@psel_user_router.callback_query(F.data.regexp(r"^psel:pws:\d+$"))
+async def show_password(cb: CallbackQuery, bot: Bot):
+    """PATCH_PSEL_PASSWORD_VAULT_V1 (Whale): «رمزِ پنل را گم می‌کنم» — رمزِ ذخیره‌شدهٔ (رمزنگاری‌شده) همین مشتری، فقط به خودش."""
+    row, a = await _acc_for(cb, bot, int(cb.data.split(":")[2]))
+    if not a:
+        return
+    if not await _perm(row, "psel_allow_showpw"):
+        return await cb.answer("نمایشِ رمز توسطِ مدیر بسته است.", show_alert=True)
+    pw = await SV.get_secret(a.id)
+    if pw is None:
+        return await cb.answer("رمز برایِ این سرویس ذخیره نشده؛ از «🔑 رمزِ تازه» استفاده کن.", show_alert=True)
+    await cb.message.answer(
+        f"🔑 <b>اطلاعاتِ ورود</b>\n\n🆔 <code>{esc(a.admin_username)}</code>\n🔑 <code>{esc(pw)}</code>\n\n"
+        "⚠️ بعد از کپی‌کردن، این پیام را پاک کن.", parse_mode="HTML")
     await cb.answer()
 
 

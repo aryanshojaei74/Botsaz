@@ -37,6 +37,8 @@ PERMS = {
     "psel_allow_pw": ("🔑 تغییرِ رمزِ پنل توسطِ مشتری", "0"),
     "psel_allow_toggle": ("⏯ خاموش/روشنِ اشتراک‌ها توسطِ مشتری", "0"),
     "psel_allow_delete": ("🗑 حذفِ دائمیِ پنل توسطِ مشتری", "0"),     # PATCH_PSEL_ACCOUNT_BUTTONS_V1
+    "psel_allow_showpw": ("🔑 نمایشِ رمزِ پنل به مشتری", "1"),         # PATCH_PSEL_PASSWORD_VAULT_V1
+    "psel_keep_login": ("🔓 پایانِ حجم: ورودِ مشتری باز بماند", "1"),    # PATCH_PSEL_KEEP_LOGIN_V1 (فقط کاربرانِ پنل خاموش می‌شوند)
 }
 
 

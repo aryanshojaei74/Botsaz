@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 
 from config import Session
-from models import BotUser, PanelSellerAccount, PanelSellerPackage, VpnPanel, WalletTxn
+from models import BotUser, PanelSellerAccount, PanelSellerPackage, PanelSellerSecret, VpnPanel, WalletTxn
 
 from tenant.bots.panel_seller import adapter as AD
 from tenant.shared.panel_clients.vpn_panel import PanelError
@@ -63,6 +63,53 @@ async def role_for(api, panel) -> int:
 
 
 GB_BYTES = 1024 ** 3
+
+
+# === PATCH_PSEL_PASSWORD_VAULT_V1 === رمزِ پنلِ مشتری رمزنگاری‌شده نگه داشته می‌شود تا «🔑 نمایش رمز» داشته باشیم.
+# بدونِ کلید (BOTSAZ_SECRET_KEY / PLATFORM_BOT_TOKEN) هرگز متنِ ساده ذخیره نمی‌شود.
+async def save_secret(account_id: int, password: str | None) -> bool:
+    """password=None ⇒ حذف (رمز تصادفی/ناشناخته شد)."""
+    try:
+        async with Session() as s:
+            row = await s.scalar(select(PanelSellerSecret).where(PanelSellerSecret.account_id == account_id))
+            if password is None:
+                if row is not None:
+                    await s.delete(row)
+                    await s.commit()
+                return True
+            import secret_box
+            if secret_box._fernet() is None:
+                return False
+            enc = secret_box.encrypt(password)
+            if row is None:
+                s.add(PanelSellerSecret(account_id=account_id, pw=enc))
+            else:
+                row.pw, row.updated_at = enc, datetime.utcnow()
+            await s.commit()
+            return True
+    except Exception:      # noqa: BLE001
+        logger.exception("panel_seller: ذخیرهٔ رمزِ رمزنگاری‌شده ناموفق بود (acc=%s)", account_id)
+        return False
+
+
+async def get_secret(account_id: int) -> str | None:
+    try:
+        async with Session() as s:
+            row = await s.scalar(select(PanelSellerSecret).where(PanelSellerSecret.account_id == account_id))
+        if row is None:
+            return None
+        import secret_box
+        val = secret_box.decrypt(row.pw)
+        return None if (val or "").startswith(secret_box.PREFIX) else val          # کلید عوض شده ⇒ خوانده نشد
+    except Exception:      # noqa: BLE001
+        logger.exception("panel_seller: خواندنِ رمزِ ذخیره‌شده ناموفق بود (acc=%s)", account_id)
+        return None
+
+
+async def keep_login_on_traffic(bot_id: int) -> bool:
+    """پایانِ حجم: فقط کاربرانِ پنل خاموش شوند و ورودِ خودِ مشتری (رمز) سرِ جایش بماند تا بتواند مصرفِ هر کاربر را ببیند."""
+    from tenant import get_setting
+    return (await get_setting(bot_id, "psel_keep_login", "1")) == "1"
 
 
 async def create_admin_on(api, panel, username: str, password: str, data_gb: int = 0) -> None:
@@ -193,6 +240,7 @@ async def buy(bot_id: int, buyer_tg: int, package_id: int, api_factory=None, bot
         s.add(acc)
         await s.commit()
         acc_id = acc.id
+    await save_secret(acc_id, password)               # PATCH_PSEL_PASSWORD_VAULT_V1
     if bot is not None and row is not None:         # اطلاعِ خرید به مالک/کانالِ اعتمادسازی/کانالِ لاگ
         try:
             from tenant import _purchase_alert
@@ -231,9 +279,12 @@ async def renew(bot_id: int, account_id: int, buyer_tg: int, api_factory=None) -
         api = api_factory(panel)
         try:
             if acc.status == "suspended":
-                new_pw = gen_password()
-                await api.set_password(acc.admin_username, new_pw)
-                await api.activate_users(acc.admin_username)
+                if acc.suspend_reason == "traffic" and await get_secret(acc.id) is not None:
+                    await api.activate_users(acc.admin_username)        # رمز دست‌نخورده بود (ورودِ مشتری باز مانده بود)
+                else:
+                    new_pw = gen_password()
+                    await api.set_password(acc.admin_username, new_pw)
+                    await api.activate_users(acc.admin_username)
             try:
                 await api.reset_usage(acc.admin_username)
             except Exception:       # noqa: BLE001 — ریستِ مصرف اختیاری است
@@ -258,6 +309,8 @@ async def renew(bot_id: int, account_id: int, buyer_tg: int, api_factory=None) -
         acc.price_toman = int(acc.price_toman or 0) + price
         await s.commit()
         exp = acc.expires_at
+    if new_pw:
+        await save_secret(account_id, new_pw)
     return {"status": "ok", "expires_at": exp, "new_password": new_pw, "username": acc.admin_username}
 
 
@@ -361,6 +414,7 @@ async def buy_test(bot_id: int, buyer_tg: int, api_factory=None, bot=None, row=N
         s.add(acc)
         await s.commit()
         acc_id = acc.id
+    await save_secret(acc_id, password)               # PATCH_PSEL_PASSWORD_VAULT_V1
     if bot is not None and row is not None:
         try:
             from tenant import _purchase_alert
@@ -419,9 +473,12 @@ async def add_volume(bot_id: int, account_id: int, buyer_tg: int, gb: int, api_f
         try:
             api = api_factory(panel)
             try:
-                new_pw = gen_password()
-                await api.set_password(acc.admin_username, new_pw)
-                await api.activate_users(acc.admin_username)
+                if await get_secret(acc.id) is not None:                 # ورودِ مشتری باز مانده بود ⇒ فقط کاربران روشن شوند
+                    await api.activate_users(acc.admin_username)
+                else:
+                    new_pw = gen_password()
+                    await api.set_password(acc.admin_username, new_pw)
+                    await api.activate_users(acc.admin_username)
             finally:
                 await api.close()
         except Exception as e:  # noqa: BLE001
@@ -457,6 +514,8 @@ async def add_volume(bot_id: int, account_id: int, buyer_tg: int, gb: int, api_f
                                   amount=price, tracking_code=None)
         except Exception:      # noqa: BLE001
             logger.exception("panel_seller: اعلانِ خریدِ حجمِ اضافه ناموفق بود")
+    if new_pw:
+        await save_secret(account_id, new_pw)
     return {"status": "ok", "new_gb": new_gb, "price": price, "new_password": new_pw, "username": uname}
 
 
@@ -478,6 +537,7 @@ async def change_password(bot_id: int, account_id: int, buyer_tg: int, api_facto
             await api.close()
     except Exception as e:  # noqa: BLE001
         return {"status": "panel_failed", "error": str(e)[:300]}
+    await save_secret(account_id, pw)
     return {"status": "ok", "password": pw, "username": acc.admin_username}
 
 
@@ -515,11 +575,15 @@ async def suspend(account_id: int, reason: str, api_factory=None) -> bool:
         uname = acc.admin_username
     if not panel:
         return False
+    # PATCH_PSEL_KEEP_LOGIN_V1 (Whale): پایانِ حجم ⇒ کاربرانِ پنل خاموش می‌شوند ولی ورودِ خودِ مشتری (رمز) باز می‌ماند تا بتواند ببیند
+    # هر کاربر چقدر مصرف کرده؛ پنل هرگز حذف نمی‌شود. (پایانِ مهلت/تعلیقِ مدیر مثلِ قبل: رمز تصادفی ⇒ ورود بسته.)
+    keep = reason == "traffic" and await keep_login_on_traffic(acc.bot_id)
     try:
         api = api_factory(panel)
         try:
             await api.disable_users(uname)
-            await api.set_password(uname, gen_password())
+            if not keep:
+                await api.set_password(uname, gen_password())
         finally:
             await api.close()
     except Exception as e:  # noqa: BLE001
@@ -529,6 +593,8 @@ async def suspend(account_id: int, reason: str, api_factory=None) -> bool:
         acc = await s.get(PanelSellerAccount, account_id, with_for_update=True)
         acc.status, acc.suspend_reason = "suspended", reason
         await s.commit()
+    if not keep:
+        await save_secret(account_id, None)            # رمز تصادفی و ناشناخته شد
     return True
 
 
@@ -557,6 +623,7 @@ async def resume(bot_id: int, account_id: int, api_factory=None) -> dict:
         acc = await s.get(PanelSellerAccount, account_id, with_for_update=True)
         acc.status, acc.suspend_reason, acc.flags = "active", None, ("nt0" if "nt0" in _flags(acc) else None)
         await s.commit()
+    await save_secret(account_id, pw)
     return {"status": "ok", "password": pw, "username": uname, "buyer_tg": acc.buyer_tg}
 
 
@@ -582,6 +649,7 @@ async def delete_account(bot_id: int, account_id: int, api_factory=None) -> bool
         acc = await s.get(PanelSellerAccount, account_id, with_for_update=True)
         acc.status = "deleted"
         await s.commit()
+    await save_secret(account_id, None)               # PATCH_PSEL_PASSWORD_VAULT_V1: رمزِ ذخیره‌شده پاک شود
     return True
 
 
@@ -647,4 +715,24 @@ async def enforce_once(bot_id: int, api_factory=None, now: datetime | None = Non
                 if row:
                     _set_flags(row, fl)
                     await s.commit()
+    # === PATCH_PSEL_KEEP_LOGIN_V1 === ورودِ مشتریِ «حجم‌تمام‌شده» باز است؛ مطمئن شو کاربرانش دوباره روشن نشده‌اند (دورزدنِ سقف).
+    try:
+        async with Session() as s:
+            ended = (await s.scalars(select(PanelSellerAccount).where(
+                PanelSellerAccount.bot_id == bot_id, PanelSellerAccount.status == "suspended",
+                PanelSellerAccount.suspend_reason == "traffic").limit(100))).all()
+        for a in ended:
+            panel = panels.get(a.panel_id)
+            if panel is None or await get_secret(a.id) is None:      # رمزِ تصادفی شده بود ⇒ خودش نمی‌تواند وارد شود
+                continue
+            try:
+                api = api_factory(panel)
+                try:
+                    await api.disable_users(a.admin_username)
+                finally:
+                    await api.close()
+            except Exception as e:      # noqa: BLE001
+                logger.info("panel_seller: خاموش‌نگه‌داشتنِ کاربرانِ حجم‌تمام‌شده ناموفق (acc=%s): %s", a.id, e)
+    except Exception:      # noqa: BLE001
+        logger.exception("panel_seller: بازبینیِ حساب‌هایِ حجم‌تمام‌شده خطا داد")
     return out
