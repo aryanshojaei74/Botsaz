@@ -249,6 +249,8 @@ async def pp_settings(cb: CallbackQuery, bot: Bot):
         # ── کلیدهای وضعیت ──
         [_b(f"🎁 دکمه تست ۲ روزه: {trial_txt}", "pp:trial", P)],
         [_b(f"🛠 حالت آپدیت: {upd_txt}", "pp:update", P)],
+        # PATCH_PAUSED_TEXT_EDIT_V1 (DevelOper): رباتِ همکار صفحهٔ تنظیماتِ جدا دارد؛ دکمهٔ ویرایشِ متنِ «خاموش/حالت آپدیت» اینجا هم باشد
+        [_b("✏️ متن خاموش بودن / حالت آپدیت", "set:paused_text", P)],
 
         # === PATCH_PARTNER_SUBADMIN_TENANT_V1 ===
         # افزودن/حذفِ ادمینِ فرعیِ خودِ همکار در رباتش (جدول AdminSupport

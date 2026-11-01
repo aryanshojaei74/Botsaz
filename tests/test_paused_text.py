@@ -108,3 +108,13 @@ def test_main_tenant_uses_custom_paused_text_for_owner_pause():
     # main_tenant را import نمی‌کنیم: ساختنِ اپ روترِ tenant را به Dispatcher وصل می‌کند و تست‌هایِ دیگر را می‌شکند
     src = (pathlib.Path(__file__).resolve().parent.parent / "main_tenant.py").read_text(encoding="utf-8")
     assert 'get_setting as _gs_pt' in src and '"paused_text"' in src
+
+
+def test_partner_settings_page_has_the_edit_button():
+    """رباتِ همکار صفحهٔ تنظیماتِ جدا (pp:settings) دارد و دکمه اولش آنجا نبود ⇒ «اضافه نشد» (DevelOper)."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent / "tenant" / "partner_bot" / "partner_menu.py").read_text(encoding="utf-8")
+    assert '"set:paused_text"' in src and '"pp:update"' in src
+    # و حالتِ آپدیتِ همکار همان پیشوندی را دارد که main_tenant برایِ متنِ سفارشی چک می‌کند
+    mt = (pathlib.Path(__file__).resolve().parent.parent / "main_tenant.py").read_text(encoding="utf-8")
+    assert "حالت آپدیت (توسط مالک ربات)" in mt and "حالت آپدیت (توسط مالک ربات)" in src
