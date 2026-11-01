@@ -438,12 +438,23 @@ async def _live_bot_context(bot_id: int, row, telegram_id: int | None = None) ->
     sections = ["اطلاعات اختصاصی این ربات — منبع حقیقت فقط همین بخش است:"]
     field = getattr(row, "field", "")
     async with Session() as s:
-        buttons = (await s.scalars(select(MainButton).where(
-            MainButton.bot_id == bot_id).order_by(MainButton.row, MainButton.col).limit(80))).all()
-        if buttons:
-            sections.append("دکمه‌ها و مسیرهای منو:")
-            sections.append("\n".join(
-                f"- {b.label}" for b in buttons if b.label))
+        # PATCH_AI_MENU_KNOWLEDGE_V1 — همهٔ دکمه‌ها (با زیرمنو) + توضیحِ عملکردِ هر کدام؛ هر بار از منویِ همان لحظه ساخته می‌شود
+        try:
+            from tenant.shared.menu_knowledge import build_menu_knowledge, kyc_facts
+            _mk = await build_menu_knowledge(bot_id)
+            if _mk:
+                sections.append("دکمه‌های منویِ ربات و کاری که هرکدام می‌کنند (برایِ توضیح به کاربر؛ نامِ دکمه را همان‌طور که هست بگو):")
+                sections.append("\n".join(_mk))
+            _kf = await kyc_facts(bot_id)
+            if _kf:
+                sections.append("\n".join(_kf))
+        except Exception:
+            logger.exception("[SMM_AI] ساختِ دانشِ دکمه‌ها ناموفق بود؛ فهرستِ ساده")
+            buttons = (await s.scalars(select(MainButton).where(
+                MainButton.bot_id == bot_id).order_by(MainButton.row, MainButton.col).limit(80))).all()
+            if buttons:
+                sections.append("دکمه‌ها و مسیرهای منو:")
+                sections.append("\n".join(f"- {b.label}" for b in buttons if b.label))
         if field == "vpn_sales":
             plans = (await s.scalars(select(VpnPlan).where(
                 VpnPlan.bot_id == bot_id, VpnPlan.active.is_(True)).order_by(VpnPlan.sort_order, VpnPlan.id).limit(80))).all()
@@ -514,7 +525,7 @@ async def _live_bot_context(bot_id: int, row, telegram_id: int | None = None) ->
                 sections.append("\n".join(lines))
             else:
                 sections.append("- سرویس فعال ثبت نشده است.")
-    return "\n\n".join(sections)[:12000]
+    return "\n\n".join(sections)[:24000]
 
 
 async def _recent_orders_context(bot_id: int, telegram_id: int) -> str:
