@@ -56,6 +56,14 @@ def spawn(coro):
     return task
 
 
+def _alert_plain(text: str) -> str:
+    """هشدارِ پاپ‌آپِ تلگرام HTML نمی‌فهمد و سقفش ۲۰۰ نویسه است؛ تگ‌ها برداشته و متنِ بلند کوتاه می‌شود."""
+    import html as _h
+    import re as _r
+    t = _h.unescape(_r.sub(r"<[^>]+>", "", text or "")).strip()
+    return t if len(t) <= 195 else t[:192] + "…"
+
+
 async def maintenance_reply(bot: Bot, data: dict, text: str | None = None,
                              reply_markup: "InlineKeyboardMarkup | None" = None) -> None:
     """برای ربات‌های موقتاً خاموش‌شده (paused) یا قفل‌شده توسط ادمین (locked):
@@ -81,7 +89,7 @@ async def maintenance_reply(bot: Bot, data: dict, text: str | None = None,
                 return
             if cq_id:
                 try:
-                    await bot.answer_callback_query(cq_id, text=text, show_alert=True)
+                    await bot.answer_callback_query(cq_id, text=_alert_plain(text), show_alert=True)   # PATCH_PAUSED_TEXT_EDIT_V1: بدونِ تگ و ≤۲۰۰ نویسه
                     return
                 except Exception as e:
                     if _is_expected_telegram_delivery_error(e):

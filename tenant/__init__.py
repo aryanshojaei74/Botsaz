@@ -3155,6 +3155,29 @@ def _is_order_notice(text, mk) -> bool:
     return False
 
 
+# === PATCH_PAUSED_TEXT_EDIT_V1 === (DevelOper) مالک بتواند متنِ «ربات خاموش است» را خودش ویرایش کند
+DEFAULT_PAUSED_TEXT = "🛠 ربات در حال به‌روزرسانی می‌باشد. لطفا چند دقیقهٔ دیگر دوباره امتحان کنید."
+PAUSED_TEXT_MAX = 600
+
+
+async def paused_notice(bot_id: int) -> str:
+    """متنِ پیامِ «ربات خاموش است» برایِ کاربران: متنِ سفارشیِ مالک (HTML) یا پیش‌فرض."""
+    try:
+        t = (await get_setting(bot_id, "paused_text", "") or "").strip()
+    except Exception:      # noqa: BLE001
+        logger.exception("paused_text خوانده نشد")
+        t = ""
+    return t or DEFAULT_PAUSED_TEXT
+
+
+def paused_alert_text(html_text: str) -> str:
+    """برایِ هشدارِ پاپ‌آپ (فقط متنِ ساده، سقفِ ۲۰۰ نویسهٔ تلگرام)."""
+    import html as _h
+    import re as _r
+    t = _h.unescape(_r.sub(r"<[^>]+>", "", html_text or "")).strip() or DEFAULT_PAUSED_TEXT
+    return t if len(t) <= 195 else t[:192] + "…"
+
+
 def _paused_notice_due(bot_id: int, chat_id: int, secs: float = 900.0) -> bool:
     """=== PATCH_PAUSED_NOTICE_THROTTLE_V1 === آیا الان نوبت فرستادن «ربات خاموش است» به این چت است؟ (هر چت هر secs ثانیه یک‌بار)"""
     import time as _t
@@ -4877,6 +4900,10 @@ class ChannelPostFSM(StatesGroup):
     wait_detach_target = State()  # دریافت فوروارد/لینکِ پستی که می‌خواهیم دکمه(ها) را از زیرش برداریم
 
 
+class PausedTextFSM(StatesGroup):      # PATCH_PAUSED_TEXT_EDIT_V1
+    text = State()
+
+
 class HomeBtnFSM(StatesGroup):
     rename = State()
     rule = State()
@@ -5180,7 +5207,7 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
         # === PATCH_PAUSED_NOTICE_THROTTLE_V1 === گزارش فدایی: «وقتی ربات را خاموش می‌کنیم، در گروه برای هر پیام می‌گوید
         # ربات خاموش است و اسپم می‌کند». در گروه هیچ پاسخی نمی‌دهیم؛ در چت خصوصی هم هر ۱۵ دقیقه یک‌بار.
         if msg.chat.type == "private" and _paused_notice_due(row.id, msg.chat.id):
-            await msg.answer("🛠 ربات در حال به‌روزرسانی می‌باشد. لطفا چند دقیقهٔ دیگر دوباره امتحان کنید.")
+            await msg.answer(await paused_notice(row.id), parse_mode="HTML")   # PATCH_PAUSED_TEXT_EDIT_V1
         return
     u, was_created = await get_or_create_user(
         row.id, msg.from_user.id, msg.from_user.full_name,
@@ -7009,7 +7036,7 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         # === PATCH_PAUSED_NOTICE_THROTTLE_V1 === گزارش فدایی: «وقتی ربات را خاموش می‌کنیم، در گروه برای هر پیام می‌گوید
         # ربات خاموش است و اسپم می‌کند». در گروه هیچ پاسخی نمی‌دهیم؛ در چت خصوصی هم هر ۱۵ دقیقه یک‌بار.
         if msg.chat.type == "private" and _paused_notice_due(row.id, msg.chat.id):
-            await msg.answer("🛠 ربات در حال به‌روزرسانی می‌باشد. لطفا چند دقیقهٔ دیگر دوباره امتحان کنید.")
+            await msg.answer(await paused_notice(row.id), parse_mode="HTML")   # PATCH_PAUSED_TEXT_EDIT_V1
         return
     bot_id = row.id
     u = await get_or_create_user(bot_id, msg.from_user.id, msg.from_user.full_name,
@@ -7554,7 +7581,8 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
             from tenant.bots.virtual_service.smm import vso_menu
             await vso_menu(_FakeCb(msg), bot)
             return
-        _settings_needs_state = {"✏️ متن خوش‌آمدگویی", "🏠 تنظیم و مدیریت دکمه‌های صفحه اصلی",
+        _settings_needs_state = {"✏️ متن خاموش بودن ربات",   # PATCH_PAUSED_TEXT_EDIT_V1
+                                 "✏️ متن خوش‌آمدگویی", "🏠 تنظیم و مدیریت دکمه‌های صفحه اصلی",
                                  "🏠 متنِ بازگشت به صفحهٔ اصلی",  # PATCH_CUSTOM_HOME_MENU_TEXT_V1
                                  "🎲 بازی کن و جایزه بگیر",  # PATCH_DICE_GAME_V1
                                  "🏅 امتیازگیری با رفرال",  # PATCH_REFERRAL_POINTS_V1
@@ -7570,6 +7598,7 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
             "🎁 تست رایگان VPN": set_trial_menu,
             "🎁 پاداش دعوت (تومان)": set_ref_reward_menu,
             "✏️ متن خوش‌آمدگویی": set_welcome_start,
+            "✏️ متن خاموش بودن ربات": set_paused_text_start,   # PATCH_PAUSED_TEXT_EDIT_V1
             "🛡 آنتی‌اسپم": tn_antispam_menu,
             # === PATCH_PRODUCT_RATING_V1 ===
             # این گزینه تو _sec_settings_kb ساخته می‌شد ولی اینجا (دیسپچرِ
@@ -7980,7 +8009,7 @@ async def mbtn_tap(cb: CallbackQuery, bot: Bot, state: FSMContext):
         await cb.answer()
         return
     if row.status == "paused" and not await is_owner_or_admin(row.id, cb.from_user.id, row.owner_id):
-        await cb.answer("🛠 ربات در حال به‌روزرسانی می‌باشد. لطفاً چند دقیقهٔ دیگر دوباره امتحان کنید.", show_alert=True)
+        await cb.answer(paused_alert_text(await paused_notice(row.id)), show_alert=True)   # PATCH_PAUSED_TEXT_EDIT_V1
         return
     bot_id = row.id
     u = await get_or_create_user(bot_id, cb.from_user.id, cb.from_user.full_name,
@@ -12697,6 +12726,7 @@ async def _sec_settings_kb(bot_id: int, plan: str, menu_mode_v: str, bot_paused:
     opts.append(("↩️ بازگشت به منوی قبل: " + ("🔴 خاموش" if _npo else "🟢 روشن"), "set:nav_prev"))
     pause_lbl = "🤖 ربات: " + ("🔴 خاموش — بزن روشن شود" if bot_paused else "🟢 روشن — بزن خاموش شود")
     opts.append((pause_lbl, "set:bot_toggle"))
+    opts.append(("✏️ متن خاموش بودن ربات", "set:paused_text"))      # PATCH_PAUSED_TEXT_EDIT_V1
     opts.append(("🛡 آنتی‌اسپم", "set:antispam"))
 
     # چیدمان درخواستی: دو جفت مشخص کنار هم؛ بقیهٔ گزینه‌های قدیمی حذف نمی‌شوند.
@@ -12710,7 +12740,7 @@ async def _sec_settings_kb(bot_id: int, plan: str, menu_mode_v: str, bot_paused:
         if row:
             requested_rows.append(row)
     for cb in ("set:menu_mode", "miniapp:panel", "miniapp:nft",
-               "set:bot_toggle", "set:antispam"):
+               "set:bot_toggle", "set:paused_text", "set:antispam"):
         if cb in by_cb:
             requested_rows.append([by_cb[cb]])
     used = {cb for row in requested_rows for _, cb in row}
@@ -12734,6 +12764,7 @@ async def _sec_settings_kb(bot_id: int, plan: str, menu_mode_v: str, bot_paused:
             "miniapp:panel": ButtonStyle.PRIMARY,
             "miniapp:nft": ButtonStyle.PRIMARY,   # PATCH_NFT_MARKET_SETTINGS_ENTRY_V1
             "set:bot_toggle": ButtonStyle.DANGER,
+            "set:paused_text": ButtonStyle.PRIMARY,
             "set:antispam": ButtonStyle.DANGER,
         }
         # === PATCH_FREE_PLAN_NO_COLORS_V1 ===
@@ -12762,6 +12793,7 @@ async def _sec_settings_kb(bot_id: int, plan: str, menu_mode_v: str, bot_paused:
         "miniapp:panel": ButtonStyle.PRIMARY,
         "miniapp:nft": ButtonStyle.PRIMARY,   # PATCH_NFT_MARKET_SETTINGS_ENTRY_V1
         "set:bot_toggle": ButtonStyle.DANGER,
+        "set:paused_text": ButtonStyle.PRIMARY,
         "set:antispam": ButtonStyle.DANGER,
     }
     # === PATCH_FREE_PLAN_NO_COLORS_V1 ===
@@ -31292,6 +31324,51 @@ async def set_bot_toggle(cb: CallbackQuery, bot: Bot):
                 logger.exception("خطای نادیده‌گرفته‌شده در بی‌اعتبارسازی وضعیت ربات")
     await cb.answer("وضعیت ربات تغییر کرد", show_alert=True)
     await tadm_sec_settings(cb, bot)
+
+
+@tenant_router.callback_query(F.data == "set:paused_text")
+async def set_paused_text_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """PATCH_PAUSED_TEXT_EDIT_V1 — متنی که وقتی ربات خاموش است به کاربران نشان داده می‌شود."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cur = (await get_setting(row.id, "paused_text", "") or "").strip()
+    await state.set_state(PausedTextFSM.text)
+    import html as _h
+    await cb.message.answer(
+        "✏️ <b>متن خاموش بودن ربات</b>\n\n"
+        "وقتی ربات را خاموش کنی (🤖 ربات: خاموش)، کاربران عادی این متن را می‌بینند؛ مالک و ادمین‌ها طبق معمول کار می‌کنند.\n\n"
+        f"متن فعلی:\n<blockquote>{_h.escape(cur) if cur else _h.escape(DEFAULT_PAUSED_TEXT) + ' (پیش‌فرض)'}</blockquote>\n\n"
+        f"متن جدید را بفرست (حداکثر {PAUSED_TEXT_MAX} نویسه؛ بولد/ایتالیک/لینک حفظ می‌شود).\n"
+        "برگشت به پیش‌فرض: /skip",
+        reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
+    await cb.answer()
+
+
+@tenant_router.message(PausedTextFSM.text, F.text)
+async def set_paused_text_save(msg: Message, state: FSMContext, bot: Bot):
+    row = await _owner_ok_msg(msg, bot)
+    if not row:
+        await state.clear()
+        return
+    raw = (msg.text or "").strip()
+    if raw == "/skip":
+        await set_setting(row.id, "paused_text", "")
+        await state.clear()
+        await msg.answer("✅ متن خاموش بودن به پیش‌فرض برگشت.")
+        return
+    html_t = (msg.html_text or raw).strip()
+    if len(raw) > PAUSED_TEXT_MAX:
+        await msg.answer(f"❌ متن بیش از {PAUSED_TEXT_MAX} نویسه است ({len(raw)}). کوتاه‌ترش کن.")
+        return
+    await set_setting(row.id, "paused_text", html_t)
+    await state.clear()
+    await msg.answer("✅ ذخیره شد. از این به بعد وقتی ربات خاموش باشد، کاربران این متن را می‌بینند.")
+    try:
+        await msg.answer("👁 پیش‌نمایش:\n\n" + html_t, parse_mode="HTML")
+    except Exception:      # noqa: BLE001
+        await set_setting(row.id, "paused_text", "")
+        await msg.answer("⚠️ تلگرام این متن را قبول نکرد (فرمت‌بندیِ خراب). ذخیره نشد؛ ساده‌تر بفرست.")
 
 
 @tenant_router.callback_query(F.data == "set:nav_kb_only")

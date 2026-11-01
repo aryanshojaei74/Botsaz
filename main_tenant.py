@@ -1403,6 +1403,14 @@ async def tenant_webhook(token: str, request: Request):
                     "🛠 این ربات توسط مالک در حالت آپدیت قرار گرفته؛ لطفاً بعداً دوباره تلاش کنید."
                     "\n🙏🏻 از صبر شما سپاسگزاریم."
                 )
+                # PATCH_PAUSED_TEXT_EDIT_V1 (DevelOper): مالک می‌تواند این متن را از «تنظیمات ← ✏️ متن خاموش بودن ربات» عوض کند
+                try:
+                    from tenant import get_setting as _gs_pt
+                    _custom_pt = ((await _gs_pt(brow.id, "paused_text", "")) or "").strip()
+                    if _custom_pt:
+                        maint_text = _custom_pt
+                except Exception:
+                    logger.exception("خواندنِ متنِ سفارشیِ خاموش بودن ربات ناموفق بود؛ متنِ پیش‌فرض")
             else:
                 maint_text = "🗄 این ربات موقتاً غیرفعال است. لطفاً بعداً دوباره امتحان کنید."
         spawn(maintenance_reply(bot, data, text=maint_text, reply_markup=maint_kb))
