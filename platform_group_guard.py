@@ -372,7 +372,8 @@ async def _check_content_restrictions(msg: Message, bot: Bot) -> bool:
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     reason_txt = "، ".join(reasons)
-    cnt, threshold, auto_banned = await _apply_warn(bot, msg.chat.id, msg.from_user, reason_txt, warned_by=0)
+    cnt, threshold, auto_banned = await _apply_warn(bot, msg.chat.id, msg.from_user, reason_txt, warned_by=0,
+                                                    evidence=_evidence(msg))
     note = f"⚠️ پیامِ {msg.from_user.full_name} به‌خاطرِ «{reason_txt}» حذف شد ({cnt}/{threshold})."
     if auto_banned:
         note += f"\n🚫 چون به سقفِ {threshold} خطا رسید، به‌صورتِ خودکار بن شد."
@@ -435,7 +436,7 @@ async def _check_promo_links(msg: Message, bot: Bot) -> bool:
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     cnt, threshold, auto_banned = await _apply_warn(
-        bot, msg.chat.id, msg.from_user, "ارسالِ لینکِ تبلیغاتیِ کانال/گروهِ دیگر", warned_by=0)
+        bot, msg.chat.id, msg.from_user, "ارسالِ لینکِ تبلیغاتیِ کانال/گروهِ دیگر", warned_by=0, evidence=_evidence(msg))
     note = f"⚠️ پیامِ {msg.from_user.full_name} به‌خاطرِ لینکِ تبلیغاتی حذف شد ({cnt}/{threshold})."
     if auto_banned:
         note += f"\n🚫 چون به سقفِ {threshold} خطا رسید، به‌صورتِ خودکار بن شد."
@@ -824,7 +825,7 @@ async def group_guard_command_router(msg: Message, bot: Bot):
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     cnt, threshold, auto_banned = await _apply_warn(
-        bot, msg.chat.id, msg.from_user, f"ارسالِ محتوایِ ممنوعه: «{matched}»", warned_by=0)
+        bot, msg.chat.id, msg.from_user, f"ارسالِ محتوایِ ممنوعه: «{matched}»", warned_by=0, evidence=_evidence(msg))
     note = f"⚠️ پیامِ {msg.from_user.full_name} به‌خاطرِ محتوایِ ممنوعه حذف شد ({cnt}/{threshold})."
     if auto_banned:
         note += f"\n🚫 چون به سقفِ {threshold} خطا رسید، به‌صورتِ خودکار بن شد."
@@ -1049,7 +1050,52 @@ async def _cmd_unmute(msg: Message, bot: Bot) -> None:
         f"👮 توسط: {_html.escape(_actor_label(msg))}")  # PATCH_GROUP_GUARD_ANON_ADMIN_V2
 
 
-async def _apply_warn(bot: Bot, chat_id: int, u, reason: str | None, warned_by: int) -> tuple[int, int, bool]:
+# === PATCH_GUARD_LOG_EVIDENCE_V1 === (فدایی) در لاگِ «⚠️ خطا» معلوم نبود دقیقاً چه چیزی باعث خطا شد؛ حالا متنِ پیام و موردِ دقیق هم می‌آید
+def _evidence(msg, text: str | None = None, limit: int = 600) -> str:
+    """متنِ HTMLِ «مدرک»: متن/کپشنِ پیام، لینک/منشنِ دقیقی که گرفته شد، مبدأِ فوروارد و نوعِ رسانه. هرگز خطا نمی‌دهد."""
+    try:
+        raw = text if text is not None else (getattr(msg, "text", None) or getattr(msg, "caption", None) or "")
+        lines: list[str] = []
+        ents = list(getattr(msg, "entities", None) or []) + list(getattr(msg, "caption_entities", None) or [])
+        base = (getattr(msg, "text", None) or getattr(msg, "caption", None) or "")
+        found: list[str] = []
+        for e in ents:
+            if e.type in ("url", "mention", "text_mention", "text_link"):
+                if e.type == "text_link" and getattr(e, "url", None):
+                    found.append(f"{base[e.offset:e.offset + e.length]} → {e.url}")
+                elif e.type == "text_mention" and getattr(e, "user", None):
+                    found.append(f"{base[e.offset:e.offset + e.length]} (آیدی {e.user.id})")
+                else:
+                    found.append(base[e.offset:e.offset + e.length])
+        if found:
+            lines.append("🔗 مورد: " + _html.escape("، ".join(dict.fromkeys(found))[:300]))
+        fo = getattr(msg, "forward_origin", None)
+        if fo is not None:
+            chat = getattr(fo, "chat", None) or getattr(fo, "sender_chat", None)
+            usr = getattr(fo, "sender_user", None)
+            if chat is not None:
+                src = (getattr(chat, "title", None) or "") + (f" (@{chat.username})" if getattr(chat, "username", None) else "")
+            elif usr is not None:
+                src = (usr.full_name or "") + (f" (@{usr.username})" if getattr(usr, "username", None) else "")
+            else:
+                src = getattr(fo, "sender_user_name", None) or "ناشناس"
+            lines.append("↪️ فوروارد از: " + _html.escape(src.strip() or "ناشناس"))
+        if getattr(msg, "sticker", None):
+            lines.append("🎭 استیکر")
+        if getattr(msg, "animation", None):
+            lines.append("🎞 گیف/انیمیشن")
+        raw = (raw or "").strip()
+        if raw:
+            shown = raw if len(raw) <= 400 else raw[:400] + "…"
+            lines.append("💬 متنِ پیام:\n<blockquote>" + _html.escape(shown) + "</blockquote>")
+        out = "\n".join(lines)
+        return out if len(out) <= limit + 200 else out[:limit + 200]
+    except Exception:      # noqa: BLE001
+        logger.exception("guard: ساختِ مدرکِ لاگ ناموفق بود")
+        return ""
+
+
+async def _apply_warn(bot: Bot, chat_id: int, u, reason: str | None, warned_by: int, evidence: str = "") -> tuple[int, int, bool]:
     """PATCH_GROUP_GUARD_PHASE2_V1 — ثبتِ یک خطا برایِ کاربرِ u در chat_id؛ اگه
     به سقف برسه خودکار بن می‌کنه. هم دستورِ /خطا هم فیلترِ محتوایِ ممنوعه از
     همین تابع استفاده می‌کنن. warned_by=0 یعنی خودکار (توسطِ فیلتر، نه یک ادمین).
@@ -1095,6 +1141,7 @@ async def _apply_warn(bot: Bot, chat_id: int, u, reason: str | None, warned_by: 
         f"⚠️ <b>خطا</b> ({cnt}/{threshold})\n👤 {_html.escape(u.full_name)} (<code>{u.id}</code>)\n"
         f"👮 ثبت‌کننده: {by_label}"
         + (f"\n📝 دلیل: {_html.escape(reason)}" if reason else "")
+        + (f"\n{evidence}" if evidence else "")
         + ("\n🚫 بنِ خودکار به‌خاطرِ رسیدن به سقف" if auto_banned else ""))
     await _log_action(log_txt)
     return cnt, threshold, auto_banned
@@ -1131,7 +1178,8 @@ async def _cmd_warn(msg: Message, bot: Bot) -> None:
     u = target.from_user
     parts = (msg.text or "").split(maxsplit=1)
     reason = parts[1].strip() if len(parts) > 1 else None
-    cnt, threshold, auto_banned = await _apply_warn(bot, msg.chat.id, u, reason, _actor_id(msg))  # PATCH_GROUP_GUARD_ANON_ADMIN_V2
+    cnt, threshold, auto_banned = await _apply_warn(bot, msg.chat.id, u, reason, _actor_id(msg),
+                                                    evidence=_evidence(target))  # PATCH_GROUP_GUARD_ANON_ADMIN_V2 + مدرکِ پیامِ ریپلای‌شده
     if auto_banned:
         await msg.reply(
             f"⚠️ خطا برایِ {u.full_name} ثبت شد ({cnt}/{threshold}).\n"
@@ -2592,7 +2640,7 @@ async def _warn_if_abusive(msg: Message, text: str) -> bool:
                 and not await _is_authorized(msg, msg.bot):
             cnt, threshold, auto_banned = await _apply_warn(
                 msg.bot, msg.chat.id, msg.from_user,
-                "توهین/بی‌احترامی در خطاب به ربات", warned_by=0)
+                "توهین/بی‌احترامی در خطاب به ربات", warned_by=0, evidence=_evidence(msg, text))
             note += f"\n\nیک خطا برات ثبت شد ({cnt}/{threshold})."
             if auto_banned:
                 note += f"\n🚫 چون به سقفِ {threshold} خطا رسیدی، بن شدی."
