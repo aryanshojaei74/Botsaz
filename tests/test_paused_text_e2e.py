@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 import config
 import models
 
-OWNER, USER = 1, 555
+OWNER, USER = 700123, 700555      # آیدی‌هایِ دور از آیدیِ ربات‌هایِ تست‌هایِ دیگر (کشِ _OWN_TG_ID_CACHE در اجرایِ کامل)
 
 
 class Cap(BaseSession):
@@ -74,6 +74,7 @@ async def env(request, monkeypatch):
             monkeypatch.setattr(_mod, "Session", maker, raising=False)
     monkeypatch.setattr(config, "Session", maker)
     tenant._SETTING_CACHE.clear(); tenant._BOT_ROW_CACHE.clear()
+    tenant._OWN_TG_ID_CACHE.clear()
     async with maker() as s:
         b = models.Bot(owner_id=OWNER, token="123:TESTTOKEN", username="shop", field=request.param, plan="pro", status="active")
         s.add(b); await s.flush()
