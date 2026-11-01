@@ -140,14 +140,21 @@ async def platform_incomplete_bet_command(msg: Message):
     if not await _group_allowed(msg.chat.id) or not await _bet_enabled():
         raise SkipHandler                   # راهنمای بازی‌هایِ رایگان (platform_group_game) جواب می‌دهد
     from platform_wager import GAMES, game_enabled, help_text, load_cfg
-    await msg.reply(help_text({g: await game_enabled(g) for g in GAMES}, cfg=await load_cfg()), parse_mode="HTML")
-    try:                                    # بازی‌هایِ رایگان + مسابقه‌هایِ پولیِ حدس/سرعت/ریاضی + طرزِ گرفتنِ شیرینی
+    base = help_text({g: await game_enabled(g) for g in GAMES}, cfg=await load_cfg())
+    # PATCH_HELP_ONE_MESSAGE_V1 (فدایی): راهنمای شرط‌بندی + مسابقه‌هایِ حدس/سرعت/ریاضی/الگو + شیرینی همه در «یک» پیام؛
+    # پیامِ دومِ تقریباً خالی («بازی‌هایِ گروه … ℹ️») دیگر نمی‌آید. فقط اگر از سقفِ ۴۰۹۶ نویسهٔ تلگرام بیشتر شد، ناچار دو پیام.
+    extra = ""
+    try:
         from platform_group_game import help_text as _games_help
-        extra = await _games_help(bet_games=False)
-        if extra:
-            await msg.reply(extra, parse_mode="HTML")
+        extra = await _games_help(bet_games=False, compact=True)
     except Exception:
         logger.exception("games help (extra) failed")
+    if extra and len(base) + len(extra) + 2 <= 4000:
+        await msg.reply(base + "\n\n" + extra, parse_mode="HTML")
+    else:
+        await msg.reply(base, parse_mode="HTML")
+        if extra:
+            await msg.reply(extra, parse_mode="HTML")
 
 @platform_group_money_router.message(
     F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}),

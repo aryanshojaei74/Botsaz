@@ -397,3 +397,58 @@ async def test_pattern_is_simultaneous_short_race_not_turn_based(env):
     assert R._match(m(st["a"], 1)) is not None and R._match(m(st["a"], 2)) is not None   # هر دو هم‌زمان می‌توانند جواب بدهند
     won = await R.settle_to(w.id, 2)
     assert won is not None and won.winner_id == 2
+
+
+# ───────── PATCH_HELP_ONE_MESSAGE_V1 (فدایی): راهنما در «یک» پیام + چهار مسابقه (حدس/سرعت/ریاضی/الگو) ─────────
+class _Reply:
+    def __init__(self):
+        self.sent = []
+        self.chat = NS(id=CHAT)
+        self.text = "بازی"
+        self.from_user = NS(id=1, is_bot=False, full_name="u1")
+
+    async def reply(self, text, **k):
+        self.sent.append(text)
+
+
+async def _run_help(monkeypatch, race_games_on):
+    async def gate(chat_id): return True
+    monkeypatch.setattr(M, "_group_allowed", gate)
+
+    async def bet_on(): return True
+    monkeypatch.setattr(M, "_bet_enabled", bet_on)
+    monkeypatch.setattr(W, "_bet_enabled", bet_on)
+
+    async def go(game): return game in race_games_on
+    monkeypatch.setattr(R, "game_on", go)
+    m = _Reply()
+    await M.platform_incomplete_bet_command(m)
+    return m.sent
+
+
+@pytest.mark.asyncio
+async def test_help_is_one_message_with_all_enabled_race_games(env, monkeypatch):
+    sent = await _run_help(monkeypatch, {"guess", "speed", "math", "pattern"})
+    assert len(sent) == 1                                                  # دیگر پیامِ دوم نمی‌آید
+    t = sent[0]
+    assert "ایکس‌او" in t and "تاس" in t and "شیر یا خط" in t              # بخشِ شرط‌بندیِ همیشگی
+    for name in ("حدس عدد", "سرعت", "ریاضی", "الگو"):
+        assert name in t, name                                              # چهار مسابقهٔ دیگر هم هست
+    assert t.count("🎮 <b>بازی‌هایِ گروه</b>") == 0                         # تیترِ پیامِ دومِ قبلی نیامده
+
+
+@pytest.mark.asyncio
+async def test_only_enabled_race_games_are_listed(env, monkeypatch):
+    sent = await _run_help(monkeypatch, {"math", "guess"})
+    assert len(sent) == 1
+    t = sent[0]
+    assert "🧮 <b>ریاضی</b>" in t and "🎯 <b>حدس عدد</b>" in t
+    assert "🧩 <b>الگو</b>" not in t and "⚡️ <b>سرعت</b>" not in t            # خاموش‌ها فهرست نمی‌شوند
+
+
+@pytest.mark.asyncio
+async def test_no_empty_second_message_when_nothing_extra(env, monkeypatch):
+    async def off(): return False
+    monkeypatch.setattr(R, "enabled", off)                                  # مسابقه‌ها خاموش
+    sent = await _run_help(monkeypatch, set())
+    assert len(sent) == 1 and "مسابقه‌هایِ پولی را هر چند نفر" not in sent[0]

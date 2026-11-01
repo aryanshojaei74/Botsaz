@@ -465,7 +465,7 @@ def _is_help(m: Message) -> bool:
     return bool(m.text and _HELP.match(m.text))
 
 
-async def help_text(bet_games: bool = True) -> str:
+async def help_text(bet_games: bool = True, compact: bool = False) -> str:
     """راهنمای بازی‌هایِ رایگان + طرزِ گرفتنِ شیرینی. bet_games=False: فهرستِ xo/سنگ‌کاغذ‌قیچی/تاس حذف می‌شود
     (راهنمای شرط‌بندی خودش جدا آمده)؛ فقط بخشِ مسابقه‌هایِ پولی (حدس عدد/سرعت/ریاضی) می‌ماند."""
     import platform_candy as _CA
@@ -526,6 +526,10 @@ async def help_text(bet_games: bool = True) -> str:
                           "⚠️ ریسکِ مالی دارد؛ مسئولیتش با خودِ توست."]
     except Exception:
         logger.debug("games help: بخشِ شرط‌بندی خوانده نشد")
+    if compact:
+        # PATCH_HELP_ONE_MESSAGE_V1: برایِ چسباندن به پیامِ راهنمایِ شرط‌بندی ⇒ بدونِ تیتر و پانویسِ تکراری؛ اگر محتوایی نبود خالی
+        body = [ln for ln in lines if ln.strip() and not ln.startswith("🎮 <b>بازی‌هایِ گروه</b>")]
+        return "\n".join(lines[1:]).strip() if body else ""
     if _candy:
         lines += ["", "ℹ️ بازیِ رایگان هم‌زمان یکی است؛ مسابقه‌هایِ پولی را هر چند نفر بخواهند هم‌زمان می‌سازند."]
     else:
