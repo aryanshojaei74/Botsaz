@@ -709,7 +709,8 @@ async def test_password_is_stored_encrypted_and_shown_only_to_its_owner(ui, _key
     assert "psel:pws:%d" % aid in _cbs(cb.message) and pw not in cb.message.out[-1][0]      # صفحهٔ مشخصات رمز را لو نمی‌دهد
     cb = _Cb(f"psel:pws:{aid}")
     await ui.UM.show_password(cb, None)
-    assert pw in cb.message.out[-1][0] and "پاک کن" in cb.message.out[-1][0]
+    import html as _html
+    assert _html.escape(pw) in cb.message.out[-1][0] and "پاک کن" in cb.message.out[-1][0]      # رمز ممکن است & داشته باشد ⇒ در HTML escape می‌شود
     other = _Cb(f"psel:pws:{aid}", uid=999)                                              # خریدارِ دیگر
     await ui.UM.show_password(other, None)
     assert not other.message.out and other.alerts
