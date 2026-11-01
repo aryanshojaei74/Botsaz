@@ -7,6 +7,7 @@ trial_report.py — PATCH_TRIAL_REPORT_CHANNEL_V1
 کلیدهایِ تنظیمات (به‌ازایِ هر ربات):
   trial_report_channel   آیدیِ عددیِ کانال/گروه
   trial_report_link      "1" (پیش‌فرض) = لینکِ سرویس هم در پست باشد، "0" = بدونِ لینک
+  trial_report_admins    "1" = همین گزارش به‌صورتِ پیام در خودِ ربات برایِ مالک و ادمین‌ها هم بیاید
 """
 from __future__ import annotations
 
@@ -67,7 +68,8 @@ async def report(bot, bot_id: int, u, *, tg_username=None, link="", volume="", d
     try:
         from tenant import get_setting
         ch = (await get_setting(bot_id, "trial_report_channel", "") or "").strip()
-        if not ch:
+        to_admins = (await get_setting(bot_id, "trial_report_admins", "0")) == "1"
+        if not ch and not to_admins:
             return
         show_link = (await get_setting(bot_id, "trial_report_link", "1")) != "0"
         name = panel_name
@@ -83,10 +85,23 @@ async def report(bot, bot_id: int, u, *, tg_username=None, link="", volume="", d
             full_name=getattr(u, "full_name", None), link=link, volume=volume,
             duration=duration, panel=name, source=source, show_link=show_link,
             ident_mode=await __import__("tenant.shared.buyer_ident", fromlist=["get_mode"]).get_mode(bot_id))
-        try:
-            chat_id = int(ch)
-        except ValueError:
-            chat_id = ch
-        await bot.send_message(chat_id, text, parse_mode="HTML", disable_web_page_preview=True)
+        if ch:
+            try:
+                chat_id = int(ch)
+            except ValueError:
+                chat_id = ch
+            try:
+                await bot.send_message(chat_id, text, parse_mode="HTML", disable_web_page_preview=True)
+            except Exception as e:
+                logger.warning("trial_report: ارسال به کانال ناموفق (bot_id=%s): %s", bot_id, e)
+        if to_admins:
+            try:
+                import tenant as _t
+                async with _t.Session() as s:
+                    brow = await s.get(_t.BotRow, bot_id)
+                if brow is not None:
+                    await _t._notify_admins(bot, brow, text)
+            except Exception as e:
+                logger.warning("trial_report: ارسال به ادمین‌ها ناموفق (bot_id=%s): %s", bot_id, e)
     except Exception as e:
         logger.warning("trial_report: ارسالِ گزارشِ تست ناموفق بود (bot_id=%s): %s", bot_id, e)

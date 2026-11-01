@@ -36,8 +36,11 @@ async def _content(bot_id: int):
         txt += ("وضعیت: ❌ تنظیم نشده\n\n"
                 "ربات را در کانال/گروهِ خودت <b>ادمین</b> کن، بعد یک پیام از آن کانال را "
                 "این‌جا فوروارد کن (یا آیدیِ عددیِ کانال/گروه را بفرست).")
-    rows = []
-    if ch:
+    adm = (await get_setting(bot_id, "trial_report_admins", "0")) == "1"
+    txt += ("\n\n📩 پیامِ داخلِ ربات به ادمین‌ها: " + ("✅ روشن" if adm else "❌ خاموش"))
+    rows = [[InlineKeyboardButton(text=f"📩 پیام به ادمین‌ها در ربات: {'✅' if adm else '❌'}",
+                                  callback_data="trrep:adm", style=ButtonStyle.PRIMARY)]]
+    if ch or adm:
         rows.append([InlineKeyboardButton(text="🧪 ارسالِ گزارشِ نمونه", callback_data="trrep:test",
                                           style=ButtonStyle.SUCCESS)])
         rows.append([InlineKeyboardButton(
@@ -158,6 +161,19 @@ async def trrep_link(cb: CallbackQuery, bot: Bot):
     await cb.answer("بدون لینک" if cur else "با لینک")
 
 
+@trial_report_admin_router.callback_query(F.data == "trrep:adm")
+async def trrep_adm(cb: CallbackQuery, bot: Bot):
+    from tenant import get_setting, set_setting
+    row = await _gate(cb, bot)
+    if not row:
+        return
+    cur = (await get_setting(row.id, "trial_report_admins", "0")) == "1"
+    await set_setting(row.id, "trial_report_admins", "0" if cur else "1")
+    txt, kb = await _content(row.id)
+    await _show(cb, txt, kb)
+    await cb.answer("پیام به ادمین‌ها خاموش شد" if cur else "از این پس هر تست برای ادمین‌ها پیام می‌شود")
+
+
 @trial_report_admin_router.callback_query(F.data == "trrep:ident")
 async def trrep_ident(cb: CallbackQuery, bot: Bot):
     from tenant.shared.buyer_ident import cycle, LABELS
@@ -177,8 +193,9 @@ async def trrep_test(cb: CallbackQuery, bot: Bot):
     row = await _gate(cb, bot)
     if not row:
         return
-    if not await get_setting(row.id, "trial_report_channel", ""):
-        return await cb.answer("کانالی تنظیم نشده.", show_alert=True)
+    if not await get_setting(row.id, "trial_report_channel", "") \
+            and await get_setting(row.id, "trial_report_admins", "0") != "1":
+        return await cb.answer("کانالی تنظیم نشده و پیام به ادمین هم خاموش است.", show_alert=True)
 
     class _U:
         telegram_id = cb.from_user.id

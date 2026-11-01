@@ -217,3 +217,25 @@ async def test_keyboard_mode_menu_opens_via_fakecb(db):
     m, b, out = mk("9:T")                                        # رباتِ تبلیغاتی → رد می‌شود
     await trrep_menu(tenant._FakeCb(m), b, St())
     assert not any("وضعیت:" in t for t in out)
+
+
+@pytest.mark.asyncio
+async def test_admin_message_toggle(db, monkeypatch):
+    """گزارشِ تست به‌صورتِ پیام در رباتِ مالک/ادمین‌ها: بدونِ کانال، همراهِ کانال، و خطا مانعِ تحویل نمی‌شود."""
+    tenant._SETTING_CACHE.clear()
+    b = FakeBot()
+    await TR.report(b, 5, U(), link="L", volume="1 گیگ", duration="1 روز", panel_name="P")
+    assert b.sent == []                                               # هر دو خاموش
+    await tenant.set_setting(5, "trial_report_admins", "1")
+    await TR.report(b, 5, U(), tg_username="zed", link="L", volume="2 گیگ", duration="1 روز", panel_name="P")
+    assert [c for c, _ in b.sent] == [1]                              # فقط مالک (owner_id=1)، بدونِ کانال
+    assert "2 گیگ" in b.sent[0][1] and "@zed" in b.sent[0][1]
+    await tenant.set_setting(5, "trial_report_channel", "-1001")
+    b2 = FakeBot()
+    await TR.report(b2, 5, U(), link="L", volume="v", duration="d", panel_name="P")
+    assert sorted(c for c, _ in b2.sent) == [-1001, 1]                # کانال + مالک
+
+    class Boom(FakeBot):
+        async def send_message(self, *a, **k):
+            raise RuntimeError("blocked")
+    await TR.report(Boom(), 5, U(), link="L", volume="v", duration="d", panel_name="P")   # بی‌خطا
