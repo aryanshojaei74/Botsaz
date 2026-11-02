@@ -249,6 +249,8 @@ tenant_router.include_router(receipt_ai_router)
 _include(vpn_user_router, "vpn")
 from tenant.bots.vpn.autorenew import autorenew_router   # === PATCH_VPN_AUTORENEW_V1 ===
 _include(autorenew_router, "vpn")
+from tenant.bots.vpn.manual_renew import manual_renew_router   # === PATCH_MANUAL_RENEW_V1 ===
+_include(manual_renew_router, "vpn")
 tenant_router.include_router(ticket_router)
 tenant_router.include_router(product_rating_router)  # PATCH_PRODUCT_RATING_V1
 tenant_router.include_router(token_swap_router)
@@ -13931,7 +13933,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "397"
+BUILD_ID = "398"
 
 
 @tenant_router.message(Command("version"))

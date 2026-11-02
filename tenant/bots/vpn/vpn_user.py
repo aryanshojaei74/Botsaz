@@ -5766,6 +5766,10 @@ async def show_my_configs(bot: Bot, msg: Message, bot_id: int, tg_id: int):
             InlineKeyboardButton(text="🔗 ارسال ساب‌لینک",
                                  callback_data=f"cfgdl:sub:{cid}", style=ButtonStyle.PRIMARY),
         ])
+        from tenant.bots.vpn.manual_renew import renew_button as _mrb   # PATCH_MANUAL_RENEW_V1
+        _rb = await _mrb(bot_id, cid)
+        if _rb:
+            rows.append([_rb])
     # === PATCH_VPN_PANEL_MARKET_V1 ===
     if n_panels:
         rows.append([InlineKeyboardButton(
@@ -5868,6 +5872,13 @@ async def show_manual_config(cb: CallbackQuery, bot: Bot):
         InlineKeyboardButton(text="🔗 ارسال ساب‌لینک",
                              callback_data=f"cfgdl:sub:{cid}", style=ButtonStyle.PRIMARY),
     ]]
+    try:
+        from tenant.bots.vpn.manual_renew import renew_button as _mrb   # PATCH_MANUAL_RENEW_V1
+        _rb = await _mrb(row.id, cid)
+        if _rb:
+            kb_rows.append([_rb])
+    except Exception:
+        logger.exception("manual_renew: دکمه")
     try:
         from tenant import inline_back_row, _cfg_guide_row
         _cfgsrc = "unlimited" if (vol or 0) == 0 else "manual"

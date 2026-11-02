@@ -117,6 +117,11 @@ async def _refund_cfg(cb, bot, state):
     await vpn_refund_cfg(cb, bot, state)
 
 
+async def _manual_renew(cb, bot, state):
+    from tenant.bots.vpn.manual_renew import mrn_cfg
+    await mrn_cfg(cb, bot, state)
+
+
 async def _page_titles(cb, bot, state):
     from tenant.bots.vpn.vpn_admin import vpn_titles_menu
     await vpn_titles_menu(cb, bot, state)
@@ -138,6 +143,11 @@ register_settings_items(KIND, [
         handler=_api_key, owner_only=True,
         deny_text="🔒 مدیریت API ربات فقط برای مالک ربات در دسترس است.",
         after=("tadm:backup:menu", "set:homemenutext"),
+    ),
+    SettingsItem(
+        label="🔄 تمدیدِ دستیِ سرویس", callback="mrn:cfg",
+        handler=_manual_renew, needs_state=True,
+        after=("vrf:cfg", "vtl:menu"),
     ),
     SettingsItem(
         label="💸 برگشت وجه سرویس", callback="vrf:cfg",

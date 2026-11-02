@@ -4154,3 +4154,25 @@ class BotChangeLog(Base):
 
 from bot_change_log import install as _install_bot_change_log   # noqa: E402
 _install_bot_change_log(Bot, BotChangeLog)
+
+
+# === PATCH_MANUAL_RENEW_V1 === درخواستِ «تمدیدِ دستیِ سرویس» (کانفیگ‌هایِ انبارِ دستی؛ تمدید را ادمین دستی انجام می‌دهد)
+class ManualRenewRequest(Base):
+    __tablename__ = "manual_renew_requests"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    config_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    amount: Mapped[int] = mapped_column(Integer, default=0)
+    method: Mapped[str] = mapped_column(String(10), default="card")      # wallet/card
+    # awaiting_receipt → pending (منتظرِ تأییدِ رسید) → paid (پرداخت قطعی؛ منتظرِ تمدیدِ دستی)
+    # → done | rejected | refunded | cancelled
+    status: Mapped[str] = mapped_column(String(20), default="awaiting_receipt", index=True)
+    receipt_file_id: Mapped[str | None] = mapped_column(String(300))
+    receipt_text: Mapped[str | None] = mapped_column(String(600))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime)
+    decided_by: Mapped[int | None] = mapped_column(BigInteger)
+
+
+TENANT_OWNED_MODELS += [ManualRenewRequest]
