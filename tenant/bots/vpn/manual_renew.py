@@ -456,6 +456,7 @@ async def _cfg_screen(bot_id: int):
     return text, kb
 
 
+@manual_renew_router.callback_query(F.data == "mrn:cfg")
 async def mrn_cfg(cb: CallbackQuery, bot: Bot, state: FSMContext | None = None):
     row = await _admin_gate(cb, bot)
     if not row:
@@ -466,8 +467,6 @@ async def mrn_cfg(cb: CallbackQuery, bot: Bot, state: FSMContext | None = None):
     await _edit(cb, text, kb)
     await cb.answer()
 
-
-manual_renew_router.callback_query.register(mrn_cfg, F.data == "mrn:cfg")
 
 
 @manual_renew_router.callback_query(F.data == "mrn:cfgt")
