@@ -3297,7 +3297,15 @@ def _nav_install(bot) -> None:
                         from tenant.shared.vs_msg_override import override_text as _vs_override
                         _newt = await _vs_override(_rowv.id, method.chat_id, method.text)
                         if _newt:
-                            method = method.model_copy(update={"text": _newt, "parse_mode": "HTML"})
+                            # === PATCH_VS_OVERRIDE_PREMIUM_EMOJI_V1 === (SINA: «ایموجیِ پیام‌هایِ ثبت/تکمیل/لغو پرمیوم نمی‌شود»)
+                            # میان‌افزارِ ایموجیِ پرمیوم *قبل* از این هوک اجرا می‌شود: متنِ پیش‌فرض را به entity تبدیل کرده بود و
+                            # با جایگزینیِ متن، entityهایِ کهنه می‌ماند و متنِ دلخواه هرگز پرمیوم نمی‌شد. entities را پاک و دوباره اعمال می‌کنیم.
+                            method = method.model_copy(update={"text": _newt, "parse_mode": "HTML", "entities": None})
+                            try:
+                                from premium_emoji_dynamic import _PremiumEmojiMiddleware as _PEM
+                                await _PEM()._rewrite_text(bot_, method)
+                            except Exception:
+                                logger.exception("vs_msg_override: اعمالِ ایموجیِ پرمیوم روی متنِ دلخواه ناموفق بود")
                 except Exception:
                     logger.exception("vs_msg_override hook failed")
         # === PATCH_ORDER_SUPPORT_BTN_TOGGLE_V1 === (فدایی) خاموش‌کردنِ دکمهٔ «📞 پشتیبانی (پیگیریِ سفارش)» زیرِ پیام‌هایِ سفارش
@@ -13933,7 +13941,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "400"
+BUILD_ID = "401"
 
 
 @tenant_router.message(Command("version"))

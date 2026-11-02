@@ -9585,7 +9585,10 @@ def _parse_cancel_response(d, order_id) -> tuple[bool, str]:
             return False, _e
         status = c.get("status")
         _cv = it.get("cancel")
-        if not status and (_cv is True or str(_cv).strip().lower() in ("1", "true", "ok", "success", "requested")):
+        # PATCH_SMM_CANCEL_ID_REPLY_V1 (SINA، سفارش #14493): بعضی پنل‌ها شناسهٔ «درخواستِ لغو» را برمی‌گردانند
+        # ([{"order": 7653721, "cancel": 67252}]) — عددِ مثبت بدونِ error یعنی درخواست ثبت شد.
+        _cid_ok = (isinstance(_cv, int) and not isinstance(_cv, bool) and _cv > 0) or str(_cv).strip().isdigit() and int(str(_cv).strip()) > 0
+        if not status and (_cv is True or _cid_ok or str(_cv).strip().lower() in ("1", "true", "ok", "success", "requested")):
             return True, "requested"
         # PATCH_SMM_CANCEL_RAW_REPLY_V1 (SINA، سفارش #14410): بعضی پنل‌ها به‌جای status یک متنِ آزاد یا success=true می‌دهند
         # («Cancel request sent»). فقط وقتی هیچ نشانهٔ منفی در متن نیست «درخواست ثبت شد» حساب می‌شود؛ باقی همچنان ردّ می‌شود.
@@ -9788,7 +9791,10 @@ async def smmu_request_cancel(cb: CallbackQuery, bot: Bot):
                 await _notify_admins(bot, row, (
                     f"⚠️ <b>درخواستِ لغوِ سفارش #{_h.escape(str(o.tracking_code or oid))} را پنل نپذیرفت</b>\n\n"
                     f"🔎 پاسخِ پنل:\n<code>{_h.escape(str(note)[:300])}</code>\n\n"
-                    "اگر مشتری باید پول را پس بگیرد، سفارش را از «سفارش‌ها» دستی لغو/برگشت بزن."))
+                    + ("ℹ️ یعنی پنل این «شناسهٔ سفارش» را نمی‌شناسد (سفارش روی این پنل ثبت نشده، قبلاً حذف/عوض شده، "
+                       f"یا شناسهٔ ثبت‌شده <code>{_h.escape(str(o.panel_order_id))}</code> درست نیست). از پنل چک کن.\n\n"
+                       if "incorrect order" in str(note).lower() or "order id" in str(note).lower() else "")
+                    + "اگر مشتری باید پول را پس بگیرد، سفارش را از «سفارش‌ها» دستی لغو/برگشت بزن."))
         except Exception:
             logger.exception("[cancel] اطلاعِ علتِ ردِ لغو به مالک ناموفق بود")
         await cb.message.answer("❌ " + panel_err_friendly(note, "درخواستِ لغو"))
