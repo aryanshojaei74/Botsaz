@@ -173,27 +173,87 @@ async def kycu_l1(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_KYC_CARD_CHANGE_V1 ===
-# === PATCH_INVOICE_KYC_CARD_V1 === (SINA) فاکتورِ شارژِ زرین‌پال/زیبال/بلوپال: کارتِ ثبت‌شدهٔ کاربر + «تغییر کارت بانکی»
-async def invoice_card_block(bot_id: int, telegram_id: int) -> tuple[str, list]:
-    """(متنِ زیرِ فاکتور, ردیف‌هایِ دکمه). برایِ کاربرِ بدونِ کارتِ ثبت‌شده/محدودشده یا وقتی احرازِ هویت خاموش است: ("", [])."""
+# === PATCH_INVOICE_KYC_CARD_V1 / PATCH_KYC_CARD_SELECT_V1 === (SINA)
+# جریان: مبلغ ← «شمارهٔ کارتِ مورد نظر را انتخاب کنید» (دکمهٔ کارت + «تغییر کارت بانکی») ← با انتخابِ کارت، همان پیام به فاکتور ویرایش
+# می‌شود و ته‌اش «کارتِ انتخابیِ شما … فقط با همین پرداخت کنید». دکمهٔ تغییر کارت فقط در مرحلهٔ انتخاب است، نه روی فاکتور.
+async def send_or_edit(message, edit_msg, text: str, reply_markup=None):
+    """اگر edit_msg داده شده همان پیام را ویرایش می‌کند (و همان را برمی‌گرداند)، وگرنه پیامِ تازه می‌فرستد."""
+    if edit_msg is not None:
+        try:
+            await edit_msg.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
+            return edit_msg
+        except Exception:
+            logger.info("kyc: ویرایشِ پیامِ انتخابِ کارت به فاکتور ممکن نشد؛ پیامِ جدید می‌رود")
+    return await message.answer(text, reply_markup=reply_markup)
+
+
+async def _eligible_card_user(bot_id: int, telegram_id: int):
+    """کاربرِ دارایِ کارتِ ثبت‌شده (احرازِ هویت روشن، محدودنشده) یا None."""
     try:
         if not await K.enabled(bot_id):
-            return "", []
+            return None
         u = await _get_user(bot_id, telegram_id)
         if not u or not getattr(u, "kyc_card", None) or bool(getattr(u, "kyc_blocked", False)):
-            return "", []
-        text = (f"\n\n💳 <b>شمارهٔ کارتِ انتخابیِ شما:</b> <code>{_mask(u.kyc_card)}</code>\n"
-                "با همین کارت پرداخت کنید؛ در غیر این صورت حساب شما برای احراز هویت سطح ۲ محدود می‌گردد.")
-        rows = []
+            return None
+        return u
+    except Exception:
+        logger.exception("kyc: بررسیِ کاربرِ دارایِ کارت ناموفق بود (نادیده گرفته شد)")
+        return None
+
+
+async def invoice_card_block(bot_id: int, telegram_id: int) -> tuple[str, list]:
+    """(متنِ ته‌ِ فاکتور, []) — دکمه‌ای روی فاکتور نیست. برایِ کاربرِ بدونِ کارتِ ثبت‌شده: ("", [])."""
+    u = await _eligible_card_user(bot_id, telegram_id)
+    if u is None:
+        return "", []
+    return (f"\n\n💳 <b>کارتِ انتخاب‌شدهٔ شما:</b> <code>{_mask(u.kyc_card)}</code>\n"
+            "فقط با همین کارت پرداخت کنید؛ در غیر این صورت حساب شما برای احراز هویت سطح ۲ محدود می‌گردد."), []
+
+
+async def card_select_gate(message, bot_id: int, telegram_id: int, gw: str, amount: int) -> bool:
+    """اگر کاربر کارتِ ثبت‌شده دارد، مرحلهٔ «انتخابِ کارت» را نشان می‌دهد و True برمی‌گرداند (فاکتور هنوز ساخته نمی‌شود)."""
+    u = await _eligible_card_user(bot_id, telegram_id)
+    if u is None:
+        return False
+    try:
+        rows = [[InlineKeyboardButton(text=f"💳 {_mask(u.kyc_card)}", callback_data=f"kcsel:{gw}:{int(amount)}",
+                                      style=ButtonStyle.SUCCESS)]]
         if await _pending_of(bot_id, u.id) is None:
             can_change, _why = await K.card_change_status(bot_id, u.id)
             if can_change:
-                rows.append([InlineKeyboardButton(text="💳 تغییر کارت بانکی", callback_data="kycu:cc",
+                rows.append([InlineKeyboardButton(text="🔄 تغییر کارت بانکی", callback_data="kycu:cc",
                                                   style=ButtonStyle.PRIMARY)])
-        return text, rows
+        rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="w:back", style=ButtonStyle.DANGER)])
+        text = ("💳 <b>شمارهٔ کارتِ مورد نظر خود را انتخاب کنید:</b>\n\n"
+                f"مبلغ: <b>{int(amount):,} تومان</b>\n"
+                "پرداخت باید فقط با کارتِ احرازشدهٔ شما انجام شود.")
+        edit = message if getattr(getattr(message, "from_user", None), "is_bot", False) else None   # پیامِ خودِ ربات (انتخابِ مبلغ) ⇒ ویرایش
+        await send_or_edit(message, edit, text, InlineKeyboardMarkup(inline_keyboard=rows))
+        return True
     except Exception:
-        logger.exception("kyc: ساختِ بلوکِ کارتِ ثبت‌شده برایِ فاکتور ناموفق بود (نادیده گرفته شد)")
-        return "", []
+        logger.exception("kyc: نمایشِ مرحلهٔ انتخابِ کارت ناموفق بود؛ فاکتور مستقیم ساخته می‌شود")
+        return False
+
+
+@kyc_user_router.callback_query(F.data.regexp(r"^kcsel:(zp|zb|bp):\d+$"))
+async def kyc_card_selected(cb: CallbackQuery, bot: Bot):
+    """کاربر کارتش را انتخاب کرد ⇒ همان پیام به فاکتورِ درگاه ویرایش می‌شود."""
+    _, gw, amt = cb.data.split(":")
+    amount = int(amt)
+    await cb.answer()
+    try:
+        if gw == "zp":
+            from tenant.gateways.zarinpal_wallet import _create_payment
+            await _create_payment(cb.message, bot, amount, from_user=cb.from_user, card_ok=True, edit_msg=cb.message)
+        elif gw == "zb":
+            from tenant.gateways.zibal_wallet import _create_payment
+            await _create_payment(cb.message, bot, amount, from_user=cb.from_user, card_ok=True, edit_msg=cb.message)
+        else:
+            from tenant.gateways.blupal_admin import _issue
+            await _issue(cb.message, bot, amount, cb.from_user, target=cb.message, card_ok=True)
+    except Exception:
+        logger.exception("kyc: ساختِ فاکتور بعد از انتخابِ کارت ناموفق بود (%s)", gw)
+        await cb.message.answer("❌ ساختِ فاکتور ناموفق بود؛ دوباره تلاش کن.")
 
 
 @kyc_user_router.callback_query(F.data == "kycu:cc")

@@ -310,7 +310,7 @@ async def bpu_amount(msg: Message, bot: Bot, state: FSMContext):
         await state.clear()
 
 
-async def _issue(message: Message, bot: Bot, amount: int, payer, from_text: bool = False, target=None) -> bool:
+async def _issue(message: Message, bot: Bot, amount: int, payer, from_text: bool = False, target=None, card_ok: bool = False) -> bool:
     """فاکتور را می‌سازد و می‌فرستد. خروجی True یعنی کارِ این مبلغ تمام شد (برایِ پاک‌کردنِ حالتِ مبلغ)."""
     from models import alloc_tracking_in
     from tenant import get_bot_row
@@ -341,6 +341,10 @@ async def _issue(message: Message, bot: Bot, amount: int, payer, from_text: bool
     if not key:
         await message.answer("درگاه تنظیم نشده است.")
         return True
+    if not card_ok:                                     # PATCH_KYC_CARD_SELECT_V1: اول انتخابِ کارت، بعد فاکتور
+        from tenant.shared.kyc_user import card_select_gate
+        if await card_select_gate(target if target is not None else message, row.id, payer.id, "bp", amount):
+            return True
     oid = BP.new_order_id()
     amount_rial = BP.to_rial(amount)
     wait = target if target is not None else await message.answer("⏳ در حالِ ساختِ فاکتور…")
@@ -367,7 +371,6 @@ async def _issue(message: Message, bot: Bot, amount: int, payer, from_text: bool
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💳 صفحهٔ پرداخت", url=str(res["payment_link"]))],
         [InlineKeyboardButton(text="🔍 بررسیِ پرداخت", callback_data=f"bpu:check:{oid}", style=ButtonStyle.SUCCESS)],
-        *_kyc_rows,
         [InlineKeyboardButton(text="❌ لغو و بازگشت", callback_data=f"bpu:cancel:{oid}", style=ButtonStyle.DANGER)],
     ])
     card_line = f"🏦 شمارهٔ کارتِ مقصد: <code>{card}</code>\n" if card else ""

@@ -360,7 +360,7 @@ async def zarinpal_fixed_amount(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await cb.answer()
 
 
-async def _create_payment(message: Message, bot: Bot, amount: int, from_user=None):
+async def _create_payment(message: Message, bot: Bot, amount: int, from_user=None, card_ok: bool = False, edit_msg=None):
     from tenant import get_bot_row
     # === PATCH_PAYER_IDENTITY_V1 === پرداخت‌کنندهٔ واقعی؛ اگر ربات/نامشخص بود پیش از هر کاری متوقف می‌شود
     from tenant.gateways.payer_identity import resolve_payer, PayerIdentityError, PAYER_ERROR_TEXT
@@ -377,6 +377,10 @@ async def _create_payment(message: Message, bot: Bot, amount: int, from_user=Non
     from tenant.gateways import wallet_limits as _wl
     if not await _wl.guard(message, row.id, "zarinpal", amount):
         return
+    if not card_ok:                                     # PATCH_KYC_CARD_SELECT_V1: اول انتخابِ کارت، بعد فاکتور
+        from tenant.shared.kyc_user import card_select_gate
+        if await card_select_gate(message, row.id, payer.id, "zp", amount):
+            return
     merchant = (await _setting(row.id, "zarinpal_merchant_id", "")).strip()
     # === PATCH_ZARINPAL_PER_BOT_DOMAIN_OVERRIDE_V1 ===
     callback_url = f"{await _callback_base(row.id)}/zarinpal/tenant/callback"
@@ -457,7 +461,8 @@ async def _create_payment(message: Message, bot: Bot, amount: int, from_user=Non
     pay_url = await startpay_url_for_bot(row.id, result)  # PATCH_GATEWAY_REDIRECT_LINK_V1
     from tenant.shared.kyc_user import invoice_card_block as _icb      # PATCH_INVOICE_KYC_CARD_V1
     _kyc_txt, _kyc_rows = await _icb(row.id, payer.id)
-    _inv_msg = await message.answer(
+    from tenant.shared.kyc_user import send_or_edit as _soe
+    _inv_msg = await _soe(message, edit_msg,
         f"✅ فاکتور شارژ کیف پول ساخته شد.\n\nمبلغ: <b>{_rial(amount)}</b>\n"
         + (f"کارمزد درگاه: <b>{_rial(fee)}</b>\n"
            f"مبلغ قابل پرداخت: <b>{_rial(gateway_amount)}</b>\n" if fee else "")
@@ -468,7 +473,6 @@ async def _create_payment(message: Message, bot: Bot, amount: int, from_user=Non
             [InlineKeyboardButton(text="🔐 پرداخت در درگاه زرین‌پال", url=pay_url, style=ButtonStyle.SUCCESS)],
             # === PATCH_ZARINPAL_MANUAL_VERIFY_V1 ===
             [InlineKeyboardButton(text="✅ بررسی و تأیید پرداخت", callback_data=f"wzp:verify:{order.id}", style=ButtonStyle.SUCCESS)],
-            *_kyc_rows,
             [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="w:back", style=ButtonStyle.DANGER)],
         ]))
     # === PATCH_INVOICE_MSG_EDIT_V1 === شناسهٔ پیامِ فاکتور را نگه می‌داریم تا بعد از تأیید ادیت شود
