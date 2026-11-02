@@ -732,7 +732,8 @@ def _detail_text(d: dict, min_active: int = MIN_ACTIVE_SALES) -> str:
     # بخواند؛ صداکننده که async است آن را پاس می‌دهد.
     warn = ""
     if d["low_since"]:
-        deadline = d["low_since"] + datetime.timedelta(days=LOW_STOCK_GRACE_DAYS)
+        from partner_rules import quota_deadline                       # PATCH_PARTNER_QUOTA_AT_EXPIRY_V1
+        deadline = quota_deadline(d["low_since"], d.get("expires_at"))
         left = max(0, (deadline - datetime.datetime.now()).days)
         warn = (f"\n\n⚠️ زیر حد نصاب ({d['active']}/{min_active}) — "
                 f"{left} روز تا غیرفعال‌شدن خودکار")
@@ -843,6 +844,13 @@ async def pa_days(cb: CallbackQuery):
                 br.last_expiry_notice = None
                 br.status = "active"
         new_exp = pb.expires_at
+        # PATCH_PARTNER_QUOTA_AT_EXPIRY_V1: مثلِ تعیینِ دستیِ روز (بالاتر)، اگر اعتبار به آینده رفت و همکار «expired» بود برگردد
+        # (قبلاً با «➕ ۷» وضعیت expired می‌ماند و فقط تاریخ عوض می‌شد).
+        if delta > 0 and pb.status == "expired" and new_exp > datetime.datetime.now():
+            pb.status = "active"
+            if br:
+                br.status = "active"
+                br.lock_reason = None
         await s.commit()
 
     d = await _partner_detail(pb_id)
@@ -1068,6 +1076,13 @@ async def _set_partner_status(pb_id: int, status: str) -> int | None:
         br = await s.get(BotRow, pb.bot_id)
         if br:
             br.status = "active" if status == "active" else "paused"
+            if status == "active":
+                br.lock_reason = None
+        if status == "active":
+            # PATCH_PARTNER_QUOTA_AT_EXPIRY_V1: فعال‌سازیِ دستیِ ادمین ⇒ مهلتِ حدِ نصاب از نو شروع شود؛ وگرنه low_stock_since قدیمی
+            # (مهلت تمام‌شده) در دورِ بعدِ حلقه همان‌دم دوباره خاموشش می‌کرد («فعال می‌کنم غیرفعال می‌شود»).
+            pb.low_stock_since = None
+            pb.low_stock_notice = None
         owner = pb.owner_id
         await s.commit()
     return owner

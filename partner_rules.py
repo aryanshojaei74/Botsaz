@@ -15,6 +15,24 @@ LOW_STOCK_GRACE_DAYS = 30
 # حدِ نصابِ ربات‌های فعالِ فروخته‌شده
 MIN_ACTIVE_SALES = 10
 
+
+def quota_deadline(low_stock_since, expires_at, grace_days: int | None = None):
+    """PATCH_PARTNER_QUOTA_AT_EXPIRY_V1 (فدایی): مهلتِ حدِ نصاب برایِ همکار = «دیرتر» از
+      (شروعِ زیرِ حدِ نصاب + LOW_STOCK_GRACE_DAYS روز) و «پایانِ روزِ اعتبارِ دادن‌شده» (expires_at).
+    یعنی تا وقتی همکار هنوز وقتِ داده‌شده دارد (مثلاً ادمین ۷ روز اضافه کرده)، به‌خاطرِ حدِ نصاب خاموش نمی‌شود؛
+    حدِ نصاب آخرِ همان روز سنجیده می‌شود. قبلاً expires_at کاملاً نادیده گرفته می‌شد و ربات با اتمامِ مهلتِ ۳۰ روزه
+    (که از بالا رفتنِ اعتبار تأثیر نمی‌گرفت) حتی بعد از فعال‌سازیِ دستی دوباره خاموش می‌شد.
+    خروجی None یعنی هنوز زیرِ حدِ نصاب نرفته (low_stock_since خالی)."""
+    import datetime as _d
+    if low_stock_since is None:
+        return None
+    base = low_stock_since + _d.timedelta(days=LOW_STOCK_GRACE_DAYS if grace_days is None else grace_days)
+    if expires_at is not None:
+        end_of_day = expires_at.replace(hour=23, minute=59, second=59, microsecond=0)
+        if end_of_day > base:
+            return end_of_day
+    return base
+
 # درصدِ تخفیفِ پیش‌فرضِ همکار رویِ قیمتِ پایهٔ پلن‌ها
 DEFAULT_PARTNER_DISCOUNT = 30
 

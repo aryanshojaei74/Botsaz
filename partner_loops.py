@@ -26,7 +26,7 @@ from sqlalchemy import select, func
 from config import Session, PLATFORM_ADMIN_ID
 from models import Bot as BotRow, PartnerBot
 from partner_rules import (LOW_STOCK_GRACE_DAYS, MIN_ACTIVE_SALES,
-                           min_active_sales, partner_term_enabled)
+                           min_active_sales, partner_term_enabled, quota_deadline)
 
 from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
@@ -128,8 +128,7 @@ async def _run_once(platform_bot=None) -> None:
                     "در غیر این صورت ربات همکار خودکار غیرفعال می‌شود."))
                 continue
 
-            deadline = pb.low_stock_since + datetime.timedelta(
-                days=LOW_STOCK_GRACE_DAYS)
+            deadline = quota_deadline(pb.low_stock_since, pb.expires_at)   # PATCH_PARTNER_QUOTA_AT_EXPIRY_V1
             # رو به بالا گرد می‌شود: «۴ روز و ۲۳ ساعت» یعنی ۵ روزِ مانده،
             # نه ۴. با گردِ رو به پایین، اخطارها گاهی یک روز را جا
             # می‌انداختند و کاربر بی‌خبر غیرفعال می‌شد.

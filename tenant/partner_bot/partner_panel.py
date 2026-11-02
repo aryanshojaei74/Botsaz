@@ -170,7 +170,8 @@ async def pp_stats(cb: CallbackQuery, bot: Bot):
 
     warn = ""
     if st.get("low_stock_since"):
-        deadline = st["low_stock_since"] + datetime.timedelta(days=LOW_STOCK_GRACE_DAYS)
+        from partner_rules import quota_deadline                       # PATCH_PARTNER_QUOTA_AT_EXPIRY_V1
+        deadline = quota_deadline(st["low_stock_since"], st.get("expires_at"))
         left = (deadline - datetime.datetime.now()).days
         warn = (f"\n\n⚠️ <b>هشدار حد نصاب</b>\nربات‌های فعال شما "
                 f"({st['active']}) کمتر از {await min_active_sales()} تاست. "
