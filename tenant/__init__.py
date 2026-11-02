@@ -4921,6 +4921,7 @@ class HomeBtnFSM(StatesGroup):
     edit_msg = State()     # تنظیم متنِ دکمه
     btn_range = State()    # بازهٔ اختصاصی دکمهٔ فروش کانفیگ (vols/days/counts)
     set_emoji = State()    # دریافت ایموجی پرمیوم برای دکمه
+    set_nemoji = State()   # PATCH_BTN_NORMAL_EMOJI_V1 — دریافتِ ایموجیِ معمولی (بدونِ نیاز به پرمیوم)
     set_btn_support = State()  # دریافت آدرس پشتیبانِ اختصاصیِ یک دکمه
     move_row = State()     # جابه‌جایی دکمه: انتخاب ردیف مقصد
     move_pos = State()     # جابه‌جایی دکمه: انتخاب موقعیت
@@ -15414,6 +15415,30 @@ def _thb_kb(mb, is_disabled: bool) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+# === PATCH_BTN_NORMAL_EMOJI_V1 ===
+import re as _re_ne
+_NE_CH = (r"[\U0001F000-\U0001FAFF\u2190-\u21FF\u2300-\u23FF\u25A0-\u25FF\u2600-\u27BF\u2900-\u297F"
+          r"\u2B00-\u2BFF\u3030\u303D\u3297\u3299\u00A9\u00AE\u203C\u2049\u2122\u2139]")
+_NE_RUN = _re_ne.compile(r"^\s*((?:" + _NE_CH + r"(?:\uFE0F|\u20E3|[\U0001F3FB-\U0001F3FF])*(?:\u200D)?)+)\s*")
+_NE_PICKS = ["🛒", "💳", "💰", "👛", "🎁", "⭐", "🔥", "✅", "📦", "🚀", "🛍", "🧾",
+             "📞", "💬", "📢", "❓", "ℹ️", "👤", "🎫", "🔑", "🌐", "⚡️", "🎮", "📱"]
+
+
+def _split_leading_emoji(label: str) -> tuple[str, str]:
+    """(ایموجیِ ابتدایِ نام یا «», بقیهٔ نام). فقط ایموجیِ ابتدای متن؛ ایموجیِ وسط/آخرِ نام دست نمی‌خورد."""
+    m = _NE_RUN.match(label or "")
+    if not m:
+        return "", (label or "").strip()
+    return m.group(1).strip(), (label or "")[m.end():].strip()
+
+
+def _label_with_emoji(label: str, emoji: str) -> str:
+    """ایموجیِ تازه جایِ ایموجیِ ابتدایِ قبلی می‌نشیند (دوتا نمی‌شود)؛ emoji خالی = حذف."""
+    _old, rest = _split_leading_emoji(label)
+    out = f"{emoji} {rest}".strip() if emoji else rest
+    return out[:80]
+
+
 def _thb_kb_look(mb) -> InlineKeyboardMarkup:
     """دستهٔ «نام، متن و ظاهر»: تغییر نام، رنگ، متنِ دکمه، ایموجی پرمیوم."""
     _clabel = {"danger": "🔴 قرمز", "success": "🟢 سبز", "primary": "🔵 آبی"}.get(mb.color or "", "پیش‌فرض")
@@ -15424,6 +15449,14 @@ def _thb_kb_look(mb) -> InlineKeyboardMarkup:
     ]
     if (mb.message or "").strip():
         rows.append([InlineKeyboardButton(text="🗑 حذف متن دکمه", callback_data=f"thb:msgdel:{mb.id}", style=ButtonStyle.DANGER)])
+    # === PATCH_BTN_NORMAL_EMOJI_V1 === («بعضی‌ها پرمیوم ندارند»): ایموجیِ معمولی کنارِ نامِ دکمه، بدونِ نیاز به پرمیوم
+    _has_ne = bool(_split_leading_emoji(mb.label or "")[0])
+    rows.append([InlineKeyboardButton(
+        text=("🙂 تغییر ایموجی معمولی" if _has_ne else "🙂 افزودن ایموجی معمولی"),
+        callback_data=f"thb:nemoji:{mb.id}", style=ButtonStyle.SUCCESS)])
+    if _has_ne:
+        rows.append([InlineKeyboardButton(text="🗑 حذف ایموجی معمولی", callback_data=f"thb:nedel:{mb.id}",
+                                          style=ButtonStyle.DANGER)])
     rows.append([InlineKeyboardButton(
         text=("😎 تغییر ایموجی پرمیوم" if (mb.icon_emoji_id or "") else "😎 افزودن ایموجی پرمیوم"),
         callback_data=f"thb:emoji:{mb.id}")])
@@ -21495,6 +21528,108 @@ async def thb_emoji_del(cb: CallbackQuery, bot: Bot):
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     await cb.message.answer("✅ ایموجی پرمیوم این دکمه حذف شد.")
     await cb.answer("حذف شد")
+
+
+# ───── ایموجیِ معمولیِ دکمه (بدونِ نیاز به پرمیوم) ─────
+# === PATCH_BTN_NORMAL_EMOJI_V1 === («افزودن ایموجی معمولی روی دکمه… بعضی‌ها پرمیوم ندارن»)
+
+async def _ne_apply(row, mb_id: int, emoji: str):
+    """ایموجی را به نامِ دکمه می‌چسباند؛ (mb, خطا|None)."""
+    async with Session() as s:
+        mb = await s.get(MainButton, mb_id)
+        if not mb or mb.bot_id != row.id:
+            return None, "دکمه پیدا نشد."
+        new = _label_with_emoji(mb.label or "", emoji)
+        if not new:
+            return mb, "نامِ دکمه خالی می‌شد؛ اول یک نام بگذار."
+        mb.label = new
+        await s.commit()
+        return mb, None
+
+
+@tenant_router.callback_query(F.data.startswith("thb:nemoji:"))
+async def thb_nemoji_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    mb_id = int(cb.data.split(":")[2])
+    await state.set_state(HomeBtnFSM.set_nemoji)
+    await state.update_data(thb_id=mb_id)
+    rows, line = [], []
+    for i, e in enumerate(_NE_PICKS):
+        line.append(InlineKeyboardButton(text=e, callback_data=f"thb:nepick:{mb_id}:{i}"))
+        if len(line) == 6:
+            rows.append(line)
+            line = []
+    if line:
+        rows.append(line)
+    rows.append([InlineKeyboardButton(text="❌ لغو", callback_data=f"thb:pick:{mb_id}", style=ButtonStyle.DANGER)])
+    await cb.message.answer(
+        "🙂 <b>ایموجیِ معمولیِ دکمه</b>\n\n"
+        "یکی از ایموجی‌هایِ زیر را بزن، یا <b>هر ایموجیِ دلخواه</b> را همین‌جا تایپ/بفرست. "
+        "ایموجی ابتدایِ نامِ دکمه می‌نشیند و برایِ همه (بدونِ پرمیوم) دیده می‌شود.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await cb.answer()
+
+
+async def _ne_done(target, row, mb, err: str | None, emoji: str = ""):
+    if err:
+        await target.answer("⚠️ " + err)
+    else:
+        note = await _duplicate_label_note(row.id, mb.label, exclude_id=mb.id)
+        await target.answer(f"✅ نامِ دکمه شد «{mb.label}»." + note)
+    if mb:
+        is_disabled = mb.id in await _disabled_btn_ids(row.id)
+        await target.answer(_thb_text(mb, is_disabled), reply_markup=_thb_kb(mb, is_disabled))
+
+
+@tenant_router.callback_query(F.data.startswith("thb:nepick:"))
+async def thb_nemoji_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    _, _, mb_id, idx = cb.data.split(":")
+    try:
+        emoji = _NE_PICKS[int(idx)]
+    except (ValueError, IndexError):
+        await cb.answer()
+        return
+    await state.clear()
+    mb, err = await _ne_apply(row, int(mb_id), emoji)
+    await cb.answer("✅" if not err else "⚠️")
+    await _ne_done(cb.message, row, mb, err, emoji)
+
+
+@tenant_router.message(HomeBtnFSM.set_nemoji, F.text)
+async def thb_nemoji_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await get_bot_row(bot)
+    if not row or not await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id):
+        await state.clear()
+        return
+    data = await state.get_data()
+    mb_id = data.get("thb_id")
+    txt = (msg.text or "").strip()
+    if txt in ("❌ لغو", "❌ لغو / بازگشت", "/cancel"):
+        await state.clear()
+        await msg.answer("لغو شد.")
+        return
+    m = _NE_RUN.match(txt)
+    if not m or not mb_id:
+        await msg.answer("ایموجی پیدا نشد. فقط یک ایموجی بفرست (مثلاً 🛒) یا یکی از دکمه‌ها را بزن؛ برایِ انصراف «❌ لغو».")
+        return
+    await state.clear()
+    mb, err = await _ne_apply(row, int(mb_id), m.group(1).strip())
+    await _ne_done(msg, row, mb, err)
+
+
+@tenant_router.callback_query(F.data.startswith("thb:nedel:"))
+async def thb_nemoji_del(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    mb, err = await _ne_apply(row, int(cb.data.split(":")[2]), "")
+    await cb.answer("حذف شد" if not err else "⚠️")
+    await _ne_done(cb.message, row, mb, err)
 
 
 # ───── جابه‌جایی دکمه ─────
