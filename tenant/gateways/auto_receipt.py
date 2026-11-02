@@ -79,6 +79,7 @@ class ReceiptCheck:
     sender_card4: str | None = None
     tracking_no: str | None = None   # شمارهٔ پیگیری (اثرِ انگشتِ یکتای رسید)
     time_str: str | None = None      # ساعتِ تراکنش روی رسید
+    amount_phrase: str | None = None  # PATCH_RECEIPT_UNIT_PHRASE_V1: عینِ عبارتِ مبلغ روی رسید («۲,۰۰۰,۰۰۰ ریال») برایِ ممیزیِ ادمین
 
 
 def _norm(text: str) -> str:
@@ -86,11 +87,41 @@ def _norm(text: str) -> str:
 
 
 # PATCH_AUTO_RECEIPT_RIAL_TOMAN_AND_FAIL_NOTICE
+# === PATCH_RECEIPT_UNIT_PHRASE_V1 === (MidnightSoul: «مبلغ ریالی را به‌عنوانِ تومان اضافه کرد؛ حساب‌ها به‌هم ریخت»)
+# رسیدِ ۲٬۰۰۰٬۰۰۰ «ریال» (= ۲۰۰٬۰۰۰ تومان) برایِ سفارشِ ۲٬۰۰۰٬۰۰۰ «تومان» تایید و کیف‌پول ده برابر شارژ شد.
+# علتِ ریشه‌ای: واحد فقط از «برچسبِ مدل» (یا حدس از متنِ خروجیِ خودِ مدل، که عبارتِ «مبلغِ موردِ انتظار … تومان» را
+# بازتاب می‌دهد) خوانده می‌شد؛ مدل اگر واحد را اشتباه (یا اصلاً) می‌نوشت، کد تومان فرض می‌کرد و مبلغ «مطابق» می‌شد.
+# حالا: ۱) مدل باید «عین عبارتِ مبلغ روی رسید» را کپی کند (عبارت_مبلغ) و کد واحد را از همان کلمه می‌خواند؛ ۲) ادعایِ «تومان» بدونِ
+# عبارتِ کپی‌شده پذیرفته نمی‌شود؛ ۳) هر تناقض (برچسب≠عبارت، عددِ عبارت≠عددِ خام، دو واحد در یک عبارت) ⇒ مبلغ «نامشخص» ⇒ بررسیِ دستی؛
+# ۴) اگر هیچ نشانهٔ واحدی نبود، فرضِ محافظه‌کارانه «ریال» (÷۱۰) است نه «تومان» — خطا فقط به سمتِ ارجاعِ دستی می‌رود.
+_RIAL_WORDS = ("ریال", "rial", "﷼")
+_TOMAN_WORDS = ("تومان", "تومن", "toman")
+
+
+def _unit_of_text(s: str) -> str | None:
+    """'rial' | 'toman' | 'mixed' | None از رویِ کلماتِ واحد در یک تکه‌متنِ کوتاه."""
+    t = _norm(s or "").lower()
+    r = any(w in t for w in _RIAL_WORDS)
+    m = any(w in t for w in _TOMAN_WORDS)
+    if r and m:
+        return "mixed"
+    return "rial" if r else ("toman" if m else None)
+
+
+def extract_amount_phrase(text: str) -> str | None:
+    """«عبارت_مبلغ» (کپیِ عینِ مبلغ و واحد از رویِ رسید) از خروجیِ مدل؛ None اگر نبود."""
+    if not text:
+        return None
+    m = re.search(r'عبارت[_\s]?مبلغ\s*[:：]\s*(.+)', text)
+    if not m:
+        return None
+    v = m.group(1).strip().strip('«»"\'` ')
+    return v[:80] or None
+
+
 def extract_ai_toman_amount(text: str) -> int | None:
-    """مبلغ را از خروجیِ ساختاریافتهٔ هوش مصنوعی می‌خواند: عددِ خام («مبلغ_عدد:»)
-    و واحد («مبلغ_واحد:»). سپس خودِ کد تبدیلِ ریال→تومان را انجام می‌دهد (÷۱۰)،
-    چون محاسبه در کد قطعی است ولی مدل‌های سبک گاهی در تقسیم خطا می‌کنند.
-    خروجی: مبلغِ نهایی به تومان یا None (اگر برچسب‌ها نبودند)."""
+    """مبلغ را از خروجیِ ساختاریافتهٔ هوش مصنوعی می‌خواند و به «تومان» برمی‌گرداند (ریال ÷ ۱۰ در خودِ کد).
+    None یعنی مبلغ/واحد قابل‌اعتماد نیست (⇒ تاییدِ خودکار ممنوع و رسید به بررسیِ دستی می‌رود)."""
     if not text:
         return None
     t = _norm(text)
@@ -108,30 +139,26 @@ def extract_ai_toman_amount(text: str) -> int | None:
         num = int(m.group(1))
     except Exception:
         return None
-    # واحد را از برچسبِ مدل یا از خودِ متنِ رسید تشخیص بده
-    unit_m = re.search(r'مبلغ[_\s]?واحد\s*[:：]?\s*(ریال|تومان|تومن)', t)
-    unit = None
-    if unit_m:
-        unit = 'تومان' if unit_m.group(1) in ('تومان', 'تومن') else 'ریال'
+
+    unit_m = re.search(r'مبلغ[_\s]?واحد\s*[:：]?\s*([^\n]*)', t)
+    label_unit = _unit_of_text(unit_m.group(1)) if unit_m else None
+    phrase = extract_amount_phrase(text)
+    phrase_unit = _unit_of_text(phrase) if phrase else None
+
+    if label_unit == "mixed" or phrase_unit == "mixed":
+        return None                                    # یک عبارت هم ریال هم تومان دارد
+    if phrase:
+        nums = re.findall(r'\d{3,12}', _norm(phrase))
+        if len(nums) > 1 or (nums and int(nums[0]) != num):
+            return None                                # عددِ عبارت با «مبلغ_عدد» نمی‌خواند
+    if phrase_unit and label_unit and phrase_unit != label_unit:
+        return None                                    # برچسبِ مدل با عبارتِ کپی‌شده تناقض دارد
+    unit = phrase_unit or label_unit
+    if unit == "toman" and not phrase_unit:
+        return None                                    # ادعایِ «تومان» فقط با عبارتِ عینِ رسید معتبر است
     if unit is None:
-        # برچسبِ واحد نبود → از کلماتِ نزدیکِ عدد در متنِ خام حدس بزن
-        near = t[max(0, m.start() - 40):min(len(t), m.end() + 50)]
-        if 'ریال' in near:
-            unit = 'ریال'
-        elif 'تومان' in near or 'تومن' in near:
-            unit = 'تومان'
-    if unit is None:
-        # هنوز نامشخص → کلِ متن را نگاه کن؛ اگر «ریال» هرجا بود، ریال فرض کن
-        if 'ریال' in t:
-            unit = 'ریال'
-        elif 'تومان' in t or 'تومن' in t:
-            unit = 'تومان'
-        else:
-            unit = 'ریال'  # پیش‌فرضِ رسیدِ بانکی
-    if unit == 'ریال':
-        # ریال → تومان
-        return num // 10
-    return num  # تومان
+        unit = "rial"                                  # رسیدِ بانکی پیش‌فرض ریال است؛ فرضِ محافظه‌کارانه
+    return num // 10 if unit == "rial" else num
 
 
 # PATCH_CARD_REGEX_IGNORE_IBAN
@@ -277,8 +304,9 @@ def _receipt_ai_autonomous_prompt(expected_amount_toman: int,
 
     base += (
         "\n-- قوانین دقیق تصمیم‌گیری --\n"
-        "1) مبلغ: اگر رسید به «ریال» است، بر 10 تقسیم کن تا تومان شود (بانک‌های "
-        "ایرانی معمولاً ریال می‌نویسند). اگر واحدی نوشته نشده، ریال فرض کن. مبلغ "
+        "1) مبلغ: واحد را فقط و فقط از روی خودِ رسید بخوان (کلمهٔ «ریال» یا «تومان» کنارِ مبلغ). "
+        "واحدِ «مبلغ مورد انتظار» بالا (تومان) را هرگز برای مبلغِ رسید کپی نکن. اگر رسید به «ریال» است، بر 10 "
+        "تقسیم کن تا تومان شود (بانک‌های ایرانی معمولاً ریال می‌نویسند). اگر واحدی نوشته نشده، ریال فرض کن. مبلغ "
         "نهایی (تومان) باید دقیقاً با «مبلغ مورد انتظار» یکی باشد (رواداری حداکثر "
         "1 تومان برای گِردکردن مجاز است). کارمزد/موجودی/مانده را با مبلغ اصلی "
         "اشتباه نگیر.\n"
@@ -298,7 +326,8 @@ def _receipt_ai_autonomous_prompt(expected_amount_toman: int,
 
         "خروجی را دقیقاً به این قالب بده (هر مورد در یک خط، بدون توضیح اضافه):\n"
         "مبلغ_عدد: <عدد مبلغ اصلی رسید، همان‌طور که روی رسید نوشته، فقط رقم>\n"
-        "مبلغ_واحد: <ریال یا تومان>\n"
+        "مبلغ_واحد: <ریال یا تومان؛ همان واحدی که روی رسید نوشته شده>\n"
+        "عبارت_مبلغ: <عینِ مبلغ و واحدش را همان‌طور که روی رسید چاپ شده کپی کن، مثلاً «۲,۰۰۰,۰۰۰ ریال»>\n"
         "کارت_مقصد: <4 رقم آخر کارت گیرنده، اگر بود>\n"
         "شبا_مقصد: <4 رقم آخر شبای گیرنده، اگر بود>\n"
         "حساب_مقصد: <4 رقم آخر شماره‌حساب گیرنده، اگر بود>\n"
@@ -558,6 +587,7 @@ def _parse_autonomous_response(text: str, expected_sender_last4: str | None,
     ok = bool(decision_line) and ("تایید" in decision_line) and ("ارجاع" not in decision_line)
 
     amount = extract_ai_toman_amount(text)
+    amount_phrase = extract_amount_phrase(text)        # PATCH_RECEIPT_UNIT_PHRASE_V1
 
     # === PATCH_AI_AMOUNT_SELF_CONTRADICTION_FIX_V1 ===
     # باگِ واقعی: مدل خودش عددِ خام + واحد رو درست تشخیص می‌ده (مثلاً
@@ -595,8 +625,14 @@ def _parse_autonomous_response(text: str, expected_sender_last4: str | None,
     if ok and expected_amount is not None:
         if amount is None:
             ok = False
-            amount_guard_reason = ("مبلغِ رسید از خروجیِ هوش مصنوعی خوانده نشد؛ بدونِ مبلغ "
-                                   "نمی‌شود رسید را تایید کرد.")
+            if re.search(r'مبلغ[_\s]?عدد\s*[:：]?\s*\d', t):
+                # عدد خوانده شده ولی واحد (ریال/تومان) قطعی نیست یا بینِ برچسب و عبارتِ روی رسید تناقض است (PATCH_RECEIPT_UNIT_PHRASE_V1)
+                amount_guard_reason = ("واحدِ مبلغ (ریال/تومان) از روی رسید قطعی نشد"
+                                       + (f" — روی رسید: «{amount_phrase}»" if amount_phrase else "")
+                                       + "؛ برایِ جلوگیری از اشتباهِ ده‌برابری رسید به بررسیِ دستی رفت.")
+            else:
+                amount_guard_reason = ("مبلغِ رسید از خروجیِ هوش مصنوعی خوانده نشد؛ بدونِ مبلغ "
+                                       "نمی‌شود رسید را تایید کرد.")
         elif abs(int(amount) - int(expected_amount)) > 1:
             ok = False
             amount_guard_reason = (f"مبلغِ خوانده‌شده از رسید ({int(amount):,} تومان) با مبلغِ "
@@ -629,7 +665,7 @@ def _parse_autonomous_response(text: str, expected_sender_last4: str | None,
 
     return ReceiptCheck(ok=ok, reason=reason, raw_text=text, amount=amount, card_last4=card_last4,
                         date_jalali=date_str, sender_card4=expected_sender_last4,
-                        tracking_no=tracking_no, time_str=time_str)
+                        tracking_no=tracking_no, time_str=time_str, amount_phrase=amount_phrase)
 
 
 async def evaluate_receipt(bot: Bot, receipt_text: str | None, file_id: str | None,
@@ -727,6 +763,19 @@ async def evaluate_receipt(bot: Bot, receipt_text: str | None, file_id: str | No
         # این رایج‌ترین حالتیه که ادمین ازش شکایت می‌کنه.
         logger.warning("[AI_RECEIPT] رسید تایید نشد — دلیل: %s", _result.reason)
     return _result
+
+
+def auto_skip_reason(check: "ReceiptCheck") -> str:
+    """PATCH_AUTO_SKIP_REASON_V1 (MidnightSoul: «همه اطلاعات درست بوده ولی رسید تایید نمی‌شود»).
+    وقتی هوش مصنوعی رسید را «تایید» کرده ولی تاییدِ خودکار انجام نشد (اثرِ انگشتِ رسید ساخته نشد، رسید هم‌زمان/قبلاً ثبت شده یا وضعیتِ
+    سفارش عوض شده)، قبلاً به ادمین همان متنِ «تایید خودمختار… همه موارد مطابقت داشت» زیرِ عنوانِ «تایید نشد» نشان داده می‌شد
+    و دلیلِ واقعی دیده نمی‌شد. این تابع دلیلِ واقعی را می‌گوید."""
+    if receipt_fingerprint(check) is None:
+        return ("\U0001F916 مبلغ و مشخصاتِ رسید درست بود، ولی «شمارهٔ پیگیری» یا «تاریخ و ساعت» از روی تصویر خوانده نشد؛ بدونِ آن‌ها "
+                "نمی‌شود مطمئن شد این رسید قبلاً استفاده نشده (جلوگیری از شارژِ تکراری)، پس تاییدِ دستی لازم است. "
+                "اگر رسید را با شمارهٔ پیگیری واضح بفرستند معمولاً خودکار تایید می‌شود.")
+    return ("\U0001F916 مشخصاتِ رسید درست بود ولی تاییدِ خودکار انجام نشد (رسید هم‌زمان/قبلاً ثبت شده یا وضعیتِ سفارش عوض شده بود)؛ "
+            "تاییدِ دستی لازم است.")
 
 
 async def duplicate_receipt_reason(scope: str, check, file_unique_id: str | None = None) -> str | None:

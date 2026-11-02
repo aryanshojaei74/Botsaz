@@ -533,7 +533,8 @@ async def _wrc_ok_impl(cb: CallbackQuery, state: FSMContext, bot: Bot):
                 return
         from tenant.gateways.auto_receipt import duplicate_receipt_reason
         _dup_reason = await duplicate_receipt_reason(f"tenant:{row.id}", check, file_unique_id) if check.ok else None
-        auto_fail_reason = _dup_reason or check.reason
+        from tenant.gateways.auto_receipt import auto_skip_reason   # PATCH_AUTO_SKIP_REASON_V1
+        auto_fail_reason = _dup_reason or (auto_skip_reason(check) if check.ok else check.reason)
 
     # اطلاع به مالک و ادمین‌های پشتیبانی (تایید دستی)
     kb_admin = InlineKeyboardMarkup(inline_keyboard=[[
@@ -613,6 +614,8 @@ async def _auto_approve_wallet_charge(bot: Bot, row, oid: int, check, file_id: s
     except Exception:
         logger.exception("tx_log (card)")
     detail_lines = [f"🔎 مبلغِ خوانده‌شده: {rial(check.amount)}"]
+    if getattr(check, "amount_phrase", None):          # PATCH_RECEIPT_UNIT_PHRASE_V1: ادمین عینِ عبارتِ روی رسید را ببیند
+        detail_lines.append(f"🧾 عینِ مبلغِ روی رسید: <code>{_html.escape(str(check.amount_phrase))}</code>")
     if check.card_last4:
         detail_lines.append(f"💳 ۴ رقمِ آخرِ کارت روی رسید: <code>{check.card_last4}</code>")
     if check.date_jalali:

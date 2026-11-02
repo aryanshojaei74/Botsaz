@@ -740,11 +740,11 @@ async def receipt_confirm(cb: CallbackQuery, bot: Bot):
                 if done:
                     await cb.answer("تایید خودکار انجام شد ✅")
                     return
-            from tenant.gateways.auto_receipt import duplicate_receipt_reason
+            from tenant.gateways.auto_receipt import duplicate_receipt_reason, auto_skip_reason   # PATCH_AUTO_SKIP_REASON_V1
             _dup_reason = await duplicate_receipt_reason(f"tenant:{row.id}", check, file_unique_id) if check.ok else None
             adm_caption += (
                 f"\n\n🤖 تایید خودکار فعال است ولی این رسید به‌صورت خودکار تایید نشد.\n"
-                f"دلیل: {_dup_reason or check.reason}"
+                f"دلیل: {_dup_reason or (auto_skip_reason(check) if check.ok else check.reason)}"
             )
         except Exception:
             logger.exception(
@@ -849,6 +849,8 @@ async def _auto_approve_config_order(bot: Bot, row, oid: int, check, file_id: st
         except Exception:
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     detail_lines = [f"🔎 مبلغِ خوانده‌شده: {rial(check.amount)}"]
+    if getattr(check, "amount_phrase", None):          # PATCH_RECEIPT_UNIT_PHRASE_V1: ادمین عینِ عبارتِ روی رسید را ببیند
+        detail_lines.append(f"🧾 عینِ مبلغِ روی رسید: <code>{_html.escape(str(check.amount_phrase))}</code>")
     if check.card_last4:
         detail_lines.append(f"💳 ۴ رقمِ آخرِ کارت روی رسید: <code>{check.card_last4}</code>")
     if check.date_jalali:
