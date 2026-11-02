@@ -148,28 +148,70 @@ def _traffic_of(c: dict) -> tuple[int, int]:
     return up, down
 
 
-async def _delete_from_panel(pf: tuple, email: str) -> bool:
-    """حذفِ حساب از پنل. True فقط اگر پنل واقعاً حذف کرد (یا حساب از قبل نبود).
+_NOT_FOUND_HINTS = ("404", "not found", "not exist", "no such", "does not exist", "یافت نشد", "وجود ندارد", "پیدا نشد")
 
-    === PATCH_TRIAL_DELETE_RETRY_V1 === (باگِ #190: «تستِ رایگان بعد از تمام‌شدن از پنل پاک نمی‌شود»)
-    قبلاً خطایِ پنل (تایم‌اوت، ۴۲۹ محدودیتِ لاگین، قطعیِ لحظه‌ای) فقط لاگ می‌شد ولی ردیفِ محلی و «کانفیگ‌هایِ من» بعدش
-    پاک می‌شد و به کاربر هم «حذف شد» می‌رسید؛ پس حسابِ مرده برایِ همیشه روی پنل می‌ماند و دیگر هیچ حلقه‌ای سراغش نمی‌آمد.
-    حالا اگر حذف نشد، ردیف می‌ماند و ده دقیقهٔ بعد دوباره تلاش می‌شود."""
+
+def _looks_not_found(e: Exception) -> bool:
+    m = (str(e) or "").lower()
+    return any(h in m for h in _NOT_FOUND_HINTS)
+
+
+async def _delete_from_panel(pf: tuple, email: str, bot_id: int | None = None) -> tuple[bool, str]:
+    """حذفِ حساب از پنل. خروجی: (موفق؟, علتِ ناموفق). موفق فقط اگر پنل واقعاً حذف کرد یا حساب از قبل نبود.
+
+    === PATCH_TRIAL_DELETE_RETRY_V1 === (باگِ #190) خطایِ پنل ⇒ ردیف می‌ماند و دورِ بعد دوباره تلاش می‌شود.
+    === PATCH_TRIAL_DELETE_VERIFY_V1 === (باگِ #191: «همچنان تستِ تمام‌شده از پنل پاک نمی‌شود»)
+      • مقدارِ برگشتیِ delete_account نادیده گرفته می‌شد: پنل‌هایی که بدونِ خطا ولی با False/«success:false» جواب می‌دهند
+        «موفق» حساب می‌شدند ⇒ ردیفِ محلی پاک و به کاربر «حذف شد» گفته می‌شد، درحالی‌که حساب روی پنل می‌ماند.
+      • خطایِ «پیدا نشد/۴۰۴» (حساب قبلاً پاک شده) برایِ همیشه «ناموفق» حساب می‌شد و ردیف هیچ‌وقت پاک نمی‌شد.
+      حالا: False ⇒ با فهرستِ پنل راستی‌آزمایی می‌شود (حساب هنوز هست ⇒ ناموفق)، و ۴۰۴ ⇒ موفق."""
     client = _make_client(pf)
+    ret = True
     try:
-        await client.delete_account(email)
-        return True
+        ret = await client.delete_account(email)
     except Exception as e:
+        if _looks_not_found(e):
+            return True, ""                                  # حساب از قبل روی پنل نبود
+        why = (str(e) or type(e).__name__).splitlines()[0][:200]
         from log_throttle import should_log
         if should_log(f"trialdel:{pf[1]}:{email}", 3600):
             logger.warning("trial_cleanup: حذفِ %r از پنلِ %s ناموفق بود؛ دورِ بعد دوباره تلاش می‌شود: %s",
-                           email, pf[0], (str(e) or type(e).__name__).splitlines()[0][:200])
-        return False
+                           email, pf[0], why)
+        return False, why
     finally:
         try:
             await client.close()
         except Exception:
             logger.exception("خطای نادیده‌گرفته‌شده (بستنِ کلاینتِ پنل)")
+    if ret is False:                                         # پنل بدونِ خطا «نه» گفت ⇒ از روی فهرستِ پنل مطمئن شو
+        fresh = await _panel_client_map(pf, bot_id or 0)
+        if fresh is not None and email not in fresh:
+            return True, ""                                  # در واقع پاک شده بود (بعضی پنل‌ها بدنهٔ خالی = False می‌دهند)
+        why = "پنل درخواستِ حذف را نپذیرفت (پاسخِ ناموفق) و حساب هنوز روی پنل است" if fresh is not None \
+            else "پنل درخواستِ حذف را نپذیرفت و فهرستِ پنل هم خوانده نشد"
+        from log_throttle import should_log
+        if should_log(f"trialdel:{pf[1]}:{email}", 3600):
+            logger.warning("trial_cleanup: %r روی پنلِ %s حذف نشد: %s", email, pf[0], why)
+        return False, why
+    return True, ""
+
+
+async def _notify_delete_failed(tbot, owner_id: int, bot_id: int, email: str, panel_key: str, why: str) -> None:
+    """به مالکِ ربات می‌گوید چرا تستِ تمام‌شده از پنل پاک نمی‌شود (حداکثر روزی یک‌بار برایِ هر حساب)."""
+    try:
+        from log_throttle import should_log
+        if not should_log(f"trialdelnotice:{bot_id}:{email}", 86400):
+            return
+        import html as _h
+        await tbot.send_message(owner_id, (
+            "⚠️ <b>تستِ تمام‌شده از پنل پاک نشد</b>\n\n"
+            f"👤 نام کاربریِ پنل: <code>{_h.escape(str(email))}</code>\n"
+            f"🗂 پنل: <code>{_h.escape(str(panel_key))}</code>\n"
+            f"🔎 علت: <code>{_h.escape(why or 'نامشخص')}</code>\n\n"
+            "ربات هر ۱۰ دقیقه دوباره تلاش می‌کند. اگر علت مشکلِ دسترسی/لاگینِ پنل است آن را درست کن؛ "
+            "در غیرِ این صورت حساب را از خودِ پنل دستی حذف کن."))
+    except Exception:
+        logger.exception("trial_cleanup: اطلاعِ ناموفق‌بودنِ حذف به مالک نرسید")
 
 
 async def _process_bot(bot_id: int) -> None:
@@ -181,6 +223,7 @@ async def _process_bot(bot_id: int) -> None:
         if not brow or brow.status != "active" or not brow.token:
             return
         token = brow.token
+        owner_id = brow.owner_id
         accts = (await s.scalars(select(PanelAccount).where(
             PanelAccount.bot_id == bot_id,
             PanelAccount.plan_title == TRIAL_TITLE))).all()
@@ -274,7 +317,9 @@ async def _process_bot(bot_id: int) -> None:
                                         a2.trial_unused_warned_at = now
                                         await s.commit()
                         elif (now - unused_warned_at).total_seconds() >= hours * 3600:
-                            if not await _delete_from_panel(pf, email):
+                            _ok, _why = await _delete_from_panel(pf, email, bot_id)
+                            if not _ok:
+                                await _notify_delete_failed(tbot, owner_id, bot_id, email, pf[0], _why)
                                 continue                       # حذف نشد ⇒ ردیف می‌ماند و دورِ بعد دوباره
                             async with Session() as s:
                                 a2 = await s.get(PanelAccount, aid)
@@ -330,7 +375,9 @@ async def _process_bot(bot_id: int) -> None:
             if (now - warned_at).total_seconds() < hours * 3600:
                 continue
 
-            if not await _delete_from_panel(pf, email):
+            _ok, _why = await _delete_from_panel(pf, email, bot_id)
+            if not _ok:
+                await _notify_delete_failed(tbot, owner_id, bot_id, email, pf[0], _why)
                 continue                                       # حذف نشد ⇒ ردیف می‌ماند و دورِ بعد دوباره
             async with Session() as s:
                 a2 = await s.get(PanelAccount, aid)
@@ -355,6 +402,72 @@ async def _process_bot(bot_id: int) -> None:
             await tbot.session.close()
         except Exception:
             logger.exception("خطای نادیده‌گرفته‌شده (بستنِ سشنِ ربات)")
+
+
+def decide(now, now_ms: int, exp_ms: int, warned_at, hours: float, on_panel: bool | None, exp_at_known: bool) -> str:
+    """وضعیتِ یک تستِ رایگان (تابعِ خالص؛ برایِ گزارشِ مالک). مقدارها:
+    no_expiry | running | warn_due | waiting | delete_due | orphan | panel_down."""
+    if on_panel is None:
+        return "panel_down"
+    if not on_panel and not exp_at_known:
+        return "orphan"
+    if exp_ms <= 0:
+        return "no_expiry"
+    if now_ms < exp_ms:
+        return "running"
+    if warned_at is None:
+        return "warn_due"
+    if (now - warned_at).total_seconds() < hours * 3600:
+        return "waiting"
+    return "delete_due"
+
+
+_DECISION_FA = {
+    "no_expiry": "⚠️ پنل تاریخِ پایانی برایش نمی‌دهد (بدونِ انقضا یا «از اولین اتصال» و هنوز وصل نشده) ⇒ خودکار پاک نمی‌شود",
+    "running": "🟢 هنوز تمام نشده",
+    "warn_due": "⏳ تمام شده؛ اخطارِ پایان در دورِ بعد می‌رود",
+    "waiting": "⏳ تمام شده و اخطار رفته؛ منتظرِ پایانِ مهلتِ حذف",
+    "delete_due": "🗑 مهلتِ حذف گذشته؛ دورِ بعد حذف می‌شود",
+    "orphan": "👻 روی پنل نیست؛ ردیفِ یتیم است و پاک می‌شود",
+    "panel_down": "🔴 پنل پاسخ نداد؛ این دور بررسی نشد",
+}
+
+
+async def trial_status_report(bot_id: int, limit: int = 20) -> list[dict]:
+    """برایِ دکمهٔ «🔍 وضعیتِ پاک‌سازیِ تست‌ها»: هر تستِ رایگان + انقضایی که از پنل خوانده شد + اینکه ربات چه تصمیمی می‌گیرد.
+    هیچ تغییری نمی‌دهد."""
+    now = _dt.datetime.utcnow()
+    now_ms = int(_dt.datetime.now().timestamp() * 1000)
+    async with Session() as s:
+        accts = (await s.scalars(select(PanelAccount).where(
+            PanelAccount.bot_id == bot_id, PanelAccount.plan_title == TRIAL_TITLE)
+            .order_by(PanelAccount.id.desc()).limit(limit))).all()
+        panels = (await s.scalars(select(VpnPanel).where(
+            VpnPanel.bot_id == bot_id, VpnPanel.enabled == True))).all()   # noqa: E712
+        rows = [(a.email, a.user_telegram_id, a.panel_key, a.expires_at, a.trial_warned_at) for a in accts]
+        pfs = [(p.panel_key, p.base_url, p.username, p.password, p.sub_base or "", p.inbound_ids, p.api_key) for p in panels]
+    if not rows or not pfs:
+        return []
+    by_key = {pf[0]: pf for pf in pfs}
+    hours = await _delete_hours(bot_id)
+    cache: dict = {}
+    out = []
+    for email, tg_id, pkey, exp_at, warned_at in rows:
+        pf = by_key.get(pkey) if pkey else pfs[0]
+        if pf is None:
+            out.append({"email": email, "user": tg_id, "panel": pkey, "exp_ms": 0, "decision": "panel_off"})
+            continue
+        if pf[0] not in cache:
+            cache[pf[0]] = await _panel_client_map(pf, bot_id)
+        emap = cache[pf[0]]
+        c = emap.get(email) if emap is not None else None
+        exp_ms = _expiry_of(c) if c else 0
+        if not exp_ms and exp_at:
+            exp_ms = int(exp_at.timestamp() * 1000)
+        out.append({"email": email, "user": tg_id, "panel": pf[0], "exp_ms": exp_ms,
+                    "decision": decide(now, now_ms, exp_ms, warned_at, hours,
+                                       None if emap is None else (email in emap), bool(exp_at))})
+    return out
 
 
 async def trial_cleanup_loop(interval: int = 600):

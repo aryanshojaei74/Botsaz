@@ -13931,7 +13931,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "394"
+BUILD_ID = "395"
 
 
 @tenant_router.message(Command("version"))
@@ -31641,6 +31641,8 @@ async def set_trial_menu(cb: CallbackQuery, bot: Bot):
         [InlineKeyboardButton(
             text=f"⏳ شروعِ زمانِ تست: {onhold_lbl}",
             callback_data="set:trial_onhold", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="🔍 وضعیتِ پاک‌سازیِ تست‌ها از پنل", callback_data="set:trial_status",
+                              style=ButtonStyle.SUCCESS)],     # PATCH_TRIAL_STATUS_V1
         [InlineKeyboardButton(text="🔑 کانالِ گزارشِ اکانتِ تست", callback_data="set:trrep",
                               style=ButtonStyle.SUCCESS)],     # PATCH_TRIAL_REPORT_CHANNEL_V1
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:settings", style=ButtonStyle.DANGER)],
@@ -31666,6 +31668,49 @@ async def set_trial_menu(cb: CallbackQuery, bot: Bot):
     except Exception:
         await cb.message.answer(text, reply_markup=kb)
     await cb.answer()
+
+
+# === PATCH_TRIAL_STATUS_V1 === (باگِ #191) مالک ببیند هر تستِ رایگان چرا پاک می‌شود/نمی‌شود، و بتواند همین حالا پاک‌سازی را اجرا کند
+async def _trial_status_text(bot_id: int) -> str:
+    import html as _h
+    from tenant.shared import trial_cleanup as _tc
+    rep = await _tc.trial_status_report(bot_id)
+    if not rep:
+        return "🔍 <b>وضعیتِ تست‌هایِ رایگان</b>\n\nتستِ رایگانِ ثبت‌شده‌ای (روی پنلِ فعال) نیست."
+    lines = ["🔍 <b>وضعیتِ پاک‌سازیِ تست‌هایِ رایگان</b>\n(۲۰ تستِ آخر؛ ربات هر ۱۰ دقیقه بررسی می‌کند)\n"]
+    for r in rep:
+        exp = (_dt.datetime.fromtimestamp(r["exp_ms"] / 1000).strftime("%Y/%m/%d %H:%M")
+               if r.get("exp_ms") else "—")
+        dec = _tc._DECISION_FA.get(r["decision"], "⚠️ پنلِ این حساب در ربات غیرفعال/ثبت‌نشده است")
+        lines.append(f"• <code>{_h.escape(str(r['email']))}</code> · انقضا: {exp}\n   {dec}")
+    text = "\n".join(lines)
+    return text if len(text) <= 3900 else text[:3900] + "…"
+
+
+@tenant_router.callback_query(F.data.in_({"set:trial_status", "set:trial_clean"}))
+async def set_trial_status(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    if cb.data == "set:trial_clean":
+        await cb.answer("در حالِ پاک‌سازی…")
+        try:
+            from tenant.shared import trial_cleanup as _tc
+            await _tc._process_bot(row.id)
+        except Exception:
+            logger.exception("set:trial_clean: پاک‌سازیِ دستی خطا داد")
+    else:
+        await cb.answer()
+    text = await _trial_status_text(row.id)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🧹 همین حالا پاک‌سازی کن", callback_data="set:trial_clean", style=ButtonStyle.DANGER)],
+        [InlineKeyboardButton(text="🔄 به‌روزرسانی", callback_data="set:trial_status", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="set:trial", style=ButtonStyle.DANGER)],
+    ])
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 # === PATCH_TRIAL_GLOBAL_DIFF_V1 ===
