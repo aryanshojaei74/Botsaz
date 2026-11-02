@@ -878,14 +878,24 @@ td,th{{border:1px solid #d0d7de;padding:6px 10px;text-align:right}} .note{{backg
 <tr><td><code>plans</code></td><td>پلن‌هایِ قابلِ خرید (id، title، volume_gb، days، price)</td></tr>
 <tr><td><code>balance</code></td><td>موجودیِ کیف پول (تومان)</td></tr>
 <tr><td><code>buy</code></td><td>خریدِ پلن از کیف پول: <code>plan_id</code> (اختیاری: <code>ref</code> برایِ جلوگیری از خریدِ تکراری هنگامِ تکرارِ درخواست)</td></tr>
+<tr><td><code>buy</code> (حجمِ دلخواه)</td><td><code>gb</code> + <code>days</code> (+ <code>panel</code> اگر چند پنل دارید) به‌جایِ <code>plan_id</code>؛ قیمت زنده از تنظیماتِ ربات. هر دو حالت <code>discount_code</code> می‌پذیرند.</td></tr>
+<tr><td><code>custom</code></td><td>قیمتِ هر گیگ/روز و بازهٔ مجازِ حجم/مدت برایِ هر پنل؛ با <code>gb</code> و <code>days</code> قیمتِ دقیقِ همان ترکیب (<code>quote</code>) هم می‌آید</td></tr>
+<tr><td><code>quote</code></td><td>قیمتِ نهایی با <code>discount_code</code> بدونِ خرید (<code>plan_id</code> یا <code>gb</code>+<code>days</code>)</td></tr>
+<tr><td><code>delete</code></td><td>حذفِ سرویس از پنل و ربات: <code>service</code> (بدونِ برگشتِ پول)</td></tr>
+<tr><td><code>charge</code></td><td>شارژِ کیف‌پول با آپی: <code>amount</code> (تومان) ← <code>pay_url</code> و <code>order_id</code>؛ بعد از پرداخت موجودی خودکار زیاد می‌شود</td></tr>
+<tr><td><code>charge_status</code></td><td>وضعیتِ فاکتورِ شارژ: <code>order_id</code> ← waiting / paid / ...</td></tr>
 <tr><td><code>services</code></td><td>فهرستِ سرویس‌هایِ کاربر</td></tr>
 <tr><td><code>status</code></td><td>وضعیتِ زنده: <code>service</code> = کدِ سرویس یا نام کاربریِ پنل</td></tr></table>
 <pre>curl -d "key=API_KEY&amp;action=plans" {api_vpn}
 curl -d "key=API_KEY&amp;action=buy&amp;plan_id=3&amp;ref=order-1001" {api_vpn}
 {{"ok":true,"charged":150000,"balance":50000.0,"service":{{"code":"123456789","email":"...","sub_link":"https://..."}}}}
-curl -d "key=API_KEY&amp;action=status&amp;service=123456789" {api_vpn}</pre>
+curl -d "key=API_KEY&amp;action=status&amp;service=123456789" {api_vpn}
+curl -d "key=API_KEY&amp;action=custom&amp;gb=50&amp;days=30" {api_vpn}
+curl -d "key=API_KEY&amp;action=buy&amp;gb=50&amp;days=30&amp;discount_code=OFF10&amp;ref=order-1002" {api_vpn}
+curl -d "key=API_KEY&amp;action=delete&amp;service=123456789" {api_vpn}
+curl -d "key=API_KEY&amp;action=charge&amp;amount=200000" {api_vpn}</pre>
 <p>خطاهایِ رایج: <code>insufficient_balance</code> · <code>plan_not_found</code> · <code>invalid_api_key</code> ·
-<code>panel_error</code> (پنل جواب نداد؛ مبلغ خودکار برگشت داده می‌شود) · <code>rate_limited</code>.</p>
+<code>panel_error</code> (پنل جواب نداد؛ مبلغ خودکار برگشت داده می‌شود) · <code>rate_limited</code> · <code>invalid_discount</code> · <code>gb_out_of_range</code> / <code>days_out_of_range</code> (با <code>min</code>/<code>max</code>) · <code>panel_required</code> · <code>open_invoice</code>.</p>
 <p class="note">تمدید از راهِ API هنوز فعال نیست؛ از داخلِ ربات انجام می‌شود.</p>
 <p class="note">⚠️ کلید را با کسی به اشتراک نگذار. اگر لو رفت، از داخلِ ربات «تغییر کلید» را بزن؛ کلیدِ قبلی همان لحظه باطل می‌شود.</p>
 </body></html>"""

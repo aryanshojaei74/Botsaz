@@ -16,6 +16,10 @@ vpn_api.py — APIِ فروشِ VPN برایِ رباتِ «فروش VPN» (PATC
     buy       خریدِ پلن از کیف‌پول → ساختِ کانفیگ روی پنل (plan_id[, ref])
     services  فهرستِ سرویس‌هایِ کاربر
     status    وضعیتِ زندهٔ یک سرویس (service = کدِ سرویس / نام کاربریِ پنل / شناسه)
+    custom    قیمت/بازهٔ حجمِ دلخواه (+ quote با gb و days)           [buy هم با gb+days(+panel) کار می‌کند]
+    quote     قیمتِ نهایی با discount_code بدونِ خرید (plan_id یا gb+days)
+    delete    حذفِ سرویس از پنل و ربات (service)
+    charge    فاکتورِ شارژِ کیف‌پول با آپی (amount) ← pay_url؛  charge_status (order_id)
 
 کلیدِ کاملِ ربات (Bot.api_key) برایِ عملیاتِ کاربری پارامترِ telegram_id می‌خواهد؛ کلیدِ شخصیِ کاربر فقط
 به خودِ همان کاربر دسترسی دارد و تخفیفِ اختصاصیِ API (api_discount_pct) را می‌گیرد.
@@ -150,11 +154,130 @@ async def _find_account(ctx: AuthCtx, user: BotUser | None, ident: str) -> Panel
         return await s.scalar(q.where(or_(*conds)))
 
 
-async def _do_buy(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
+
+def _int_or_none(v) -> int | None:
+    v = str(v if v is not None else "").strip()
+    return int(v) if v.lstrip("-").isdigit() else None
+
+
+async def _custom_panels(ctx: AuthCtx) -> list:
+    """پنل‌هایِ فعال که «فروشِ حجمِ دلخواه» رویشان روشن است."""
+    from tenant.bots.vpn.vpn_user import _vc
+    async with Session() as s:
+        panels = (await s.scalars(select(VpnPanel).where(
+            VpnPanel.bot_id == ctx.bot_id, VpnPanel.enabled == True).order_by(VpnPanel.id))).all()  # noqa: E712
+    return [pn for pn in panels if (await _vc(ctx.bot_id, "vc_enabled", pn.panel_key)) == "1"]
+
+
+async def _custom_info(ctx: AuthCtx, user: BotUser | None, p: dict) -> JSONResponse:
+    """action=custom: قیمت و بازهٔ حجم/مدتِ فروشِ دلخواه (زنده از تنظیماتِ ربات). با gb/days قیمتِ دقیقِ همان ترکیب هم می‌آید."""
+    from tenant.bots.vpn.vpn_user import _vc_all_for_user, _vc_gb_cost
+    gb_q, days_q = _int_or_none(p.get("gb") or p.get("volume_gb")), _int_or_none(p.get("days"))
+    want = (p.get("panel") or "").strip()
+    items = []
+    for pn in await _custom_panels(ctx):
+        if want and pn.panel_key != want:
+            continue
+        cfg = await _vc_all_for_user(ctx.bot_id, user.telegram_id if user else 0, pn.panel_key,
+                                     days=days_q, gb=gb_q)
+        item = {
+            "panel": pn.panel_key,
+            "price_per_gb": _final_price(ctx, float(cfg["vc_price_gb"])),
+            "price_per_day": _final_price(ctx, float(cfg["vc_price_day"])),
+            "min_gb": int(cfg["vc_min_gb"]), "max_gb": int(cfg["vc_max_gb"]),
+            "min_days": int(cfg["vc_min_days"]), "max_days": int(cfg["vc_max_days"]),
+        }
+        if gb_q is not None and days_q is not None:
+            item["quote"] = _final_price(ctx, float(_vc_gb_cost(cfg, gb_q) + days_q * int(cfg["vc_price_day"])))
+        items.append(item)
+    return JSONResponse({"ok": True, "count": len(items), "items": items})
+
+
+async def _resolve_spec(ctx: AuthCtx, user: BotUser, p: dict, s) -> tuple[dict | None, JSONResponse | None]:
+    """مشخصاتِ خرید از روی plan_id (پلنِ آماده) یا gb+days(+panel) (حجمِ دلخواه). (spec, خطا).
+    قیمتِ برگشتی = قیمتِ بعد از تخفیفِ اختصاصیِ کلید و *قبل* از کدِ تخفیف."""
     raw_plan = (p.get("plan_id") or p.get("plan") or "").strip()
-    if not raw_plan.isdigit():
-        return _err("plan_id_required")
-    plan_id = int(raw_plan)
+    gb_raw = (p.get("gb") or p.get("volume_gb") or "").strip()
+    if raw_plan:
+        if not raw_plan.isdigit():
+            return None, _err("plan_id_required")
+        from tenant.bots.vpn.vpn_user import _plan_audience_filter
+        aud, _ = await _plan_audience_filter(ctx.bot_id, user.telegram_id)
+        plan = await s.get(VpnPlan, int(raw_plan))
+        panel = ok_aud = None
+        if plan and plan.bot_id == ctx.bot_id:
+            panel = await s.scalar(select(VpnPanel).where(
+                VpnPanel.bot_id == ctx.bot_id, VpnPanel.panel_key == plan.panel_key))
+            ok_aud = await s.scalar(select(VpnPlan.id).where(VpnPlan.id == plan.id, aud))
+        if not plan or plan.bot_id != ctx.bot_id or not plan.active or not panel or not panel.enabled or not ok_aud:
+            return None, _err("plan_not_found")
+        return {"kind": "plan", "plan_id": plan.id, "title": plan.title, "gb": int(plan.volume_gb or 0),
+                "days": int(plan.days or 0), "limit_ip": int(plan.limit_ip or 0), "panel_key": plan.panel_key,
+                "price": _final_price(ctx, float(plan.price)),
+                "pf": (panel.base_url, panel.username, panel.password, panel.sub_base or "",
+                       panel.inbound_ids, panel.api_key)}, None
+    if not gb_raw:
+        return None, _err("plan_id_required")
+    gb, days = _int_or_none(gb_raw), _int_or_none(p.get("days"))
+    if gb is None or gb <= 0:
+        return None, _err("invalid_gb")
+    if days is None or days <= 0:
+        return None, _err("days_required")
+    cands = await _custom_panels(ctx)
+    want = (p.get("panel") or "").strip()
+    if want:
+        cands = [x for x in cands if x.panel_key == want]
+    if not cands:
+        return None, _err("custom_not_available" if not want else "panel_not_found")
+    if len(cands) > 1:
+        return None, _err("panel_required", panels=[x.panel_key for x in cands])
+    pn = cands[0]
+    from tenant.bots.vpn.vpn_user import _vc_all_for_user, _vc_gb_cost
+    cfg = await _vc_all_for_user(ctx.bot_id, user.telegram_id, pn.panel_key, days=days, gb=gb)
+    lo_g, hi_g, lo_d, hi_d = (int(cfg["vc_min_gb"]), int(cfg["vc_max_gb"]),
+                               int(cfg["vc_min_days"]), int(cfg["vc_max_days"]))
+    if not (lo_g <= gb <= hi_g):
+        return None, _err("gb_out_of_range", min=lo_g, max=hi_g)
+    if not (lo_d <= days <= hi_d):
+        return None, _err("days_out_of_range", min=lo_d, max=hi_d)
+    base = _vc_gb_cost(cfg, gb) + days * int(cfg["vc_price_day"])
+    if base <= 0:
+        return None, _err("custom_not_available")
+    return {"kind": "custom", "plan_id": None, "title": f"حجم دلخواه {gb} گیگ / {days} روز", "gb": gb,
+            "days": days, "limit_ip": 0, "panel_key": pn.panel_key, "price": _final_price(ctx, float(base)),
+            "pf": (pn.base_url, pn.username, pn.password, pn.sub_base or "", pn.inbound_ids, pn.api_key)}, None
+
+
+async def _apply_code(ctx: AuthCtx, user: BotUser, spec: dict, code: str, s):
+    """(DiscountResult|None, خطا|None). کد خالی ⇒ (None, None)."""
+    code = (code or "").strip()
+    if not code:
+        return None, None
+    from tenant.gateways.discount_engine import validate_discount
+    res = await validate_discount(bot_id=ctx.bot_id, code=code, telegram_id=user.telegram_id,
+                                  price=int(spec["price"]), panel_key=spec["panel_key"],
+                                  plan_id=spec["plan_id"], session=s)
+    if not res.ok:
+        return None, _err("invalid_discount", message=res.reason)
+    return res, None
+
+
+async def _quote(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
+    """action=quote: قیمتِ نهایی (با کدِ تخفیف) بدونِ خرید و بدونِ ثبتِ مصرفِ کد."""
+    async with Session() as s:
+        spec, err = await _resolve_spec(ctx, user, p, s)
+        if err:
+            return err
+        res, err = await _apply_code(ctx, user, spec, p.get("discount_code") or p.get("code") or "", s)
+        if err:
+            return err
+    final = int(res.final_price) if res else int(spec["price"])
+    return JSONResponse({"ok": True, "price": int(spec["price"]), "discount": int(res.discount) if res else 0,
+                         "final": final, "discount_code": res.code if res else None,
+                         "title": spec["title"], "volume_gb": spec["gb"], "days": spec["days"]})
+
+
+async def _do_buy(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
     ref = (p.get("ref") or "").strip()[:40]
 
     # idempotency: همان ref دوباره آمد → همان سرویس را برگردان، دوباره پول نگیر
@@ -172,21 +295,17 @@ async def _do_buy(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
                 return JSONResponse({"ok": True, "duplicate": True, "service": _svc_payload(acc)})
             return _err("duplicate_ref_in_progress")
 
-    # ۱) اعتبارسنجیِ پلن/پنل و کسرِ اتمیکِ موجودی
-    from tenant.bots.vpn.vpn_user import _plan_audience_filter
-    aud, _ = await _plan_audience_filter(ctx.bot_id, user.telegram_id)
+    # ۱) اعتبارسنجیِ پلن/حجمِ دلخواه، کدِ تخفیف و کسرِ اتمیکِ موجودی (کد هم در همین تراکنش مصرف می‌شود)
+    from tenant.gateways.discount_engine import record_usage, revert_usage
+    disc_code_id, disc_amount, disc_code = None, 0, None
     async with Session() as s:
-        plan = await s.get(VpnPlan, plan_id)
-        panel = None
-        if plan and plan.bot_id == ctx.bot_id:
-            panel = await s.scalar(select(VpnPanel).where(
-                VpnPanel.bot_id == ctx.bot_id, VpnPanel.panel_key == plan.panel_key))
-            ok_aud = await s.scalar(select(VpnPlan.id).where(VpnPlan.id == plan_id, aud))
-        else:
-            ok_aud = None
-        if not plan or plan.bot_id != ctx.bot_id or not plan.active or not panel or not panel.enabled or not ok_aud:
-            return _err("plan_not_found")
-        price = _final_price(ctx, float(plan.price))
+        spec, err = await _resolve_spec(ctx, user, p, s)
+        if err:
+            return err
+        res, err = await _apply_code(ctx, user, spec, p.get("discount_code") or p.get("code") or "", s)
+        if err:
+            return err
+        price = int(res.final_price) if res else int(spec["price"])
         u = await s.scalar(select(BotUser).where(
             BotUser.id == user.id).with_for_update())
         if not u or u.is_banned:
@@ -194,15 +313,17 @@ async def _do_buy(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
         if float(u.balance) < price:
             return _err("insufficient_balance", balance=float(u.balance), price=price)
         u.balance = float(u.balance) - price
+        if res:
+            disc_code_id, disc_amount, disc_code = res.code_id, int(res.discount), res.code
+            await record_usage(s, code_id=disc_code_id, bot_id=ctx.bot_id, telegram_id=u.telegram_id,
+                               saved_amount=disc_amount)
         s.add(WalletTxn(bot_id=ctx.bot_id, user_id=u.id, amount=-price, kind="purchase",
-                        note=f"خریدِ VPN از راهِ API: {plan.title[:40]}"
+                        note=f"خریدِ VPN از راهِ API: {spec['title'][:40]}"
                              + (f" [ref:{ref}]" if ref else "")))
         await s.commit()
         user_db_id, tg_id, tg_username = u.id, u.telegram_id, getattr(u, "username", None)
-        p_title, p_gb, p_days, p_limit = plan.title, int(plan.volume_gb or 0), int(plan.days or 0), int(plan.limit_ip or 0)
-        panel_key = plan.panel_key
-        pf = (panel.base_url, panel.username, panel.password, panel.sub_base or "",
-              panel.inbound_ids, panel.api_key)
+        p_title, p_gb, p_days, p_limit = spec["title"], spec["gb"], spec["days"], spec["limit_ip"]
+        panel_key, plan_id, pf = spec["panel_key"], spec["plan_id"], spec["pf"]
         bot_row = await s.get(BotRow, ctx.bot_id)
         bot_username = bot_row.username if bot_row else None
 
@@ -228,6 +349,8 @@ async def _do_buy(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
                 u2.balance = float(u2.balance) + price
                 s.add(WalletTxn(bot_id=ctx.bot_id, user_id=u2.id, amount=price, kind="refund",
                                 note="عودت: خطای ساختِ کانفیگ (API)"))
+            if disc_code_id:
+                await revert_usage(s, code_id=disc_code_id, telegram_id=tg_id)
             await s.commit()
         try:
             await _pool.drop(panel_key, pf[0], pf[1], pf[2], **pkw)
@@ -263,8 +386,67 @@ async def _do_buy(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
         bal = await s.scalar(select(BotUser.balance).where(BotUser.id == user_db_id))
     # اطلاعِ خرید به ادمین‌ها/کانالِ اعتمادسازی (مثلِ بقیهٔ مسیرهایِ فروش) — بی‌صدا و غیرمسدودکننده
     asyncio.ensure_future(_notify_sale(ctx.bot_id, user_db_id, p_title, price, code))
-    return JSONResponse({"ok": True, "charged": price, "balance": float(bal or 0), "service": payload},
-                        status_code=200)
+    out = {"ok": True, "charged": price, "balance": float(bal or 0), "service": payload}
+    if disc_code:
+        out.update({"discount": disc_amount, "discount_code": disc_code})
+    return JSONResponse(out, status_code=200)
+
+
+_DEL_PER_MIN = 10
+_CHG_PER_MIN = 6
+
+
+async def _do_delete(ctx: AuthCtx, user: BotUser | None, p: dict) -> JSONResponse:
+    """action=delete: حذفِ سرویس از پنل و از ربات (بدونِ برگشتِ پول). فقط وقتی پنل واقعاً حذف کرد (یا حساب از قبل نبود)
+    ردیفِ محلی پاک می‌شود؛ خطایِ پنل ⇒ panel_error و سرویس سرجایش می‌ماند تا دوباره تلاش شود."""
+    acc = await _find_account(ctx, user, p.get("service") or p.get("email") or p.get("code") or "")
+    if not acc:
+        return _err("service_not_found")
+    async with Session() as s:
+        panel = await s.scalar(select(VpnPanel).where(
+            VpnPanel.bot_id == ctx.bot_id, VpnPanel.panel_key == (acc.panel_key or "sanai")))
+    if panel:
+        from tenant.shared.trial_cleanup import _delete_from_panel
+        pf = (panel.panel_key, panel.base_url, panel.username, panel.password, panel.sub_base or "",
+              panel.inbound_ids, panel.api_key)
+        ok, why = await _delete_from_panel(pf, acc.email, ctx.bot_id)
+        if not ok:
+            return _err("panel_error", message=(why or "")[:200])
+    async with Session() as s:
+        a2 = await s.get(PanelAccount, acc.id)
+        if a2:
+            await s.delete(a2)
+            await s.commit()
+    return JSONResponse({"ok": True, "deleted": True, "service": acc.svc_code or acc.email})
+
+
+async def _do_charge(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
+    """action=charge: فاکتورِ شارژِ کیف‌پول با درگاهِ آپی (همان مسیرِ مینی‌اپ). بعد از پرداخت موجودیِ ربات خودکار زیاد می‌شود."""
+    amount = _int_or_none(p.get("amount"))
+    if not amount or amount <= 0:
+        return _err("amount_required")
+    from tenant.gateways import apay as AP
+    async with Session() as s:
+        row = await s.get(BotRow, ctx.bot_id)
+    if not row:
+        return _err("internal_error")
+    data, err = await AP.create_charge_core(row, user.telegram_id, amount)
+    if not data:
+        if (err or "").startswith("open:"):
+            return _err("open_invoice", order_id=err.split(":", 1)[1])
+        return _err("charge_failed", message=(err or "")[:200])
+    return JSONResponse({"ok": True, **data})
+
+
+async def _charge_status(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
+    oid = (p.get("order_id") or "").strip()
+    if not oid:
+        return _err("order_id_required")
+    from tenant.gateways import apay as AP
+    st = await AP.mini_status(ctx.bot_id, user.telegram_id, oid)
+    if st is None:
+        return _err("order_not_found")
+    return JSONResponse({"ok": True, **st})
 
 
 async def _notify_sale(bot_id: int, user_db_id: int, title: str, price, code) -> None:
@@ -301,6 +483,29 @@ async def dispatch(ctx: AuthCtx, action: str, p: dict) -> JSONResponse:
         if user is None:
             return _err("telegram_id_required" if ctx.full_access else "user_not_found")
         return JSONResponse({"ok": True, "balance": float(user.balance), "currency": "TOMAN"})
+
+    if action == "custom":
+        u2 = user if (not ctx.full_access or p.get("telegram_id")) else None
+        return await _custom_info(ctx, u2, p)
+
+    if action == "quote":
+        if user is None:
+            return _err("telegram_id_required" if ctx.full_access else "user_not_found")
+        return await _quote(ctx, user, p)
+
+    if action == "delete":
+        if user is None:
+            return _err("telegram_id_required" if ctx.full_access else "user_not_found")
+        if not _rate_ok(f"del:{ctx.bot_id}:{user.id}", _DEL_PER_MIN):
+            return _err("rate_limited")
+        return await _do_delete(ctx, user, p)
+
+    if action in ("charge", "charge_status"):
+        if user is None:
+            return _err("telegram_id_required" if ctx.full_access else "user_not_found")
+        if not _rate_ok(f"chg:{ctx.bot_id}:{user.id}", _CHG_PER_MIN):
+            return _err("rate_limited")
+        return await (_do_charge(ctx, user, p) if action == "charge" else _charge_status(ctx, user, p))
 
     if action == "buy":
         if user is None:
