@@ -10280,7 +10280,7 @@ async def manual_order_channel_active(bot_id: int) -> bool:
 
 async def _notify_manual_order(bot: Bot, row: BotRow, text: str,
                                kb: InlineKeyboardMarkup | None = None,
-                               photo_file_id: str | None = None) -> None:
+                               photo_file_id: str | None = None):
     """سفارشِ دستی‌ای که ادمین باید انجام/تأیید کند (گیفت، استارز، پرمیوم، تون،
     ری‌اکشن — چه کیف‌پول چه کارت‌به‌کارت): اگر «کانالِ سفارشاتِ دستی» وصل و فعال
     باشد همان‌جا پست می‌شود تا تیم همان‌جا تأیید کند؛ وگرنه (یا اگر ارسال خطا داد)
@@ -10290,10 +10290,8 @@ async def _notify_manual_order(bot: Bot, row: BotRow, text: str,
         chat = (await get_setting(row.id, "smm_manual_channel_id", "") or "").strip()
         if chat and await get_setting(row.id, "smm_manual_channel_enabled", "0") == "1":
             if photo_file_id:
-                await bot.send_photo(chat, photo_file_id, caption=text, reply_markup=kb, parse_mode="HTML")
-            else:
-                await bot.send_message(chat, text, reply_markup=kb, parse_mode="HTML")
-            return
+                return await bot.send_photo(chat, photo_file_id, caption=text, reply_markup=kb, parse_mode="HTML")
+            return await bot.send_message(chat, text, reply_markup=kb, parse_mode="HTML")   # PATCH_GIFT_POST_CLOSE_V1: پیام برگردانده می‌شود
     except Exception:
         logger.exception("ارسالِ سفارشِ دستی به کانالِ سفارشات ناموفق بود (bot_id=%s)؛ "
                          "به پیامِ خصوصیِ ادمین برمی‌گردیم", row.id)
@@ -13942,7 +13940,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "402"
+BUILD_ID = "403"
 
 
 @tenant_router.message(Command("version"))

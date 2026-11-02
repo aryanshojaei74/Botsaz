@@ -14089,7 +14089,7 @@ async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
         # روشِ پرداخت کار می‌کنند و gift_cardpay_reject حالا برایِ سفارش‌هایِ
         # کیف‌پولی وجه را هم برمی‌گرداند.
         admin_kb = await _gift_admin_kb(row.id, order_id, gift_id)   # PATCH_TGTOOLS_GIFT_V1
-        await _notify_manual_order(
+        _post = await _notify_manual_order(
             bot, row,
             f"💰 سفارشِ گیفت (تحویلِ دستی{' — انتخابِ مشتری: اکانتِ پشتیبانی' if via == 's' else ''}، پرداختِ کیف‌پول) — #{await order_no(GiftOrder, order_id)}\n"
             f"{item_label}{qty_line}\n💰 {price:,} تومان\n🎯 مقصد: {order.dest_label}{link_line}\n"
@@ -14098,6 +14098,7 @@ async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
             + ("🕶 <b>ناشناس:</b> هنگامِ ارسال، گزینهٔ مخفی‌کردنِ نامِ فرستنده را بزن!\n" if anon else "") +
             f"🔖 کد: {trk}\n\nاین گیفت را باید خودت دستی برایِ خریدار بفرستی، "
             f"بعد «✅ انجام شد» را بزن.", admin_kb)
+        await _gift_post_remember(row.id, order_id, _post)        # PATCH_GIFT_POST_CLOSE_V1
         # === PATCH_TGTOOLS_GIFT_V1 === گیفتِ کاتالوگی + «گیفتِ خودکارِ TGTools» روشن ⇒ همین حالا خودکار می‌خرد
         if not g.is_manual and await _auto_gift_on(row.id):     # PATCH_ACC_GIFT_V1
             _gift_auto_spawn(bot, row, order_id)
@@ -18825,7 +18826,7 @@ async def star_receipt_photo_in(msg: Message, bot: Bot, state: FSMContext):
 async def _notify_manual_order(bot: Bot, row, text: str, kb=None, photo_file_id=None) -> None:
     """=== PATCH_MANUAL_ORDER_CHANNEL_V1 === سفارشِ دستی → کانالِ سفارشاتِ دستی (یا پیامِ خصوصیِ ادمین)."""
     from tenant import _notify_manual_order as _f
-    await _f(bot, row, text, kb, photo_file_id=photo_file_id)
+    return await _f(bot, row, text, kb, photo_file_id=photo_file_id)
 
 
 async def _channel_post_mark_done(cb, text: str) -> None:
@@ -19537,6 +19538,31 @@ async def _tgt_gift_status(key: str, tx, first: dict | None = None) -> tuple[str
     return "pending", cur
 
 
+# === PATCH_GIFT_POST_CLOSE_V1 === (MoBiN: «وقتی اکانتِ پشتیبانی خودکار سفارش را زد، پستِ سفارش در کانال هم تایید شود؟»)
+# سفارشِ کیف‌پولیِ گیفت در «کانالِ سفارشات» پست می‌شود (با دکمهٔ ✅/❌) و بعد خودکار تحویل می‌شود؛ تا حالا آن پستِ اولیه با دکمه‌هایش
+# می‌ماند و فقط یک پیامِ جدید می‌آمد. حالا شناسهٔ پست ذخیره می‌شود و با تحویلِ خودکار دکمه‌هایش به «✅ تحویل شد» تبدیل می‌شود.
+async def _gift_post_remember(bot_id: int, order_id: int, msg) -> None:
+    try:
+        if msg is not None and getattr(getattr(msg, "chat", None), "type", None) == "channel":
+            await _set_setting(bot_id, f"gift_post_{order_id}", f"{msg.chat.id}:{msg.message_id}")
+    except Exception:
+        logger.exception("gift_post: ذخیرهٔ شناسهٔ پستِ کانال ناموفق بود (بی‌اهمیت)")
+
+
+async def _gift_post_close(bot: Bot, bot_id: int, order_id: int, label: str) -> None:
+    try:
+        raw = (await _get_setting(bot_id, f"gift_post_{order_id}", "") or "").strip()
+        if ":" not in raw:
+            return
+        chat, mid = raw.rsplit(":", 1)
+        await bot.edit_message_reply_markup(
+            chat_id=int(chat), message_id=int(mid),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=label, callback_data="noop")]]))
+        await _set_setting(bot_id, f"gift_post_{order_id}", "")
+    except Exception:
+        logger.info("gift_post: بستنِ دکمه‌هایِ پستِ کانالِ سفارش ممکن نشد (بی‌اهمیت)")
+
+
 async def _tgt_gift_finish(bot: Bot, row, order_id: int, who: str = "TGTools") -> None:
     from tenant import _notify_admins
     async with Session() as s:
@@ -19550,6 +19576,7 @@ async def _tgt_gift_finish(bot: Bot, row, order_id: int, who: str = "TGTools") -
         trk = o.tracking_code
         await s.commit()
     await _notify_gift_order_trust_success(bot, row, order_id)
+    await _gift_post_close(bot, row.id, order_id, f"✅ تحویل شد ({who})")      # PATCH_GIFT_POST_CLOSE_V1
     await _notify_manual_order(bot, row, f"✅ گیفتِ سفارش #{await order_no(GiftOrder, order_id)} با {who} تحویل داده شد.")
     if buyer_tg_id:
         try:
