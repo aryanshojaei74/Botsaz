@@ -27561,7 +27561,7 @@ async def admin_user_action(cb: CallbackQuery, state: FSMContext, bot: Bot):
             ).order_by(PanelAccount.id.desc()))).all()
             acct_list = [(a.id, a.email, a.plan_title, a.volume_gb, a.days, a.volume_mb) for a in accts]
         if not acct_list:
-            await cb.answer("این کاربر سرویس VPNای ندارد.", show_alert=True)
+            await _admin_no_panel_svc(cb, row, uid, action)       # PATCH_ADMIN_MANUAL_SVC_V1
             return
         b = InlineKeyboardBuilder()
         for aid, email, title, vol, days, vol_mb in acct_list:
@@ -27581,7 +27581,7 @@ async def admin_user_action(cb: CallbackQuery, state: FSMContext, bot: Bot):
             ).order_by(PanelAccount.id.desc()))).all()
             acct_list = [(a.id, a.email, a.plan_title, a.volume_gb, a.days, a.volume_mb) for a in accts]
         if not acct_list:
-            await cb.answer("این کاربر سرویس VPNای ندارد.", show_alert=True)
+            await _admin_no_panel_svc(cb, row, uid, action)       # PATCH_ADMIN_MANUAL_SVC_V1
             return
         b = InlineKeyboardBuilder()
         for aid, email, title, vol, days, vol_mb in acct_list:
@@ -27600,7 +27600,7 @@ async def admin_user_action(cb: CallbackQuery, state: FSMContext, bot: Bot):
             ).order_by(PanelAccount.id.desc()))).all()
             acct_list = [(a.id, a.email, a.plan_title, a.volume_gb, a.days, a.status, a.volume_mb) for a in accts]
         if not acct_list:
-            await cb.answer("این کاربر سرویس VPNای ندارد.", show_alert=True)
+            await _admin_no_panel_svc(cb, row, uid, action)       # PATCH_ADMIN_MANUAL_SVC_V1
             return
         b = InlineKeyboardBuilder()
         for aid, email, title, vol, days, status, vol_mb in acct_list:
@@ -27620,6 +27620,41 @@ async def admin_user_action(cb: CallbackQuery, state: FSMContext, bot: Bot):
     await state.set_state(AdminFSM.adjust_amount)
     await state.update_data(target_uid=uid, adj_sign=(1 if action == "add" else -1))
     await cb.message.answer("مبلغ را به تومان بفرست:", reply_markup=await smart_cancel_kb(bot))
+    await cb.answer()
+
+
+# === PATCH_ADMIN_MANUAL_SVC_V1 === (MidnightSoul) کاربری که «سرویس دستی» خریده بود با دکمه‌هایِ افزودن روز/حجم/توقف «سرویس VPNای ندارد» می‌گرفت
+# درحالی‌که در «رسیدها و خریدهایِ کاربر» دیده می‌شد. سرویسِ دستی به پنل وصل نیست؛ پس ربات می‌تواند آن را نشان بدهد ولی روز/حجمِ زنده ندارد
+# تا تغییر دهد. حالا فهرستِ سرویس‌هایِ دستیِ کاربر + توضیحِ دقیق (و راهنما) نشان داده می‌شود، نه خطایِ گمراه‌کننده.
+async def _manual_services_of(bot_id: int, tg_id: int) -> list[tuple]:
+    async with Session() as s:
+        u = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == tg_id))
+        if not u:
+            return []
+        cfgs = (await s.scalars(select(Config).where(
+            Config.bot_id == bot_id, Config.owner_user_id == u.id, Config.status == "sold")
+            .order_by(Config.id.desc()).limit(30))).all()
+        return [(c.id, c.code, c.volume_gb, c.days, c.custom_label, c.category) for c in cfgs]
+
+
+async def _admin_no_panel_svc(cb: CallbackQuery, row, uid: int, action: str) -> None:
+    manual = await _manual_services_of(row.id, uid)
+    if not manual:
+        await cb.answer("این کاربر سرویس VPNای ندارد.", show_alert=True)
+        return
+    what = {"days": "افزودن/کاهشِ روز", "gb": "افزودن/کاهشِ حجم", "svc": "توقف/فعال‌سازی/حذف"}.get(action, "این کار")
+    lines = []
+    for _cid, code, vol, days, label, cat in manual:
+        vol_t = "نامحدود" if not vol else f"{vol} گیگ"
+        lines.append(f"• <b>#{code}</b> — {vol_t} · {days} روز"
+                     + (f" — {_html.escape(label)}" if label else "") + (f" · دسته: {_html.escape(cat)}" if cat else ""))
+    text = (f"📦 <b>سرویس‌هایِ دستیِ این کاربر</b> ({len(manual)})\n\n" + "\n".join(lines[:20]) +
+            f"\n\nℹ️ این کاربر سرویسِ <b>پنل‌دار</b> ندارد؛ فقط سرویسِ <b>دستی</b> (کانفیگِ انبار) دارد. سرویسِ دستی به پنل وصل نیست و ربات "
+            f"حجم/تاریخِ زنده‌ای از آن ندارد، پس «{what}» از همین‌جا ممکن نیست — آن را مستقیم روی پنلِ خودت انجام بده."
+            "\n\n💡 برایِ ثبتِ «تمدیدِ دستی» با پرداخت از کارت/کیف‌پول، از «تنظیمات ← 🔄 تمدیدِ دستیِ سرویس» استفاده کن.")
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ بازگشت", callback_data=f"usr:back:{uid}")
+    await cb.message.answer(text, reply_markup=b.as_markup())
     await cb.answer()
 
 
@@ -33782,6 +33817,15 @@ async def _cfgguide_panel(bot_id: int, source: str) -> tuple[str, InlineKeyboard
         rows.append([InlineKeyboardButton(
             text="🏷 آموزش‌های اختصاصی بر اساس دسته‌بندی",
             callback_data=f"tadm:cfgguide:catlist:{source}", style=ButtonStyle.PRIMARY)])
+    if source == TRIAL_GUIDE_SOURCE:                                   # PATCH_TRIAL_GUIDE_INHERIT_V1
+        _from = ((await get_setting(bot_id, "cfg_guide_trial_from", "")) or "").strip()
+        body += ("\n\n🔗 <b>استفاده از آموزش‌هایِ موجود:</b> "
+                 + (f"سرویس‌هایِ تست از آموزش‌هایِ «{_cfgguide_label(_from)}» استفاده می‌کنند"
+                    + (" (اگر متنِ بالا خالی باشد)." if has_text else ".") if _from else
+                    "تنظیم نشده. می‌توانی یکی از بخش‌هایِ دیگر (مثلاً کانفیگ‌هایِ دستی یا یک پنل) را انتخاب کنی تا همان آموزش‌ها "
+                    "(با آموزش‌هایِ هر دسته‌بندی) زیرِ پیامِ تحویلِ تست هم بیاید؛ لازم نیست دوباره بنویسی."))
+        rows.append([InlineKeyboardButton(text="🔗 استفاده از آموزش‌هایِ موجود", callback_data="tadm:cfgguide:inh",
+                                          style=ButtonStyle.SUCCESS)])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت به لیست", callback_data="tadm:cfgguide", style=ButtonStyle.DANGER)])
     return body, InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -33897,6 +33941,18 @@ async def tadm_cfgguide_del(cb: CallbackQuery, bot: Bot):
 
 
 async def _cfg_guide_row(bot_id: int, source: str = "manual", category: str | None = None) -> list[InlineKeyboardButton] | None:
+    """PATCH_TRIAL_GUIDE_INHERIT_V1 (MidnightSoul): برایِ «سرویس‌هایِ تست»، اگر آموزشِ اختصاصیِ خودش نبود و مالک یک بخشِ دیگر را برایِ
+    ارث‌بری انتخاب کرده باشد (cfg_guide_trial_from)، همان آموزش‌هایِ موجود (از جمله آموزش‌هایِ هر دسته‌بندی) زیرِ تست هم می‌آید."""
+    own = await _cfg_guide_row_own(bot_id, source, category)
+    if own or source != TRIAL_GUIDE_SOURCE:
+        return own
+    src = ((await get_setting(bot_id, "cfg_guide_trial_from", "")) or "").strip()
+    if src and src != TRIAL_GUIDE_SOURCE:
+        return await _cfg_guide_row_own(bot_id, src, category)
+    return None
+
+
+async def _cfg_guide_row_own(bot_id: int, source: str = "manual", category: str | None = None) -> list[InlineKeyboardButton] | None:
     """ردیفِ دکمهٔ «📖 آموزش اتصال» — اگر برای این منبعِ خاص فعال و متن‌دار باشد، برای
     چسباندن زیرِ پیامِ تحویلِ کانفیگ استفاده می‌شود؛ وگرنه None.
 
@@ -33945,6 +34001,49 @@ async def _cfg_guide_row(bot_id: int, source: str = "manual", category: str | No
     if not enabled or not text_val.strip():
         return None
     return [InlineKeyboardButton(text="📖 آموزش اتصال", callback_data=f"cfgguide:show:{source}")]
+
+
+@tenant_router.callback_query(F.data.in_({"tadm:cfgguide:inh"}) | F.data.startswith("tadm:cfgguide:inhset:"))
+async def tadm_cfgguide_inherit(cb: CallbackQuery, bot: Bot):
+    """PATCH_TRIAL_GUIDE_INHERIT_V1 — انتخابِ اینکه آموزشِ سرویس‌هایِ تست از کدام بخشِ موجود بیاید."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    if cb.data.startswith("tadm:cfgguide:inhset:"):
+        choice = cb.data.split(":", 3)[3]
+        await set_setting(row.id, "cfg_guide_trial_from", "" if choice == "-" else choice)
+        await cb.answer("✅ ذخیره شد" if choice != "-" else "اتصال قطع شد")
+        body, kb = await _cfgguide_panel(row.id, TRIAL_GUIDE_SOURCE)
+        try:
+            await cb.message.edit_text(body, reply_markup=kb)
+        except Exception:
+            await cb.message.answer(body, reply_markup=kb)
+        return
+    from tenant.bots.vpn.vpn_admin import get_all_panels
+    cur = ((await get_setting(row.id, "cfg_guide_trial_from", "")) or "").strip()
+    srcs = [(k, v) for k, v in _CFG_GUIDE_SOURCES if k != TRIAL_GUIDE_SOURCE]
+    seen = {k for k, _ in srcs}
+    for p in await get_all_panels(row.id):
+        pk = p.panel_key or ""
+        if pk and pk not in seen:
+            seen.add(pk)
+            srcs.append((pk, _cfgguide_label(pk)))
+    rows = []
+    for k, label in srcs:
+        enabled, txt = await _cfgguide_get(row.id, k)
+        has = (enabled and txt.strip()) or bool(await _cfgguide_catmap_get(row.id, k) if k in _CFG_GUIDE_CATEGORY_SOURCES else [])
+        rows.append([InlineKeyboardButton(text=("✅ " if k == cur else "") + label + ("" if has else " (آموزشی ندارد)"),
+                                          callback_data=f"tadm:cfgguide:inhset:{k}", style=ButtonStyle.PRIMARY)])
+    rows.append([InlineKeyboardButton(text="🚫 بدونِ ارث‌بری", callback_data="tadm:cfgguide:inhset:-", style=ButtonStyle.DANGER)])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"tadm:cfgguide:pick:{TRIAL_GUIDE_SOURCE}", style=ButtonStyle.DANGER)])
+    text = ("🔗 <b>آموزشِ سرویس‌هایِ تست از کدام بخش بیاید؟</b>\n\n"
+            "همان آموزش‌هایی که قبلاً برایِ آن بخش ساخته‌ای (متنِ عمومی و آموزش‌هایِ هر دسته‌بندی) زیرِ پیامِ تحویلِ تست هم نشان داده می‌شود. "
+            "اگر برایِ «🎁 سرویس‌هایِ تست» متنِ اختصاصی هم بنویسی، آن اولویت دارد.")
+    try:
+        await cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    except Exception:
+        await cb.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await cb.answer()
 
 
 @tenant_router.callback_query(F.data.startswith("cfgguide:show:"))
