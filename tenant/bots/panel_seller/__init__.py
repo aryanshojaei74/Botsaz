@@ -13,3 +13,4 @@ panel_seller_router.include_router(psel_admin_router)
 panel_seller_router.include_router(psel_user_router)
 
 from tenant.bots.panel_seller import products_menu as _products_menu  # noqa: E402,F401
+from tenant.bots.panel_seller import settings as _psel_settings  # noqa: E402,F401  PATCH_PSEL_PARITY_V2
