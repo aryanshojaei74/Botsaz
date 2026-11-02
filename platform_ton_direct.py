@@ -219,7 +219,8 @@ async def _match_charge(tx: dict) -> int | None:
                 ((PlatformTonDirectCharge.status == "expired") &
                  (PlatformTonDirectCharge.expires_at >= _late_from))))).all()
             for ch in rows:
-                if ch.memo and ch.memo.upper() in comment:
+                from tenant.gateways.ton_direct import memo_in_comment      # PATCH_TON_MEMO_CONFUSABLES_V1
+                if memo_in_comment(ch.memo, comment):
                     if value >= Decimal(str(ch.ton_amount)) * AMOUNT_TOLERANCE:
                         return ch.id
                     logger.warning(

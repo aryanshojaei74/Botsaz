@@ -424,6 +424,20 @@ async def _credit(bot_id: int, charge_id: int, tx_hash: str) -> int:
     return credit
 
 
+# === PATCH_TON_MEMO_CONFUSABLES_V1 === (تیکت #906: «دو بار واریز کردم و خودکار تایید نشد»)
+# کامنت را کاربر دستی تایپ می‌کند و «O» حرف را به‌جایِ «0» صفر می‌زند (در فونتِ کیف‌پول‌ها شبیه‌اند). memo از hex ساخته می‌شود
+# (فقط ۰-۹ و A-F؛ هرگز O/I/L ندارد)، پس این سه حرفِ گیج‌کننده را قبل از مقایسه یکسان می‌کنیم. مبلغ همچنان باید بخواند.
+_MEMO_CONFUSABLE = str.maketrans({"O": "0", "I": "1", "L": "1"})
+
+
+def norm_memo_text(text: str | None) -> str:
+    return (text or "").upper().translate(_MEMO_CONFUSABLE)
+
+
+def memo_in_comment(memo: str | None, comment: str | None) -> bool:
+    return bool(memo) and norm_memo_text(memo) in norm_memo_text(comment)
+
+
 async def _match_charge(bot_id: int, tx: dict) -> int | None:
     """فاکتورِ متناظرِ یک تراکنش را پیدا می‌کند (اول memo، بعد مبلغ)."""
     comment = (tx.get("comment") or "").strip().upper()
@@ -438,7 +452,7 @@ async def _match_charge(bot_id: int, tx: dict) -> int | None:
                 (TonDirectCharge.status == "waiting") |
                 ((TonDirectCharge.status == "expired") & (TonDirectCharge.expires_at >= _late_from))))).all()
             for ch in rows:
-                if ch.memo and ch.memo.upper() in comment:
+                if memo_in_comment(ch.memo, comment):
                     if value >= Decimal(str(ch.ton_amount)) * AMOUNT_TOLERANCE:
                         return ch.id
                     logger.warning(
