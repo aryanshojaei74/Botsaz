@@ -85,7 +85,25 @@ async def test_melipayamak_pattern_send():
         return 200, {"Value": "0", "RetStatus": 35, "StrRetStatus": "InvalidPattern"}
     ok_, err = await SV.send_code(c, "0912", "1", http=fail)
     assert ok_ is False and "InvalidPattern" in err
-    assert (await SV.send_code({**c, "key": "nopass"}, "0912", "1", http=ok))[0] is False          # کلیدِ ناقص
+    assert (await SV.send_code({**c, "key": ":pw"}, "0912", "1", http=ok))[0] is False             # نام‌کاربریِ خالی
+    # InvalidData (SINA): علتِ رایج به زبانِ ساده
+    async def invalid(method, url, **kw):
+        return 200, {"Value": "0", "RetStatus": 2, "StrRetStatus": "InvalidData"}
+    ok2, err2 = await SV.send_code(c, "0912", "1", http=invalid)
+    assert ok2 is False and "InvalidData" in err2 and "bodyId" in err2
+    # کلیدِ فقط‌توکن ⇒ کنسولِ جدید
+    seen = []
+
+    async def console_ok(method, url, **kw):
+        seen.append((method, url, kw))
+        return 200, {"recId": 987654, "status": "ارسال موفق بود"}
+    assert (await SV.send_code({**c, "key": "TOKEN123"}, "09123456789", "54321", http=console_ok))[0] is True
+    assert seen[-1][1] == "https://console.melipayamak.com/api/send/shared/TOKEN123"
+    assert seen[-1][2]["json"] == {"bodyId": 12345, "to": "09123456789", "args": ["54321"]}
+
+    async def console_bad(method, url, **kw):
+        return 200, {"recId": 0, "status": "پترن نامعتبر"}
+    assert (await SV.send_code({**c, "key": "TOKEN123"}, "0912", "1", http=console_bad))[0] is False
     assert (await SV.send_code({**c, "template": "abc"}, "0912", "1", http=ok))[0] is False        # bodyId غیرعددی
     assert "melipayamak" in SV.PROVIDERS and SV.ready({**c})
 

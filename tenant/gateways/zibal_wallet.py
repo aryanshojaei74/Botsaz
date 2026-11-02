@@ -450,14 +450,17 @@ async def _create_payment(message: Message, bot: Bot, amount: int, from_user=Non
     # === PATCH_GATEWAY_REDIRECT_LINK_V1 ===
     from tenant.gateways.gateway_redirect import startpay_for
     pay_url = await startpay_for(row.id, "zibal", result)
+    from tenant.shared.kyc_user import invoice_card_block as _icb      # PATCH_INVOICE_KYC_CARD_V1
+    _kyc_txt, _kyc_rows = await _icb(row.id, payer.id)
     _inv_msg = await message.answer(
         f"✅ فاکتور شارژ کیف پول ساخته شد.\n\nمبلغ شارژ: <b>{_rial(amount)}</b>\n"
         + (f"کارمزد درگاه: <b>{_rial(fee)}</b>\nمبلغ قابل پرداخت: <b>{_rial(gateway_amount)}</b>\n" if fee else "") + "\n"
         "روی دکمهٔ زیر بزنید و پرداخت را در درگاه زیبال انجام دهید. کیف پول معمولاً خودکار شارژ می‌شود؛ "
-        "اگر بعد از پرداخت شارژ نشد، دکمهٔ «✅ بررسی و تأیید پرداخت» را بزنید.",
+        "اگر بعد از پرداخت شارژ نشد، دکمهٔ «✅ بررسی و تأیید پرداخت» را بزنید." + _kyc_txt,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔐 پرداخت در درگاه زیبال", url=pay_url, style=ButtonStyle.SUCCESS)],
             [InlineKeyboardButton(text="✅ بررسی و تأیید پرداخت", callback_data=f"wzb:verify:{order.id}", style=ButtonStyle.SUCCESS)],
+            *_kyc_rows,
             [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="w:back", style=ButtonStyle.DANGER)],
         ]))
     # === PATCH_INVOICE_MSG_EDIT_V1 === شناسهٔ پیامِ فاکتور را نگه می‌داریم تا بعد از تأیید ادیت شود

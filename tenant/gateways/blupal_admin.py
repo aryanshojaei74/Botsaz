@@ -362,9 +362,12 @@ async def _issue(message: Message, bot: Bot, amount: int, payer, from_text: bool
         s.add(ch)
         await s.commit()
         cid = ch.id
+    from tenant.shared.kyc_user import invoice_card_block as _icb      # PATCH_INVOICE_KYC_CARD_V1
+    _kyc_txt, _kyc_rows = await _icb(row.id, payer.id)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💳 صفحهٔ پرداخت", url=str(res["payment_link"]))],
         [InlineKeyboardButton(text="🔍 بررسیِ پرداخت", callback_data=f"bpu:check:{oid}", style=ButtonStyle.SUCCESS)],
+        *_kyc_rows,
         [InlineKeyboardButton(text="❌ لغو و بازگشت", callback_data=f"bpu:cancel:{oid}", style=ButtonStyle.DANGER)],
     ])
     card_line = f"🏦 شمارهٔ کارتِ مقصد: <code>{card}</code>\n" if card else ""
@@ -380,7 +383,7 @@ async def _issue(message: Message, bot: Bot, amount: int, payer, from_text: bool
         "۱. روی «💳 صفحهٔ پرداخت» بزن و مبلغ/کارت را ببین.\n"
         "۲. واریز کن، بعد «🔍 بررسیِ پرداخت» را بزن (خودکار هم بررسی می‌شود).\n"
         "۳. کیفِ پولت شارژ می‌شود. ✅\n\n"
-        "⏳ اگر منصرف شدی، «❌ لغو و بازگشت» را بزن.")
+        "⏳ اگر منصرف شدی، «❌ لغو و بازگشت» را بزن." + _kyc_txt)
     try:                                                    # «در حال ساخت» همان پیامِ فاکتور می‌شود (نه پیامِ اضافه)
         await wait.edit_text(text, reply_markup=kb, parse_mode="HTML")
         sent = wait

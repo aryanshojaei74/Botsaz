@@ -173,6 +173,29 @@ async def kycu_l1(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_KYC_CARD_CHANGE_V1 ===
+# === PATCH_INVOICE_KYC_CARD_V1 === (SINA) فاکتورِ شارژِ زرین‌پال/زیبال/بلوپال: کارتِ ثبت‌شدهٔ کاربر + «تغییر کارت بانکی»
+async def invoice_card_block(bot_id: int, telegram_id: int) -> tuple[str, list]:
+    """(متنِ زیرِ فاکتور, ردیف‌هایِ دکمه). برایِ کاربرِ بدونِ کارتِ ثبت‌شده/محدودشده یا وقتی احرازِ هویت خاموش است: ("", [])."""
+    try:
+        if not await K.enabled(bot_id):
+            return "", []
+        u = await _get_user(bot_id, telegram_id)
+        if not u or not getattr(u, "kyc_card", None) or bool(getattr(u, "kyc_blocked", False)):
+            return "", []
+        text = (f"\n\n💳 <b>شمارهٔ کارتِ انتخابیِ شما:</b> <code>{_mask(u.kyc_card)}</code>\n"
+                "با همین کارت پرداخت کنید؛ در غیر این صورت حساب شما برای احراز هویت سطح ۲ محدود می‌گردد.")
+        rows = []
+        if await _pending_of(bot_id, u.id) is None:
+            can_change, _why = await K.card_change_status(bot_id, u.id)
+            if can_change:
+                rows.append([InlineKeyboardButton(text="💳 تغییر کارت بانکی", callback_data="kycu:cc",
+                                                  style=ButtonStyle.PRIMARY)])
+        return text, rows
+    except Exception:
+        logger.exception("kyc: ساختِ بلوکِ کارتِ ثبت‌شده برایِ فاکتور ناموفق بود (نادیده گرفته شد)")
+        return "", []
+
+
 @kyc_user_router.callback_query(F.data == "kycu:cc")
 async def kycu_card_change(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from tenant import get_bot_row, smart_cancel_kb

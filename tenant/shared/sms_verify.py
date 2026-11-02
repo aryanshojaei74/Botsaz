@@ -103,6 +103,18 @@ async def sms_mode(bot_id: int) -> bool:
 
 # ───────────────────────── ارسال با پنلِ پیامکی ─────────────────────────
 
+# PATCH_SMS_MELIPAYAMAK_HINTS_V1 (SINA: «HTTP 200: InvalidData مشکلش چیه؟») — علتِ رایجِ هر پاسخِ ملی‌پیامک به زبانِ ساده
+_MP_HINTS = {
+    "InvalidData": "اطلاعاتِ ارسالی نامعتبر است: معمولاً bodyId (کدِ پترن) اشتباه/تاییدنشده است، یا تعدادِ متغیرهایِ پترن "
+                   "با «یک کد» نمی‌خواند (پترن باید فقط یک متغیر داشته باشد)، یا bodyId مالِ کنسولِ جدید است و نام‌کاربری:رمزِ پنلِ قدیمی داده شده "
+                   "(در این حالت به‌جایِ نام‌کاربری:رمز، «توکنِ کنسول» را بگذار).",
+    "InvalidPattern": "پترن/bodyId پیدا نشد یا تایید نشده است.",
+    "InvalidUserNameOrPassword": "نام‌کاربری یا رمزِ پنل اشتباه است.",
+    "UserIsNotActive": "حسابِ پنل فعال نیست.",
+    "ArgumentIsNull": "یکی از فیلدها خالی بود (کلید/قالب را دوباره بررسی کن).",
+}
+
+
 async def send_code(c: dict, mobile_local: str, code: str, http=None) -> tuple[bool, str]:
     """(موفق؟, توضیح). http: برایِ تست (async fn(method, url, **kw) → (status, json))."""
     http = http or _http
@@ -123,13 +135,27 @@ async def send_code(c: dict, mobile_local: str, code: str, http=None) -> tuple[b
         if c["provider"] == "melipayamak":
             # PATCH_SMS_MELIPAYAMAK_V1: «ارسال با پترن» (BaseServiceNumber). «کلید» = «نام‌کاربری:رمز» پنل، «قالب» = bodyId (کدِ متنِ تاییدشده)
             user, _, pw = c["key"].partition(":")
-            if not user or not pw or not str(c["template"]).isdigit():
-                return False, "کلید باید به شکل «نام‌کاربری:رمز» و قالب باید bodyIdِ عددی باشد."
+            if not str(c["template"]).isdigit():
+                return False, "قالب باید bodyIdِ عددیِ پترنِ تاییدشده باشد."
+            if not pw:
+                # PATCH_SMS_MELIPAYAMAK_CONSOLE_V1 (SINA): کنسولِ جدیدِ ملی‌پیامک «توکن» می‌دهد نه «نام‌کاربری:رمز»؛ پترن‌هایِ آن کنسول
+                # bodyIdِ خودش را دارند و با سرویسِ قدیمی (BaseServiceNumber) جور نیستند. (با سرویسِ واقعی تست نشده)
+                st, js = await http("POST", f"https://console.melipayamak.com/api/send/shared/{c['key']}",
+                                    json={"bodyId": int(c["template"]), "to": mobile_local, "args": [code]})
+                rec = str((js or {}).get("recId") or "") if isinstance(js, dict) else ""
+                ok = st == 200 and rec.isdigit() and int(rec) > 0
+                return ok, "" if ok else f"HTTP {st}: {str((js or {}).get('status') or js)[:120]}"
+            if not user:
+                return False, "کلید باید «نام‌کاربری:رمز» (پنلِ قدیمی) یا فقط «توکنِ کنسول» باشد."
             st, js = await http("POST", "https://rest.payamak-panel.com/api/SendSMS/BaseServiceNumber",
                                 data={"username": user, "password": pw, "text": code, "to": mobile_local, "bodyId": int(c["template"])})
             val = str((js or {}).get("Value") or "") if isinstance(js, dict) else ""
             ok = st == 200 and isinstance(js, dict) and int((js.get("RetStatus") or 0)) == 1 and val not in ("", "0")
-            return ok, "" if ok else f"HTTP {st}: {str((js or {}).get('StrRetStatus') or js)[:120]}"
+            if ok:
+                return True, ""
+            _stat = str((js or {}).get("StrRetStatus") or js)[:120] if isinstance(js, dict) else str(js)[:120]
+            _hint = _MP_HINTS.get(_stat.strip(), "")
+            return False, f"HTTP {st}: {_stat}" + (f" — {_hint}" if _hint else "")
     except Exception as e:  # noqa: BLE001
         return False, f"{type(e).__name__}: {str(e)[:100]}"
     return False, "پنلِ پیامکیِ نامعتبر"
@@ -341,7 +367,7 @@ async def cycle(cb: CallbackQuery, bot: Bot):
     await cb.answer("انجام شد.")
 
 
-_ASK = {"key": (SmsCfgFSM.key, "🔑 کلیدِ API پنلِ پیامکی را بفرست (ملی پیامک: به شکلِ <code>نام‌کاربری:رمز</code>). بعد از دریافت، پیامت پاک می‌شود:"),
+_ASK = {"key": (SmsCfgFSM.key, "🔑 کلیدِ API پنلِ پیامکی را بفرست (ملی پیامک: <code>نام‌کاربری:رمز</code> یا فقط «توکنِ کنسول»). بعد از دریافت، پیامت پاک می‌شود:"),
         "tpl": (SmsCfgFSM.template, "🧾 نامِ قالبِ تأیید را بفرست (کاوه‌نگار: نامِ قالب؛ sms.ir: شناسهٔ عددیِ قالب؛ ملی پیامک: bodyIdِ عددی). "
                                     "قالب باید یک متغیرِ کد داشته باشد:"),
         "param": (SmsCfgFSM.param, "🏷 نامِ پارامترِ کد در قالبِ sms.ir را بفرست (مثلاً <code>CODE</code>):"),
