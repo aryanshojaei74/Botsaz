@@ -596,6 +596,7 @@ async def delete_flow(cb: CallbackQuery, bot: Bot):
 class PselAccFSM(StatesGroup):
     rename = State()
     contact = State()
+    extra_gb = State()       # PATCH_PSEL_XG_CUSTOM_V1 — مقدارِ دلخواهِ حجمِ اضافه
 
 
 def _support_url(raw: str) -> str | None:
@@ -751,11 +752,58 @@ async def extra_gb_menu(cb: CallbackQuery, bot: Bot):
         return await cb.answer("خریدِ حجمِ اضافه برایِ این پنل فعال نیست.", show_alert=True)
     picks = [btn(f"{fa(g)} گیگ · {n(g * unit)} ت", f"psel:xb:{a.id}:{g}", style=ButtonStyle.PRIMARY) for g in _XG_PICKS]
     rows = [picks[i:i + 2] for i in range(0, len(picks), 2)]
+    rows.append([btn("✏️ حجمِ دلخواه (هر مقدار)", f"psel:xc:{a.id}", style=ButtonStyle.SUCCESS)])     # PATCH_PSEL_XG_CUSTOM_V1
     rows.append(back_row(f"psel:a:{a.id}"))
+    note = ("از کیف‌پول کسر می‌شود و همین‌جا به حجمِ این پنل اضافه می‌شود؛ این پنل مدت‌دار نیست و حجمِ اضافه دائمی است."
+            if not a.expires_at else
+            "از کیف‌پول کسر می‌شود و همین‌جا به حجمِ همین دوره اضافه می‌شود (با تمدید، حجم به مقدارِ بسته برمی‌گردد).")
     await edit_or_send(cb, f"📈 <b>حجمِ اضافه برایِ {esc(a.title)}</b>\n\n💵 هر گیگ: <b>{n(unit)}</b> تومان\n"
-                           f"📦 حجمِ فعلی: {gb_text(a.data_gb)}\n\nاز کیف‌پول کسر می‌شود و همین‌جا به حجمِ همین دوره اضافه می‌شود "
-                           "(با تمدید، حجم به مقدارِ بسته برمی‌گردد).", kb(*rows))
+                           f"📦 حجمِ فعلی: {gb_text(a.data_gb)}\n\n{note}", kb(*rows))
     await cb.answer()
+
+
+# === PATCH_PSEL_XG_CUSTOM_V1 === (Whale: «بخشِ افزایشِ حجم هم دلخواه باشد»)
+@psel_user_router.callback_query(F.data.regexp(r"^psel:xc:\d+$"))
+async def extra_gb_custom_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row, a = await _acc_for(cb, bot, int(cb.data.split(":")[2]))
+    if not a:
+        return
+    unit = await SV.extra_gb_price(row.id)
+    if unit <= 0 or not a.data_gb:
+        return await cb.answer("خریدِ حجمِ اضافه برایِ این پنل فعال نیست.", show_alert=True)
+    await state.clear()
+    await state.set_state(PselAccFSM.extra_gb)
+    await state.update_data(acc_id=a.id)
+    await edit_or_send(cb, f"✏️ چند گیگ حجمِ اضافه می‌خواهی؟ یک عددِ ۱ تا {fa(SV.EXTRA_GB_MAX)} بفرست.\n"
+                           f"💵 هر گیگ: <b>{n(unit)}</b> تومان", kb(back_row(f"psel:xg:{a.id}", "✖️ لغو")))
+    await cb.answer()
+
+
+@psel_user_router.message(PselAccFSM.extra_gb, F.text)
+async def extra_gb_custom_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _row(bot)
+    d = await state.get_data()
+    raw = (msg.text or "").strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")).replace(",", "")
+    if raw in ("/cancel", "لغو"):
+        await state.clear()
+        return await msg.answer("لغو شد.")
+    if not row or not d.get("acc_id"):
+        await state.clear()
+        return
+    if not raw.isdigit() or not (1 <= int(raw) <= SV.EXTRA_GB_MAX):
+        return await msg.answer(f"❌ یک عددِ صحیحِ ۱ تا {fa(SV.EXTRA_GB_MAX)} بفرست (یا /cancel).")
+    gb = int(raw)
+    async with Session() as s:
+        a = await s.get(PanelSellerAccount, int(d["acc_id"]))
+    if not a or a.bot_id != row.id or a.buyer_tg != msg.from_user.id or a.status == "deleted" or not a.data_gb:
+        await state.clear()
+        return await msg.answer("این پنل الان قابلِ افزودنِ حجم نیست.")
+    unit = await SV.extra_gb_price(row.id)
+    await state.clear()
+    await msg.answer(f"🧾 <b>تأییدِ خریدِ حجمِ اضافه</b>\n\n📈 {fa(gb)} گیگ برایِ «{esc(a.title)}»\n💰 مبلغ: <b>{n(gb * unit)}</b> تومان "
+                     "(از کیف‌پول کسر می‌شود)",
+                     reply_markup=kb([btn("✅ خرید", f"psel:xb:{a.id}:{gb}", style=ButtonStyle.SUCCESS)],
+                                     back_row(f"psel:xg:{a.id}", "✖️ لغو")), parse_mode="HTML")
 
 
 @psel_user_router.callback_query(F.data.regexp(r"^psel:xb:\d+:\d+$"))

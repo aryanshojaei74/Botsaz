@@ -175,5 +175,38 @@ class PanelAdminAPI:
                 return 0
         return 0
 
+    # === PATCH_PSEL_MAX_USERS_ENFORCE_V1 === (Whale: «تست رایگان را ۳ کاربر گذاشتم ولی هرچقدر خواستند کاربر می‌سازند»)
+    async def list_user_rows(self, username: str, expected: int | None = None) -> list[dict] | None:
+        """کاربرانِ همین ادمین (GET /api/users?admin=…). None یعنی مطمئن نیستیم فیلتر واقعاً اعمال شده (هرگز حدس نمی‌زنیم):
+        ردیفی که مالکش ادمینِ دیگری است، یا — وقتی ردیف‌ها مالک ندارند — تعدادِ ردیف‌ها با تعدادِ اعلامیِ ادمین نمی‌خواند."""
+        rows: list[dict] = []
+        offset = 0
+        for _ in range(20):
+            res = await self.c._request("GET", "/api/users", params={"admin": username, "limit": 500, "offset": offset})
+            batch = res.get("users") if isinstance(res, dict) else (res if isinstance(res, list) else [])
+            batch = [b for b in (batch or []) if isinstance(b, dict)]
+            rows.extend(batch)
+            total = res.get("total") if isinstance(res, dict) else None
+            if not batch or len(batch) < 500 or (isinstance(total, int) and len(rows) >= total):
+                break
+            offset += 500
+        low = username.lower()
+        saw_owner = False
+        for r in rows:
+            adm = r.get("admin")
+            owner = adm.get("username") if isinstance(adm, dict) else (adm if isinstance(adm, str) else r.get("owner_username"))
+            if owner is None:
+                continue
+            saw_owner = True
+            if str(owner).lower() != low:
+                return None
+        if not saw_owner and expected is not None and len(rows) != int(expected):
+            return None
+        return rows
+
+    async def set_user_status(self, panel_username: str, status: str) -> None:
+        """status: active | disabled — تغییرِ وضعیتِ یک کاربرِ پنل (PUT /api/user/{username})."""
+        await self.c._request("PUT", f"/api/user/{quote(panel_username)}", json={"status": status})
+
     async def restart_core(self) -> None:
         await self.c._request("POST", "/api/core/restart")

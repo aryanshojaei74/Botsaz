@@ -11,7 +11,7 @@ from models import Bot as BotRow
 from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
 
-INTERVAL = 600
+INTERVAL = 180        # PATCH_PSEL_MAX_USERS_ENFORCE_V1: سقفِ کاربر/انقضا سریع‌تر اعمال شود (قبلاً ۶۰۰ثانیه)
 
 
 async def run_once() -> int:

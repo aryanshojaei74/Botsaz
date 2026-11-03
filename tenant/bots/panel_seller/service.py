@@ -867,6 +867,34 @@ async def delete_account(bot_id: int, account_id: int, api_factory=None) -> bool
     return True
 
 
+async def limit_users(api, admin_username: str, keep: int) -> list[str] | None:
+    """PATCH_PSEL_MAX_USERS_ENFORCE_V1 — فقط «keep» کاربرِ قدیمی‌تر فعال می‌ماند؛ بقیه (تازه‌تر) خاموش می‌شوند.
+    خروجی: نامِ کاربرانی که همین حالا خاموش شدند؛ None اگر نشد/مطمئن نبودیم (آن‌وقت هیچ‌چیز خاموش نمی‌شود)."""
+    try:
+        expected = await api.user_count(admin_username)
+        rows = await api.list_user_rows(admin_username, expected)
+    except Exception as e:      # noqa: BLE001
+        logger.info("panel_seller: فهرستِ کاربرانِ ادمین %s خوانده نشد: %s", admin_username, e)
+        return None
+    if rows is None or int(keep) <= 0 or len(rows) <= int(keep):
+        return None if rows is None else []
+    rows = sorted(rows, key=lambda r: (str(r.get("created_at") or ""), str(r.get("username") or "")))
+    extra = rows[int(keep):]
+    off: list[str] = []
+    for r in extra:
+        if str(r.get("status") or "active") in ("disabled", "expired", "limited"):
+            continue                                   # قبلاً غیرفعال است
+        name = r.get("username")
+        if not name:
+            continue
+        try:
+            await api.set_user_status(str(name), "disabled")
+            off.append(str(name))
+        except Exception as e:      # noqa: BLE001
+            logger.info("panel_seller: خاموش‌کردنِ کاربرِ اضافیِ %s ناموفق: %s", name, e)
+    return off
+
+
 def _fa_days(left: timedelta) -> int:
     return max(0, int(left.total_seconds() // 86400))
 
@@ -893,6 +921,7 @@ async def enforce_once(bot_id: int, api_factory=None, now: datetime | None = Non
             continue
         fl = _flags(a)
         used = users = None
+        disabled_extra: list[str] | None = None
         if a.data_gb or a.max_users:
             try:
                 api = api_factory(panel)
@@ -901,6 +930,8 @@ async def enforce_once(bot_id: int, api_factory=None, now: datetime | None = Non
                         used = await api.usage_bytes(a.admin_username)
                     if a.max_users:
                         users = await api.user_count(a.admin_username)
+                        if users is not None and users > a.max_users:          # PATCH_PSEL_MAX_USERS_ENFORCE_V1
+                            disabled_extra = await limit_users(api, a.admin_username, a.max_users)
                 finally:
                     await api.close()
             except Exception as e:  # noqa: BLE001
@@ -918,8 +949,19 @@ async def enforce_once(bot_id: int, api_factory=None, now: datetime | None = Non
                     out.append((a.buyer_tg, f"⚠️ بیش از ۸۰٪ حجمِ پنلِ {label} مصرف شده."))
         if users is not None and a.max_users and users > a.max_users and "usr" not in fl:
             fl.add("usr")
-            out.append((a.buyer_tg, f"⚠️ تعدادِ کاربرانِ پنلِ {label} ({users}) از سقفِ بسته ({a.max_users}) بیشتر است."))
-            out.append((0, f"⚠️ پنلِ {label} (خریدار {a.buyer_tg}) از سقفِ کاربر گذشت: {users}/{a.max_users}."))
+            if disabled_extra:                       # سقفِ کاربر واقعاً اعمال شد (کاربرانِ تازه‌ترِ بیش از سقف خاموش شدند)
+                names = "، ".join(disabled_extra[:10]) + ("…" if len(disabled_extra) > 10 else "")
+                out.append((a.buyer_tg, f"⛔️ پنلِ {label} سقفِ {a.max_users} کاربر دارد؛ {len(disabled_extra)} کاربرِ اضافه خاموش شد "
+                                        f"({names}). برایِ کاربرِ بیشتر، بسته را ارتقا بده."))
+                out.append((0, f"⛔️ پنلِ {label} (خریدار {a.buyer_tg}) از سقفِ کاربر گذشت ({users}/{a.max_users}); "
+                               f"{len(disabled_extra)} کاربرِ اضافه خاموش شد."))
+            else:                                    # روی این پنل نشد/مطمئن نبودیم ⇒ فقط هشدار (مثلِ قبل)
+                out.append((a.buyer_tg, f"⚠️ تعدادِ کاربرانِ پنلِ {label} ({users}) از سقفِ بسته ({a.max_users}) بیشتر است."))
+                out.append((0, f"⚠️ پنلِ {label} (خریدار {a.buyer_tg}) از سقفِ کاربر گذشت: {users}/{a.max_users}."))
+        elif disabled_extra:                         # کاربرِ تازهٔ دیگری هم بالاتر از سقف ساخته شد؛ بی‌صدا خاموشش کردیم
+            pass
+        if users is not None and a.max_users and users <= a.max_users:
+            fl.discard("usr")                        # زیرِ سقف برگشت؛ دفعهٔ بعد دوباره اطلاع بده
         if a.expires_at and (a.expires_at - now) <= timedelta(days=WARN_DAYS) and "exp3" not in fl:
             fl.add("exp3")
             out.append((a.buyer_tg, f"⏳ فقط {_fa_days(a.expires_at - now)} روز تا پایانِ پنلِ {label} مانده؛ تمدید کن."))
