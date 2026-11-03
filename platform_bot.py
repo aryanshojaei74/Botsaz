@@ -318,7 +318,13 @@ FIELDS["partner"] = "🤝 ربات همکار"
 # زمینه ساخته شده‌اند دست‌نخورده کار می‌کنند (FIELDS ملاکِ نمایشِ نامه، نه
 # ACTIVE_FIELDS) و مالکشان می‌تواند از «🔄 تغییر نوع ربات» به یکی از سه
 # زمینهٔ فعال سوییچ کند.
-ACTIVE_FIELDS = {"vpn_sales", "virtual_service", "ad_bot", "funstat", "escrow_bot", "giveaway", "panel_seller"}  # PATCH_FUNSTAT_BOT_V1 / PATCH_ESCROW_BOT_KIND_V1
+# === PATCH_FIELDS_ORDER_V1 === «Fun Stat» (جست‌وجویِ آیدی) از فهرستِ ساخت خارج شد (قرمز/به‌زودی)؛ رباتِ قبلی‌ها کار می‌کنند.
+# فهرست‌هایِ انتخابِ نوع: فعال‌ها بالا، قفل‌شده‌ها (قرمز) آخر.
+def _fields_ordered():
+    return sorted(FIELDS.items(), key=lambda kv: kv[0] not in ACTIVE_FIELDS)
+
+
+ACTIVE_FIELDS = {"vpn_sales", "virtual_service", "ad_bot", "escrow_bot", "giveaway", "panel_seller"}  # PATCH_FUNSTAT_BOT_V1 / PATCH_ESCROW_BOT_KIND_V1
 
 # قیمت پلن‌ها به تومان (بعداً از تنظیمات قابل ویرایش می‌شود)
 PLAN_PRICE = {Plan.GROWTH.value: 5_000_000, Plan.PRO.value: 15_000_000}
@@ -5270,7 +5276,7 @@ async def choose_field(msg: Message, state: FSMContext, bot: Bot):
                             cap_extra_slots=extra_slots)
     b = InlineKeyboardBuilder()
     # === PATCH_CREATE_FLOW_COLORS_V1 ===
-    for key, title in FIELDS.items():
+    for key, title in _fields_ordered():
         if key in ACTIVE_FIELDS:
             b.button(text=title, callback_data=f"field:{key}", style=ButtonStyle.SUCCESS)
         else:
@@ -7795,7 +7801,7 @@ async def edt_field_start(cb: CallbackQuery, state: FSMContext):
     await state.set_state(EditBot.field)
     await state.update_data(edit_bot_id=bot_id)
     b = InlineKeyboardBuilder()
-    for key, title in FIELDS.items():
+    for key, title in _fields_ordered():
         if key == cur_field:
             continue
         if key in ("funstat", "panel_seller"):
