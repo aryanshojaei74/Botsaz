@@ -193,12 +193,14 @@ def _back_kb() -> InlineKeyboardMarkup:
 # choose_field() → show_pitch(). قبلاً برعکس بود و کاربر اول پول می‌داد
 # یا تست می‌گرفت، بعد می‌فهمید قرار است چه بسازد.
 
-async def _ps_show_plans(cb: CallbackQuery, row, pb):
+async def _ps_show_plans(cb: CallbackQuery, row, pb, only_pro: bool = False):
     # === PATCH_PARTNER_TOP_CUSTOMERS_V1 ===
     # قیمتِ نشان‌داده‌شده هم باید تخفیفِ رتبه را نشان بدهد، نه فقط قیمتِ
     # نهاییِ زمانِ پرداخت — وگرنه خریدار عددی می‌بیند که بعداً عوض می‌شود.
     pg = await sale_price(row.id, "growth", cb.from_user.id)
     pp = await sale_price(row.id, "pro", cb.from_user.id)
+    if only_pro:   # PATCH_PARTNER_NEW_KINDS_V1
+        pg = 0
 
     b = InlineKeyboardBuilder()
     if pb.stock_growth > 0 and pg > 0:
@@ -351,10 +353,17 @@ async def ps_field_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if not await field_allowed(row.id, field):
         await cb.answer("این نوع ربات فعلاً ارائه نمی‌شود", show_alert=True)
         return
+    # === PATCH_PARTNER_NEW_KINDS_V1 === پنل‌فروشی: مرحلهٔ تست؛ فقط با دسترسیِ دستیِ مدیرِ پلتفرم
+    if field == "panel_seller":
+        from tenant.bots.panel_seller import gate as _ps_g
+        if not await _ps_g.allowed(cb.from_user.id):
+            await cb.answer("این نوعِ ربات در مرحلهٔ تست است و برایِ حسابِ تو فعال نشده.",
+                            show_alert=True)
+            return
 
     if state is not None:
         await state.update_data(ps_field=field, ps_pb=pb.id, ps_bot=row.id)
-    await _ps_show_plans(cb, row, pb)
+    await _ps_show_plans(cb, row, pb, only_pro=(field == "panel_seller"))
 
 
 @partner_sales_router.callback_query(F.data.startswith("ps:pick:"))
@@ -425,6 +434,9 @@ async def ps_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
     if kind not in ("growth", "pro"):
         await cb.answer()
+        return
+    if kind != "pro" and (await state.get_data()).get("ps_field") == "panel_seller":
+        await cb.answer("ربات پنل‌فروشی فقط در پلنِ حرفه‌ای ساخته می‌شود.", show_alert=True)
         return
 
     stock = pb.stock_growth if kind == "growth" else pb.stock_pro
@@ -520,6 +532,9 @@ async def ps_trialplan_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if not data.get("ps_pb"):
         await cb.answer("این مرحله منقضی شده. دوباره از منو شروع کن.",
                          show_alert=True)
+        return
+    if plan != "pro" and data.get("ps_field") == "panel_seller":
+        await cb.answer("ربات پنل‌فروشی فقط در پلنِ حرفه‌ای ساخته می‌شود.", show_alert=True)
         return
 
     await state.update_data(ps_plan=plan, ps_kind="trial", ps_price=0)

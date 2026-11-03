@@ -69,6 +69,10 @@ FIELDS: list[tuple[str, str]] = [
     # لیستِ جداگانه می‌خوانند، پس بدونِ این خط اصلاً برایِ مشتریِ همکار
     # نمایش داده نمی‌شد.
     ("community_mgmt",  "🛡 مدیریت گروه و کانال"),
+    # === PATCH_PARTNER_NEW_KINDS_V1 === هم‌تراز با بات‌سازِ اصلی
+    ("giveaway",        "🎰 ربات قرعه‌کشی (جذب ممبر و جایزه)"),
+    ("escrow_bot",      "🤝 ربات واسطه‌گری (معامله با واسطه)"),
+    ("panel_seller",    "🧩 ربات پنل‌فروشی — 🧪 در حال تست"),
 ]
 FIELD_LABEL = dict(FIELDS)
 
@@ -80,7 +84,7 @@ FIELD_LABEL = dict(FIELDS)
 # community_mgmt ساخته شده‌اند)؛ فقط allowed_fields() (که هم دکمه‌های
 # انتخاب و هم اعتبارسنجیِ سمتِ سرور را کنترل می‌کند) پایین‌تر با همین
 # مجموعه فیلتر می‌شود.
-ACTIVE_FIELDS = {"vpn_sales", "virtual_service", "ad_bot"}
+ACTIVE_FIELDS = {"vpn_sales", "virtual_service", "ad_bot", "giveaway", "escrow_bot", "panel_seller"}  # PATCH_PARTNER_NEW_KINDS_V1
 
 
 # === PATCH_PARTNER_SALE_FIELDS_V1 ===
