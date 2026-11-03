@@ -155,6 +155,10 @@ async def _admin_disabled(api, uname: str, disabled: bool, account_id=None) -> N
         return
     if res is False:
         logger.warning("panel_seller: پنل غیرفعال‌شدنِ ادمین %s را نپذیرفت (acc=%s)", uname, account_id)
+    elif res is None:
+        logger.info("panel_seller: غیرفعال‌شدنِ ادمین %s تأیید نشد/پشتیبانی نمی‌شود (acc=%s)", uname, account_id)
+    else:
+        logger.info("panel_seller: ادمین %s روی پنل %s شد (acc=%s)", uname, "غیرفعال" if disabled else "فعال", account_id)
 
 
 def _api(panel):

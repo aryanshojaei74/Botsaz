@@ -72,7 +72,7 @@ FIELDS: list[tuple[str, str]] = [
     # === PATCH_PARTNER_NEW_KINDS_V1 === هم‌تراز با بات‌سازِ اصلی
     ("giveaway",        "🎰 ربات قرعه‌کشی (جذب ممبر و جایزه)"),
     ("escrow_bot",      "🤝 ربات واسطه‌گری (معامله با واسطه)"),
-    ("panel_seller",    "🧩 ربات پنل‌فروشی — 🧪 در حال تست"),
+    ("panel_seller",    "🧩 ربات پنل‌فروشی"),
 ]
 FIELD_LABEL = dict(FIELDS)
 

@@ -17,6 +17,10 @@ from models import PlatformSetting
 
 KEY = "psel_beta"
 
+# === PATCH_PSEL_OPEN_V1 === مرحلهٔ تست تمام شد: ساخت و فروشِ رباتِ پنل‌فروشی برایِ همه باز است
+# (همچنان فقط پلنِ حرفه‌ای). برایِ برگشت به حالتِ بسته OPEN=False.
+OPEN = True
+
 
 async def _load() -> dict:
     async with Session() as s:
@@ -63,6 +67,8 @@ async def grants() -> dict[int, str]:
 
 async def status(tg_id: int, now: datetime | None = None) -> tuple[bool, str]:
     """(مجاز؟, دلیل). دلیل: ok | none | expired."""
+    if OPEN:
+        return True, "ok"
     d = await _load()
     k = str(int(tg_id))
     if k not in d:

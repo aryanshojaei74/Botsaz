@@ -166,8 +166,8 @@ async def mg_home(cb: CallbackQuery, bot: Bot, state: FSMContext):
         await edit_or_send(cb, "هنوز پنلی متصل نکرده‌ای. از «🗂 پنل‌هایِ متصل» اتصال بده.", kb(back_row("psel:adm")))
         return await cb.answer()
     if len(panels) == 1:
-        cb.data = f"psel:mgP:{panels[0].id}"
-        return await mg_dashboard(cb, bot)
+        # CallbackQuery غیرقابلِ‌تغییر (frozen) است؛ `cb.data = ...` ValidationError می‌داد و دکمه ساکت می‌ماند
+        return await _dashboard(cb, bot, row, panels[0].id)
     rows = [[btn(f"🖥 {p.panel_key} — {p.base_url.replace('https://', '').replace('http://', '')[:30]}", f"psel:mgP:{p.id}",
                  style=ButtonStyle.PRIMARY)] for p in panels]
     rows.append(back_row("psel:adm"))
@@ -180,7 +180,10 @@ async def mg_dashboard(cb: CallbackQuery, bot: Bot):
     row = await _guard(cb, bot)
     if not row:
         return
-    pid = int(cb.data.split(":")[2])
+    await _dashboard(cb, bot, row, int(cb.data.split(":")[2]))
+
+
+async def _dashboard(cb: CallbackQuery, bot: Bot, row, pid: int):
     panel = await _panel_of(row, pid)
     if not panel:
         return await cb.answer("پنل پیدا نشد.", show_alert=True)

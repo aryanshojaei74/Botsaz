@@ -228,3 +228,17 @@ async def test_menu_has_manage_button_and_report(mg):
     await MG.mg_report(cb, None)
     t = cb.message.out[-1][0]
     assert "پرمصرف" in t and "رو به انقضا" in t and "near" in t
+
+
+@pytest.mark.asyncio
+async def test_single_panel_home_works_with_frozen_callback(mg):
+    """CallbackQuery در aiogram frozen است؛ مسیرِ تک‌پنل نباید cb.data را عوض کند (Whale: دکمه هیچ‌چیز نمی‌داد)."""
+    class Frozen(_Cb):
+        def __setattr__(self, k, v):
+            if k == "data" and "data" in self.__dict__:
+                raise AttributeError("frozen")
+            super().__setattr__(k, v)
+
+    cb = Frozen("psel:mg", uid=500)
+    await MG.mg_home(cb, None, _St())
+    assert "مدیریتِ پنل" in cb.message.out[-1][0]

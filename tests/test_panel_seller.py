@@ -3,6 +3,13 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace as NS
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _beta_closed(monkeypatch):
+    """PATCH_PSEL_OPEN_V1: پیش‌فرض باز است؛ این فایل مسیرِ «بسته/بتا» را هم پوشش می‌دهد."""
+    from tenant.bots.panel_seller import gate as _g
+    monkeypatch.setattr(_g, "OPEN", False)
 import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -246,7 +253,6 @@ async def test_password_toggle_delete_are_scoped_to_owner_of_account(env):
 def test_kind_registered_on_platform_and_tenant():
     import platform_bot as PB
     assert "panel_seller" in PB.FIELDS and "panel_seller" in PB.ACTIVE_FIELDS and "panel_seller" in PB.FIELD_PITCH
-    assert "در حال تست" in PB.FIELDS["panel_seller"]
     kb = PB._action_kb_base("panel_seller")
     cbs = [b.callback_data for r in kb.inline_keyboard for b in r]
     assert "act:psel_buy" in cbs and "act:psel_my" in cbs

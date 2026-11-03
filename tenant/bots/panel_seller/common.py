@@ -54,6 +54,9 @@ async def sales_gate(row) -> tuple[bool, str]:
 async def status_line(row) -> str:
     from tenant.bots.panel_seller import gate
     from plans import Plan
+    if gate.OPEN:
+        plan = "✅ حرفه‌ای" if (row.plan or "") == Plan.PRO.value else "⚠️ نیازمندِ پلنِ حرفه‌ای"
+        return f"💎 پلن: {plan}"
     d = await gate.grants()
     exp = d.get(row.owner_id)
     ok, _ = await gate.status(row.owner_id)
