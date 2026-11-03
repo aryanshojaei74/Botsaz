@@ -86,7 +86,7 @@ def mg(ui, monkeypatch):
     FC.users["gone"] = _user(status="disabled", i=99)
     FC.users["old"] = _user(days=-3, i=98)                 # منقضی
     FC.users["unl"] = _user(total=0, days=0, i=97)         # نامحدود
-    FC.users["near"] = _user(days=2, i=96, online=int(NOW * 1000))
+    FC.users["near"] = _user(days=2, i=96, online=int(time.time() * 1000))     # «الان»، نه زمانِ import (در اجرایِ کامل ده‌ها دقیقه فاصله می‌افتاد)
     return ui
 
 
