@@ -420,10 +420,15 @@ async def mg_toggle(cb: CallbackQuery, bot: Bot):
             return await cb.answer("کاربر پیدا نشد.", show_alert=True)
         enable = not bool(usage.get("enable", True))
         await c.set_enabled(name, enable)
+        after = await c.get_usage(name)               # PATCH_PSEL_VERIFY_STATE_V1: «ربات می‌گوید غیرفعال شد ولی در پنل فعال است»
+        actual = bool((after or {}).get("enable", enable))
     except Exception as e:      # noqa: BLE001
         return await cb.answer("انجام نشد: " + str(e)[:150], show_alert=True)
     finally:
         await _close(c)
+    if actual != enable:
+        await cb.answer("⚠️ پنل تغییر را اعمال نکرد؛ وضعیتِ واقعیِ کاربر هنوز " + ("فعال" if actual else "غیرفعال") + " است.", show_alert=True)
+        return await _show_card(cb, row, pid, name)
     await cb.answer("✅ فعال شد" if enable else "⛔️ غیرفعال شد")
     await _show_card(cb, row, pid, name)
 
@@ -714,15 +719,21 @@ async def mg_admin_op(cb: CallbackQuery, bot: Bot):
     row, panel, pid, name, op = got
     c = _open(panel)
     api = AD.PanelAdminAPI(c)
+    remaining = None
     try:
         if op == "0":
             await api.disable_users(name)
+            remaining = await api.ensure_users_state(name, False)          # PATCH_PSEL_VERIFY_STATE_V1
         elif op == "1":
             await api.activate_users(name)
+            remaining = await api.ensure_users_state(name, True)
         else:
             await api.reset_usage(name)
     except Exception as e:      # noqa: BLE001
         return await cb.answer("انجام نشد: " + str(e)[:150], show_alert=True)
     finally:
         await _close(c)
-    await cb.answer({"0": "⛔️ همه خاموش شد", "1": "✅ همه روشن شد", "r": "🔄 مصرف ریست شد"}[op], show_alert=True)
+    if remaining:
+        return await cb.answer(f"⚠️ پنل {fa(remaining)} کاربر را تغییر نداد (هنوز در وضعیتِ قبلی‌اند).", show_alert=True)
+    tail = "" if remaining == 0 or op == "r" else "\n(وضعیتِ واقعیِ کاربران قابلِ تأیید نبود؛ در فهرستِ کاربران نگاه کن.)"
+    await cb.answer({"0": "⛔️ همه خاموش شد", "1": "✅ همه روشن شد", "r": "🔄 مصرف ریست شد"}[op] + tail, show_alert=True)

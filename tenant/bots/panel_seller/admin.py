@@ -468,6 +468,9 @@ async def ac_toggle_users(cb: CallbackQuery, bot: Bot):
         return
     _, _, aid, en = cb.data.split(":")
     r = await SV.set_users_enabled(row.id, int(aid), None, en == "1")
+    if r["status"] == "partial":                                   # PATCH_PSEL_VERIFY_STATE_V1
+        return await cb.answer(f"⚠️ پنل {fa(r['remaining'])} کاربر را تغییر نداد (هنوز در وضعیتِ قبلی‌اند). "
+                               "از «🛠 مدیریتِ کاملِ پنل» دستی بررسی کن.", show_alert=True)
     await cb.answer("✅ انجام شد." if r["status"] == "ok" else f"❌ {r.get('error') or r['status']}"[:190], show_alert=r["status"] != "ok")
 
 
@@ -482,7 +485,7 @@ async def ac_suspend(cb: CallbackQuery, bot: Bot):
     if not a or a.bot_id != row.id:
         return await cb.answer("پیدا نشد.", show_alert=True)
     ok = await SV.suspend(aid, "owner")
-    await cb.answer("🔴 معلق شد." if ok else "❌ تعلیق روی پنل انجام نشد.", show_alert=not ok)
+    await cb.answer("🔴 معلق شد." if ok else "❌ تعلیق روی پنل انجام نشد (یا پنل بعضی کاربران را خاموش نکرد).", show_alert=not ok)
     text, markup = await _acc_view(row, aid)
     if text:
         await edit_or_send(cb, text, markup)

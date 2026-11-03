@@ -208,5 +208,38 @@ class PanelAdminAPI:
         """status: active | disabled — تغییرِ وضعیتِ یک کاربرِ پنل (PUT /api/user/{username})."""
         await self.c._request("PUT", f"/api/user/{quote(panel_username)}", json={"status": status})
 
+    async def ensure_users_state(self, username: str, enabled: bool) -> int | None:
+        """PATCH_PSEL_VERIFY_STATE_V1 (Whale: «ربات می‌گوید غیرفعال شد ولی در پنل هنوز فعال است»).
+        اندپوینتِ دسته‌جمعیِ خاموش/روشن بعضی پنل‌ها بی‌صدا اثر نمی‌گذارد (پاسِ خالی = «موفق» حساب می‌شد). این‌جا وضعیتِ واقعیِ
+        کاربران خوانده می‌شود، هر کاربرِ هنوز اشتباه تکی اصلاح می‌شود و دوباره خوانده می‌شود.
+        خروجی: تعدادِ کاربرانِ باقی‌مانده در وضعیتِ اشتباه (۰ = موفق)؛ None = نتوانستیم تأیید کنیم."""
+        want = "active" if enabled else "disabled"
+
+        def wrong(r: dict) -> bool:
+            st = str(r.get("status") or "active")
+            return st == "disabled" if enabled else st in ("active", "on_hold")
+        try:
+            expected = await self.user_count(username)
+            rows = await self.list_user_rows(username, expected)
+        except PanelError:
+            return None
+        if rows is None:
+            return None
+        bad = [r for r in rows if wrong(r) and r.get("username")]
+        if not bad:
+            return 0
+        for r in bad:
+            try:
+                await self.set_user_status(str(r["username"]), want)
+            except PanelError:
+                continue
+        try:
+            rows2 = await self.list_user_rows(username, expected)
+        except PanelError:
+            return None
+        if rows2 is None:
+            return None
+        return sum(1 for r in rows2 if wrong(r))
+
     async def restart_core(self) -> None:
         await self.c._request("POST", "/api/core/restart")

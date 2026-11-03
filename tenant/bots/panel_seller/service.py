@@ -131,6 +131,18 @@ async def apply_native_limit(api, username: str, gb: int) -> None:
         logger.warning("panel_seller: اعمالِ سقفِ حجمِ بومی ناموفق بود (%s): %s", username, e)
 
 
+async def verify_users_state(api, uname: str, enabled: bool) -> int | None:
+    """PATCH_PSEL_VERIFY_STATE_V1 — بعد از خاموش/روشنِ دسته‌جمعی: تعدادِ کاربرانی که هنوز در وضعیتِ اشتباه‌اند (۰ = موفق، None = تأییدنشد)."""
+    fn = getattr(api, "ensure_users_state", None)
+    if fn is None:
+        return None
+    try:
+        return await fn(uname, enabled)
+    except Exception as e:      # noqa: BLE001
+        logger.info("panel_seller: تأییدِ وضعیتِ کاربرانِ %s ناموفق: %s", uname, e)
+        return None
+
+
 def _api(panel):
     return AD.PanelAdminAPI.for_panel(panel)
 
@@ -692,10 +704,13 @@ async def set_users_enabled(bot_id: int, account_id: int, buyer_tg: int | None, 
         api = api_factory(panel)
         try:
             await (api.activate_users if enable else api.disable_users)(acc.admin_username)
+            remaining = await verify_users_state(api, acc.admin_username, bool(enable))      # PATCH_PSEL_VERIFY_STATE_V1
         finally:
             await api.close()
     except Exception as e:  # noqa: BLE001
         return {"status": "panel_failed", "error": str(e)[:300]}
+    if remaining:
+        return {"status": "partial", "remaining": int(remaining)}
     return {"status": "ok"}
 
 
@@ -829,6 +844,10 @@ async def suspend(account_id: int, reason: str, api_factory=None) -> bool:
         api = api_factory(panel)
         try:
             await api.disable_users(uname)
+            remaining = await verify_users_state(api, uname, False)          # PATCH_PSEL_VERIFY_STATE_V1
+            if remaining:                                                    # پنل کاربران را واقعاً خاموش نکرد ⇒ «معلق شد» نگو
+                logger.warning("panel_seller: تعلیق acc=%s: %s کاربر هنوز فعال است", account_id, remaining)
+                return False
             if not keep:
                 await api.set_password(uname, gen_password())
         finally:

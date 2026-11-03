@@ -897,5 +897,8 @@ async def toggle_flow(cb: CallbackQuery, bot: Bot):
         return await cb.answer("این کار توسطِ مدیر بسته است.", show_alert=True)
     await cb.answer("در حالِ انجام…")
     r = await SV.set_users_enabled(row.id, a.id, cb.from_user.id, parts[3] == "1")
-    msg = "✅ انجام شد." if r["status"] == "ok" else "❌ " + (r.get("error") or _ERR_FA.get(r["status"], "انجام نشد."))
+    if r["status"] == "partial":                                   # PATCH_PSEL_VERIFY_STATE_V1
+        msg = f"⚠️ پنل {fa(r['remaining'])} کاربر را تغییر نداد؛ بعداً دوباره امتحان کن یا به مدیر خبر بده."
+    else:
+        msg = "✅ انجام شد." if r["status"] == "ok" else "❌ " + (r.get("error") or _ERR_FA.get(r["status"], "انجام نشد."))
     await cb.message.answer(msg[:300])
