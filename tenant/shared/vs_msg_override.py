@@ -43,7 +43,7 @@ RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("✅ گیفت با موفقیت ارسال شد!", _DONE),          # ارسال خودکار فوری گیفت با استارز ربات
     ("✅ گیفتت با موفقیت ارسال شد!", _DONE),         # تایید ادمین برای گیفت دستی
     (re.compile(r"✅ پرمیوم \d+ ماهه با موفقیت فعال شد"), _DONE),   # پرمیوم فوری (نه پیام ادمین «✅ پرمیوم سفارش …»)
-    ("✅ سفارش تون تو (", _DONE),                    # تایید ادمین برای تون
+    (re.compile(r"✅ سفارش تون تو \(\S+\) ارسال شد"), _DONE),   # تایید ادمین برای تون (بدونِ ایموجی با «لغو شد»ِ تون یکی نشود)
     ("❌ متاسفانه سفارشت توسط ارائه‌دهنده لغو شد", _CANCELED),   # لغو TGTools + بازگشت خودکار وجه
     ("❌ متاسفانه ارسال", _FAILED),                  # ارسال گیفت ناموفق بود
     ("❌ متاسفانه فعال", _FAILED),                   # فعال‌سازی پرمیوم ناموفق بود
@@ -51,6 +51,16 @@ RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("↩️ سفارش تون تو", _REFUND),
 )
 _MARKS_RE = re.compile("[\u064b-\u0652]")
+# === PATCH_VS_OVERRIDE_EMOJI_AGNOSTIC_V1 === (SINA: «🔙 سفارشِ تونِ تو (#15769) لغو شد… نه پیامی که تنظیم کردیم»)
+# میان‌افزارِ ایموجیِ پرمیوم *قبل* از این هوک اجرا می‌شود و ایموجیِ پیام (↩️، ✅، ❌، 🎉 …) را با «نویسهٔ نمایشیِ» ایموجیِ پرمیومِ مالک
+# عوض می‌کند (مثلاً ↩️ ⇒ 🔙). الگوهایِ پیش‌فرض با ایموجیِ اصلی شروع می‌شدند ⇒ تطبیق نمی‌خورد و متنِ دلخواه هرگز جایگزین نمی‌شد.
+# حالا مقایسه روی متنِ «بدونِ ایموجی» انجام می‌شود (هم الگو هم پیام).
+_EMOJI_RE = re.compile("[\U0001F000-\U0001FAFF\u2190-\u21FF\u2300-\u23FF\u2460-\u27BF\u2B00-\u2BFF\u3030\u303D\u00A9\u00AE\u203C\u2049\u2122\u2139\uFE0F\u200D\u20E3]")
+
+
+def _flat(text: str | None) -> str:
+    """متنِ بدونِ اعراب و بدونِ ایموجی با فاصله‌هایِ یکنواخت."""
+    return " ".join(_EMOJI_RE.sub("", _MARKS_RE.sub("", text or "")).split())
 _TRK_RE = re.compile(r"کد پیگیری(?: سفارش)?:\s*(?:<code>)?([A-Za-z0-9_-]+)(?:</code>)?")
 _ID_RE = re.compile(r"#([A-Za-z0-9_-]+)")
 
@@ -60,10 +70,23 @@ def _nm(text: str | None) -> str:
     return _MARKS_RE.sub("", text or "")
 
 
+def _compile_rules():
+    out = []
+    for pat, chain in RULES:
+        if hasattr(pat, "match"):
+            out.append((re.compile(_flat(pat.pattern)), chain))
+        else:
+            out.append((_flat(pat), chain))
+    return tuple(out)
+
+
+_FLAT_RULES = _compile_rules()
+
+
 def rule_keys(text: str | None) -> tuple[str, ...] | None:
     """زنجیرهٔ کلیدهای متن قابل‌تنظیم برای این پیام پیش‌فرض، یا None اگر پیام سفارش نیست."""
-    t = _nm((text or "")[:240])[:160]       # این تابع برای هر پیام خروجی صدا زده می‌شود؛ فقط ابتدای متن لازم است
-    for pat, chain in RULES:
+    t = _flat((text or "")[:400])[:200]     # این تابع برای هر پیام خروجی صدا زده می‌شود؛ فقط ابتدای متن لازم است
+    for pat, chain in _FLAT_RULES:
         if (pat.match(t) if hasattr(pat, "match") else t.startswith(pat)):
             return chain
     return None

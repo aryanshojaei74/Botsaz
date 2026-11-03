@@ -127,3 +127,18 @@ def test_matching_ignores_vowel_marks_in_the_default_texts():
     assert VO.rule_key(f"✅ رسید دریافت شد و برا{kasra}ی تایید{kasra} ادمین فرستاده شد.") == "order_placed_manual"
     assert VO.rule_key("✅ رسید دریافت شد و برای تایید ادمین فرستاده شد.") == "order_placed_manual"
     assert VO.rule_key(f"↩️ سفارش{kasra} تون{kasra} تو (#5) لغو شد") == "refunded"
+
+
+def test_rules_ignore_which_emoji_the_message_starts_with():
+    """SINA: ایموجیِ پرمیوم ↩️ را به 🔙 (نویسهٔ نمایشی) عوض می‌کند؛ تطبیقِ متنِ دلخواه نباید به ایموجی وابسته باشد."""
+    # پیامِ دقیقاً از اسکرین‌شاتِ SINA
+    msg = "🔙 سفارشِ تونِ تو (#15769) لغو شد و مبلغِ 36,623 تومان به کیف‌پولت بازگشت."
+    assert VO.rule_key(msg) == "refunded"
+    assert VO.rule_key("✅ سفارش شما با موفقیت ثبت شد! 🎉\n\nx") == "order_placed_manual"
+    assert VO.rule_key("🟢 سفارش شما با موفقیت ثبت شد! 🥳\n\nx") == "order_placed_manual"          # ایموجی‌هایِ دیگر
+    assert VO.rule_key("✔️ سفارش شما با موفقیت تکمیل شد! 🎊") == "completed"
+    assert VO.rule_key("⭕ متاسفانه سفارشت رد شد.") == "rejected"
+    assert VO.rule_key("✅ سفارش تون تو (#12) ارسال شد!\n💎 1 TON") == "completed"                # تونِ تکمیل
+    assert VO.rule_key("↩️ سفارش تون تو (#12) لغو شد") == "refunded"                             # تونِ لغو؛ با تکمیل قاطی نمی‌شود
+    assert VO.rule_key("✅ سفارشت با موفقیت تکمیل شد. با تشکر") is None                           # پیامِ SMM همچنان دست‌نخورده
+    assert VO.rule_key("سلام، خوش آمدی") is None
