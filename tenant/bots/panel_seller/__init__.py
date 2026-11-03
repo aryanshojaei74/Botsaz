@@ -6,10 +6,12 @@
 from aiogram import Router
 
 from tenant.bots.panel_seller.admin import psel_admin_router
+from tenant.bots.panel_seller.manage import psel_manage_router   # PATCH_PSEL_MANAGE_V1
 from tenant.bots.panel_seller.user import psel_user_router
 
 panel_seller_router = Router(name="panel_seller")
 panel_seller_router.include_router(psel_admin_router)
+panel_seller_router.include_router(psel_manage_router)
 panel_seller_router.include_router(psel_user_router)
 
 from tenant.bots.panel_seller import products_menu as _products_menu  # noqa: E402,F401

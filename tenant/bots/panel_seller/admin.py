@@ -98,6 +98,7 @@ async def menu_content(row):
         [btn("🗂 پنل‌هایِ متصل (اتصال/حذف)", "pyar:menu", style=ButtonStyle.PRIMARY)],
         [btn("📦 بسته‌هایِ فروش", "psel:pk", style=ButtonStyle.SUCCESS),
          btn("👤 ادمین‌هایِ فروخته‌شده", "psel:ac:0", style=ButtonStyle.PRIMARY)],
+        [btn("🛠 مدیریتِ کاملِ پنل (کاربران، ساخت، گزارش، ادمین‌ها)", "psel:mg", style=ButtonStyle.SUCCESS)],     # PATCH_PSEL_MANAGE_V1
         [btn("🔎 جستجو و مدیریتِ یک پنل (نام‌کاربری/کد)", "psel:lk", style=ButtonStyle.SUCCESS)],
         [btn("🔄 ریستارتِ پنل", "psel:rs", style=ButtonStyle.PRIMARY),
          btn("⚙️ دسترسی‌هایِ مشتری", "psel:set", style=ButtonStyle.PRIMARY)],
