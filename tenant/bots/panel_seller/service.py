@@ -143,6 +143,20 @@ async def verify_users_state(api, uname: str, enabled: bool) -> int | None:
         return None
 
 
+async def _admin_disabled(api, uname: str, disabled: bool, account_id=None) -> None:
+    """PATCH_PSEL_ADMIN_DISABLE_V1 — خودِ ادمین را (روی پنل‌هایی که پشتیبانی می‌کنند) غیرفعال/فعال می‌کند؛ بی‌صدا و بدونِ شکستنِ تعلیق."""
+    fn = getattr(api, "set_admin_disabled", None)
+    if fn is None:
+        return
+    try:
+        res = await fn(uname, disabled)
+    except Exception as e:      # noqa: BLE001
+        logger.info("panel_seller: غیرفعال‌کردنِ ادمین %s ناموفق (acc=%s): %s", uname, account_id, e)
+        return
+    if res is False:
+        logger.warning("panel_seller: پنل غیرفعال‌شدنِ ادمین %s را نپذیرفت (acc=%s)", uname, account_id)
+
+
 def _api(panel):
     return AD.PanelAdminAPI.for_panel(panel)
 
@@ -336,6 +350,7 @@ async def renew(bot_id: int, account_id: int, buyer_tg: int, api_factory=None) -
                     await api.activate_users(acc.admin_username)        # رمز دست‌نخورده بود (ورودِ مشتری باز مانده بود)
                 else:
                     new_pw = gen_password()
+                    await _admin_disabled(api, acc.admin_username, False, acc.id)     # PATCH_PSEL_ADMIN_DISABLE_V1
                     await api.set_password(acc.admin_username, new_pw)
                     await api.activate_users(acc.admin_username)
             try:
@@ -624,6 +639,7 @@ async def add_volume(bot_id: int, account_id: int, buyer_tg: int, gb: int, api_f
                     await api.activate_users(acc.admin_username)
                 else:
                     new_pw = gen_password()
+                    await _admin_disabled(api, acc.admin_username, False, acc.id)     # PATCH_PSEL_ADMIN_DISABLE_V1
                     await api.set_password(acc.admin_username, new_pw)
                     await api.activate_users(acc.admin_username)
             finally:
@@ -762,6 +778,7 @@ async def admin_adjust_volume(bot_id: int, account_id: int, delta_gb: int, api_f
                     await api.activate_users(uname)
                 else:
                     new_pw = gen_password()
+                    await _admin_disabled(api, uname, False, account_id)              # PATCH_PSEL_ADMIN_DISABLE_V1
                     await api.set_password(uname, new_pw)
                     await api.activate_users(uname)
             await apply_native_limit(api, uname, new_gb)
@@ -850,6 +867,7 @@ async def suspend(account_id: int, reason: str, api_factory=None) -> bool:
                 return False
             if not keep:
                 await api.set_password(uname, gen_password())
+                await _admin_disabled(api, uname, True, account_id)           # PATCH_PSEL_ADMIN_DISABLE_V1
         finally:
             await api.close()
     except Exception as e:  # noqa: BLE001
@@ -879,6 +897,7 @@ async def resume(bot_id: int, account_id: int, api_factory=None) -> dict:
     try:
         api = api_factory(panel)
         try:
+            await _admin_disabled(api, uname, False, account_id)              # PATCH_PSEL_ADMIN_DISABLE_V1
             await api.set_password(uname, pw)
             await api.activate_users(uname)
         finally:

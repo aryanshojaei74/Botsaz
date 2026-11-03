@@ -117,6 +117,21 @@ class PanelAdminAPI:
         """PUT /api/admin/{username} — به‌روزرسانیِ جزئی (فقط فیلدهایِ غیر-None اعمال می‌شود؛ طبقِ کدِ رسمی)."""
         await self.c._request("PUT", f"/api/admin/{quote(username)}", json={k: v for k, v in fields.items() if v is not None})
 
+    async def set_admin_disabled(self, username: str, disabled: bool) -> bool | None:
+        """PATCH_PSEL_ADMIN_DISABLE_V1 (Whale: «پنلِ تستِ رایگان منقضی و خاموش شد ولی غیرفعالش نمی‌کند») — خودِ ادمین در پاسارگاردِ جدید
+        «غیرفعال» می‌شود (is_disabled؛ در پنلِ «مدیرانِ غیرفعال» دیده می‌شود)، نه فقط کاربرانش. خروجی: True = اعمال و تأیید شد،
+        False = پنل نپذیرفت، None = این پنل مفهومِ غیرفعال‌شدنِ ادمین ندارد (مرزبانِ قدیمی) یا تأییدش ممکن نبود."""
+        try:
+            if not await self.is_new_style(username):
+                return None
+            await self.put_admin(username, is_disabled=bool(disabled))
+            row, _ns = await self._admin_row(username)
+        except PanelError:
+            return False
+        if row is None or "is_disabled" not in row:
+            return None
+        return bool(row.get("is_disabled")) == bool(disabled)
+
     async def apply_data_limit(self, username: str, gb: int) -> bool:
         """سقفِ حجمِ بومیِ ادمین (بایت؛ ۰ = نامحدود). فقط روی پنلِ جدید؛ خروجی: True اگر اعمال شد."""
         if not await self.is_new_style(username):
