@@ -13940,7 +13940,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "406"
+BUILD_ID = "407"
 
 
 @tenant_router.message(Command("version"))
@@ -26969,6 +26969,9 @@ async def _render_user_detail(target, bot: Bot, uid: int, edit: bool = False) ->
         kb_rows.append([InlineKeyboardButton(
             text=("♾ تستِ نامحدود: ✅ فعال (زدن = لغو)" if _tu_on else "♾ دادنِ تستِ نامحدود به این کاربر"),
             callback_data=f"usr:trunl:{uid}")])
+    if row.field == "virtual_service":       # PATCH_USER_VS_ORDERS_V1
+        kb_rows.append([InlineKeyboardButton(text="🛍 لیست سفارشاتِ خدماتِ مجازیِ کاربر", callback_data=f"usr:vso:{uid}:0",
+                                             style=ButtonStyle.PRIMARY)])
     kb_rows += [
         [InlineKeyboardButton(text="🧾 رسیدها و خریدهای کاربر", callback_data=f"usr:receipts:{uid}")],
         # === PATCH_ADMIN_DM_USER_V1 ===
@@ -27632,6 +27635,9 @@ async def admin_user_phish_exec(cb: CallbackQuery, bot: Bot):
 
 @tenant_router.callback_query(F.data.startswith("usr:"))
 async def admin_user_action(cb: CallbackQuery, state: FSMContext, bot: Bot):
+    if cb.data.startswith(("usr:vso:", "usr:vsos:")):      # PATCH_USER_VS_ORDERS_V1: هندلرشان در smm_router است
+        from aiogram.dispatcher.event.bases import SkipHandler
+        raise SkipHandler
     row = await _owner_ok(cb, bot)
     if not row:
         return

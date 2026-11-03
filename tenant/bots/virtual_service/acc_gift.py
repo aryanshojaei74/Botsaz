@@ -50,6 +50,11 @@ def _classify(e: Exception) -> str:
     n = type(e).__name__
     s = str(e)
     up = (n + " " + s).upper()
+    flat = up.replace("_", "").replace(" ", "")      # PATCH_ACC_GIFT_PEER_MSG_V1: نامِ کلاسِ Telethon «PeerIdInvalidError» بدونِ underscore است
+    if "PEERIDINVALID" in flat:
+        return ("گیرنده برایِ اکانتِ پشتیبانی معتبر نبود (PeerIdInvalid): یوزرنیم مالِ یک کاربرِ عادی نیست "
+                "(ممکن است ربات/کانال/حسابِ حذف‌شده یا محدود باشد) یا اکانت نمی‌تواند به او گیفت بدهد. "
+                "گیفت را دستی بفرست، یا از مشتری یوزرنیمِ شخصیِ درست بخواه.")
     if "BALANCE_TOO_LOW" in up or "STARS_BALANCE" in up or "NOT_ENOUGH" in up:
         return "موجودیِ استارزِ اکانتِ پشتیبانی کافی نیست."
     if "STARGIFT_INVALID" in up or "GIFT_INVALID" in up:

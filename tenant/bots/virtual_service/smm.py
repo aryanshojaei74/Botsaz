@@ -9878,6 +9878,11 @@ async def smmu_request_cancel(cb: CallbackQuery, bot: Bot):
                 s.add(WalletTxn(bot_id=row.id, user_id=u.id, amount=refund,
                                 kind="smm_refund", note=f"بازگشتِ وجهِ نسبیِ سفارش #{oo.tracking_code or oo.id} (لغوِ مشتری)"))
         await s.commit()
+    # === PATCH_SMM_CANCEL_CUSTOM_TEXT_V1 === (SINA: «پیامِ لغوِ سفارشات همان که تنظیم کردیم نیست»)
+    _ck = await _smm_custom_txt(row.id, "canceled") or await _smm_custom_txt(row.id, "refunded")
+    if _ck:
+        await _answer_html_safe(cb.message, await _render_order_text(row.id, oid, _ck))
+        return
     txt = "✅ سفارش لغو شد."
     if refund > 0:
         txt += f"\n💰 <b>{int(refund):,} تومان</b> (بابتِ بخشِ تحویل‌نشده) به کیف‌پولت برگشت."
@@ -14489,14 +14494,22 @@ async def gift_cardpay_approve(cb: CallbackQuery, bot: Bot):
     # تاییدِ ادمین یعنی «خودم دستی فرستادم».
     manual_mode = await _get_setting(row.id, "gift_manual_delivery", "0") == "1"
     # === PATCH_TGTOOLS_GIFT_V1 === رسید تأیید شد؛ گیفتِ کاتالوگی و گیفتِ خودکارِ TGTools روشن ⇒ خودکار بخر (نه «دستی فرستادم»)
+    # === PATCH_GIFT_DONE_IS_MANUAL_V1 === (SINA: «انجام شد را می‌زنیم، می‌گوید ارسال خودکار شروع شد؛ دکمهٔ ارسال با پشتیبان جدا هست»)
+    # «✅ انجام شد» فقط برایِ «تأییدِ رسیدِ کارت‌به‌کارتِ اولیه» خودکار می‌فرستد. سفارشِ کیف‌پولی (که خودکارش موقعِ ثبت اجرا شده) یا سفارشی که
+    # ارسالِ خودکارش شکست خورده و به دستی برگشته (fail_reason پر است) یعنی «خودم دستی فرستادم»؛ ارسالِ خودکار فقط با دکمه‌هایِ جدایشان.
+    _first_card_approval = (o.pay_method == "card") and not (o.fail_reason or "").strip()
     if (not (o.gift_id or "").startswith(("manual", "premium_", "starsell_", "srx_", "tonsell_"))
+            and _first_card_approval
             and o.deliver_via != "bot" and await _auto_gift_on(row.id)):     # PATCH_ACC_GIFT_V1
         _via_lbl = "اکانتِ پشتیبانی" if await _acc_gift_on(row.id) else "TGTools"
         await cb.answer(f"🤖 ارسالِ خودکار با {_via_lbl} شروع شد…")
         await _admin_msg_close(cb, f"🤖 سفارش #{await order_no(GiftOrder, order_id)}: ارسالِ خودکار با {_via_lbl} شروع شد؛ نتیجه اینجا اعلام می‌شود.")
         _gift_auto_spawn(bot, row, order_id)
         return
-    if (o.gift_id or "").startswith("manual") or manual_mode or o.deliver_via == "support":
+    _manual_done = ((o.pay_method != "card" or (o.fail_reason or "").strip())
+                    and not (o.gift_id or "").startswith(("premium_", "starsell_", "srx_", "tonsell_"))
+                    and o.deliver_via != "bot")       # PATCH_GIFT_DONE_IS_MANUAL_V1: «انجام شد» = دستی فرستادم
+    if (o.gift_id or "").startswith("manual") or manual_mode or o.deliver_via == "support" or _manual_done:
         async with Session() as s:
             o3 = await s.get(GiftOrder, order_id)
             if o3 is not None and await _is_foreign(o3, bot):   # PATCH_TENANT_SCOPE_V1
@@ -19508,6 +19521,7 @@ async def _tgt_revert_manual_gift(bot: Bot, row, order_id: int, reason: str, *, 
             return
         if o.status == "auto_processing":
             o.status = "awaiting_admin"
+        o.fail_reason = (reason or "ارسالِ خودکار انجام نشد")[:500]      # PATCH_GIFT_DONE_IS_MANUAL_V1
         gift_id, dest, trk = o.gift_id, o.dest_label, o.tracking_code
         qty, done = int(o.quantity or 1), int(o.sent_qty or 0)
         await s.commit()
@@ -21052,3 +21066,137 @@ async def _is_foreign(obj, bot) -> bool:
     from tenant import get_bot_row as _gbr
     _r = await _gbr(bot)
     return bool(_r) and obj.bot_id != _r.id
+
+
+# === PATCH_USER_VS_ORDERS_V1 === (SINA: «توی مدیریت کاربران لیست سفارشاتِ خدماتِ مجازیِ کاربر + صفحه‌های ۱۰تایی + جستجو با کدِ پیگیری یا اسمِ محصول»)
+_UVO_PAGE = 10
+_UVO_FETCH = 400        # حداکثر سفارشِ خوانده‌شده از هر جدول برایِ هر کاربر (برایِ جستجو/صفحه‌بندی)
+
+
+class UserVsOrdersFSM(StatesGroup):
+    query = State()
+
+
+def _uvo_gift_label(o) -> str:
+    gid = str(getattr(o, "gift_id", "") or "")
+    if gid.startswith("starsell_"):
+        return f"⭐ {int(getattr(o, 'star_count', 0) or 0) * int(getattr(o, 'quantity', 1) or 1):,} استارز"
+    if gid.startswith("premium_"):
+        return "🌟 تلگرام پریمیوم " + gid.split("_")[-1] + " ماهه"
+    if gid.startswith("tonsell_"):
+        return "💎 TON"
+    if gid.startswith("srx_"):
+        return "⭐️ ری‌اکشنِ استارزی"
+    if gid.startswith("manual"):
+        return "🎁 گیفتِ سفارشی"
+    return f"🎁 گیفت {getattr(o, 'gift_emoji', '') or ''}".strip()
+
+
+async def user_vs_orders(bot_id: int, user_tg: int, query: str = "") -> list[dict]:
+    """سفارش‌هایِ خدماتِ مجازیِ یک کاربر (SMM + گیفت/استارز/تون/پرمیوم/ری‌اکشن)، جدید به قدیم. query: کدِ پیگیری یا بخشی از نامِ محصول."""
+    items: list[dict] = []
+    async with Session() as s:
+        buyer = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == user_tg))
+        smm = (await s.scalars(select(SmmOrder).where(
+            SmmOrder.bot_id == bot_id, SmmOrder.user_telegram_id == user_tg
+        ).order_by(SmmOrder.id.desc()).limit(_UVO_FETCH))).all()
+        gifts = (await s.scalars(select(GiftOrder).where(
+            GiftOrder.bot_id == bot_id, GiftOrder.buyer_user_id == buyer.id
+        ).order_by(GiftOrder.id.desc()).limit(_UVO_FETCH))).all() if buyer else []
+    for o in smm:
+        items.append({"kind": "smm", "id": o.id, "code": str(o.tracking_code or o.id),
+                      "name": (o.service_name or "سفارش SMM") + (f" × {o.quantity:,}" if o.quantity else ""),
+                      "price": int(o.price_toman or 0), "status": _VS_STATUS_LABELS.get(o.status, o.status or "—"),
+                      "at": o.created_at})
+    for o in gifts:
+        qty = int(o.quantity or 1)
+        items.append({"kind": "gift", "id": o.id, "code": str(o.tracking_code or o.id),
+                      "name": _uvo_gift_label(o) + (f" × {qty}" if qty > 1 else ""),
+                      "price": int(o.price_toman or 0) * max(1, qty),
+                      "status": _VS_GIFT_STATUS_LABELS.get(o.status, o.status or "—"), "at": o.created_at})
+    q = (query or "").strip().lower().lstrip("#")
+    if q:
+        items = [i for i in items if q == i["code"].lower() or q in i["name"].lower()]
+    items.sort(key=lambda i: (i["at"] or datetime.min, i["id"]), reverse=True)
+    return items
+
+
+async def user_vs_orders_content(bot_id: int, user_tg: int, page: int = 0, query: str = ""):
+    items = await user_vs_orders(bot_id, user_tg, query)
+    total = len(items)
+    pages = max(1, (total + _UVO_PAGE - 1) // _UVO_PAGE)
+    page = max(0, min(page, pages - 1))
+    chunk = items[page * _UVO_PAGE:(page + 1) * _UVO_PAGE]
+    head = f"🛍 <b>سفارش‌هایِ خدماتِ مجازیِ کاربر</b> <code>{user_tg}</code>"
+    if query:
+        head += f"\n🔎 جستجو: <code>{_html_escape(query)}</code>"
+    lines = [head, f"مجموع: <b>{total}</b> سفارش — صفحهٔ {page + 1} از {pages}\n"]
+    for it in chunk:
+        d = it["at"].strftime("%Y-%m-%d %H:%M") if it["at"] else "—"
+        lines.append(f"🔖 <code>{_html_escape(it['code'])}</code> — {_html_escape(it['name'])}\n"
+                     f"   💰 {it['price']:,} تومان · {it['status']} · {d}")
+    if not chunk:
+        lines.append("سفارشی پیدا نشد." if query else "این کاربر هنوز سفارشی نداشته است.")
+    enc = "".join(c for c in (query or "") if c.isalnum())[:20]     # فقط حروف/عدد؛ callback_data محدودِ ۶۴ بایتی است
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="⬅️ قبلی", callback_data=f"usr:vso:{user_tg}:{page - 1}" + (f":{enc}" if enc else "")))
+    if page + 1 < pages:
+        nav.append(InlineKeyboardButton(text="بعدی ➡️", callback_data=f"usr:vso:{user_tg}:{page + 1}" + (f":{enc}" if enc else "")))
+    rows = ([nav] if nav else []) + [
+        [InlineKeyboardButton(text="🔎 جستجوی سفارش (کدِ پیگیری یا نامِ محصول)", callback_data=f"usr:vsos:{user_tg}")],
+        [InlineKeyboardButton(text="⬅️ بازگشت به کارتِ کاربر", callback_data=f"usr:card:{user_tg}", style=ButtonStyle.DANGER)],
+    ]
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _uvo_show(target, text: str, kb) -> None:
+    try:
+        await target.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await target.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@smm_router.callback_query(F.data.regexp(r"^usr:vso:-?\d+:\d+(:\w+)?$"))
+async def usr_vs_orders_open(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    parts = cb.data.split(":")
+    uid, page = int(parts[2]), int(parts[3])
+    query = parts[4] if len(parts) > 4 else ""
+    text, kb = await user_vs_orders_content(row.id, uid, page, query)
+    await _uvo_show(cb.message, text, kb)
+    await cb.answer()
+
+
+@smm_router.callback_query(F.data.regexp(r"^usr:vsos:-?\d+$"))
+async def usr_vs_orders_search_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    uid = int(cb.data.split(":")[2])
+    await state.set_state(UserVsOrdersFSM.query)
+    await state.update_data(uvo_uid=uid)
+    await cb.message.answer(
+        "🔎 <b>کدِ پیگیری</b> یا بخشی از <b>نامِ محصول</b> را بفرست (مثلاً <code>15431</code> یا «استارز»).\n"
+        "برایِ انصراف: /cancel", parse_mode="HTML")
+    await cb.answer()
+
+
+@smm_router.message(StateFilter(UserVsOrdersFSM.query), F.text)
+async def usr_vs_orders_search_run(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner(msg, bot)
+    if not row:
+        await state.clear()
+        return
+    data = await state.get_data()
+    uid = data.get("uvo_uid")
+    await state.clear()
+    q = (msg.text or "").strip()
+    if not uid or q in ("/cancel", "لغو", "❌ لغو"):
+        await msg.answer("لغو شد.")
+        return
+    text, kb = await user_vs_orders_content(row.id, int(uid), 0, q)
+    await msg.answer(text, reply_markup=kb, parse_mode="HTML")
