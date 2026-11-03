@@ -530,7 +530,39 @@ async def buy_test(bot_id: int, buyer_tg: int, api_factory=None, bot=None, row=N
 
 
 # === PATCH_PSEL_EXTRA_VOLUME_V1 === خریدِ حجمِ اضافه (درخواستِ Whale Support): سقفِ حجمِ همین دوره بالا می‌رود؛ با تمدید به حجمِ بسته برمی‌گردد.
-EXTRA_GB_MAX = 1000
+EXTRA_GB_MAX = 1000          # پیش‌فرضِ بیشترین مقدار؛ مالک می‌تواند عوضش کند (psel_extra_gb_max)
+EXTRA_GB_HARD_MAX = 100_000
+EXTRA_GB_DEFAULT_PICKS = (5, 10, 20, 50, 100)
+
+
+async def extra_gb_range(bot_id: int) -> tuple[int, int]:
+    """PATCH_PSEL_XG_RANGE_V1 (Whale: «بازهٔ افزایشِ حجم را خودم تعیین کنم») — (کمترین، بیشترین) گیگِ مجازِ هر خریدِ حجمِ اضافه."""
+    from tenant import get_setting
+
+    async def _i(key, default):
+        try:
+            return int(float((await get_setting(bot_id, key, str(default))) or default))
+        except (TypeError, ValueError):
+            return default
+    lo = max(1, min(EXTRA_GB_HARD_MAX, await _i("psel_extra_gb_min", 1)))
+    hi = max(lo, min(EXTRA_GB_HARD_MAX, await _i("psel_extra_gb_max", EXTRA_GB_MAX)))
+    return lo, hi
+
+
+async def extra_gb_picks(bot_id: int) -> list[int]:
+    """دکمه‌هایِ سریعِ حجمِ اضافه (قابلِ تنظیم؛ فقط مقدارهایِ داخلِ بازه، حداکثر ۸ تا)."""
+    from tenant import get_setting
+    raw = (await get_setting(bot_id, "psel_extra_gb_picks", "") or "").strip()
+    vals: list[int] = []
+    for x in raw.replace("،", ",").replace(" ", ",").split(","):
+        x = x.strip().translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+        if x.isdigit() and int(x) > 0:
+            vals.append(int(x))
+    if not vals:
+        vals = list(EXTRA_GB_DEFAULT_PICKS)
+    lo, hi = await extra_gb_range(bot_id)
+    out = sorted({v for v in vals if lo <= v <= hi})[:8]
+    return out or [lo]
 
 
 async def extra_gb_price(bot_id: int) -> int:
@@ -548,7 +580,8 @@ async def add_volume(bot_id: int, account_id: int, buyer_tg: int, gb: int, api_f
     unit = await extra_gb_price(bot_id)
     if unit <= 0:
         return {"status": "disabled"}
-    if not (1 <= int(gb) <= EXTRA_GB_MAX):
+    _lo, _hi = await extra_gb_range(bot_id)
+    if not (_lo <= int(gb) <= _hi):
         return {"status": "bad_amount"}
     gb = int(gb)
     async with Session() as s:

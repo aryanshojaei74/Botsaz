@@ -55,6 +55,8 @@ class PselFSM(StatesGroup):
     lookup = State()           # PATCH_PSEL_ADMIN_LOOKUP_V1
     vol_delta = State()        # PATCH_PSEL_ADMIN_LOOKUP_V1
     note = State()             # PATCH_PSEL_NOTES_V1
+    extra_range = State()      # PATCH_PSEL_XG_RANGE_V1
+    extra_picks = State()      # PATCH_PSEL_XG_RANGE_V1
 
 
 async def _guard(event, bot: Bot):
@@ -637,6 +639,12 @@ async def _set_view(row):
     _xp = await extra_gb_price(row.id)
     rows.append([btn(f"📈 حجمِ اضافه: {fa(f'{_xp:,}') + ' تومان/گیگ' if _xp else '⛔️ خاموش'}", "psel:xp",
                      style=ButtonStyle.SUCCESS if _xp else ButtonStyle.DANGER)])
+    if _xp:                                                # PATCH_PSEL_XG_RANGE_V1
+        from tenant.bots.panel_seller.service import extra_gb_picks, extra_gb_range
+        _lo, _hi = await extra_gb_range(row.id)
+        _pk = await extra_gb_picks(row.id)
+        rows.append([btn(f"📏 بازهٔ حجمِ اضافه: {fa(_lo)} تا {fa(_hi)} گیگ", "psel:xr", style=ButtonStyle.PRIMARY)])
+        rows.append([btn("⚡️ دکمه‌هایِ سریع: " + "، ".join(fa(x) for x in _pk), "psel:xq", style=ButtonStyle.PRIMARY)])
     rows.append(back_row(MENU))
     return ("⚙️ <b>دسترسی‌هایِ مشتری</b>\n\nمشخص کن مشتری از «🗂 پنل‌هایِ من» چه کارهایی بتواند بکند. "
             "هر کدام را بزنی جابه‌جا می‌شود."), kb(*rows)
@@ -695,6 +703,75 @@ async def extra_price_save(msg: Message, bot: Bot, state: FSMContext):
     text, markup = await _set_view(row)
     await msg.answer(("✅ فروشِ حجمِ اضافه روشن شد.\n\n" if v else "✅ فروشِ حجمِ اضافه خاموش شد.\n\n") + text,
                      reply_markup=markup, parse_mode="HTML")
+
+
+# === PATCH_PSEL_XG_RANGE_V1 === (Whale: «بخشِ افزایشِ حجم را جوری کن که خودم بازه را تعیین کنم»)
+@psel_admin_router.callback_query(F.data == "psel:xr")
+async def extra_range_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    from tenant.bots.panel_seller.service import extra_gb_range, EXTRA_GB_HARD_MAX
+    lo, hi = await extra_gb_range(row.id)
+    await state.set_state(PselFSM.extra_range)
+    await edit_or_send(cb, f"📏 <b>بازهٔ حجمِ اضافه</b>\n\nفعلی: {fa(lo)} تا {fa(hi)} گیگ\n\n"
+                           "کمترین و بیشترینِ گیگ در هر خرید را با یک فاصله بفرست؛ مثلاً <code>10 500</code>\n"
+                           f"(بیشترین حداکثر {fa(f'{EXTRA_GB_HARD_MAX:,}')}). مشتری فقط داخلِ همین بازه می‌تواند بخرد.",
+                       kb(back_row("psel:set", "✖️ لغو")))
+    await cb.answer()
+
+
+@psel_admin_router.message(PselFSM.extra_range, F.text)
+async def extra_range_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard(msg, bot)
+    if not row:
+        return
+    from tenant import set_setting
+    from tenant.bots.panel_seller.service import EXTRA_GB_HARD_MAX
+    parts = (msg.text or "").replace("،", " ").replace(",", " ").replace("-", " ").split()
+    vals = [_num(x) for x in parts]
+    if len(vals) != 2 or any(v is None for v in vals):
+        return await msg.answer("❌ دو عدد با یک فاصله بفرست؛ مثلاً: 10 500")
+    lo, hi = int(vals[0]), int(vals[1])
+    if not (1 <= lo <= hi <= EXTRA_GB_HARD_MAX):
+        return await msg.answer(f"❌ باید ۱ ≤ کمترین ≤ بیشترین ≤ {fa(f'{EXTRA_GB_HARD_MAX:,}')} باشد.")
+    await set_setting(row.id, "psel_extra_gb_min", str(lo))
+    await set_setting(row.id, "psel_extra_gb_max", str(hi))
+    await state.clear()
+    text, markup = await _set_view(row)
+    await msg.answer(f"✅ بازهٔ حجمِ اضافه: {fa(lo)} تا {fa(hi)} گیگ.\n\n" + text, reply_markup=markup, parse_mode="HTML")
+
+
+@psel_admin_router.callback_query(F.data == "psel:xq")
+async def extra_picks_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    from tenant.bots.panel_seller.service import extra_gb_picks
+    await state.set_state(PselFSM.extra_picks)
+    await edit_or_send(cb, "⚡️ <b>دکمه‌هایِ سریعِ حجمِ اضافه</b>\n\nفعلی: " + "، ".join(fa(x) for x in await extra_gb_picks(row.id)) +
+                           "\n\nعددها را با کاما بفرست؛ مثلاً <code>10,25,50,100,250</code> (حداکثر ۸ عدد، فقط داخلِ بازه).\n"
+                           "برایِ برگشت به پیش‌فرض (۵/۱۰/۲۰/۵۰/۱۰۰) یک <code>-</code> بفرست.", kb(back_row("psel:set", "✖️ لغو")))
+    await cb.answer()
+
+
+@psel_admin_router.message(PselFSM.extra_picks, F.text)
+async def extra_picks_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard(msg, bot)
+    if not row:
+        return
+    from tenant import set_setting
+    raw = (msg.text or "").strip()
+    if raw == "-":
+        await set_setting(row.id, "psel_extra_gb_picks", "")
+    else:
+        vals = [_num(x) for x in raw.replace("،", ",").replace(" ", ",").split(",") if x.strip()]
+        if not vals or any(v is None or v <= 0 for v in vals):
+            return await msg.answer("❌ عددهایِ صحیح را با کاما بفرست؛ مثلاً: 10,25,50,100")
+        await set_setting(row.id, "psel_extra_gb_picks", ",".join(str(int(v)) for v in vals))
+    await state.clear()
+    text, markup = await _set_view(row)
+    await msg.answer("✅ ذخیره شد.\n\n" + text, reply_markup=markup, parse_mode="HTML")
 
 
 # === PATCH_PSEL_FREE_TEST_V1 === تستِ رایگان: روشن/خاموش + مشخصات (ساعت، گیگ، کاربر)

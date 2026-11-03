@@ -13940,7 +13940,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "408"
+BUILD_ID = "409"
 
 
 @tenant_router.message(Command("version"))

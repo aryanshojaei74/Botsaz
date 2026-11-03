@@ -739,7 +739,7 @@ async def contact_save(msg: Message, bot: Bot, state: FSMContext):
                      reply_markup=kb(back_row(f"psel:a:{aid}", "🗂 بازگشت به پنل")))
 
 
-_XG_PICKS = (5, 10, 20, 50, 100)
+_XG_PICKS = (5, 10, 20, 50, 100)      # پیش‌فرض؛ مقدارِ واقعی از تنظیماتِ مالک (SV.extra_gb_picks)
 
 
 @psel_user_router.callback_query(F.data.regexp(r"^psel:xg:\d+$"))
@@ -750,7 +750,8 @@ async def extra_gb_menu(cb: CallbackQuery, bot: Bot):
     unit = await SV.extra_gb_price(row.id)
     if unit <= 0 or not a.data_gb:
         return await cb.answer("خریدِ حجمِ اضافه برایِ این پنل فعال نیست.", show_alert=True)
-    picks = [btn(f"{fa(g)} گیگ · {n(g * unit)} ت", f"psel:xb:{a.id}:{g}", style=ButtonStyle.PRIMARY) for g in _XG_PICKS]
+    picks = [btn(f"{fa(g)} گیگ · {n(g * unit)} ت", f"psel:xb:{a.id}:{g}", style=ButtonStyle.PRIMARY)
+             for g in await SV.extra_gb_picks(row.id)]
     rows = [picks[i:i + 2] for i in range(0, len(picks), 2)]
     rows.append([btn("✏️ حجمِ دلخواه (هر مقدار)", f"psel:xc:{a.id}", style=ButtonStyle.SUCCESS)])     # PATCH_PSEL_XG_CUSTOM_V1
     rows.append(back_row(f"psel:a:{a.id}"))
@@ -774,7 +775,8 @@ async def extra_gb_custom_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await state.clear()
     await state.set_state(PselAccFSM.extra_gb)
     await state.update_data(acc_id=a.id)
-    await edit_or_send(cb, f"✏️ چند گیگ حجمِ اضافه می‌خواهی؟ یک عددِ ۱ تا {fa(SV.EXTRA_GB_MAX)} بفرست.\n"
+    lo, hi = await SV.extra_gb_range(row.id)
+    await edit_or_send(cb, f"✏️ چند گیگ حجمِ اضافه می‌خواهی؟ یک عددِ {fa(lo)} تا {fa(hi)} بفرست.\n"
                            f"💵 هر گیگ: <b>{n(unit)}</b> تومان", kb(back_row(f"psel:xg:{a.id}", "✖️ لغو")))
     await cb.answer()
 
@@ -790,8 +792,9 @@ async def extra_gb_custom_save(msg: Message, bot: Bot, state: FSMContext):
     if not row or not d.get("acc_id"):
         await state.clear()
         return
-    if not raw.isdigit() or not (1 <= int(raw) <= SV.EXTRA_GB_MAX):
-        return await msg.answer(f"❌ یک عددِ صحیحِ ۱ تا {fa(SV.EXTRA_GB_MAX)} بفرست (یا /cancel).")
+    lo, hi = await SV.extra_gb_range(row.id)
+    if not raw.isdigit() or not (lo <= int(raw) <= hi):
+        return await msg.answer(f"❌ یک عددِ صحیحِ {fa(lo)} تا {fa(hi)} بفرست (یا /cancel).")
     gb = int(raw)
     async with Session() as s:
         a = await s.get(PanelSellerAccount, int(d["acc_id"]))
