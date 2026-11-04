@@ -626,6 +626,29 @@ async def _get_referral_reward(bot_id: int) -> float:
         return 0
 
 
+async def _referral_cap_allowed(sess, bot_id: int, inviter_id: int, rj, reward: float) -> float:
+    """PATCH_REF_CAP_V1 — سقفِ پاداشِ دعوت برایِ هر دعوت‌کننده: «حداکثر تعدادِ دعوتِ پاداش‌دار» و «حداکثر مجموعِ پاداش (تومان)».
+    ۰ = بدونِ سقف. خروجی: مبلغی که هنوز می‌شود پرداخت کرد (۰ = سقف پر است)."""
+    async def _num(key):
+        try:
+            return int(float(await _eget(bot_id, key, "0") or 0))
+        except Exception:      # noqa: BLE001
+            return 0
+    mx_n, mx_t = await _num("referral_max_invites"), await _num("referral_max_total")
+    if mx_n <= 0 and mx_t <= 0:
+        return reward
+    row = (await sess.execute(select(func.count(), func.coalesce(func.sum(ReferralJoin.reward_paid), 0)).where(
+        ReferralJoin.bot_id == bot_id, ReferralJoin.inviter_user_id == inviter_id,
+        ReferralJoin.reward_paid > 0, ReferralJoin.id != rj.id))).one()
+    paid_n, paid_total = int(row[0] or 0), float(row[1] or 0)
+    own = float(rj.reward_paid or 0)
+    if mx_n > 0 and own <= 0 and paid_n >= mx_n:
+        return 0
+    if mx_t > 0:
+        reward = min(reward, max(mx_t - paid_total - own, 0))
+    return reward
+
+
 async def handle_referral_join(bot_id: int, new_user: BotUser, ref_code: str, bot: Bot):
     """وقتی کاربر جدید از لینک دعوت وارد می‌شود — فقط ثبت می‌کند.
 
@@ -717,17 +740,31 @@ async def handle_referral_join(bot_id: int, new_user: BotUser, ref_code: str, bo
         inviter = await s.get(BotUser, rj.inviter_user_id, with_for_update=True)
         if not inviter:
             return
-        inviter.balance = float(inviter.balance) + reward
-        rj.reward_paid = reward
-        rj.purchase_rewarded = True  # جلوگیری از پرداخت دوباره در حالت خرید
-        s.add(WalletTxn(
-            bot_id=bot_id, user_id=inviter.id,
-            amount=reward, kind="referral",
-            note=f"پاداش دعوت کاربر {new_user.telegram_id}"
-        ))
-        await s.commit()
-        inviter_tg_id = inviter.telegram_id
-        _log_inviter, _log_bal = inviter, float(inviter.balance)
+        reward = await _referral_cap_allowed(s, bot_id, inviter.id, rj, reward)       # PATCH_REF_CAP_V1
+        if reward <= 0:
+            rj.purchase_rewarded = True          # سقف پر است: بدونِ پاداش بسته می‌شود
+            await s.commit()
+            _capped_tg = inviter.telegram_id
+            _capped = True
+        else:
+            _capped = False
+            inviter.balance = float(inviter.balance) + reward
+            rj.reward_paid = reward
+            rj.purchase_rewarded = True  # جلوگیری از پرداخت دوباره در حالت خرید
+            s.add(WalletTxn(
+                bot_id=bot_id, user_id=inviter.id,
+                amount=reward, kind="referral",
+                note=f"پاداش دعوت کاربر {new_user.telegram_id}"
+            ))
+            await s.commit()
+            inviter_tg_id = inviter.telegram_id
+            _log_inviter, _log_bal = inviter, float(inviter.balance)
+    if _capped:
+        try:
+            await bot.send_message(_capped_tg, "🎉 یک دوست با لینک دعوت شما وارد ربات شد!\n(سقفِ پاداشِ دعوتِ شما پر شده است.)")
+        except Exception:
+            logger.exception("اطلاع‌رسانیِ سقفِ پاداشِ دعوت")
+        return
     # === PATCH_TX_LOG_ALL_MOVEMENTS_V1 ===
     # پاداشِ دعوت هم یک افزایشِ موجودی است و باید در کانالِ لاگ بیاید.
     try:
@@ -821,6 +858,9 @@ async def handle_referral_purchase(bot_id: int, buyer_telegram_id: int, bot: Bot
         if not inviter:
             return
 
+        reward = await _referral_cap_allowed(s, bot_id, inviter.id, rj, reward)       # PATCH_REF_CAP_V1
+        if reward <= 0:
+            return
         inviter.balance = float(inviter.balance) + reward
         # PATCH_REF_PERCENT_V1 — در حالتِ مادام‌العمر مبلغ‌ها جمع می‌شوند
         rj.reward_paid = float(rj.reward_paid or 0) + reward if _lifetime else reward

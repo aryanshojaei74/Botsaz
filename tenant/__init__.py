@@ -13940,7 +13940,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "420"
+BUILD_ID = "421"
 
 
 @tenant_router.message(Command("version"))
@@ -33542,6 +33542,9 @@ def _ref_reward_kb(enabled: bool, mode: str = "join", plan: str = "") -> InlineK
         [InlineKeyboardButton(text="⏳ مدتِ پاداشِ درصدی (روز)",
                               callback_data="refrw:days",
                               style=ButtonStyle.PRIMARY)],
+        # === PATCH_REF_CAP_V1 ===
+        [InlineKeyboardButton(text="🔝 سقفِ تعدادِ دعوتِ پاداش‌دار", callback_data="refrw:capn", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="🔝 سقفِ مجموعِ پاداشِ هر نفر (تومان)", callback_data="refrw:capt", style=ButtonStyle.PRIMARY)],
         # === PATCH_REF_BANNER_V1 ===
         [InlineKeyboardButton(text="✏️ متنِ صفحهٔ زیرمجموعه‌گیری",
                               callback_data="refrw:pagetext", style=ButtonStyle.PRIMARY)],
@@ -33562,6 +33565,8 @@ _REF_TYPE_LABELS = {
 
 class _RefPctFSM(StatesGroup):
     pct = State()
+    capn = State()   # PATCH_REF_CAP_V1
+    capt = State()
     days = State()   # PATCH_REF_DURATION_V1
 
 
@@ -33631,6 +33636,46 @@ async def ref_reward_days_save(msg: Message, bot: Bot, state: FSMContext):
                      reply_markup=_ref_reward_kb(_en, _md, row.plan))
 
 
+# === PATCH_REF_CAP_V1 === سقفِ پاداشِ دعوت (۰ = بدونِ سقف)
+@tenant_router.callback_query(F.data.in_({"refrw:capn", "refrw:capt"}))
+async def ref_cap_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    n = cb.data == "refrw:capn"
+    await state.set_state(_RefPctFSM.capn if n else _RefPctFSM.capt)
+    cur = await get_setting(row.id, "referral_max_invites" if n else "referral_max_total", "0")
+    await cb.message.answer(
+        ("🔝 هر کاربر حداکثر برایِ چند دعوت پاداش بگیرد؟\nمثلاً <code>10</code>. <code>0</code> = بدونِ سقف."
+         if n else
+         "🔝 مجموعِ پاداشی که هر کاربر می‌تواند از دعوت بگیرد حداکثر چند تومان باشد؟\nمثلاً <code>500000</code>. <code>0</code> = بدونِ سقف.")
+        + f"\nمقدارِ فعلی: <b>{cur}</b>",
+        reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
+    await cb.answer()
+
+
+@tenant_router.message(_RefPctFSM.capn, F.text)
+@tenant_router.message(_RefPctFSM.capt, F.text)
+async def ref_cap_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner_ok(msg, bot)
+    cur_state = await state.get_state()
+    await state.clear()
+    if not row:
+        return
+    raw = (msg.text or "").strip()
+    v = 0 if raw in ("0", "۰") else fa_to_int(raw)
+    if v is None or v < 0 or v > 10_000_000_000:
+        await msg.answer("عددِ نامعتبر.")
+        return
+    n = cur_state == _RefPctFSM.capn.state
+    await set_setting(row.id, "referral_max_invites" if n else "referral_max_total", str(v))
+    await msg.answer(("✅ سقفِ تعدادِ دعوت: " if n else "✅ سقفِ مجموعِ پاداش: ")
+                     + ("<b>بدونِ سقف</b>" if v == 0 else f"<b>{v:,}</b>" + ("" if n else " تومان")), parse_mode="HTML")
+    _en = await get_setting(row.id, "referral_reward_enabled", "1") == "1"
+    _md = await get_setting(row.id, "referral_reward_mode", "join")
+    await msg.answer(await _ref_reward_text(row.id), reply_markup=_ref_reward_kb(_en, _md, row.plan))
+
+
 @tenant_router.message(_RefPctFSM.pct, F.text)
 async def ref_reward_pct_save(msg: Message, bot: Bot, state: FSMContext):
     row = await _owner_ok(msg, bot)
@@ -33670,6 +33715,10 @@ async def _ref_reward_text(bot_id: int) -> str:
     else:
         _reward_line = (f"نوعِ پاداش: <b>{_tlbl}</b>\n"
                         f"مبلغ پاداش: <b>{rial(amt)}</b>\n")
+    _cn = await get_setting(bot_id, "referral_max_invites", "0")
+    _ct = await get_setting(bot_id, "referral_max_total", "0")
+    _reward_line += (f"سقفِ پاداشِ هر نفر: <b>{'بدونِ سقف' if str(_cn) in ('0', '') else str(_cn) + ' دعوت'}</b> · "
+                     f"<b>{'بدونِ سقف' if str(_ct) in ('0', '') else f'{int(float(_ct)):,} تومان'}</b>\n")   # PATCH_REF_CAP_V1
     mode_desc = ("به‌محض ورود شخص جدید از لینک، پاداش به کیف‌پول دعوت‌کننده اضافه می‌شود."
                  if mode == "join" else
                  "پاداش فقط بعد از <b>اولین خرید موفقِ</b> زیرمجموعه به دعوت‌کننده پرداخت می‌شود "
