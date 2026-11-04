@@ -169,6 +169,27 @@ def _iso(value) -> str:
     return f"{_FSI}{text}{_PDI}" if text else text
 
 
+_PANEL_TAG_RE = None
+
+
+def strip_panel_tag(text, panel_name: str | None = None) -> str:
+    """PATCH_TRUST_STRIP_PANEL_TAG_V1 (NextV2ray «🥇طلایی (A)») — نشانهٔ پنل در انتهایِ عنوانِ پلن («(A)»، «(B)»، «(پنل ۲)» یا نامِ خودِ پنل)
+    در کانالِ عمومیِ اعتماد نمایش داده نمی‌شود. فقط پرانتزِ پایانیِ **کوتاه** (≤۲ نویسه) یا برابر با نامِ پنل حذف می‌شود؛
+    توضیحی مثلِ «(ویژه)» دست‌نخورده می‌ماند."""
+    import re
+    t = "" if text is None else str(text)
+    pn = (panel_name or "").strip().lower()
+
+    def _fix(seg: str) -> str:
+        def _r(m):
+            inner = m.group(1).strip()
+            if len(inner) <= 2 or (pn and inner.lower() == pn):
+                return ""
+            return m.group(0)
+        return re.sub(r"\s*[\(（]([^()（）]{1,40})[\)）](?=\s*(?:—|-|·|/|$))", _r, seg)
+    return _fix(t).strip() or t
+
+
 async def send_trust_channel_post(
     bot: Bot, bot_id: int, *,
     buyer_telegram_id: int | None,
@@ -198,6 +219,8 @@ async def send_trust_channel_post(
         channel_id = await get_setting(bot_id, "trust_channel_id", "")
         if not channel_id:
             return
+        product_name = strip_panel_tag(product_name, panel_name)          # PATCH_TRUST_STRIP_PANEL_TAG_V1
+        button_name = strip_panel_tag(button_name, panel_name) if button_name else button_name
         show_admin = await get_setting(bot_id, "trust_show_admin", "0") == "1"
         admin_username = await get_setting(bot_id, "trust_admin_username", "")
 
