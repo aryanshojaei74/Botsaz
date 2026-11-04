@@ -109,7 +109,7 @@ async def build_menu_knowledge(bot_id: int, limit: int = 500) -> list[str]:
                     if _pl:
                         what = (what + "؛ " if what else "") + "خدماتِ این پلتفرم(ها) را نشان می‌دهد: " + "، ".join(_pl[:6])
                 except Exception:      # noqa: BLE001
-                    pass
+                    logger.debug("menu_knowledge: خواندنِ config دکمهٔ پلتفرم %s ناموفق", getattr(b, "id", "?"))
             msg = " ".join((b.message or "").split())
             if msg:
                 what = (what + "؛ " if what else "") + f"پیام ثابت: «{msg[:140]}{'…' if len(msg) > 140 else ''}»"

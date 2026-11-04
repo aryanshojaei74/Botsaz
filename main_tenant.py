@@ -38,7 +38,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage  # === PATCH_REDIS_FSM_STORAGE_V1 ===
 from aiogram.fsm.storage.base import DefaultKeyBuilder
 from aiogram.types import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.exceptions import TelegramBadRequest, TelegramUnauthorizedError  # PATCH_MESSAGE_NOT_MODIFIED_GLOBAL_V1
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramUnauthorizedError  # PATCH_MESSAGE_NOT_MODIFIED_GLOBAL_V1
 from fastapi import FastAPI, Request, Response
 from sqlalchemy import select, update  # === PATCH_TENANT_ACTIVITY_TRACKING_V1 ===
 from config import PLATFORM_BOT_TOKEN, Session, init_db
@@ -726,6 +726,11 @@ async def vpn_expiry_loop():
                                 _log_unauthorized(tbot)
                             except TelegramForbiddenError:
                                 pass
+                            except TelegramAPIError as _te:
+                                # PATCH_EXPIRY_WARN_QUIET_V1 — خطایِ عادیِ تلگرام (چتِ حذف‌شده/حسابِ غیرفعال/تایم‌اوتِ شبکه/محدودیتِ نرخ):
+                                # یک خطِ کوتاه؛ نه traceback (در ۲ ساعت ~۳۰ traceback یکسان در لاگ بود).
+                                logger.warning("vpn_expiry_loop: ارسالِ هشدارِ انقضا به %s ناموفق (%s: %s)",
+                                               tg_id, type(_te).__name__, str(_te)[:120])
                             except Exception:
                                 logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
                             async with Session() as s:
