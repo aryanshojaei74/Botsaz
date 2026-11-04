@@ -44,7 +44,21 @@ def _strip_prefix(s: str) -> str:
     return s
 
 
+# === PATCH_AI_RULES_NO_LEAK_V1 === نامِ ارائه‌دهنده‌هایِ پشتِ صحنه نباید به مشتری برسد (SINA: «اکسا» نامِ OzVinoo/SMSPool را گفت).
+_HIDE = (("OzVinoo", "سرویسِ خودکار"), ("Ozvinoo", "سرویسِ خودکار"), ("SMSPool", "سرویسِ خودکار"), ("SMSpool", "سرویسِ خودکار"))
+
+
+def _no_providers(t: str) -> str:
+    for a, b in _HIDE:
+        t = t.replace(a, b)
+    return t.replace("سرویسِ خودکار/سرویسِ خودکار", "سرویسِ خودکار").replace("سرویسِ خودکار یا سرویسِ خودکار", "سرویسِ خودکار")
+
+
 def describe_action(action: str | None, simple_actions: dict | None = None) -> str:
+    return _no_providers(_describe_action(action, simple_actions))
+
+
+def _describe_action(action: str | None, simple_actions: dict | None = None) -> str:
     """توضیحِ فارسیِ یک اکشن؛ '' اگر ناشناخته است."""
     act = (action or "").strip()
     if not act:
@@ -90,6 +104,10 @@ async def build_menu_knowledge(bot_id: int, limit: int = 500) -> list[str]:
             msg = " ".join((b.message or "").split())
             if msg:
                 what = (what + "؛ " if what else "") + f"پیام ثابت: «{msg[:140]}{'…' if len(msg) > 140 else ''}»"
+            # === PATCH_AI_RULES_NO_LEAK_V1 === قوانینی که مالک برایِ همین دکمه نوشته (کاربر قبل از ورود می‌بیند)
+            rl = " ".join((b.rules or "").split())
+            if rl:
+                what = (what + "؛ " if what else "") + f"قوانینِ این دکمه: «{rl[:600]}{'…' if len(rl) > 600 else ''}»"
             lines.append(f"- مسیر «{' ← '.join(path)}»" + (f": {what}" if what else ""))
             walk(b.id, path, depth + 1)
     walk(None, [], 0)
@@ -116,4 +134,20 @@ async def kyc_facts(bot_id: int) -> list[str]:
         ]
     except Exception:      # noqa: BLE001
         logger.exception("menu_knowledge: خواندنِ واقعیت‌هایِ احرازِ هویت ناموفق بود")
+        return []
+
+
+async def rules_facts(bot_id: int) -> list[str]:
+    """PATCH_AI_RULES_NO_LEAK_V1 — قوانینِ سراسریِ بخشِ خدماتِ مجازی (vs_rules_text) که مالک نوشته؛ تا دستیار به
+    «قوانین چیست؟» با همان متنِ مالک جواب بدهد، نه حدس."""
+    try:
+        from tenant import get_setting
+        txt = " ".join(((await get_setting(bot_id, "vs_rules_text", "")) or "").split())
+        if not txt:
+            return []
+        req = (await get_setting(bot_id, "vs_rules_required", "0")) == "1"
+        return [("قوانینِ بخشِ خدماتِ مجازیِ این ربات" + (" (کاربر قبل از استفاده باید بپذیرد)" if req else "") +
+                 f" — متنِ دقیقِ مالک: «{txt[:1800]}{'…' if len(txt) > 1800 else ''}»")]
+    except Exception:      # noqa: BLE001
+        logger.exception("menu_knowledge: خواندنِ قوانین ناموفق بود")
         return []

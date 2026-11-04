@@ -73,3 +73,18 @@ async def test_live_context_contains_buttons_and_kyc_levels(env):
 async def test_kyc_off_is_stated(env):
     out = "\n".join(await MK.kyc_facts(6))
     assert "فعال نیست" in out
+
+
+@pytest.mark.asyncio
+async def test_button_rules_and_vs_rules_reach_assistant(env):
+    """SINA: «قوانینی که برایِ دکمه تنظیم کردیم را نمی‌گوید» — قوانینِ دکمه و قوانینِ سراسریِ خدمات مجازی در context می‌آیند."""
+    async with env() as s:
+        s.add(models.MainButton(id=30, bot_id=5, row=4, col=0, label="🛒 خرید", action="skip",
+                                rules="قانونِ دکمه: بدونِ بازگشتِ وجه"))
+        await s.commit()
+    await tenant.set_setting(5, "vs_rules_text", "۱) استرداد ندارد\n۲) تحویل ۲۴ ساعته")
+    await tenant.set_setting(5, "vs_rules_required", "1")
+    ctx = await AI._live_bot_context(5, models.Bot(id=5, field="virtual_service", plan="pro"))
+    assert "قانونِ دکمه: بدونِ بازگشتِ وجه" in ctx
+    assert "۱) استرداد ندارد ۲) تحویل ۲۴ ساعته" in ctx and "باید بپذیرد" in ctx
+    assert "OzVinoo" not in ctx and "SMSPool" not in ctx
