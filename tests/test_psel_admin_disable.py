@@ -7,11 +7,13 @@ from tests.test_panel_seller import FakeAPI as _Base, env, _sell  # noqa: F401
 
 
 class P:
-    """کلاینتِ ساختگیِ پاسارگاردِ جدید: GET /api/admins ⇒ {"admins": [...]}؛ PUT /api/admin/{u} ⇒ is_disabled را می‌نویسد."""
+    """کلاینتِ ساختگیِ **وفادار به کدِ رسمیِ پاسارگارد**: AdminModify فقط «status» ("active"|"disabled") را می‌پذیرد و فیلدِ ناشناخته
+    (مثلِ is_disabled) را بی‌صدا نادیده می‌گیرد؛ پاسخِ GET هم status و computed_field «is_disabled» دارد."""
 
-    def __init__(self, admin_has_flag=True, apply=True, new_style=True):
+    def __init__(self, apply=True, new_style=True, has_status=True):
         self.admin = {"username": "adm", "used_traffic": 0, "total_users": 1}
-        if admin_has_flag:
+        if has_status:
+            self.admin["status"] = "active"
             self.admin["is_disabled"] = False
         self.apply, self.new_style, self.calls = apply, new_style, []
 
@@ -19,8 +21,11 @@ class P:
         self.calls.append((method, path, kw.get("json")))
         if method == "GET" and path == "/api/admins":
             return {"admins": [self.admin], "total": 1} if self.new_style else [self.admin]
-        if method == "PUT" and path == "/api/admin/adm" and self.apply and "is_disabled" in self.admin:
-            self.admin["is_disabled"] = kw["json"]["is_disabled"]
+        if method == "PUT" and path == "/api/admin/adm" and self.apply and "status" in self.admin:
+            st = (kw.get("json") or {}).get("status")
+            if st in ("active", "disabled"):
+                self.admin["status"] = st
+                self.admin["is_disabled"] = st == "disabled"
         return {}
 
 
@@ -28,14 +33,16 @@ class P:
 async def test_adapter_disables_and_verifies_on_new_style_panel():
     p = P()
     assert await AD.PanelAdminAPI(p).set_admin_disabled("adm", True) is True
-    assert ("PUT", "/api/admin/adm", {"is_disabled": True}) in p.calls and p.admin["is_disabled"] is True
-    assert await AD.PanelAdminAPI(p).set_admin_disabled("adm", False) is True and p.admin["is_disabled"] is False
+    assert ("PUT", "/api/admin/adm", {"status": "disabled"}) in p.calls and p.admin["status"] == "disabled"
+    assert await AD.PanelAdminAPI(p).set_admin_disabled("adm", False) is True and p.admin["status"] == "active"
+    # رگرسیون (Whale): بدنهٔ PUT نباید «is_disabled» باشد (پاسارگارد نادیده‌اش می‌گیرد ⇒ ادمین فعال می‌ماند)
+    assert not any("is_disabled" in (c[2] or {}) for c in p.calls if c[0] == "PUT")
 
 
 @pytest.mark.asyncio
 async def test_adapter_reports_false_when_panel_ignored_it_and_none_when_unsupported():
     assert await AD.PanelAdminAPI(P(apply=False)).set_admin_disabled("adm", True) is False       # پنل نپذیرفت
-    assert await AD.PanelAdminAPI(P(admin_has_flag=False)).set_admin_disabled("adm", True) is None   # فیلد را نمی‌شناسد
+    assert await AD.PanelAdminAPI(P(has_status=False)).set_admin_disabled("adm", True) is None   # فیلد را نمی‌شناسد
     old = P(new_style=False)
     assert await AD.PanelAdminAPI(old).set_admin_disabled("adm", True) is None                     # مرزبانِ قدیمی
     assert not any(c[0] == "PUT" for c in old.calls)                                              # دست نمی‌زند
@@ -77,3 +84,30 @@ async def test_panel_that_cannot_disable_admins_does_not_break_suspension(env):
             raise RuntimeError("boom")
     aid, uname = await _sell(env)
     assert await SV.suspend(aid, "expired", Broken) is True                     # کاربران خاموش و رمز تصادفی شد؛ فقط لاگ
+
+
+@pytest.mark.asyncio
+async def test_enforce_heals_previously_suspended_admin_still_active(env):
+    """حسابِ قبلاً-معلق که ادمینش هنوز «فعال» مانده، در دورِ بعدی غیرفعال می‌شود؛ حجمی دست نمی‌خورد."""
+    from datetime import datetime
+    calls = []
+
+    class H(DApi):
+        async def admin_is_disabled(self, u):
+            return False
+
+        async def set_admin_disabled(self, u, disabled):
+            calls.append((u, disabled))
+            return True
+
+    aid, uname = await _sell(env)
+    assert await SV.suspend(aid, "expired", DApi) is True
+    await SV.enforce_once(7, api_factory=H)
+    assert (uname, True) in calls
+    calls.clear()
+
+    class Done(H):
+        async def admin_is_disabled(self, u):
+            return True
+    await SV.enforce_once(7, api_factory=Done)
+    assert calls == []                                    # قبلاً غیرفعال ⇒ دست نمی‌زند

@@ -124,13 +124,31 @@ class PanelAdminAPI:
         try:
             if not await self.is_new_style(username):
                 return None
-            await self.put_admin(username, is_disabled=bool(disabled))
+            # کدِ رسمیِ پاسارگارد (app/models/admin.py): AdminModify فیلدِ «status» ("active"|"disabled") دارد؛ «is_disabled» فقط
+            # یک computed_field در پاسخ است و در بدنهٔ PUT نادیده گرفته می‌شود (PUT بدونِ خطا ۲۰۰ می‌دهد ولی چیزی عوض نمی‌شود).
+            await self.put_admin(username, status="disabled" if disabled else "active")
             row, _ns = await self._admin_row(username)
         except PanelError:
             return False
-        if row is None or "is_disabled" not in row:
+        if row is None:
             return None
-        return bool(row.get("is_disabled")) == bool(disabled)
+        if "status" in row:
+            return (str(row.get("status") or "").lower() == "disabled") == bool(disabled)
+        if "is_disabled" in row:
+            return bool(row.get("is_disabled")) == bool(disabled)
+        return None
+
+    async def admin_is_disabled(self, username: str) -> bool | None:
+        """True/False = وضعیتِ فعلیِ «غیرفعال»بودنِ ادمین؛ None = پنل این مفهوم را ندارد یا خوانده نشد."""
+        try:
+            row, ns = await self._admin_row(username)
+        except PanelError:
+            return None
+        if not ns or row is None:
+            return None
+        if "status" in row:
+            return str(row.get("status") or "").lower() == "disabled"
+        return bool(row["is_disabled"]) if "is_disabled" in row else None
 
     async def apply_data_limit(self, username: str, gb: int) -> bool:
         """سقفِ حجمِ بومیِ ادمین (بایت؛ ۰ = نامحدود). فقط روی پنلِ جدید؛ خروجی: True اگر اعمال شد."""

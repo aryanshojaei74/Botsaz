@@ -161,6 +161,33 @@ async def _admin_disabled(api, uname: str, disabled: bool, account_id=None) -> N
         logger.info("panel_seller: ادمین %s روی پنل %s شد (acc=%s)", uname, "غیرفعال" if disabled else "فعال", account_id)
 
 
+async def _heal_suspended_admins(bot_id: int, panels: dict, api_factory) -> None:
+    """PATCH_PSEL_ADMIN_HEAL_V1 (Whale) — حساب‌هایی که قبل از اصلاحِ فیلدِ «status» معلق شده‌اند ولی ادمینشان هنوز «فعال» مانده را
+    (تعلیقِ غیرِ حجمی) خودکار غیرفعال می‌کند. فقط اگر پنل صریحاً «فعال» بگوید دست می‌زند؛ هر دور حداکثر ۵۰ حساب."""
+    try:
+        async with Session() as s:
+            rows = (await s.scalars(select(PanelSellerAccount).where(
+                PanelSellerAccount.bot_id == bot_id, PanelSellerAccount.status == "suspended",
+                PanelSellerAccount.suspend_reason != "traffic").limit(50))).all()
+    except Exception:      # noqa: BLE001
+        logger.exception("panel_seller: خواندنِ حساب‌هایِ معلق برایِ هم‌گام‌سازیِ ادمین خطا داد")
+        return
+    for a in rows:
+        panel = panels.get(a.panel_id)
+        if panel is None:
+            continue
+        try:
+            api = api_factory(panel)
+            try:
+                chk = getattr(api, "admin_is_disabled", None)
+                if chk is not None and await chk(a.admin_username) is False:
+                    await _admin_disabled(api, a.admin_username, True, a.id)
+            finally:
+                await api.close()
+        except Exception as e:      # noqa: BLE001
+            logger.info("panel_seller: هم‌گام‌سازیِ ادمینِ معلق ناموفق (acc=%s): %s", a.id, e)
+
+
 def _api(panel):
     return AD.PanelAdminAPI.for_panel(panel)
 
@@ -1066,4 +1093,5 @@ async def enforce_once(bot_id: int, api_factory=None, now: datetime | None = Non
                 logger.info("panel_seller: خاموش‌نگه‌داشتنِ کاربرانِ حجم‌تمام‌شده ناموفق (acc=%s): %s", a.id, e)
     except Exception:      # noqa: BLE001
         logger.exception("panel_seller: بازبینیِ حساب‌هایِ حجم‌تمام‌شده خطا داد")
+    await _heal_suspended_admins(bot_id, panels, api_factory)
     return out
