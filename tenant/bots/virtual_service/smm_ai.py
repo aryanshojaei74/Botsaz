@@ -552,6 +552,7 @@ async def _recent_orders_context(bot_id: int, telegram_id: int) -> str:
                 .order_by(SmmOrder.id.desc()).limit(10))).all()
         items = [{"code": str(o.tracking_code or o.id), "name": f"{o.service_name or 'سرویس'} × {o.quantity}",
                   "price": int(o.price_toman or 0), "status": o.status or "—", "at": o.created_at} for o in orders]
+    logger.info("[SMM_AI] bot=%s user=%s سفارش‌هایِ خوانده‌شده برایِ context: %s", bot_id, telegram_id, len(items))
     if not items:
         return "آخرین سفارش‌هایِ همین مشتری: (هنوز هیچ سفارشی ثبت نکرده است.)"
     shown = items[:10]
@@ -988,8 +989,9 @@ async def smmai_ask_answer(msg: Message, bot: Bot, state: FSMContext):
         return
     provider = await _get_provider(row.id)
     await msg.answer("⏳ در حالِ فکر کردن...")
-    context = (await _live_bot_context(row.id, row, msg.from_user.id)
-               + "\n\n" + await _recent_orders_context(row.id, msg.from_user.id))
+    # PATCH_AI_ORDERS_FIRST_V1 — سفارش‌هایِ کاربر اول می‌آید تا برشِ «سختِ» انتهایِ context (fit_context) آن را نبُرد
+    context = (await _recent_orders_context(row.id, msg.from_user.id)
+               + "\n\n" + await _live_bot_context(row.id, row, msg.from_user.id))
     answer = await ask_ai(provider, api_key, msg.text, context,
                           _bot_system_prompt(row), bot_id=row.id)
     if not answer:
@@ -1114,8 +1116,9 @@ async def _smm_ai_answer_in_group(msg: Message, question: str, row) -> None:
         return
     provider = await _get_provider(row.id)
     logger.info(f"[SMM_AI_GROUP] bot_id={row.id} provider={provider} — در حالِ فراخوانیِ AI برایِ سؤال={question!r}")
-    context = (await _live_bot_context(row.id, row, msg.from_user.id)
-               + "\n\n" + await _recent_orders_context(row.id, msg.from_user.id))
+    # PATCH_AI_ORDERS_FIRST_V1 — سفارش‌هایِ کاربر اول می‌آید تا برشِ «سختِ» انتهایِ context (fit_context) آن را نبُرد
+    context = (await _recent_orders_context(row.id, msg.from_user.id)
+               + "\n\n" + await _live_bot_context(row.id, row, msg.from_user.id))
     answer = await ask_ai(provider, api_key, question, context,
                           _bot_system_prompt(row), bot_id=row.id)
     if not answer:

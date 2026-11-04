@@ -36,3 +36,11 @@ async def test_recent_orders_context_uses_all_virtual_orders(monkeypatch):
         return []
     monkeypatch.setattr(smm, "user_vs_orders", empty)
     assert "هنوز هیچ سفارشی" in await A._recent_orders_context(1, 5)
+
+
+def test_orders_first_survive_hard_truncation():
+    """وقتی تیترهایِ غیرِفهرست از بودجه بیشتر شود، fit_context «برشِ سخت» از انتها می‌زند؛ سفارش‌ها باید اولِ context باشند."""
+    orders = "آخرین سفارش‌هایِ همین مشتری (مجموعِ سفارش‌ها: 1؛ 1 موردِ آخر در زیر آمده):\n▪ #ST77: ⭐ 100 استارز, وضعیت: تحویل شد, مبلغ: 20,000 تومان"
+    live = "\n".join(f"عنوانِ غیرِفهرست {i} " + "y" * 80 for i in range(100))
+    out = A.fit_context(orders + "\n\n" + live, "لیست سفارشاتمو بفرست", 1500)
+    assert "▪ #ST77" in out
