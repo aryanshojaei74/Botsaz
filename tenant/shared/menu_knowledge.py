@@ -101,6 +101,15 @@ async def build_menu_knowledge(bot_id: int, limit: int = 500) -> list[str]:
             what = describe_action(b.action, _SIMPLE_ACTIONS)
             if kids.get(b.id):
                 what = "یک زیرمنو باز می‌کند: " + "، ".join((k.label or "").strip() for k in kids[b.id][:8] if (k.label or "").strip())
+            if (b.action or "") == "smm_platform" and not kids.get(b.id):      # PATCH_AI_SMM_PATH_V1 — کدام پلتفرم/خدمات پشتِ این دکمه است
+                try:
+                    import json as _json
+                    _cfg = _json.loads(b.config or "{}") or {}
+                    _pl = [str(x) for x in (_cfg.get("platforms") or ([_cfg["platform"]] if _cfg.get("platform") else [])) if x]
+                    if _pl:
+                        what = (what + "؛ " if what else "") + "خدماتِ این پلتفرم(ها) را نشان می‌دهد: " + "، ".join(_pl[:6])
+                except Exception:      # noqa: BLE001
+                    pass
             msg = " ".join((b.message or "").split())
             if msg:
                 what = (what + "؛ " if what else "") + f"پیام ثابت: «{msg[:140]}{'…' if len(msg) > 140 else ''}»"
