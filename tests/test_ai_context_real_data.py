@@ -40,7 +40,7 @@ async def test_margin_mode_service_price_is_real_not_zero(env):
         await s.commit()
     txt = await _ctx()
     line = next(l for l in txt.splitlines() if "بوست ۱ روزه" in l)
-    assert "قیمت حداقلِ سفارش" in line and "ثبت نشده" not in line
+    assert "حداقل" in line and "تومان" in line and "ثبت نشده" not in line
     import re
     nums = [int(x.replace(",", "")) for x in re.findall(r"([\d,]+) تومان", line)]
     assert nums and all(n > 0 for n in nums), line                        # هیچ قیمتِ صفرِ دروغین
@@ -62,7 +62,7 @@ async def test_manual_price_is_used_when_set(env):
         s.add(models.SmmService(bot_id=7, service_id="a", name="سرویسِ دستی", category="x", min_qty=100, max_qty=5000,
                                 panel_rate=0, sell_rate=2000, is_active=True))
         await s.commit()
-    line = next(l for l in (await _ctx()).splitlines() if "سرویسِ دستی؛" in l)
+    line = next(l for l in (await _ctx()).splitlines() if "سرویسِ دستی:" in l)
     assert "200 تومان" in line or "۲۰۰ تومان" in line or "200" in line     # ۱۰۰ عدد × ۲۰۰۰ در ۱۰۰۰
     assert "2,000 تومان" in line                                             # قیمتِ ۱۰۰۰ عدد
 

@@ -155,8 +155,10 @@ async def rules_facts(bot_id: int) -> list[str]:
         if not txt:
             return []
         req = (await get_setting(bot_id, "vs_rules_required", "0")) == "1"
-        return [("قوانینِ بخشِ خدماتِ مجازیِ این ربات" + (" (کاربر قبل از استفاده باید بپذیرد)" if req else "") +
-                 f" — متنِ دقیقِ مالک: «{txt[:1800]}{'…' if len(txt) > 1800 else ''}»")]
+        # «- » اولِ خط ⇒ در fit_context «قابلِ حذف» است و فقط وقتی سؤال به قوانین مربوط باشد جا می‌گیرد (قبلاً همیشه ~۱۹۰۰ نویسه از
+        # بودجه می‌خورد و قیمتِ سرویس‌ها از context بیرون می‌افتاد — SINA: «بوست چنده؟» گاهی «قیمت ذکر نشده»).
+        return [("- قوانینِ بخشِ خدماتِ مجازیِ این ربات" + (" (کاربر قبل از استفاده باید بپذیرد)" if req else "") +
+                 f" — متنِ دقیقِ مالک: «{txt[:1500]}{'…' if len(txt) > 1500 else ''}»")]
     except Exception:      # noqa: BLE001
         logger.exception("menu_knowledge: خواندنِ قوانین ناموفق بود")
         return []

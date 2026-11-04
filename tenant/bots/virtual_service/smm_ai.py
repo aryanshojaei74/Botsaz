@@ -525,16 +525,44 @@ async def _live_bot_context(bot_id: int, row, telegram_id: int | None = None) ->
                     except Exception:
                         logger.exception("[SMM_AI] محاسبهٔ قیمتِ سرویس %s ناموفق بود", getattr(s, "id", "?"))
                         p_min = p_1000 = 0
-                    price_txt = (f"قیمت حداقلِ سفارش ({mn:,} عدد): {p_min:,} تومان؛ قیمت ۱۰۰۰ عدد: {p_1000:,} تومان"
-                                 if (p_min > 0 or p_1000 > 0) else
-                                 "قیمت: ثبت نشده (عددی حدس نزن؛ کاربر قیمت را در صفحهٔ سرویس می‌بیند)")
-                    lines.append(f"- {s.name}؛ دسته {s.category or 'عمومی'}؛ حداقل {int(s.min_qty or 0)}؛ "
-                                 f"حداکثر {int(s.max_qty or 0)}؛ {price_txt}"
-                                 + (f"؛ توضیح: {(s.description or '')[:180]}" if s.description else ""))
+                    # PATCH_AI_PRICE_FIRST_V1 — «بوست ۱ روزه چنده؟» گاهی جواب می‌داد «قیمت ذکر نشده»: خطِ سرویس برایِ جا شدن در بودجه
+                    # (fit_context خطوطِ بلندتر از ۱۶۰ نویسه را می‌برد) از انتها کوتاه می‌شد و قیمت—که آخرِ خط بود—می‌پرید. حالا نام+قیمت اول است.
+                    if (p_min > 0 or p_1000 > 0):
+                        price_txt = f"حداقل {mn:,} عدد = {p_min:,} تومان (۱۰۰۰ عدد = {p_1000:,} تومان)"
+                    else:
+                        price_txt = "قیمت ثبت نشده (حدس نزن)"
+                    lines.append(f"- {s.name}: {price_txt}؛ دسته {s.category or 'عمومی'}؛ حداکثر {int(s.max_qty or 0)}"
+                                 + (f"؛ توضیح: {(s.description or '')[:120]}" if s.description else ""))
                 sections.append("\n".join(lines))
             else:
                 sections.append("- سرویس فعال ثبت نشده است.")
     return "\n\n".join(sections)[:24000]
+
+
+async def _user_facts_context(bot_id: int, telegram_id: int) -> str:
+    """PATCH_AI_USER_FACTS_V1 (SINA: «کل بخش کاربران رو بهش بدی و همه‌چی بلد باشه») — فقط وضعیتِ **خودِ همین کاربر**
+    (موجودی، سطحِ احراز، تأییدِ شماره، تعدادِ زیرمجموعه و تیکتِ باز). اطلاعاتِ هیچ کاربرِ دیگری هرگز وارد نمی‌شود."""
+    try:
+        from sqlalchemy import func as _f
+        from models import BotUser, ReferralJoin, TenantTicket
+        async with Session() as s:
+            u = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == telegram_id))
+            if not u:
+                return ""
+            refs = int(await s.scalar(select(_f.count()).select_from(ReferralJoin).where(
+                ReferralJoin.bot_id == bot_id, ReferralJoin.inviter_user_id == u.id)) or 0)
+            tk = int(await s.scalar(select(_f.count()).select_from(TenantTicket).where(
+                TenantTicket.bot_id == bot_id, TenantTicket.user_id == u.id, TenantTicket.status != "closed")) or 0)
+        lines = ["وضعیتِ حسابِ همین مشتری (فقط برایِ پاسخ به خودِ او):",
+                 f"موجودیِ کیف پول: {int(u.balance or 0):,} تومان",
+                 f"سطحِ احرازِ هویت: {int(u.kyc_level or 0)}" + (" (حساب محدود شده)" if getattr(u, "kyc_blocked", False) else ""),
+                 f"شمارهٔ تاییدشده: {'بله' if getattr(u, 'phone_verified', False) else 'خیر'}",
+                 f"تعدادِ زیرمجموعه‌هایِ دعوت‌شده: {refs}",
+                 f"تیکت‌هایِ بازِ پشتیبانی: {tk}"]
+        return "\n".join(lines)
+    except Exception:      # noqa: BLE001
+        logger.exception("[SMM_AI] خواندنِ وضعیتِ حسابِ کاربر ناموفق بود")
+        return ""
 
 
 async def _recent_orders_context(bot_id: int, telegram_id: int) -> str:
@@ -555,7 +583,7 @@ async def _recent_orders_context(bot_id: int, telegram_id: int) -> str:
     logger.info("[SMM_AI] bot=%s user=%s سفارش‌هایِ خوانده‌شده برایِ context: %s", bot_id, telegram_id, len(items))
     if not items:
         return "آخرین سفارش‌هایِ همین مشتری: (هنوز هیچ سفارشی ثبت نکرده است.)"
-    shown = items[:10]
+    shown = items[:6]
     lines = [f"آخرین سفارش‌هایِ همین مشتری (مجموعِ سفارش‌ها: {len(items)}؛ {len(shown)} موردِ آخر در زیر آمده):"]
     for o in shown:
         d = o["at"].strftime("%Y-%m-%d") if o.get("at") else ""
@@ -991,6 +1019,7 @@ async def smmai_ask_answer(msg: Message, bot: Bot, state: FSMContext):
     await msg.answer("⏳ در حالِ فکر کردن...")
     # PATCH_AI_ORDERS_FIRST_V1 — سفارش‌هایِ کاربر اول می‌آید تا برشِ «سختِ» انتهایِ context (fit_context) آن را نبُرد
     context = (await _recent_orders_context(row.id, msg.from_user.id)
+               + "\n\n" + await _user_facts_context(row.id, msg.from_user.id)
                + "\n\n" + await _live_bot_context(row.id, row, msg.from_user.id))
     answer = await ask_ai(provider, api_key, msg.text, context,
                           _bot_system_prompt(row), bot_id=row.id)
@@ -1118,6 +1147,7 @@ async def _smm_ai_answer_in_group(msg: Message, question: str, row) -> None:
     logger.info(f"[SMM_AI_GROUP] bot_id={row.id} provider={provider} — در حالِ فراخوانیِ AI برایِ سؤال={question!r}")
     # PATCH_AI_ORDERS_FIRST_V1 — سفارش‌هایِ کاربر اول می‌آید تا برشِ «سختِ» انتهایِ context (fit_context) آن را نبُرد
     context = (await _recent_orders_context(row.id, msg.from_user.id)
+               + "\n\n" + await _user_facts_context(row.id, msg.from_user.id)
                + "\n\n" + await _live_bot_context(row.id, row, msg.from_user.id))
     answer = await ask_ai(provider, api_key, question, context,
                           _bot_system_prompt(row), bot_id=row.id)
