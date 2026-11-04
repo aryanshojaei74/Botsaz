@@ -547,6 +547,37 @@ async def test_counter_refresh_edits_posts_of_active_giveaways(env, monkeypatch)
     assert await LOOP.refresh_counters_once(now=10_700.0) == 1
 
 
+async def test_counter_refresh_backs_off_quietly_when_bot_token_is_revoked(env, monkeypatch, caplog):
+    """PATCH_GIVEAWAY_UNAUTH_QUIET_V1 — توکنِ باطل: هر ۱۰ دقیقه traceback نه؛ یک هشدار و ۶ ساعت وقفه."""
+    from aiogram.exceptions import TelegramUnauthorizedError
+    from aiogram.methods import GetMe
+    g = await mk_gw()
+    async with env.mk() as s:
+        s.add(models.GiveawayPost(bot_id=BOT, giveaway_id=g.id, chat_id=-1001, message_id=5))
+        await s.commit()
+
+    class _Dead:
+        session = SimpleNamespace(close=_noop)
+
+        async def get_me(self):
+            raise TelegramUnauthorizedError(method=GetMe(), message="Unauthorized")
+
+    monkeypatch.setattr(LOOP, "Bot", lambda **kw: _Dead())
+    monkeypatch.setattr(A, "bot_username", None, raising=False)
+    import tenant.bots.giveaway.common as C
+    monkeypatch.setattr(C, "bot_username", lambda bot: _Dead().get_me())
+    LOOP._last_refresh.clear()
+    LOOP._unauth_logged.clear()
+    with caplog.at_level("INFO"):
+        assert await LOOP.refresh_counters_once(now=10_000.0) == 0
+        assert not any(r.exc_info for r in caplog.records if r.levelname == "ERROR")      # بدونِ traceback
+        assert sum("نامعتبر" in r.getMessage() for r in caplog.records) == 1
+        await LOOP.refresh_counters_once(now=10_700.0)                                      # ۱۰ دقیقه بعد: تلاشی نمی‌شود
+        await LOOP.refresh_counters_once(now=10_000.0 + 3600)
+        assert sum("نامعتبر" in r.getMessage() for r in caplog.records) == 1
+    assert LOOP._last_refresh[g.id] > 10_000.0 + 3600                                      # تا ~۶ ساعت وقفه
+
+
 def _fwd_chat(i):
     return tmsg(str(i), OWNER)
 

@@ -5,6 +5,7 @@ import asyncio
 import time
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from sqlalchemy import select
@@ -19,7 +20,9 @@ from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
 
 REFRESH_EVERY = 600.0
+UNAUTH_BACKOFF = 6 * 3600.0        # توکنِ ربات باطل شده: تا ۶ ساعت دوباره تلاش نکن
 _last_refresh: dict[int, float] = {}
+_unauth_logged: set[int] = set()
 
 
 async def end_due_once() -> int:
@@ -37,6 +40,10 @@ async def end_due_once() -> int:
                 done += 1 if res.ok else 0
             finally:
                 await bot.session.close()
+        except TelegramUnauthorizedError:
+            if gid not in _unauth_logged:
+                _unauth_logged.add(gid)
+                logger.warning("giveaway auto-end: توکنِ رباتِ قرعه‌کشی %s نامعتبر است", gid)
         except Exception:      # noqa: BLE001
             logger.exception("giveaway auto-end failed (gid=%s)", gid)
     return done
@@ -63,6 +70,12 @@ async def refresh_counters_once(now: float | None = None) -> int:
                 n += await A.refresh_posts(bot, g)
             finally:
                 await bot.session.close()
+        except TelegramUnauthorizedError:
+            # PATCH_GIVEAWAY_UNAUTH_QUIET_V1 — توکنِ رباتِ این قرعه‌کشی باطل است (مالک حذف/توکن را عوض کرده): هر ۱۰ دقیقه traceback نمی‌نویسیم
+            _last_refresh[g.id] = now + UNAUTH_BACKOFF - REFRESH_EVERY
+            if g.id not in _unauth_logged:
+                _unauth_logged.add(g.id)
+                logger.warning("giveaway refresh: توکنِ رباتِ قرعه‌کشی %s (bot %s) نامعتبر است؛ تا ۶ ساعت دوباره تلاش نمی‌شود", g.id, g.bot_id)
         except Exception:      # noqa: BLE001
             logger.exception("giveaway refresh counters failed (gid=%s)", g.id)
     return n
