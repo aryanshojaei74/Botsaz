@@ -384,6 +384,41 @@ async def _check_content_restrictions(msg: Message, bot: Bot) -> bool:
     return True
 
 
+
+# === PATCH_GROUP_PROFANITY_V1 ===
+# فحش → حذفِ پیام + یک خطا (اخطار)؛ با رسیدن به سقفِ خطا، بنِ خودکار (همان مکانیزمِ بقیهٔ فیلترها).
+# پیش‌فرض روشن است (pset: group_guard_profanity = on/off)، مستقل از سوییچِ کلیِ «محافظ»؛ فقط گروهِ متصل.
+# ادمین‌ها مستثنا هستند. «فحش به هوش مصنوعی» هم همین‌جا گرفته می‌شود چون قبل از پاسخ‌گویی اجرا می‌شود.
+async def _check_profanity(msg: Message, bot: Bot) -> bool:
+    if _is_spam_bot_message(msg) or not msg.from_user:
+        return False
+    text = (msg.text or msg.caption or "").strip()
+    if not text:
+        return False
+    if (await get_pset("group_guard_profanity", "on")) != "on":
+        return False
+    from platform_profanity import find_profanity
+    extra = [w.strip() for w in (await get_pset("group_guard_banned_words", "")).splitlines() if w.strip()]
+    hit = find_profanity(text, None)
+    if not hit:
+        return False
+    if await _is_authorized(msg, bot):
+        return False
+    try:
+        await bot.delete_message(msg.chat.id, msg.message_id)
+    except Exception:
+        logger.exception("حذفِ پیامِ حاویِ فحش ناموفق بود")
+    cnt, threshold, auto_banned = await _apply_warn(
+        bot, msg.chat.id, msg.from_user, "فحش/توهین", warned_by=0, evidence=_evidence(msg))
+    note = f"⚠️ {msg.from_user.full_name} اخطار گرفتی: فحش و توهین در گروه ممنوعه ({cnt}/{threshold})."
+    if auto_banned:
+        note += f"\n🚫 چون به سقفِ {threshold} اخطار رسید، به‌صورتِ خودکار بن شد."
+    try:
+        await msg.answer(note)
+    except Exception:
+        logger.exception("ارسالِ اخطارِ فحش ناموفق بود")
+    return True
+
 # === PATCH_GROUP_GUARD_ANTIPROMO_V1 ===
 # آنتی‌فلودِ لینکِ تبلیغاتی — بر خلافِ سوییچِ کلیِ «محدودیتِ لینک» در
 # «محدودیتِ نوعِ محتوا» (که هر نوع لینکی رو می‌گیره)، این یکی مشخصاً فقط
@@ -752,6 +787,15 @@ async def group_guard_command_router(msg: Message, bot: Bot):
                     f"«{(msg.text or '').strip().split()[0]}» رو بفرست.")
                 return
 
+    # === PATCH_GROUP_PROFANITY_V1 === /فحش on|off — روشن/خاموشِ اخطارِ فحش (فقط ادمین، فقط گروهِ متصل)
+    if cmd in ("/profanity", "/فحش") and is_guarded_chat:
+        if await _is_authorized(msg, bot):
+            _arg = ((msg.text or "").split(maxsplit=1) + [""])[1].strip().lower()
+            if _arg in ("on", "روشن", "off", "خاموش"):
+                await set_pset("group_guard_profanity", "on" if _arg in ("on", "روشن") else "off")
+            _cur = await get_pset("group_guard_profanity", "on")
+            await msg.reply(f"🧼 اخطارِ فحش: {'روشن ✅' if _cur == 'on' else 'خاموش ⛔️'}\nتغییر: /فحش روشن  یا  /فحش خاموش")
+        return
     if cmd is not None:
         if cmd not in (_BAN_CMDS | _UNBAN_CMDS | _WARN_CMDS | _MUTE_CMDS
                        | _UNMUTE_CMDS | _UNWARN_CMDS):
@@ -781,6 +825,8 @@ async def group_guard_command_router(msg: Message, bot: Bot):
     # guard_on): return» باعث می‌شد اگه ادمین سوییچِ اصلیِ محافظ رو خاموش
     # کرده باشه (که ربطی به آزمایشِ هوش مصنوعی نداره)، پاسخ‌گویی هم کلاً
     # بی‌صدا کار نکنه.
+    if is_guarded_chat and msg.from_user and await _check_profanity(msg, bot):   # PATCH_GROUP_PROFANITY_V1
+        return
     if is_guarded_chat and (msg.from_user or getattr(msg, 'sender_chat', None)) and not _is_spam_bot_message(msg):
         if await _check_ai_trigger(msg, bot):
             return
