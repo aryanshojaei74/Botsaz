@@ -5487,7 +5487,15 @@ async def show_pitch(cb: CallbackQuery, state: FSMContext):
                     callback_data=f"newplan:{plan.value}", style=ButtonStyle.SUCCESS)
             else:
                 final, _base, pdisc = plan_price_final(plan.value)
-                disc_txt = f" (٪{pdisc} تخفیف)" if pdisc else ""
+                try:     # PATCH_PLAN_LIST_USER_DISCOUNT_V1
+                    _dp, _df, _dn = await display_plan_discount(cb.from_user.id, plan.value)
+                except Exception:      # noqa: BLE001
+                    logger.exception("display_plan_discount (ساختِ ربات)")
+                    _dp, _df = 0, 0
+                if _dp or _df:
+                    final = price_after(final, _dp, _df)
+                    pdisc = _dp
+                disc_txt = (f" (٪{pdisc} تخفیف)" if pdisc else "") if not _df else " (تخفیفِ شما)"
                 b.button(text=f"{PLAN_INFO[plan]['title']} — {rial(final)}/ماه{disc_txt}",
                          callback_data=f"newplan:{plan.value}", style=ButtonStyle.SUCCESS)
     # === PATCH_CREATE_FLOW_BACK_BUTTONS_V1 ===
@@ -8090,7 +8098,18 @@ async def my_bot_upgrade(cb: CallbackQuery):
             price_txt = f"رایگان (⏳ {cdown} مانده)" if cdown else "رایگان (حالت تست)"
         else:
             final, _b, pdisc = plan_price_final(plan.value)
-            price_txt = f"{rial(final)}/ماه" + (f" (٪{pdisc} تخفیف)" if pdisc else "")
+            # === PATCH_PLAN_LIST_USER_DISCOUNT_V1 === (MAHDI) تخفیفِ شخصیِ کاربر (تخفیفِ همیشگی/نفراتِ برتر/معرف) همین‌جا هم دیده شود،
+            # نه فقط در مرحلهٔ انتخابِ مدت؛ قبلاً قیمتِ پایه نشان داده می‌شد و کاربر فکر می‌کرد تخفیفش حذف شده.
+            try:
+                _dp, _df, _dn = await display_plan_discount(cb.from_user.id, plan.value)
+            except Exception:      # noqa: BLE001
+                logger.exception("display_plan_discount (لیستِ ارتقا)")
+                _dp, _df = 0, 0
+            if _dp or _df:
+                final = price_after(final, _dp, _df)
+                price_txt = f"{rial(final)}/ماه" + (f" (٪{_dp} تخفیفِ شما)" if _dp else " (تخفیفِ شما)")
+            else:
+                price_txt = f"{rial(final)}/ماه" + (f" (٪{pdisc} تخفیف)" if pdisc else "")
         b.button(text=f"{label}{PLAN_INFO[plan]['title']} — {price_txt}",
                  callback_data=f"upg:{plan.value}:{bot_id}", style=ButtonStyle.SUCCESS)
     b.adjust(1)

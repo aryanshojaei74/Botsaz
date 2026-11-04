@@ -56,3 +56,39 @@ async def test_display_discount_flat(db, monkeypatch):
     monkeypatch.setattr(pb, "ptc_discount_for", ptc)
     pct, flat, note = await pb.display_plan_discount(111, "growth")
     assert flat == 25_000 and pct >= 0 and "ماه" in note
+
+
+@pytest.mark.asyncio
+async def test_upgrade_list_shows_users_permanent_discount(db, monkeypatch):
+    """PATCH_PLAN_LIST_USER_DISCOUNT_V1 (MAHDI) — صفحهٔ «ارتقا پلن» باید قیمتِ بعد از تخفیفِ شخصیِ کاربر را نشان دهد."""
+    from decimal import Decimal
+    monkeypatch.setattr(pb, "plans_paid_enabled", lambda: True)
+    monkeypatch.setattr(pb, "plan_price_final", lambda p: (200_000, 200_000, 0))
+
+    async def ptc(uid):
+        return "percent", 0
+    monkeypatch.setattr(pb, "ptc_discount_for", ptc)
+    async with db() as s:
+        s.add(models.Bot(id=9, owner_id=555, token="9:T", username="b9", field="vpn_sales", plan="pro", status="active"))
+        s.add(models.PlatformUserDiscount(user_telegram_id=555, percent=15, active=True, plans="growth,pro"))
+        await s.commit()
+    captured = {}
+
+    class _M:
+        async def edit_text(self, text, reply_markup=None, **k):
+            captured["kb"] = reply_markup
+
+    class _U:
+        id = 555
+
+    class _Cb:
+        data = "mbup:9"
+        from_user = _U()
+        message = _M()
+
+        async def answer(self, *a, **k):
+            pass
+
+    await pb.my_bot_upgrade(_Cb())
+    labels = [b.text for row in captured["kb"].inline_keyboard for b in row]
+    assert any("170,000" in t and "15" in t for t in labels), labels         # ۲۰۰٬۰۰۰ − ۱۵٪
