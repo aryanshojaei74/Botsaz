@@ -13940,7 +13940,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "422"
+BUILD_ID = "423"
 
 
 @tenant_router.message(Command("version"))
@@ -27015,10 +27015,18 @@ async def _render_user_detail(target, bot: Bot, uid: int, edit: bool = False) ->
             api_line = f"\n🔌 دسترسیِ API: ✅ فعال{disc_txt}"
         else:
             api_line = "\n🔌 دسترسیِ API: ❌ غیرفعال"
+    # === PATCH_USERMGMT_PHONE_V1 === (پیشنهاد #193) شمارهٔ تاییدشدهٔ کاربر در «مدیریت کاربر» برایِ ادمین/مالک دیده شود
+    _ph_raw = (getattr(u, "phone_number", None) or "").strip()
+    if _ph_raw:
+        _ph_show = _ph_raw if _ph_raw.startswith("+") else "+" + _ph_raw
+        phone_line = f"شماره: <code>{_html.escape(_ph_show)}</code> " + ("✅ تاییدشده\n" if getattr(u, "phone_verified", False) else "(تاییدنشده)\n")
+    else:
+        phone_line = "شماره: — (ثبت نشده)\n" if (await get_setting(row.id, "phone_verify_enabled", "off")) == "on" else ""
     text = (
         f"👤 کاربر <code>{uid}</code>\n"
         f"نام: {u.full_name or '—'}\n"
         f"یوزرنیم: @{u.username or '—'}\n"
+        f"{phone_line}"
         f"موجودی کیف پول: {rial(u.balance)}\n"
         f"خریدهای موفق: {orders_count}\n"
         f"مجموع خرید: {rial(txns_sum)}\n"
