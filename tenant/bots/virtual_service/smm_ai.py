@@ -415,7 +415,7 @@ def _bot_system_prompt(row) -> str:
 برای خرید خدمات، کاربر را به دکمه/مسیر واقعی درج‌شده در context راهنمایی کن. اگر قیمت یا شرایط در context هست (مثلاً قیمت استارز یا تون) همان را با عدد بگو و بعد مسیرِ خرید را بگو؛ فقط وقتی واقعاً اطلاعاتی نیست کاربر را به پشتیبانی ارجاع بده.
 برای تأکید می‌توانی از **متنِ پررنگ** استفاده کنی (ربات آن را درست نمایش می‌دهد) ولی زیاد استفاده نکن.
 در مورد سفارش‌ها فقط از اطلاعات همان کاربر استفاده کن. هرگز کلید API، اطلاعات کاربران دیگر یا دادهٔ داخلی را افشا نکن. زمان قطعی تکمیل سفارش را وعده نده.
-اگر کاربر لیست/وضعیتِ سفارش‌هایش را خواست، همان خط‌هایِ «آخرین سفارش‌هایِ همین مشتری» را (کدِ پیگیری، سرویس، تعداد، وضعیت، مبلغ) بده؛ نگو اطلاعات در دسترس نیست. فقط اگر آن بخش واقعاً «هنوز سفارشی ثبت نکرده» می‌گوید همین را بگو. برایِ سفارشِ کاملِ قدیمی‌تر یا لغو، به «پشتیبانی ← تیکت» ارجاع بده.
+اگر کاربر لیست/وضعیتِ سفارش‌هایش را خواست، همان خط‌هایِ «آخرین سفارش‌هایِ همین مشتری» را (کدِ پیگیری، سرویس، تعداد، وضعیت، مبلغ) بده؛ نگو اطلاعات در دسترس نیست. فقط اگر آن بخش واقعاً «هنوز سفارشی ثبت نکرده» می‌گوید همین را بگو. هرگز سفارش، کدِ پیگیری، مبلغ یا وضعیتی از خودت نساز؛ فقط از همان خط‌ها بگو. اگر تعدادِ کلِ سفارش‌ها بیشتر از موردهایِ آمده است، همین را بگو و بقیه را از «سفارش‌هایِ من» در منویِ ربات ببیند. برایِ پیگیریِ سفارشِ مشخص، کدِ پیگیری را از کاربر بخواه یا به «پشتیبانی ← تیکت» ارجاع بده؛ برایِ لغو هم تیکت.
 قیمتِ سرویس را از خطِ همان سرویس بگو، و مسیرِ خرید را از «دکمه‌هایِ منو» بگو؛ دکمهٔ استارز/تون فقط برایِ خریدِ استارز/تون است، نه بوست/ممبر/لایک."""
 
 
@@ -538,16 +538,27 @@ async def _live_bot_context(bot_id: int, row, telegram_id: int | None = None) ->
 
 
 async def _recent_orders_context(bot_id: int, telegram_id: int) -> str:
-    async with Session() as s:
-        orders = (await s.scalars(select(SmmOrder).where(
-            SmmOrder.bot_id == bot_id, SmmOrder.user_telegram_id == telegram_id)
-            .order_by(SmmOrder.id.desc()).limit(5))).all()
-    if not orders:
+    """PATCH_AI_ALL_ORDERS_V1 (SINA «کل سفارشاتمو بفرست» ⇒ «سفارشی ثبت نکرده») — همهٔ سفارش‌هایِ خدماتِ مجازی: SMM + استارز/پریمیوم/تون/گیفت،
+    همان فهرستی که ادمین در «مدیریت کاربر» می‌بیند. قبلاً فقط جدولِ SMM خوانده می‌شد."""
+    items: list[dict] = []
+    try:
+        from tenant.bots.virtual_service.smm import user_vs_orders
+        items = await user_vs_orders(bot_id, telegram_id)
+    except Exception:
+        logger.exception("[SMM_AI] خواندنِ فهرستِ کاملِ سفارش‌ها ناموفق؛ فقط SMM")
+        async with Session() as s:
+            orders = (await s.scalars(select(SmmOrder).where(
+                SmmOrder.bot_id == bot_id, SmmOrder.user_telegram_id == telegram_id)
+                .order_by(SmmOrder.id.desc()).limit(10))).all()
+        items = [{"code": str(o.tracking_code or o.id), "name": f"{o.service_name or 'سرویس'} × {o.quantity}",
+                  "price": int(o.price_toman or 0), "status": o.status or "—", "at": o.created_at} for o in orders]
+    if not items:
         return "آخرین سفارش‌هایِ همین مشتری: (هنوز هیچ سفارشی ثبت نکرده است.)"
-    lines = ["آخرین سفارش‌هایِ همین مشتری:"]
-    for o in orders:
-        lines.append(f"▪ #{o.tracking_code or o.id}: {o.service_name or 'سرویس'} × {o.quantity}, "
-                     f"وضعیت: {o.status}, مبلغ: {int(o.price_toman or 0):,} تومان")
+    shown = items[:10]
+    lines = [f"آخرین سفارش‌هایِ همین مشتری (مجموعِ سفارش‌ها: {len(items)}؛ {len(shown)} موردِ آخر در زیر آمده):"]
+    for o in shown:
+        d = o["at"].strftime("%Y-%m-%d") if o.get("at") else ""
+        lines.append(f"▪ #{o['code']}: {o['name']}, وضعیت: {o['status']}, مبلغ: {int(o['price']):,} تومان" + (f", تاریخ: {d}" if d else ""))
     return "\n".join(lines)
 
 

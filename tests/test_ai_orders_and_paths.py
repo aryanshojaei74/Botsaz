@@ -14,3 +14,25 @@ def test_system_prompt_forbids_stars_for_boost_and_requires_order_list():
         field = "virtual_service"
     p = A._bot_system_prompt(R())
     assert "نگو اطلاعات در دسترس نیست" in p and "استارز/تون فقط" in p
+
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_recent_orders_context_uses_all_virtual_orders(monkeypatch):
+    """SINA: سفارشِ استارز/گیفت هم باید در context بیاید (قبلاً فقط SMM ⇒ «سفارشی ثبت نکرده»)."""
+    import datetime as dt
+    from tenant.bots.virtual_service import smm
+
+    async def fake(bot_id, tg, query=""):
+        return [{"kind": "gift", "id": 1, "code": "ST77", "name": "⭐ 100 استارز", "price": 20000, "status": "تحویل شد",
+                 "at": dt.datetime(2026, 11, 4)}]
+    monkeypatch.setattr(smm, "user_vs_orders", fake)
+    out = await A._recent_orders_context(1, 5)
+    assert "▪ #ST77" in out and "100 استارز" in out and "مجموعِ سفارش‌ها: 1" in out
+
+    async def empty(bot_id, tg, query=""):
+        return []
+    monkeypatch.setattr(smm, "user_vs_orders", empty)
+    assert "هنوز هیچ سفارشی" in await A._recent_orders_context(1, 5)
