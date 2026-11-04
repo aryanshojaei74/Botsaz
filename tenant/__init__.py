@@ -8891,11 +8891,16 @@ async def _pubapi_render(row, u, tg_id: int):
         n_api = int(await s_cnt.scalar(select(func.count(SmmOrder.id)).where(
             SmmOrder.bot_id == row.id, SmmOrder.user_telegram_id == tg_id,
             SmmOrder.source == "api")) or 0)
-    lines = [
-        "🔑 <b>API</b>", "",
-        "🔗 آدرس API:", f"<code>{base}/api/vpn</code>" if _is_vpn_api else f"<code>{base}/api/v2</code>", "",
-        f"💰 موجودی شما: <b>{int(u.balance):,}</b> تومان",
-    ]
+    # === PATCH_API_PAGE_MINIMAL_V1 === (Weirdnet) مالک می‌تواند صفحه را «ساده» کند: فقط کلید و تغییر کلید (بدونِ آدرس/اکشن‌ها/مستندات)
+    _minimal = (await get_setting(row.id, "api_page_minimal", "0")) == "1"
+    if _minimal:
+        lines = ["🔑 <b>API</b>", ""]
+    else:
+        lines = [
+            "🔑 <b>API</b>", "",
+            "🔗 آدرس API:", f"<code>{base}/api/vpn</code>" if _is_vpn_api else f"<code>{base}/api/v2</code>", "",
+            f"💰 موجودی شما: <b>{int(u.balance):,}</b> تومان",
+        ]
     if u.api_discount_pct:
         lines.append(f"🎁 تخفیفِ شما رویِ خریدهایِ API: {float(u.api_discount_pct):g}٪")
     if u.api_expires_at:
@@ -8906,11 +8911,12 @@ async def _pubapi_render(row, u, tg_id: int):
               "✅ وضعیت کلید: فعال"]
     if not _is_vpn_api:
         lines.append(f"🛒 سفارش‌هایِ API: <b>{n_api}</b>")
-    else:
+    elif not _minimal:
         lines += ["", "اکشن‌ها: <code>plans</code> · <code>balance</code> · <code>buy</code> · "
-                      "<code>services</code> · <code>status</code>"]
+                      "<code>services</code> · <code>status</code> · <code>trial</code> · <code>ticket</code>"]
     docs_url = f"{base}/api/docs/vpn" if _is_vpn_api else f"{base}/api/docs"   # PATCH_VPN_API_V1
-    lines += ["", f"📘 مستندات: {docs_url}"]
+    if not _minimal:
+        lines += ["", f"📘 مستندات: {docs_url}"]
     text = "\n".join(lines)
     rows = [[InlineKeyboardButton(text="🔄 تغییر کلید", callback_data="pubapi:regen", style=ButtonStyle.DANGER)]
             + ([] if _is_vpn_api else
@@ -8923,7 +8929,7 @@ async def _pubapi_render(row, u, tg_id: int):
             text=("🟢 اعلان سفارشات وبسرویس 🟢" if _non else "🔴 اعلان سفارشات وبسرویس 🔴"),
             callback_data="pubapi:notif",
             style=(ButtonStyle.SUCCESS if _non else ButtonStyle.DANGER))])
-    if docs_url.startswith(("http://", "https://")) and "YOUR" not in docs_url:
+    if (not _minimal) and docs_url.startswith(("http://", "https://")) and "YOUR" not in docs_url:
         rows.append([InlineKeyboardButton(text="📘 مستندات API", url=docs_url, style=ButtonStyle.PRIMARY)])
     if price > 0 and u.api_expires_at:
         rows.append([InlineKeyboardButton(text=f"♻️ تمدید ({price:,} تومان)",
@@ -13940,7 +13946,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "424"
+BUILD_ID = "425"
 
 
 @tenant_router.message(Command("version"))

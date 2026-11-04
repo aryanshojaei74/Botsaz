@@ -20,6 +20,8 @@ vpn_api.py — APIِ فروشِ VPN برایِ رباتِ «فروش VPN» (PATC
     quote     قیمتِ نهایی با discount_code بدونِ خرید (plan_id یا gb+days)
     delete    حذفِ سرویس از پنل و ربات (service)
     charge    فاکتورِ شارژِ کیف‌پول با آپی (amount) ← pay_url؛  charge_status (order_id)
+    trial     دریافتِ تستِ رایگان (طبقِ تنظیماتِ سراسریِ تست؛ هر کاربر یک‌بار)
+    ticket    ثبتِ تیکت (text[, subject])؛  tickets فهرستِ تیکت‌ها (+ پاسخ‌ها)؛  ticket_reply (ticket_id, text)
 
 کلیدِ کاملِ ربات (Bot.api_key) برایِ عملیاتِ کاربری پارامترِ telegram_id می‌خواهد؛ کلیدِ شخصیِ کاربر فقط
 به خودِ همان کاربر دسترسی دارد و تخفیفِ اختصاصیِ API (api_discount_pct) را می‌گیرد.
@@ -469,6 +471,200 @@ async def _notify_sale(bot_id: int, user_db_id: int, title: str, price, code) ->
         logger.exception("vpn_api: اطلاعِ خرید به مالک ناموفق بود (نادیده گرفته شد)")
 
 
+# === PATCH_VPN_API_TRIAL_TICKET_V1 === (Weirdnet: «دریافت تست و ثبت تیکت و پاسخ هم اضافه شود»)
+async def _do_trial(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
+    """تستِ رایگانِ API — فقط تنظیماتِ سراسریِ تست (trial_enabled/trial_gb/trial_days/trial_hours/trial_source). قانون‌هایِ اختصاصیِ هر دکمهٔ تست اعمال نمی‌شود."""
+    import tenant as T
+    from models import TrialUsage
+    from tenant.shared.panel_clients.vpn_panel import PanelError, gen_uuid, gen_sub_id
+    from tenant.bots.vpn.vpn_user import _make_config_email, new_svc_code
+    if not _rate_ok(f"trial:{ctx.bot_id}:{user.id}", 3):
+        return _err("rate_limited")
+    if await T.get_setting(ctx.bot_id, "trial_enabled", "0") != "1":
+        return _err("trial_disabled")
+    exempt = await T._trial_exempt(ctx.bot_id, user.telegram_id)
+    try:
+        gb = float(await T.get_setting(ctx.bot_id, "trial_gb", "2"))
+    except (ValueError, TypeError):
+        gb = 2.0
+    try:
+        days = int(await T.get_setting(ctx.bot_id, "trial_days", "3"))
+    except (ValueError, TypeError):
+        days = 3
+    try:
+        hours = int(await T.get_setting(ctx.bot_id, "trial_hours", "0"))
+    except (ValueError, TypeError):
+        hours = 0
+    source = await T.get_setting(ctx.bot_id, "trial_source", "panel")
+    # ثبتِ مصرف پیش از تحویل (جلوگیریِ از دوبار گرفتن)؛ شکست ⇒ برگشت
+    if not exempt:
+        async with Session() as s:
+            if await s.scalar(select(TrialUsage).where(TrialUsage.bot_id == ctx.bot_id, TrialUsage.user_telegram_id == user.telegram_id)):
+                return _err("trial_already_used")
+            s.add(TrialUsage(bot_id=ctx.bot_id, user_telegram_id=user.telegram_id))
+            try:
+                await s.commit()
+            except Exception:      # noqa: BLE001
+                await s.rollback()
+                return _err("trial_already_used")
+
+    async def _rollback():
+        if exempt:
+            return
+        try:
+            async with Session() as s:
+                tu = await s.scalar(select(TrialUsage).where(TrialUsage.bot_id == ctx.bot_id, TrialUsage.user_telegram_id == user.telegram_id))
+                if tu:
+                    await s.delete(tu)
+                    await s.commit()
+        except Exception:      # noqa: BLE001
+            logger.exception("vpn_api trial: برگشتِ ثبتِ مصرف ناموفق")
+
+    if source == "stock":
+        from models import Config
+        async with Session() as s:
+            cfg = await s.scalar(select(Config).where(Config.bot_id == ctx.bot_id, Config.status == "in_stock", Config.price == 0,
+                                                      Config.volume_gb >= int(gb)).order_by(Config.id).limit(1).with_for_update())
+            if not cfg:
+                await _rollback()
+                return _err("trial_out_of_stock")
+            cfg.status, cfg.owner_user_id = "sold", user.id
+            payload, vol, d = cfg.payload, cfg.volume_gb, cfg.days
+            await s.commit()
+        return JSONResponse({"ok": True, "trial": {"source": "stock", "config": payload, "volume_gb": vol, "days": d}})
+
+    async with Session() as s:
+        panel = await s.scalar(select(VpnPanel).where(VpnPanel.bot_id == ctx.bot_id, VpnPanel.enabled == True))   # noqa: E712
+        bot_row = await s.get(BotRow, ctx.bot_id)
+    if not panel:
+        await _rollback()
+        return _err("no_panel")
+    client = T._trial_panel_client(panel)
+    try:
+        email = await _make_config_email(ctx.bot_id, panel.panel_key, bot_row.username if bot_row else None,
+                                         user.telegram_id, user.full_name or "")
+        on_hold = await T.get_setting(ctx.bot_id, "trial_on_hold", "0") == "1"
+        if gb < 1:
+            acc = await client.create_account(email, gb=0, days=days, limit_ip=0, uuid_str=gen_uuid(), sub_id=gen_sub_id(),
+                                              mb=int(round(gb * 1024)), hours=hours, on_hold=on_hold)
+        else:
+            acc = await client.create_account(email, gb=int(gb), days=days, limit_ip=0, uuid_str=gen_uuid(), sub_id=gen_sub_id(),
+                                              hours=hours, on_hold=on_hold)
+        sub_link = acc.get("sub_link") or ""
+        async with Session() as s:
+            new_acc = PanelAccount(bot_id=ctx.bot_id, user_telegram_id=user.telegram_id, email=email, panel_key=panel.panel_key,
+                                   uuid=acc.get("uuid"), sub_id=acc.get("sub_id"), sub_link=sub_link,
+                                   volume_gb=int(gb) if gb >= 1 else 0, days=days, plan_title="تست رایگان", status="active",
+                                   svc_code=await new_svc_code(s, ctx.bot_id), first_conn_notified=False)
+            s.add(new_acc)
+            await s.commit()
+            a = new_acc
+        out = _svc_payload(a)
+        out["trial"] = True
+        return JSONResponse({"ok": True, "service": out})
+    except PanelError as e:
+        await _rollback()
+        logger.warning("vpn_api trial: خطایِ پنل: %s", e)
+        return _err("panel_error")
+    except Exception:      # noqa: BLE001
+        await _rollback()
+        logger.exception("vpn_api trial: خطایِ غیرمنتظره")
+        return _err("internal_error")
+    finally:
+        try:
+            await client.close()
+        except Exception:      # noqa: BLE001
+            pass
+
+
+def _tk_payload(t, replies=None) -> dict:
+    d = {"id": t.id, "status": t.status, "subject": t.subject, "text": t.text,
+         "created_at": _fmt_dt(t.created_at)}
+    if replies is not None:
+        d["replies"] = [{"from": r.sender, "text": r.text, "at": _fmt_dt(r.created_at)} for r in replies]
+    return d
+
+
+async def _do_ticket(ctx: AuthCtx, user: BotUser, action: str, p: dict) -> JSONResponse:
+    from models import TenantTicket, TenantTicketReply
+    if action == "ticket":
+        text = str(p.get("text") or "").strip()
+        if not text or len(text) > 3000:
+            return _err("invalid_text")
+        if not _rate_ok(f"tk:{ctx.bot_id}:{user.id}", 6):
+            return _err("rate_limited")
+        subject = (str(p.get("subject") or "").strip()[:100]) or None
+        async with Session() as s:
+            t = TenantTicket(bot_id=ctx.bot_id, user_id=user.id, text=text, subject=subject)
+            s.add(t)
+            await s.flush()
+            tid = t.id
+            await s.commit()
+        await _notify_ticket(ctx.bot_id, user, tid, text, subject, reply=False)
+        return JSONResponse({"ok": True, "ticket": {"id": tid, "status": "open"}})
+    if action == "tickets":
+        tid = _int_or_none(p.get("ticket_id") or p.get("id"))
+        async with Session() as s:
+            if tid:
+                t = await s.scalar(select(TenantTicket).where(TenantTicket.id == tid, TenantTicket.bot_id == ctx.bot_id, TenantTicket.user_id == user.id))
+                if not t:
+                    return _err("ticket_not_found")
+                reps = (await s.scalars(select(TenantTicketReply).where(TenantTicketReply.ticket_id == t.id).order_by(TenantTicketReply.id))).all()
+                return JSONResponse({"ok": True, "ticket": _tk_payload(t, reps)})
+            items = (await s.scalars(select(TenantTicket).where(TenantTicket.bot_id == ctx.bot_id, TenantTicket.user_id == user.id)
+                                     .order_by(TenantTicket.id.desc()).limit(50))).all()
+        return JSONResponse({"ok": True, "count": len(items), "items": [_tk_payload(t) for t in items]})
+    # ticket_reply
+    tid = _int_or_none(p.get("ticket_id") or p.get("id"))
+    text = str(p.get("text") or "").strip()
+    if not tid:
+        return _err("ticket_id_required")
+    if not text or len(text) > 3000:
+        return _err("invalid_text")
+    if not _rate_ok(f"tkr:{ctx.bot_id}:{user.id}", 12):
+        return _err("rate_limited")
+    async with Session() as s:
+        t = await s.scalar(select(TenantTicket).where(TenantTicket.id == tid, TenantTicket.bot_id == ctx.bot_id, TenantTicket.user_id == user.id).with_for_update())
+        if not t:
+            return _err("ticket_not_found")
+        if t.status == "closed":
+            return _err("ticket_closed")
+        s.add(TenantTicketReply(ticket_id=t.id, sender="user", text=text))
+        t.status = "open"
+        subj = t.subject
+        await s.commit()
+    await _notify_ticket(ctx.bot_id, user, tid, text, subj, reply=True)
+    return JSONResponse({"ok": True, "ticket": {"id": tid, "status": "open"}})
+
+
+async def _notify_ticket(bot_id: int, user: BotUser, tid: int, text: str, subject, *, reply: bool) -> None:
+    """اطلاعِ تیکتِ API به ادمین‌هایِ ربات (با دکمهٔ پاسخ)؛ شکست‌خوردنش نباید پاسخِ API را خراب کند."""
+    try:
+        from aiogram import Bot as _AiogramBot
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+        from tenant import _notify_admins
+        async with Session() as s:
+            _row = await s.get(BotRow, bot_id)
+        if not _row:
+            return
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💬 پاسخ", callback_data=f"tkt:reply:{tid}:{user.telegram_id}")]])
+        head = (f"💬 پاسخِ جدید به تیکت #{tid}" if reply else f"🎫 تیکت جدید #{tid} (از طریقِ API)") + f"\nکاربر: <code>{user.telegram_id}</code>"
+        if subject:
+            head += f"\nموضوع: <b>{_html_escape(subject)}</b>"
+        _tb = _AiogramBot(token=_row.token)
+        try:
+            await _notify_admins(_tb, _row, f"{head}\n\n{_html_escape(text)}", kb)
+        finally:
+            await _tb.session.close()
+    except Exception:      # noqa: BLE001
+        logger.exception("vpn_api: اطلاعِ تیکت به ادمین ناموفق بود")
+
+
+def _html_escape(t) -> str:
+    import html as _h
+    return _h.escape(str(t or ""))
+
+
 async def dispatch(ctx: AuthCtx, action: str, p: dict) -> JSONResponse:
     if not _rate_ok(f"any:{ctx.bot_id}:{ctx.user.id if ctx.user else 0}", _ANY_PER_MIN):
         return _err("rate_limited")
@@ -513,6 +709,16 @@ async def dispatch(ctx: AuthCtx, action: str, p: dict) -> JSONResponse:
         if not _rate_ok(f"buy:{ctx.bot_id}:{user.id}", _BUY_PER_MIN):
             return _err("rate_limited")
         return await _do_buy(ctx, user, p)
+
+    if action == "trial":          # PATCH_VPN_API_TRIAL_TICKET_V1
+        if user is None:
+            return _err("telegram_id_required" if ctx.full_access else "user_not_found")
+        return await _do_trial(ctx, user, p)
+
+    if action in ("ticket", "tickets", "ticket_reply"):
+        if user is None:
+            return _err("telegram_id_required" if ctx.full_access else "user_not_found")
+        return await _do_ticket(ctx, user, action, p)
 
     if action == "services":
         if user is None:

@@ -884,6 +884,10 @@ td,th{{border:1px solid #d0d7de;padding:6px 10px;text-align:right}} .note{{backg
 <tr><td><code>delete</code></td><td>حذفِ سرویس از پنل و ربات: <code>service</code> (بدونِ برگشتِ پول)</td></tr>
 <tr><td><code>charge</code></td><td>شارژِ کیف‌پول با آپی: <code>amount</code> (تومان) ← <code>pay_url</code> و <code>order_id</code>؛ بعد از پرداخت موجودی خودکار زیاد می‌شود</td></tr>
 <tr><td><code>charge_status</code></td><td>وضعیتِ فاکتورِ شارژ: <code>order_id</code> ← waiting / paid / ...</td></tr>
+<tr><td><code>trial</code></td><td>دریافتِ تستِ رایگان (طبقِ تنظیماتِ تستِ ربات؛ هر کاربر یک‌بار). خطاها: <code>trial_disabled</code>، <code>trial_already_used</code>، <code>trial_out_of_stock</code></td></tr>
+<tr><td><code>ticket</code></td><td>ثبتِ تیکت: <code>text</code> و اختیاری <code>subject</code> ← <code>ticket.id</code></td></tr>
+<tr><td><code>tickets</code></td><td>فهرستِ تیکت‌ها؛ با <code>ticket_id</code> ← جزئیاتِ تیکت + پاسخ‌ها (<code>replies</code>)</td></tr>
+<tr><td><code>ticket_reply</code></td><td>پاسخ به تیکتِ خودتان: <code>ticket_id</code> و <code>text</code></td></tr>
 <tr><td><code>services</code></td><td>فهرستِ سرویس‌هایِ کاربر</td></tr>
 <tr><td><code>status</code></td><td>وضعیتِ زنده: <code>service</code> = کدِ سرویس یا نام کاربریِ پنل</td></tr></table>
 <pre>curl -d "key=API_KEY&amp;action=plans" {api_vpn}

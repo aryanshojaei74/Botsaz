@@ -423,6 +423,15 @@ async def _apikey_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
                   else "👥 API برایِ همهٔ کاربران: ⬜️ غیرفعال (زدن = باز برایِ همه)"),
             callback_data="tadm:apikey:allusers",
             style=(ButtonStyle.SUCCESS if _all else ButtonStyle.PRIMARY))])
+    # === PATCH_API_PAGE_MINIMAL_V1 === صفحهٔ API کاربر: «ساده» = فقط کلید و تغییرِ کلید
+    if has_ctl:
+        from tenant import get_setting as _gs2
+        _mini = (await _gs2(bot_id, "api_page_minimal", "0")) == "1"
+        kb_rows.append([InlineKeyboardButton(
+            text=("🙈 صفحهٔ API کاربر: ساده (فقط کلید) ✅ — زدن = کامل" if _mini
+                  else "👁 صفحهٔ API کاربر: کامل — زدن = ساده (فقط کلید و تغییر کلید)"),
+            callback_data="tadm:apikey:minimal",
+            style=(ButtonStyle.SUCCESS if _mini else ButtonStyle.PRIMARY))])
     # === PATCH_API_PAID_ACCESS_V1 ===
     # قیمت و مدتِ دسترسیِ API برایِ کاربران (خرید از موجودیِ کیف پول).
     if has_ctl:
@@ -490,6 +499,25 @@ async def tadm_apikey_price_set(msg: Message, bot: Bot, state: FSMContext):
                      else "✅ دسترسیِ API رایگان شد.")
     text, kb = await _apikey_content(row.id)
     await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@custom_domain_router.callback_query(F.data == "tadm:apikey:minimal")
+async def tadm_apikey_minimal_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    if row.field not in ("virtual_service", "vpn_sales"):
+        await cb.answer("این قابلیت فقط برایِ رباتِ خدماتِ مجازی و فروشِ VPN است.", show_alert=True)
+        return
+    from tenant import get_setting as _gs, set_setting as _ss
+    new = "0" if (await _gs(row.id, "api_page_minimal", "0")) == "1" else "1"
+    await _ss(row.id, "api_page_minimal", new)
+    text, kb = await _apikey_content(row.id)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await cb.answer("ساده شد" if new == "1" else "کامل شد")
 
 
 @custom_domain_router.callback_query(F.data == "tadm:apikey:period")

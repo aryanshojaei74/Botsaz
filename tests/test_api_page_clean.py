@@ -344,3 +344,19 @@ def test_docs_are_static_and_leak_nothing(client):
 def test_docs_mention_the_partial_status_and_unsupported_actions(client):
     html = client.get("/api/docs", headers={"host": "x.test"}).text
     assert "Partial" in html and "refill" in html and "cancel" in html
+
+
+@pytest.mark.asyncio
+async def test_minimal_page_shows_only_key_and_regen_button(db):
+    """PATCH_API_PAGE_MINIMAL_V1 (Weirdnet) — حالتِ «ساده»: فقط کلید + تغییرِ کلید؛ بدونِ آدرس/موجودی/اکشن‌ها/مستندات."""
+    import tenant
+    maker, row = db
+    await tenant.set_setting(row.id, "api_page_minimal", "1")
+    tenant._SETTING_CACHE.clear()
+    text, kb = await tenant._pubapi_render(row, await user(maker), CUSTOMER)
+    assert f"<code>{KEY}</code>" in text and "وضعیت کلید" in text
+    for hidden in ("آدرس API", "expresspanel.ir", "موجودی شما", "مستندات", "اکشن‌ها"):
+        assert hidden not in text, hidden
+    datas = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert "pubapi:regen" in datas
+    assert not any(getattr(b, "url", None) for r in kb.inline_keyboard for b in r)      # دکمهٔ مستنداتِ لینکی هم نیست
