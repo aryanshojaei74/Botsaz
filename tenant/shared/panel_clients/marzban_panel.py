@@ -712,6 +712,19 @@ class MarzbanPanelClient:
         را به لیستی از دیکشنری با کلیدهای tag/protocol تبدیل می‌کنیم؛ شناسهٔ
         یکتای اینباند در مرزبان همان «tag» است (در 3X-UI عدد id بود)."""
         res = await self._request("GET", "/api/inbounds") or {}
+        # PATCH_MARZBAN_INBOUNDS_LIST_V1 — بعضی پنل‌هایِ هم‌خانوادهٔ مرزبان (نسخه‌هایِ جدید/فورک) به‌جایِ {protocol: [...]} «لیست» برمی‌گردانند
+        # (لیستِ دیکشنری با tag/protocol، یا لیستِ تگ‌ها). قبلاً AttributeError می‌داد و همگام‌سازیِ آن پنل هر دور خطا می‌خورد.
+        if isinstance(res, list):
+            grouped: dict[str, list] = {}
+            for it in res:
+                if isinstance(it, dict) and (it.get("tag") or it.get("remark")):
+                    tag = it.get("tag") or it.get("remark")
+                    grouped.setdefault(str(it.get("protocol") or "unknown"), []).append({**it, "tag": tag})
+                elif isinstance(it, str) and it:
+                    grouped.setdefault("unknown", []).append({"tag": it})
+            res = grouped
+        elif not isinstance(res, dict):
+            res = {}
         flat = []
         for proto, items in res.items():
             for ib in items or []:
@@ -773,6 +786,8 @@ class MarzbanPanelClient:
         cache = self._inbounds_cache or {}
         wanted = set(tags) if tags else None
         for proto, items in cache.items():
+            if proto == "unknown":          # تگِ بدونِ پروتکل: نمی‌شود برایِ ساختِ کاربر حدس زد
+                continue
             for ib in items or []:
                 tag = ib.get("tag")
                 if not tag:
