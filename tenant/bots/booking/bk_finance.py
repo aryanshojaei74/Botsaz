@@ -294,7 +294,7 @@ async def bka_customer_view(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return await cb.answer("پرونده پیدا نشد", show_alert=True)
     c, counts, paid, recent = got
     total = sum(counts.values())
-    link = f'<a href="tg://user?id={tg}">پروفایل تلگرام</a>'
+    link = E.tg_link_html(tg)
     text = (f"👤 <b>{_esc(c.name or '—')}</b> {'🚫 <b>مسدود</b>' if c.blocked else ''}\n📱 <code>{_esc(c.phone)}</code>\n🔗 {link}\n\n"
             f"📊 کلِ نوبت‌ها: <b>{total}</b> · ✅ انجام‌شده: {counts.get('done', 0)} · 🟢 تأییدشده: {counts.get('confirmed', 0)} · 🟡 انتظار: {counts.get('pending', 0)}\n"
             f"⚪️ لغو: {counts.get('cancelled', 0)} · 🔴 رد: {counts.get('rejected', 0)} · ⚠️ عدم حضور: {counts.get('noshow', 0)}\n"

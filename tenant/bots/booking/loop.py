@@ -29,7 +29,7 @@ async def run_once(now: _dt.datetime | None = None, bot_factory=None) -> int:
     sent = 0
     async with Session() as s:
         aps = (await s.scalars(select(BkAppt).where(
-            BkAppt.status == "confirmed", BkAppt.date_str >= today.isoformat(),
+            BkAppt.status == "confirmed", BkAppt.tg_id > 0, BkAppt.date_str >= today.isoformat(),
             BkAppt.date_str <= (today + _dt.timedelta(days=8)).isoformat()))).all()
     by_bot: dict[int, list[BkAppt]] = {}
     for a in aps:

@@ -43,6 +43,9 @@ class BkAdm(StatesGroup):
     of_reason = State()
     cfg_val = State()
     pay_amount = State()
+    m_name = State()
+    m_phone = State()
+    m_note = State()
     cu_note = State()
     cu_search = State()
 
@@ -149,7 +152,8 @@ async def bka_hub_appts(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if not await _guard(cb, bot):
         return
     await state.clear()
-    rows = [[_btn("🟡 در انتظار تأیید", "bka:l:pend:0", ButtonStyle.SUCCESS)],
+    rows = [[_btn("➕ ثبتِ نوبتِ دستی (حضوری/تلفنی)", "bka:m", ButtonStyle.SUCCESS)],
+            [_btn("🟡 در انتظار تأیید", "bka:l:pend:0", ButtonStyle.SUCCESS)],
             [_btn("📅 امروز", "bka:l:today:0", ButtonStyle.PRIMARY), _btn("🗓 فردا", "bka:l:tmr:0", ButtonStyle.PRIMARY)],
             [_btn("🔜 همهٔ نوبت‌هایِ آینده", "bka:l:up:0", ButtonStyle.PRIMARY)],
             _help_btn("ap"), BACK_HOME]
@@ -262,7 +266,7 @@ async def bka_list(cb: CallbackQuery, bot: Bot):
 
 
 def _admin_card(a: BkAppt, paid: int = 0) -> str:
-    link = f'<a href="tg://user?id={a.tg_id}">پروفایل تلگرام</a>'
+    link = E.tg_link_html(a.tg_id)
     t = f"📌 <b>نوبت #{a.id}</b>\n\n{_appt_card(a)}\n\n👤 {_esc(a.customer_name)}\n📱 <code>{_esc(a.phone)}</code>\n🔗 {link}"
     if a.price or paid:
         left = max(int(a.price or 0) - int(paid), 0)
@@ -303,6 +307,8 @@ async def bka_view(cb: CallbackQuery, bot: Bot):
 
 
 async def _tell_customer(bot: Bot, a: BkAppt, text: str):
+    if not E.has_telegram(a.tg_id):          # مشتریِ ثبتِ دستی: تلگرام ندارد
+        return
     try:
         await bot.send_message(a.tg_id, text, parse_mode="HTML")
     except Exception:      # noqa: BLE001

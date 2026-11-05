@@ -296,14 +296,49 @@ async def day_slots(bot_id: int, service: BkService, d: _dt.date, staff_id: int 
 
 # ───────────────────────── ثبت/لغو ─────────────────────────
 
+def has_telegram(tg_id) -> bool:
+    """مشتریِ دستی (ثبت‌شده توسطِ مالک، بدونِ تلگرام) شناسهٔ منفی دارد؛ به او پیام/یادآوری فرستاده نمی‌شود."""
+    try:
+        return int(tg_id) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def tg_link_html(tg_id) -> str:
+    return f'<a href="tg://user?id={int(tg_id)}">پروفایل تلگرام</a>' if has_telegram(tg_id) else "(بدونِ تلگرام — ثبتِ دستی)"
+
+
 async def book(bot_id: int, tg_id: int, service: BkService, d: _dt.date, start: int, staff_id: int | None,
-               name: str, phone: str, note: str, cfg: dict, now: _dt.datetime | None = None):
+               name: str, phone: str, note: str, cfg: dict, now: _dt.datetime | None = None, by_owner: bool = False):
     """نوبت را ثبت می‌کند؛ قبل از ثبت دوباره موجود بودنِ ساعت را از دیتابیس می‌سنجد.
-    خروجی: (BkAppt | None, خطا | None) — خطا: 'taken' | 'bad_time'."""
-    async with Session() as s:
-        cu = await s.scalar(select(BkCustomer).where(BkCustomer.bot_id == bot_id, BkCustomer.tg_id == int(tg_id)))
-    if cu and cu.blocked:
-        return None, "blocked"
+    by_owner=True (ثبتِ دستیِ مالک): نوبت مستقیم «تأییدشده» است، «حداقل فاصله تا نوبت» و «مسدود بودنِ مشتری» اعمال نمی‌شود
+    (تداخل با نوبت/تعطیلی/ساعتِ کاری همچنان کنترل می‌شود).
+    خروجی: (BkAppt | None, خطا | None) — خطا: 'taken' | 'blocked'."""
+    if by_owner:
+        cfg = {**cfg, "lead": 0}
+    else:
+        async with Session() as s:
+            cu = await s.scalar(select(BkCustomer).where(BkCustomer.bot_id == bot_id, BkCustomer.tg_id == int(tg_id)))
+        if cu and cu.blocked:
+            return None, "blocked"
+    # «بررسیِ آزاد بودن + ثبت» برایِ یک روز پشتِ‌سرهم انجام می‌شود تا دو رزروِ هم‌زمانِ همان ساعت (در همین پروسه) هر دو جا نشوند
+    async with _book_lock(bot_id, d):
+        return await _book_locked(bot_id, tg_id, service, d, start, staff_id, name, phone, note, cfg, now, by_owner)
+
+
+_BOOK_LOCKS: dict = {}
+
+
+def _book_lock(bot_id: int, d: _dt.date):
+    import asyncio
+    k = (bot_id, d.isoformat())
+    if len(_BOOK_LOCKS) > 512:           # حافظه محدود بماند
+        for kk in [x for x, v in _BOOK_LOCKS.items() if not v.locked()][:256]:
+            _BOOK_LOCKS.pop(kk, None)
+    return _BOOK_LOCKS.setdefault(k, asyncio.Lock())
+
+
+async def _book_locked(bot_id, tg_id, service, d, start, staff_id, name, phone, note, cfg, now, by_owner):
     snap = await load_snapshot(bot_id, d, d)
     res = await resources_for(bot_id, cfg, service.id, staff_id)
     slots = dict(slots_for_day(snap, d, service.duration_min, cfg, res, now))
@@ -319,7 +354,7 @@ async def book(bot_id: int, tg_id: int, service: BkService, d: _dt.date, start: 
         ap = BkAppt(bot_id=bot_id, tg_id=int(tg_id), service_id=service.id, service_name=service.name, staff_id=rid,
                     staff_name=staff_name, date_str=d.isoformat(), start_min=start, end_min=start + service.duration_min,
                     price=int(service.price or 0), customer_name=(name or "")[:80], phone=(phone or "")[:20],
-                    note=(note or "")[:1000], status="confirmed" if cfg["auto_confirm"] else "pending")
+                    note=(note or "")[:1000], status="confirmed" if (cfg["auto_confirm"] or by_owner) else "pending")
         s.add(ap)
         # پروندهٔ مشتری: ساخت/به‌روزرسانیِ نام و شماره (یادداشت و «مسدود» دست‌نخورده می‌ماند)
         cu = await s.scalar(select(BkCustomer).where(BkCustomer.bot_id == bot_id, BkCustomer.tg_id == int(tg_id)))
@@ -436,3 +471,29 @@ async def finance_summary(bot_id: int, now: _dt.datetime | None = None) -> dict:
     return {"today": t_today, "d7": t7, "d30": t30, "by_day": by_day, "by_method": by_method,
             "owed_total": sum(o for _a, o in owed), "owed": owed, "upcoming": upcoming,
             "by_service": [(n, int(c), int(v)) for n, c, v in by_service], "by_staff": [(n or "—", int(c), int(v)) for n, c, v in by_staff]}
+
+
+async def find_or_create_manual_customer(bot_id: int, name: str, phone: str) -> BkCustomer:
+    """مشتریِ حضوری/تلفنی: اگر شماره‌اش قبلاً در پرونده‌ها هست همان پرونده (جلوگیریِ از تکرار)، وگرنه پروندهٔ تازه با شناسهٔ
+    منفیِ یکتا (بدونِ تلگرام). شناسه‌هایِ منفی فقط داخلِ همین ربات یکتا هستند."""
+    from sqlalchemy import func as _f
+    from sqlalchemy.exc import IntegrityError
+    name, phone = (name or "").strip()[:80], (phone or "").strip()[:20]
+    async with Session() as s:
+        if phone:
+            c = await s.scalar(select(BkCustomer).where(BkCustomer.bot_id == bot_id, BkCustomer.phone == phone).order_by(BkCustomer.id).limit(1))
+            if c:
+                if name and not c.name:
+                    c.name = name
+                    await s.commit()
+                return c
+        for _ in range(4):
+            mn = await s.scalar(select(_f.min(BkCustomer.tg_id)).where(BkCustomer.bot_id == bot_id, BkCustomer.tg_id <= 0))
+            c = BkCustomer(bot_id=bot_id, tg_id=int(mn or 0) - 1, name=name or None, phone=phone or None)
+            s.add(c)
+            try:
+                await s.commit()
+                return c
+            except IntegrityError:
+                await s.rollback()
+        raise RuntimeError("manual customer id allocation failed")
