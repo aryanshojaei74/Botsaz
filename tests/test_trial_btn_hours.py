@@ -77,3 +77,17 @@ async def test_button_trial_accepts_hours_and_shows_label(env):
     async with env.mk() as s:
         cfg = json.loads((await s.get(models.MainButton, env.mb_id)).config)
     assert cfg["trial_days"] == "2" and "trial_hours" not in cfg
+
+
+def test_hourly_trial_label_and_delivery_hours_helper():
+    import datetime as dt
+    from tenant.bots.vpn import vpn_user as VU
+    now = dt.datetime(2026, 11, 6, 0, 0)
+    a = SimpleNamespace(days=0, expires_at=now + dt.timedelta(hours=6), created_at=now)
+    assert VU._acc_hours(a) == 6
+    assert "6 ساعت" in VU._svc_label("تست رایگان", 0, 0, 307, VU._acc_hours(a))
+    assert "بی‌انقضا" in VU._svc_label("تست رایگان", 0, 0, 307, 0)          # واقعاً بی‌انقضا بدونِ expires_at
+    b = SimpleNamespace(days=0, expires_at=None, created_at=now)
+    assert VU._acc_hours(b) == 0
+    c = SimpleNamespace(days=3, expires_at=now + dt.timedelta(days=3), created_at=now)
+    assert VU._acc_hours(c) == 0                                           # روزی ⇒ ساعتی حساب نمی‌شود

@@ -1058,8 +1058,19 @@ def fmt_vol(gb, mb=None) -> str:
     return "♾️ نامحدود" if gb == 0 else f"{gb} گیگ"
 
 
+def _acc_hours(a) -> int:
+    """PATCH_TRIAL_HOURS_DISPLAY_V1 (تیکت #912) — مدتِ تستِ ساعتی: days=0 ولی expires_at ثبت شده ⇒ تعدادِ ساعت (۱..۷۲۰)، وگرنه ۰."""
+    try:
+        if int(getattr(a, "days", 0) or 0) == 0 and getattr(a, "expires_at", None) and getattr(a, "created_at", None):
+            h = round((a.expires_at - a.created_at).total_seconds() / 3600)
+            return h if 0 < h <= 720 else 0
+    except Exception:      # noqa: BLE001
+        pass
+    return 0
+
+
 def _svc_label(plan_title: str | None, volume_gb: int, days: int,
-               volume_mb: int | None = None) -> str:
+               volume_mb: int | None = None, hours: int = 0) -> str:
     """نمایش خوانا: اگه اسم دلخواه داشت نشون بده، زیرش هم مشخصات.
 
     === PATCH_PANEL_ACCOUNT_VOLUME_MB_V1 ===
@@ -1071,7 +1082,7 @@ def _svc_label(plan_title: str | None, volume_gb: int, days: int,
         vol = f"{volume_mb} مگابایت"
     else:
         vol = "نامحدود" if volume_gb == 0 else f"{volume_gb} گیگ"
-    dur  = "بی‌انقضا" if days == 0 else f"{days} روز"
+    dur  = f"{hours} ساعت" if (days == 0 and hours) else ("بی‌انقضا" if days == 0 else f"{days} روز")
     spec = f"{vol} / {dur}"
     # اگه plan_title یه اسم کاربری باشه (نه فرمت خودکار مثل 30G / 30D)
     if plan_title and not _re.match(r'^\d+G\s*/\s*\d+D$', plan_title.strip()):
@@ -1268,7 +1279,8 @@ async def _send_config_delivery(bot: Bot, tg_id: int, aid: int):
             return
         vol      = (f"{a.volume_mb} مگابایت" if a.volume_mb
                     else ("نامحدود" if a.volume_gb == 0 else f"{a.volume_gb} گیگ"))
-        dur      = "بی‌انقضا" if a.days == 0 else f"{a.days} روز"
+        _hrs     = _acc_hours(a)
+        dur      = f"{_hrs} ساعت" if _hrs else ("بی‌انقضا" if a.days == 0 else f"{a.days} روز")
         # === PATCH_EXPIRY_FALLBACK_V1 ===
         # در پیامِ تحویل «تاریخ انقضا: —» دیده شد. علتش این است که بعضی
         # مسیرها (مثلِ تستِ رایگان) `expires_at` را پر نمی‌کنند و کاربر
@@ -1277,9 +1289,9 @@ async def _send_config_delivery(bot: Bot, tg_id: int, aid: int):
         _exp = a.expires_at
         if _exp is None and a.days and a.created_at:
             _exp = a.created_at + _dt.timedelta(days=a.days)
-        exp_line = ("" if a.days == 0 else
+        exp_line = ("" if (a.days == 0 and not _hrs) else
                     f"📅 تاریخ انقضا: <b>{_jalali(_exp)}</b>\n")
-        title    = _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb)
+        title    = _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb, _acc_hours(a))
         sub_link = a.sub_link or ""
         acc_bot_id = a.bot_id
         acc_panel_key = a.panel_key or ""
@@ -5949,7 +5961,7 @@ async def show_reseller_configs(bot: Bot, msg: Message, bot_id: int, tg_id: int)
     rows = []
     for a in accts:
         mark = "🟢" if a.status == "active" else "🔴"
-        title = _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb)
+        title = _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb, _acc_hours(a))
         rows.append([InlineKeyboardButton(text=f"{mark} {title}",
                                           callback_data=f"vsvc:{a.id}")])
     rows.append(back)
@@ -5989,7 +6001,7 @@ async def show_my_services(bot: Bot, msg: Message, bot_id: int, tg_id: int):
             # === PATCH_VPN_DELETE_HIDE_ONLY_V1 ===
             PanelAccount.status.notin_(("hidden", "refunded", "refunding")))   # PATCH_VPN_REFUND_V1
             .order_by(PanelAccount.id.desc()))).all()
-        items = [(a.id, _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb), a.status) for a in accts]
+        items = [(a.id, _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb, _acc_hours(a)), a.status) for a in accts]
         # کانفیگ‌های خریداری‌شده از انبار دستی را هم نشان بده
         u = await s.scalar(select(BotUser).where(
             BotUser.bot_id == bot_id, BotUser.telegram_id == tg_id))
@@ -6053,7 +6065,7 @@ async def renewable_services(bot_id: int, tg_id: int) -> list[tuple[int, str, st
                 continue
             if (await _vc(bot_id, "renew_enabled", panel.panel_key)) != "1":
                 continue
-            out.append((a.id, _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb), a.status or "active"))
+            out.append((a.id, _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb, _acc_hours(a)), a.status or "active"))
     return out
 
 
@@ -6108,7 +6120,7 @@ async def vpn_service(cb: CallbackQuery, bot: Bot):
             return
         panel = await _panel_for_account(s, row.id, a)
         email, sub_link = a.email, a.sub_link
-        title = _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb)
+        title = _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb, _acc_hours(a))
         bought = _jalali(a.created_at)
         fallback_expiry = a.expires_at
         # === PATCH_SVC_DISABLE_MARKER_USER ===
@@ -6550,7 +6562,7 @@ async def vpn_refund_ask(cb: CallbackQuery, bot: Bot):
         await cb.answer("حجم/زمانِ باقی‌مانده‌ای نیست؛ مبلغی برای برگشت وجود ندارد.", show_alert=True)
         return
     lines = ["💸 <b>درخواستِ برگشت وجه</b>", "",
-             f"🏷 سرویس: <b>{_svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb)}</b>"]
+             f"🏷 سرویس: <b>{_svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb, _acc_hours(a))}</b>"]
     if q is not None:
         lines += _refund_breakdown_lines(q, int(a.paid_toman or 0))
     else:
@@ -6635,7 +6647,7 @@ async def vpn_refund_req_save(msg: Message, bot: Bot, state: FSMContext):
              else f"<code>{msg.from_user.id}</code>")
     lines = ["💸 <b>درخواستِ برگشت وجهِ سرویس VPN</b>", "",
              f"👤 کاربر: {uname} ({html.escape(msg.from_user.full_name or '')})",
-             f"🏷 سرویس: <b>{html.escape(_svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb))}</b>"
+             f"🏷 سرویس: <b>{html.escape(_svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb, _acc_hours(a)))}</b>"
              f" — <code>{html.escape(str(a.email))}</code>"]
     if q is not None:
         lines += _refund_breakdown_lines(q, int(a.paid_toman or 0))
@@ -6689,7 +6701,7 @@ async def vpn_refund_decide(cb: CallbackQuery, bot: Bot):
         panel = (await s.scalar(select(VpnPanel).where(
             VpnPanel.bot_id == row.id, VpnPanel.panel_key == (a.panel_key or "sanai")))) if a else None
     who = f"@{cb.from_user.username}" if cb.from_user.username else str(cb.from_user.id)
-    label = _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb) if a else "سرویس"
+    label = _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb, _acc_hours(a)) if a else "سرویس"
 
     async def _set_req(frm: tuple, to: str) -> int:
         async with Session() as s2:
@@ -6950,7 +6962,7 @@ async def vpn_add_traffic(cb: CallbackQuery, bot: Bot):
         a   = await s.get(PanelAccount, aid)
         if not row or not a or a.bot_id != row.id or a.user_telegram_id != cb.from_user.id:
             await cb.answer("یافت نشد.", show_alert=True); return
-        title = _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb)
+        title = _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb, _acc_hours(a))
         panel = await _panel_for_account(s, row.id, a)
     # تنظیمات تمدید از ادمین (مخصوص همین پنل)
     bot_id   = row.id if row else 0

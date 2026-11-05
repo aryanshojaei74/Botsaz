@@ -9402,6 +9402,14 @@ async def do_free_trial(msg, bot: "Bot", bot_id: int, u: BotUser,
                              reply_markup=back_kb)
             return
         client = _trial_panel_client(panel)
+        # === PATCH_TRIAL_HOURS_SAFETY_V1 === (تیکت #912) پنل‌هایِ بدونِ پشتیبانیِ ساعتی (هیدیفای، شاهان، …) پارامترِ hours را نادیده می‌گرفتند
+        # و با days=0 «تستِ بی‌انقضا» می‌ساختند؛ برایِ آن‌ها مدت به نزدیک‌ترین «روزِ کامل» (حداقل ۱) گرد می‌شود.
+        _base_key = str(panel.panel_key or "").split("#")[0]
+        if hours and _base_key not in _TRIAL_HOURS_CAPABLE:
+            days = max(1, int(days or 0) + -(-int(hours) // 24))      # گردِ رو به بالا
+            hours = 0
+            _dur_display = _trial_duration_label(str(days), "0")
+            logger.warning("trial: پنلِ %s ساعتی را پشتیبانی نمی‌کند؛ مدت به %s روز گرد شد", _base_key, days)
         try:
             email = await _make_config_email(
                 bot_id, panel.panel_key,
@@ -9428,6 +9436,9 @@ async def do_free_trial(msg, bot: "Bot", bot_id: int, u: BotUser,
                     uuid=acc.get("uuid"), sub_id=acc.get("sub_id"),
                     sub_link=sub_link, volume_gb=gb_int, days=days,
                     plan_title="تست رایگان", status="active",
+                    # PATCH_TRIAL_HOURS_DISPLAY_V1: زمانِ پایانِ واقعیِ تست (روز+ساعت) ثبت شود تا «۶ ساعت» به‌جایِ «بی‌انقضا» نشان داده شود
+                    expires_at=(None if _onhold or not hours else
+                                _dt.datetime.utcnow() + _dt.timedelta(days=int(days or 0), hours=int(hours or 0))),
                     svc_code=await _new_svc_code(s, bot_id), first_conn_notified=False)
                 s.add(new_acc)
                 await s.commit()
@@ -9617,6 +9628,11 @@ def _trial_panel_client(panel):
         logger.exception("استخرِ پنل برایِ تستِ رایگان در دسترس نبود؛ کلاینتِ تازه ساخته شد")
         from tenant.shared.panel_clients.vpn_panel_factory import make_panel_client
         return make_panel_client(panel)
+
+
+# پنل‌هایی که create_account‌شان واقعاً hours را اعمال می‌کند (بقیه ⇒ گردِ روزانه)
+_TRIAL_HOURS_CAPABLE = frozenset({"marzban", "pasargad", "pasarguard", "marzneshin", "upanel_mizban", "rebecca",
+                                  "rickpanel", "nodex", "sanai", "alireza"})
 
 
 async def _trial_deliver(bot: "Bot", bot_id: int, u: "BotUser", trial_mode: str,
@@ -14009,7 +14025,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "452"
+BUILD_ID = "453"
 
 
 @tenant_router.message(Command("version"))
