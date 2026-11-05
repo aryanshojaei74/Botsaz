@@ -172,18 +172,46 @@ def _iso(value) -> str:
 _PANEL_TAG_RE = None
 
 
+def _panel_keywords(panel_name: str | None) -> set[str]:
+    """PATCH_TRUST_STRIP_PANEL_TAG_V2 — کلمه‌هایِ نامِ پنل‌ها (از فهرستِ برچسبِ پنل‌هایِ ربات + نامِ همین پنل) برایِ تشخیصِ
+    نشانهٔ پنل در عنوانِ پلن، مثلاً «(یوپنل)»، «(مرزبان)»، «(سنایی)»، «(PasarGuard)»."""
+    import re
+    def toks(label: str) -> set[str]:
+        out = set()
+        for w in re.split(r"[\s()\[\]（）/\-—·|,،]+", label or ""):
+            w = re.sub(r"[^\w\u0600-\u06FF]", "", w, flags=re.UNICODE).lower()
+            if len(w) >= 3 and w != "پنل" and not w.isdigit():
+                out.add(w)
+        return out
+    kws = toks(panel_name or "")
+    try:
+        from tenant.bots.vpn.vpn_admin import PANEL_LABELS
+        for lbl in PANEL_LABELS.values():
+            kws |= toks(lbl)
+    except Exception:      # noqa: BLE001
+        pass
+    return kws
+
+
 def strip_panel_tag(text, panel_name: str | None = None) -> str:
-    """PATCH_TRUST_STRIP_PANEL_TAG_V1 (NextV2ray «🥇طلایی (A)») — نشانهٔ پنل در انتهایِ عنوانِ پلن («(A)»، «(B)»، «(پنل ۲)» یا نامِ خودِ پنل)
-    در کانالِ عمومیِ اعتماد نمایش داده نمی‌شود. فقط پرانتزِ پایانیِ **کوتاه** (≤۲ نویسه) یا برابر با نامِ پنل حذف می‌شود؛
+    """PATCH_TRUST_STRIP_PANEL_TAG_V1/V2 — نشانهٔ پنل در انتهایِ عنوانِ پلن («(A)»، «(B)»، «(پنل ۲)»، نامِ پنل مثلِ «(یوپنل)») در کانالِ
+    عمومیِ اعتماد نمایش داده نمی‌شود. فقط پرانتزِ پایانیِ **کوتاه** (≤۲ نویسه) یا حاویِ نامِ یک پنل حذف می‌شود؛
     توضیحی مثلِ «(ویژه)» دست‌نخورده می‌ماند."""
     import re
     t = "" if text is None else str(text)
     pn = (panel_name or "").strip().lower()
+    kws = _panel_keywords(panel_name)
+
+    def _is_panel_word(inner: str) -> bool:
+        norm = re.sub(r"[^\w\u0600-\u06FF]", "", inner, flags=re.UNICODE).lower()
+        if not norm:
+            return False
+        return any(k == norm or (len(k) >= 4 and (k in norm or norm in k) and len(norm) >= 4) for k in kws)
 
     def _fix(seg: str) -> str:
         def _r(m):
             inner = m.group(1).strip()
-            if len(inner) <= 2 or (pn and inner.lower() == pn):
+            if len(inner) <= 2 or (pn and inner.lower() == pn) or _is_panel_word(inner):
                 return ""
             return m.group(0)
         return re.sub(r"\s*[\(（]([^()（）]{1,40})[\)）](?=\s*(?:—|-|·|/|$))", _r, seg)
