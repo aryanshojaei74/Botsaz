@@ -66,7 +66,7 @@ async def run_once(now: _dt.datetime | None = None, bot_factory=None) -> int:
                     await bot.session.close()
         except Exception:      # noqa: BLE001
             logger.exception("booking loop: خطا (bot=%s)", bot_id)
-    await _expire_stale(now)
+    await _expire_stale(now, bot_factory)
     return sent
 
 
@@ -120,20 +120,44 @@ async def worker_alive(max_age_min: int = 15) -> bool:
         return False
 
 
-async def _expire_stale(now: _dt.datetime) -> None:
-    """نوبتِ «در انتظارِ تأیید» که زمانش گذشته بی‌پایان نماند ⇒ لغو (علت: زمان گذشت)."""
+async def _expire_stale(now: _dt.datetime, bot_factory=None) -> None:
+    """۱) نوبتِ «در انتظارِ تأیید» که زمانش گذشته ⇒ لغو و بیعانه (اگر هست) کامل برگردد. ۲) «منتظرِ بیعانه»هایِ منقضی ⇒ لغو (پولی نرفته)."""
     try:
+        stale: list[tuple[int, int, int]] = []          # (bot_id, appt_id, tg_id)
         async with Session() as s:
             aps = (await s.scalars(select(BkAppt).where(BkAppt.status == "pending", BkAppt.date_str <= now.date().isoformat()))).all()
-            n = 0
             for a in aps:
                 if E.appt_start_dt(a) <= now:
                     a.status, a.cancel_reason = "cancelled", "زمانِ نوبت بدونِ تأیید گذشت"
-                    n += 1
-            if n:
+                    stale.append((a.bot_id, a.id, a.tg_id))
+            if stale:
                 await s.commit()
+        cfgs: dict[int, dict] = {}
+        for bot_id, aid, tg in stale:
+            cfg = cfgs.get(bot_id) or await E.get_cfg(bot_id)
+            cfgs[bot_id] = cfg
+            refunded = await E.refund_deposit(bot_id, aid, cfg, force_full=True)
+            if refunded and E.has_telegram(tg):
+                try:
+                    async with Session() as s:
+                        row = await s.get(BotRow, bot_id)
+                    if row and row.token:
+                        bot = bot_factory(row) if bot_factory else Bot(token=row.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+                        try:
+                            await bot.send_message(tg, f"ℹ️ نوبتِ #{aid} تأیید نشد و زمانش گذشت؛ بیعانهٔ <b>{refunded:,}</b> تومان به کیف پولت برگشت.", parse_mode="HTML")
+                        finally:
+                            if not bot_factory:
+                                await bot.session.close()
+                except Exception:      # noqa: BLE001
+                    logger.info("booking: خبرِ بازگشتِ بیعانه به مشتری نرسید (tg=%s)", tg)
+        # منتظرِ بیعانه‌هایِ منقضی (هر ربات با مهلتِ خودش)
+        async with Session() as s:
+            hold_bots = [r for r in (await s.scalars(select(BkAppt.bot_id).where(BkAppt.status == "hold").distinct())).all()]
+        for bot_id in hold_bots:
+            cfg = cfgs.get(bot_id) or await E.get_cfg(bot_id)
+            await E.expire_holds(bot_id, cfg)
     except Exception:      # noqa: BLE001
-        logger.exception("booking: پاک‌سازیِ نوبت‌هایِ منتظرِ گذشته ناموفق")
+        logger.exception("booking: پاک‌سازیِ نوبت‌هایِ منقضی ناموفق")
 
 
 async def booking_loop() -> None:

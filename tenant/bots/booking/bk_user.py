@@ -29,7 +29,7 @@ from tenant.bots.booking.handlers import booking_router
 from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
 
-STATUS_FA = {"pending": "🟡 در انتظار تأیید", "confirmed": "🟢 تأییدشده", "cancelled": "⚪️ لغوشده",
+STATUS_FA = {"hold": "🟠 منتظرِ پرداختِ بیعانه", "pending": "🟡 در انتظار تأیید", "confirmed": "🟢 تأییدشده", "cancelled": "⚪️ لغوشده",
              "rejected": "🔴 ردشده", "done": "✅ انجام‌شده", "noshow": "⚠️ عدم حضور"}
 
 
@@ -359,12 +359,18 @@ async def _summary(msg, bot: Bot, state: FSMContext, tg_id: int):
         async with Session() as s:
             stf = await s.get(BkStaff, int(data["bk_stf"]))
         staff_line = f"\n👤 پرسنل: <b>{_esc(stf.name if stf else '')}</b>"
+    cfg = await E.get_cfg(row.id)
+    dep = E.deposit_for(sv.price, cfg)
+    dep_line = ""
+    if dep > 0:
+        dep_line = (f"\n\n💳 <b>بیعانه: {dep:,} تومان</b> از کیف پولت برداشته می‌شود تا نوبت ثبت شود "
+                    f"(مهلتِ پرداخت {cfg['hold_min']} دقیقه).\nبا لغوِ نوبت تا {cfg['refund_h']} ساعت قبل از شروع، بیعانه به کیف پولت برمی‌گردد.")
     text = (f"📋 <b>خلاصهٔ نوبت</b>\n\n💈 {_esc(sv.name)} ({_dur_txt(sv.duration_min)}){staff_line}\n"
             f"📅 {E.fa_date_long(d)}\n⏰ {E.fmt_hm(st)} تا {E.fmt_hm(st + sv.duration_min)}\n💰 {_price_txt(sv.price)}\n\n"
             f"👤 {_esc(data.get('bk_name'))}\n📱 {_esc(data.get('bk_phone'))}"
-            + (f"\n📝 {_esc(data.get('bk_note'))}" if data.get("bk_note") else ""))
+            + (f"\n📝 {_esc(data.get('bk_note'))}" if data.get("bk_note") else "") + dep_line)
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [_btn("✅ ثبتِ نهاییِ نوبت", "bk:confirm", ButtonStyle.SUCCESS)],
+        [_btn("✅ ثبتِ نهاییِ نوبت" if dep <= 0 else "✅ ادامه و پرداختِ بیعانه", "bk:confirm", ButtonStyle.SUCCESS)],
         [_btn("❌ انصراف", "bk:cancelflow", ButtonStyle.DANGER)]])
     await msg.answer(text, reply_markup=kb, parse_mode="HTML")
 
@@ -399,6 +405,9 @@ async def bk_confirm(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if err or not ap:
         await cb.answer("این ساعت همین الان رزرو شد؛ لطفاً ساعتِ دیگری انتخاب کن.", show_alert=True)
         return await bk_start(cb, bot)
+    if ap.status == "hold":                    # بیعانه لازم است ⇒ ساعت موقتاً نگه داشته شد؛ منتظرِ پرداخت
+        await cb.answer("ساعت برایِ تو نگه داشته شد")
+        return await _pay_screen(cb, row, ap, cfg)
     await cb.answer("ثبت شد ✅")
     done = ("✅ <b>نوبتت قطعی شد!</b>" if ap.status == "confirmed"
             else "✅ <b>نوبتت ثبت شد</b> و منتظرِ تأییدِ مجموعه است؛ به‌محضِ تأیید خبرت می‌کنیم.")
@@ -416,8 +425,10 @@ def _appt_card(ap: BkAppt) -> str:
     lines = [f"💈 {_esc(ap.service_name)}"]
     if ap.staff_name:
         lines.append(f"👤 پرسنل: {_esc(ap.staff_name)}")
-    lines += [f"📅 {E.fa_date_long(d)}", f"⏰ {E.fmt_hm(ap.start_min)} تا {E.fmt_hm(ap.end_min)}", f"💰 {_price_txt(ap.price)}",
-              f"وضعیت: {STATUS_FA.get(ap.status, ap.status)}"]
+    lines += [f"📅 {E.fa_date_long(d)}", f"⏰ {E.fmt_hm(ap.start_min)} تا {E.fmt_hm(ap.end_min)}", f"💰 {_price_txt(ap.price)}"]
+    if int(ap.deposit or 0) > 0:
+        lines.append(f"💳 بیعانه: {int(ap.deposit):,} تومان")
+    lines.append(f"وضعیت: {STATUS_FA.get(ap.status, ap.status)}")
     return "\n".join(lines)
 
 
@@ -428,6 +439,8 @@ async def _notify_owner_new(bot: Bot, row, ap: BkAppt, user):
         who = f"{_esc(ap.customer_name)} — <code>{_esc(ap.phone)}</code>"
         link = f'<a href="tg://user?id={ap.tg_id}">پروفایل تلگرام</a>'
         head = "🆕 نوبتِ جدیدِ قطعی" if ap.status == "confirmed" else "🆕 درخواستِ نوبتِ جدید"
+        if int(ap.deposit or 0) > 0:
+            head += f" (💳 بیعانهٔ {int(ap.deposit):,} تومان پرداخت شد)"
         text = f"{head} #{ap.id}\n\n{_appt_card(ap)}\n\n👤 {who}\n🔗 {link}"
         if ap.note:
             text += f"\n📝 {_esc(ap.note)}"
@@ -449,7 +462,7 @@ async def bk_my(cb, bot: Bot):
     async with Session() as s:
         aps = (await s.scalars(select(BkAppt).where(
             BkAppt.bot_id == row.id, BkAppt.tg_id == cb.from_user.id, BkAppt.date_str >= today,
-            BkAppt.status.in_(("pending", "confirmed"))).order_by(BkAppt.date_str, BkAppt.start_min))).all()
+            BkAppt.status.in_(("pending", "confirmed", "hold"))).order_by(BkAppt.date_str, BkAppt.start_min))).all()
         past = (await s.scalars(select(BkAppt).where(
             BkAppt.bot_id == row.id, BkAppt.tg_id == cb.from_user.id).order_by(BkAppt.id.desc()).limit(5))).all()
     if not aps:
@@ -460,8 +473,8 @@ async def bk_my(cb, bot: Bot):
                 for a in past)
         await _show(cb, txt, [[_btn("➕ نوبتِ جدید", "bk:home", ButtonStyle.SUCCESS)], _back_home()])
         return await cb.answer()
-    rows = [[_btn(f"{E.fa_date(_dt.date.fromisoformat(a.date_str))} {E.fmt_hm(a.start_min)} · {a.service_name}", f"bk:v:{a.id}", ButtonStyle.PRIMARY)]
-            for a in aps]
+    rows = [[_btn(("🟠 " if a.status == "hold" else "") + f"{E.fa_date(_dt.date.fromisoformat(a.date_str))} {E.fmt_hm(a.start_min)} · {a.service_name}",
+                  f"bk:v:{a.id}", ButtonStyle.PRIMARY)] for a in aps]
     rows += [[_btn("➕ نوبتِ جدید", "bk:home", ButtonStyle.SUCCESS)], _back_home()]
     await _show(cb, "🗓 <b>نوبت‌هایِ من</b>\nبرایِ جزئیات/لغو روی نوبت بزن:", rows)
     await cb.answer()
@@ -482,6 +495,10 @@ async def bk_view(cb: CallbackQuery, bot: Bot):
     if not ap or ap.bot_id != row.id or ap.tg_id != cb.from_user.id:
         return await cb.answer("نوبت پیدا نشد.", show_alert=True)
     cfg = await E.get_cfg(row.id)
+    if ap.status == "hold":
+        if E.hold_left_min(ap, cfg) <= 0:
+            return await cb.answer("مهلتِ پرداختِ این نوبت تمام شده است.", show_alert=True)
+        return await _pay_screen(cb, row, ap, cfg)
     ok, why = E.can_cancel(ap, cfg)
     rows = []
     if ok:
@@ -499,7 +516,19 @@ async def bk_view(cb: CallbackQuery, bot: Bot):
 @booking_router.callback_query(F.data.startswith("bk:x:"))
 async def bk_cancel_ask(cb: CallbackQuery, bot: Bot):
     aid = int(cb.data.split(":")[2])
-    await _show(cb, "❓ مطمئنی می‌خواهی این نوبت را <b>لغو</b> کنی؟",
+    policy = ""
+    row = await _row(bot)
+    if row:
+        async with Session() as s:
+            ap = await s.get(BkAppt, aid)
+        if ap and ap.bot_id == row.id and ap.tg_id == cb.from_user.id:
+            net = await E.net_deposit(row.id, aid)
+            if net > 0:
+                cfg = await E.get_cfg(row.id)
+                back = (E.appt_start_dt(ap) - E.iran_now()) >= _dt.timedelta(hours=cfg["refund_h"])
+                policy = (f"\n\n💳 بیعانهٔ {net:,} تومان " + ("با این لغو <b>به کیف پولت برمی‌گردد</b>." if back
+                          else f"چون کمتر از {cfg['refund_h']} ساعت به نوبت مانده، <b>برگردانده نمی‌شود</b>."))
+    await _show(cb, "❓ مطمئنی می‌خواهی این نوبت را <b>لغو</b> کنی؟" + policy,
                 [[_btn("✅ بله، لغو شود", f"bk:xy:{aid}", ButtonStyle.DANGER)], [_btn("⬅️ نه", f"bk:v:{aid}", ButtonStyle.PRIMARY)]])
     await cb.answer()
 
@@ -518,11 +547,87 @@ async def bk_cancel_do(cb: CallbackQuery, bot: Bot):
     ok, why = E.can_cancel(ap, cfg)
     if not ok:
         return await cb.answer(why, show_alert=True)
-    await E.set_status(row.id, aid, "cancelled", "لغو توسطِ مشتری", only_from=E.ACTIVE_STATUSES)
+    done = await E.set_status(row.id, aid, "cancelled", "لغو توسطِ مشتری", only_from=E.ACTIVE_STATUSES)
+    if not done:                                  # هم‌زمان تعیین‌تکلیف شد (مثلاً مالک لغو کرد) ⇒ بازگشتِ بیعانه دوباره انجام نمی‌شود
+        return await cb.answer("این نوبت قبلاً تعیین‌تکلیف شده است.", show_alert=True)
+    refunded = await E.refund_deposit(row.id, aid, cfg, force_full=False)
     await cb.answer("نوبت لغو شد")
+    if refunded:
+        await cb.message.answer(f"💳 بیعانهٔ <b>{refunded:,}</b> تومان به کیف پولت برگشت.", parse_mode="HTML")
+    elif int(ap.deposit or 0) > 0:
+        await cb.message.answer("ℹ️ طبقِ قوانینِ مجموعه (لغو کمتر از مهلت) بیعانه برگردانده نمی‌شود.")
     try:
         from tenant import _notify_admins
-        await _notify_admins(bot, row, f"❎ نوبت #{aid} توسطِ مشتری لغو شد.\n\n{_appt_card(ap)}\n👤 {_esc(ap.customer_name)} — <code>{_esc(ap.phone)}</code>")
+        extra = (f"\n💳 بیعانه: {refunded:,} تومان به کیف پولِ مشتری برگشت." if refunded else
+                 ("\n💳 بیعانه طبقِ قانون برگردانده نشد (نزدیکِ زمانِ نوبت)." if int(ap.deposit or 0) > 0 else ""))
+        await _notify_admins(bot, row, f"❎ نوبت #{aid} توسطِ مشتری لغو شد.\n\n{_appt_card(ap)}\n👤 {_esc(ap.customer_name)} — <code>{_esc(ap.phone)}</code>{extra}")
     except Exception:      # noqa: BLE001
         logger.exception("bk: اطلاعِ لغو به مالک ناموفق")
     await bk_my(cb, bot)
+
+
+# ───────────────────────── ۶) بیعانه ─────────────────────────
+
+async def _pay_screen(cb, row, ap: BkAppt, cfg: dict, note: str = ""):
+    async with Session() as s:
+        from models import BotUser
+        u = await s.scalar(select(BotUser).where(BotUser.bot_id == row.id, BotUser.telegram_id == ap.tg_id))
+    bal = int(float(u.balance or 0)) if u else 0
+    left = E.hold_left_min(ap, cfg)
+    text = (f"{note}💳 <b>پرداختِ بیعانه</b>\n\n{_appt_card(ap)}\n\n"
+            f"موجودیِ کیف پولت: <b>{bal:,}</b> تومان\nمبلغِ بیعانه: <b>{int(ap.deposit):,}</b> تومان\n"
+            f"⏳ ساعت تا <b>{left}</b> دقیقهٔ دیگر برایِ تو نگه داشته می‌شود.")
+    if bal < int(ap.deposit):
+        text += f"\n\n⚠️ برایِ پرداخت <b>{int(ap.deposit) - bal:,}</b> تومان کم داری؛ کیف پولت را شارژ کن و بعد از «🗓 نوبت‌هایِ من» پرداخت را کامل کن."
+    rows = [[_btn(f"👛 پرداخت از کیف پول ({int(ap.deposit):,})", f"bk:pay:{ap.id}", ButtonStyle.SUCCESS)]]
+    if bal < int(ap.deposit):
+        rows.append([_btn("💳 شارژ کیف پول", "w:back", ButtonStyle.PRIMARY)])
+    rows.append([_btn("❌ انصراف (آزادکردنِ ساعت)", f"bk:xh:{ap.id}", ButtonStyle.DANGER)])
+    await _show(cb, text, rows)
+
+
+@booking_router.callback_query(F.data.startswith("bk:pay:"))
+async def bk_pay(cb: CallbackQuery, bot: Bot):
+    row = await _row(bot)
+    if not row:
+        return await cb.answer()
+    aid = int(cb.data.split(":")[2])
+    cfg = await E.get_cfg(row.id)
+    code, info = await E.pay_deposit(row.id, aid, cb.from_user.id, cfg)
+    if code == "insufficient":
+        await cb.answer("موجودیِ کیف پول کافی نیست.", show_alert=True)
+        return await _pay_screen(cb, row, info["appt"], cfg)
+    if code in ("expired",):
+        await cb.answer("مهلتِ پرداخت تمام شد؛ دوباره نوبت بگیر.", show_alert=True)
+        return await bk_start(cb, bot)
+    if code in ("notfound", "nouser"):
+        return await cb.answer("نوبت پیدا نشد.", show_alert=True)
+    if code == "not_hold":
+        await cb.answer("این نوبت قبلاً تعیین‌تکلیف شده است.", show_alert=True)
+        return await bk_my(cb, bot)
+    ap = info
+    await cb.answer("پرداخت شد ✅")
+    done = ("✅ <b>بیعانه پرداخت شد و نوبتت قطعی شد!</b>" if ap.status == "confirmed"
+            else "✅ <b>بیعانه پرداخت شد و نوبتت ثبت شد</b>؛ منتظرِ تأییدِ مجموعه است و به‌محضِ تأیید خبرت می‌کنیم.")
+    await cb.message.answer(f"{done}\n\n{_appt_card(ap)}\n\nکدِ پیگیری: <code>#{ap.id}</code>", parse_mode="HTML")
+    await _notify_owner_new(bot, row, ap, cb.from_user)
+    try:
+        from tenant import main_kb_or_remove
+        await cb.message.answer("🏠", reply_markup=await main_kb_or_remove(row.id, row.owner_id, cb.from_user.id))
+    except Exception:      # noqa: BLE001
+        logger.debug("bk: بازگردانیِ کیبوردِ اصلی ناموفق")
+
+
+@booking_router.callback_query(F.data.startswith("bk:xh:"))
+async def bk_release_hold(cb: CallbackQuery, bot: Bot):
+    row = await _row(bot)
+    if not row:
+        return await cb.answer()
+    aid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        ap = await s.get(BkAppt, aid)
+    if not ap or ap.bot_id != row.id or ap.tg_id != cb.from_user.id:
+        return await cb.answer("نوبت پیدا نشد.", show_alert=True)
+    await E.set_status(row.id, aid, "cancelled", "انصراف از پرداختِ بیعانه", only_from=("hold",))
+    await cb.answer("ساعت آزاد شد")
+    await bk_start(cb, bot)

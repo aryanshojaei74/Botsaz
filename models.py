@@ -4234,7 +4234,7 @@ class BkOff(Base):
 
 
 class BkAppt(Base):
-    """نوبتِ ثبت‌شده. status: pending | confirmed | cancelled | rejected | done | noshow."""
+    """نوبتِ ثبت‌شده. status: hold | pending | confirmed | cancelled | rejected | done | noshow."""
     __tablename__ = "bk_appts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -4255,6 +4255,8 @@ class BkAppt(Base):
     cancel_reason: Mapped[str | None] = mapped_column(String(160))
     remind1_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     remind2_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    # بیعانهٔ الزامیِ این نوبت (تومان؛ تصویرِ سیاستِ زمانِ رزرو). status="hold" یعنی منتظرِ پرداختِ بیعانه (ساعت موقتاً رزرو است).
+    deposit: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

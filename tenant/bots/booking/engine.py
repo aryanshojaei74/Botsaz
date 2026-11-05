@@ -30,6 +30,10 @@ DEFAULTS = {
     "bk_remind1_h": "24",        # یادآوریِ اول (ساعت قبل؛ ۰ = خاموش)
     "bk_remind2_h": "2",         # یادآوریِ دوم
     "bk_use_staff": "0",         # ۱ = مشتری پرسنل انتخاب می‌کند
+    "bk_deposit_mode": "off",    # بیعانه (پیش‌پرداخت از کیف پول): off | fixed | percent
+    "bk_deposit_value": "0",     # fixed ⇒ تومان؛ percent ⇒ درصد (۱..۱۰۰)
+    "bk_refund_hours": "24",     # لغوِ مشتری تا این‌قدر ساعت قبل ⇒ بیعانه برمی‌گردد
+    "bk_hold_min": "15",         # مهلتِ پرداختِ بیعانه (دقیقه)؛ ساعت تا آن موقع برایِ مشتری نگه داشته می‌شود
     "bk_biz_name": "",
     "bk_biz_address": "",
     "bk_biz_phone": "",
@@ -179,6 +183,9 @@ async def get_cfg(bot_id: int) -> dict:
         "remind2": _i("bk_remind2_h", 0, 24 * 7), "use_staff": cfg["bk_use_staff"] == "1",
         "biz_name": cfg["bk_biz_name"], "biz_address": cfg["bk_biz_address"],
         "biz_phone": cfg["bk_biz_phone"], "welcome": cfg["bk_welcome"],
+        "dep_mode": cfg["bk_deposit_mode"] if cfg["bk_deposit_mode"] in ("fixed", "percent") else "off",
+        "dep_value": _i("bk_deposit_value", 0, 1_000_000_000), "refund_h": _i("bk_refund_hours", 0, 24 * 30),
+        "hold_min": _i("bk_hold_min", 5, 180),
     }
 
 
@@ -212,8 +219,9 @@ class Snapshot:
     appts: dict = field(default_factory=dict)         # (staff_id, date_str) → [(s,e)]
 
 
-async def load_snapshot(bot_id: int, d0: _dt.date, d1: _dt.date) -> Snapshot:
+async def load_snapshot(bot_id: int, d0: _dt.date, d1: _dt.date, hold_min: int = 15) -> Snapshot:
     snap = Snapshot()
+    hold_cut = _dt.datetime.utcnow() - _dt.timedelta(minutes=hold_min)
     a, b = d0.isoformat(), d1.isoformat()
     async with Session() as s:
         for h in (await s.scalars(select(BkHours).where(BkHours.bot_id == bot_id))).all():
@@ -225,7 +233,9 @@ async def load_snapshot(bot_id: int, d0: _dt.date, d1: _dt.date) -> Snapshot:
             snap.offs.setdefault((o.staff_id, o.date_str), []).append(iv)
         for ap in (await s.scalars(select(BkAppt).where(
                 BkAppt.bot_id == bot_id, BkAppt.date_str >= a, BkAppt.date_str <= b,
-                BkAppt.status.in_(ACTIVE_STATUSES)))).all():
+                BkAppt.status.in_(ACTIVE_STATUSES + ("hold",))))).all():
+            if ap.status == "hold" and (ap.created_at is None or ap.created_at < hold_cut):
+                continue                      # مهلتِ پرداختِ بیعانه تمام شده ⇒ ساعت دوباره آزاد است
             snap.appts.setdefault((ap.staff_id, ap.date_str), []).append((ap.start_min, ap.end_min))
     return snap
 
@@ -276,7 +286,7 @@ async def open_days(bot_id: int, service: BkService, staff_id: int | None, cfg: 
     now = now or iran_now()
     today = now.date()
     last = today + _dt.timedelta(days=cfg["days_ahead"])
-    snap = await load_snapshot(bot_id, today, last)
+    snap = await load_snapshot(bot_id, today, last, cfg["hold_min"])
     res = await resources_for(bot_id, cfg, service.id, staff_id)
     out = []
     d = today
@@ -289,7 +299,7 @@ async def open_days(bot_id: int, service: BkService, staff_id: int | None, cfg: 
 
 async def day_slots(bot_id: int, service: BkService, d: _dt.date, staff_id: int | None, cfg: dict,
                     now: _dt.datetime | None = None) -> list[tuple[int, int]]:
-    snap = await load_snapshot(bot_id, d, d)
+    snap = await load_snapshot(bot_id, d, d, cfg["hold_min"])
     res = await resources_for(bot_id, cfg, service.id, staff_id)
     return slots_for_day(snap, d, service.duration_min, cfg, res, now)
 
@@ -339,7 +349,7 @@ def _book_lock(bot_id: int, d: _dt.date):
 
 
 async def _book_locked(bot_id, tg_id, service, d, start, staff_id, name, phone, note, cfg, now, by_owner):
-    snap = await load_snapshot(bot_id, d, d)
+    snap = await load_snapshot(bot_id, d, d, cfg["hold_min"])
     res = await resources_for(bot_id, cfg, service.id, staff_id)
     slots = dict(slots_for_day(snap, d, service.duration_min, cfg, res, now))
     if start not in slots:
@@ -350,11 +360,13 @@ async def _book_locked(bot_id, tg_id, service, d, start, staff_id, name, phone, 
         async with Session() as s:
             st = await s.get(BkStaff, rid)
             staff_name = st.name if st else None
+    dep = 0 if by_owner else deposit_for(service.price, cfg)
     async with Session() as s:
         ap = BkAppt(bot_id=bot_id, tg_id=int(tg_id), service_id=service.id, service_name=service.name, staff_id=rid,
                     staff_name=staff_name, date_str=d.isoformat(), start_min=start, end_min=start + service.duration_min,
                     price=int(service.price or 0), customer_name=(name or "")[:80], phone=(phone or "")[:20],
-                    note=(note or "")[:1000], status="confirmed" if (cfg["auto_confirm"] or by_owner) else "pending")
+                    note=(note or "")[:1000], deposit=dep, created_at=_dt.datetime.utcnow(),
+                    status="hold" if dep > 0 else ("confirmed" if (cfg["auto_confirm"] or by_owner) else "pending"))
         s.add(ap)
         # پروندهٔ مشتری: ساخت/به‌روزرسانیِ نام و شماره (یادداشت و «مسدود» دست‌نخورده می‌ماند)
         cu = await s.scalar(select(BkCustomer).where(BkCustomer.bot_id == bot_id, BkCustomer.tg_id == int(tg_id)))
@@ -385,16 +397,22 @@ def can_cancel(ap: BkAppt, cfg: dict, now: _dt.datetime | None = None) -> tuple[
 
 async def set_status(bot_id: int, appt_id: int, status: str, reason: str | None = None,
                      only_from: tuple | None = None) -> BkAppt | None:
+    """وضعیت را عوض می‌کند. با only_from یک UPDATE شرطیِ اتمی است (دو درخواستِ هم‌زمان ⇒ فقط یکی موفق)."""
+    from sqlalchemy import update
     async with Session() as s:
-        ap = await s.get(BkAppt, appt_id, with_for_update=True)
-        if not ap or ap.bot_id != bot_id:
-            return None
-        if only_from and ap.status not in only_from:
-            return None
-        ap.status = status
+        vals = {"status": status}
         if reason:
-            ap.cancel_reason = reason[:160]
+            vals["cancel_reason"] = reason[:160]
+        q = update(BkAppt).where(BkAppt.id == appt_id, BkAppt.bot_id == bot_id)
+        if only_from:
+            q = q.where(BkAppt.status.in_(only_from))
+        res = await s.execute(q.values(**vals))
+        if (res.rowcount or 0) != 1:
+            await s.rollback()
+            return None
         await s.commit()
+        ap = await s.get(BkAppt, appt_id)
+        await s.refresh(ap)
         return ap
 
 
@@ -427,8 +445,8 @@ async def add_payment(bot_id: int, appt_id: int, amount: int, method: str = "cas
         ap = await s.get(BkAppt, appt_id)
         if not ap or ap.bot_id != bot_id or amount <= 0:
             return None
-        p = BkPayment(bot_id=bot_id, appt_id=appt_id, amount=int(amount), method=method if method in ("cash", "card", "online", "other") else "other",
-                      note=(note or "")[:160])
+        p = BkPayment(bot_id=bot_id, appt_id=appt_id, amount=int(amount), method=method if method in ("cash", "card", "online", "other") else "other",     # «wallet» فقط توسطِ pay_deposit/refund_deposit ثبت می‌شود
+                      note=(note or "")[:160], created_at=_dt.datetime.utcnow())
         s.add(p)
         await s.commit()
         return p
@@ -497,3 +515,141 @@ async def find_or_create_manual_customer(bot_id: int, name: str, phone: str) -> 
             except IntegrityError:
                 await s.rollback()
         raise RuntimeError("manual customer id allocation failed")
+
+
+# ───────────────────────── بیعانه (پیش‌پرداخت از کیف پولِ ربات) ─────────────────────────
+# پول فقط از «کیف پولِ مشتری در همین ربات» برداشته می‌شود (شارژِ کیف پول با همهٔ درگاه‌هایِ ربات انجام می‌شود).
+# هر جابه‌جاییِ پول داخلِ «یک تراکنشِ دیتابیس» با قفلِ ردیف انجام می‌شود و روی وضعیتِ نوبت شرطی است ⇒ دوبار کلیک دوبار کسر نمی‌کند.
+
+def deposit_for(price: int, cfg: dict) -> int:
+    """بیعانهٔ یک خدمت طبقِ سیاستِ ربات. ثابت: سقفش قیمتِ خدمت (اگر قیمت دارد)؛ درصدی: از قیمت (خدمتِ «توافقی» ⇒ ۰)."""
+    price = max(int(price or 0), 0)
+    mode, v = cfg.get("dep_mode", "off"), int(cfg.get("dep_value", 0) or 0)
+    if mode == "fixed":
+        amt = min(v, price) if price > 0 else v
+    elif mode == "percent":
+        amt = price * max(0, min(v, 100)) // 100
+    else:
+        amt = 0
+    return max(int(amt), 0)
+
+
+def hold_left_min(ap: BkAppt, cfg: dict, now_utc: _dt.datetime | None = None) -> int:
+    """دقیقه‌هایِ باقی‌ماندهٔ مهلتِ پرداختِ بیعانه (۰ = تمام شده)."""
+    if ap.status != "hold" or ap.created_at is None:
+        return 0
+    left = ap.created_at + _dt.timedelta(minutes=cfg["hold_min"]) - (now_utc or _dt.datetime.utcnow())
+    return max(0, -(-int(left.total_seconds()) // 60))
+
+
+_MONEY_LOCKS: dict = {}
+
+
+def _money_lock(appt_id: int):
+    """قفلِ درون‌پروسه‌ایِ هر نوبت برایِ عملیاتِ پولی (در کنارِ قفلِ ردیفِ پایگاه‌داده و شرطِ اتمیِ UPDATE)."""
+    import asyncio
+    if len(_MONEY_LOCKS) > 1024:
+        for kk in [x for x, v in _MONEY_LOCKS.items() if not v.locked()][:512]:
+            _MONEY_LOCKS.pop(kk, None)
+    return _MONEY_LOCKS.setdefault(int(appt_id), asyncio.Lock())
+
+
+async def pay_deposit(bot_id: int, appt_id: int, tg_id: int, cfg: dict, now_utc: _dt.datetime | None = None):
+    """بیعانه را از کیف پولِ مشتری برمی‌دارد و نوبت را از «hold» به pending/confirmed می‌برد.
+    اتمی و مستقل از نوعِ دیتابیس: ۱) انتقالِ وضعیتِ hold→paying با UPDATE شرطی (فقط یک درخواست برنده می‌شود)،
+    ۲) کسرِ موجودی با UPDATE شرطی (balance >= مبلغ)، ۳) ثبتِ تراکنش/پرداخت و وضعیتِ نهایی — همه در یک تراکنش.
+    خروجی: (کد، اطلاعات) — کد: ok | insufficient | expired | not_hold | notfound | nouser."""
+    from sqlalchemy import update
+    from models import BotUser, WalletTxn
+    now_utc = now_utc or _dt.datetime.utcnow()
+    async with _money_lock(appt_id):
+        async with Session() as s:
+            claim = await s.execute(update(BkAppt).where(
+                BkAppt.id == appt_id, BkAppt.bot_id == bot_id, BkAppt.tg_id == int(tg_id), BkAppt.status == "hold").values(status="paying"))
+            if (claim.rowcount or 0) != 1:
+                await s.rollback()
+                ap = await s.get(BkAppt, appt_id)
+                if not ap or ap.bot_id != bot_id or int(ap.tg_id) != int(tg_id):
+                    return "notfound", None
+                return "not_hold", ap
+            ap = await s.get(BkAppt, appt_id)
+            await s.refresh(ap)
+            if hold_left_min(_as_hold(ap), cfg, now_utc) <= 0:
+                ap.status, ap.cancel_reason = "cancelled", "پرداختِ بیعانه در مهلت انجام نشد"
+                await s.commit()
+                return "expired", ap
+            amt = int(ap.deposit or 0)
+            u = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == int(tg_id)).with_for_update())
+            if not u:
+                ap.status = "hold"
+                await s.commit()
+                return "nouser", ap
+            if amt > 0:
+                debit = await s.execute(update(BotUser).where(BotUser.id == u.id, BotUser.balance >= amt).values(balance=BotUser.balance - amt))
+                if (debit.rowcount or 0) != 1:                   # موجودی کافی نیست ⇒ وضعیت برمی‌گردد، پولی نمی‌رود
+                    bal = int(float(u.balance or 0))
+                    ap.status = "hold"
+                    await s.commit()
+                    return "insufficient", {"need": amt, "balance": bal, "appt": ap}
+                s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=-amt, kind="booking_deposit", note=f"بیعانهٔ نوبت #{ap.id}"))
+                s.add(BkPayment(bot_id=bot_id, appt_id=ap.id, amount=amt, method="wallet", note="بیعانه", created_at=now_utc))
+            ap.status = "confirmed" if cfg["auto_confirm"] else "pending"
+            await s.commit()
+            return "ok", ap
+
+
+def _as_hold(ap: BkAppt) -> BkAppt:
+    """hold_left_min فقط وقتی status=="hold" باشد حساب می‌کند؛ داخلِ pay_deposit وضعیتِ موقتِ «paying» است."""
+    class _V:
+        status = "hold"
+        created_at = ap.created_at
+    return _V()      # type: ignore[return-value]
+
+
+async def net_deposit(bot_id: int, appt_id: int) -> int:
+    """بیعانهٔ خالصِ پرداخت‌شده از کیف پول (پرداخت‌ها منهایِ بازگشت‌ها)."""
+    from sqlalchemy import func as _f
+    async with Session() as s:
+        return int(await s.scalar(select(_f.coalesce(_f.sum(BkPayment.amount), 0)).where(
+            BkPayment.bot_id == bot_id, BkPayment.appt_id == appt_id, BkPayment.method == "wallet")) or 0)
+
+
+async def refund_deposit(bot_id: int, appt_id: int, cfg: dict, force_full: bool, now: _dt.datetime | None = None) -> int:
+    """بیعانهٔ خالص را به کیف پولِ مشتری برمی‌گرداند (اتمی و idempotent: بار دوم ۰ برمی‌گرداند).
+    force_full=False (لغوِ مشتری): فقط اگر تا شروعِ نوبت حداقل refund_h ساعت مانده باشد. مشتریِ بدونِ تلگرام: ۰.
+    خروجی: مبلغِ بازگردانده‌شده (تومان)."""
+    from sqlalchemy import func as _f
+    from models import BotUser, WalletTxn
+    now = now or iran_now()
+    async with _money_lock(appt_id), Session() as s:
+        ap = await s.get(BkAppt, appt_id, with_for_update=True)
+        if not ap or ap.bot_id != bot_id or not has_telegram(ap.tg_id):
+            return 0
+        net = int(await s.scalar(select(_f.coalesce(_f.sum(BkPayment.amount), 0)).where(
+            BkPayment.bot_id == bot_id, BkPayment.appt_id == appt_id, BkPayment.method == "wallet")) or 0)
+        if net <= 0:
+            return 0
+        if not force_full and (appt_start_dt(ap) - now) < _dt.timedelta(hours=cfg["refund_h"]):
+            return 0
+        u = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == int(ap.tg_id)).with_for_update())
+        if not u:
+            return 0
+        u.balance = float(u.balance or 0) + net
+        s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=net, kind="booking_refund", note=f"بازگشتِ بیعانهٔ نوبت #{ap.id}"))
+        s.add(BkPayment(bot_id=bot_id, appt_id=appt_id, amount=-net, method="wallet", note="بازگشتِ بیعانه", created_at=_dt.datetime.utcnow()))
+        await s.commit()
+        return net
+
+
+async def expire_holds(bot_id: int, cfg: dict, now_utc: _dt.datetime | None = None) -> int:
+    """نوبت‌هایِ «منتظرِ بیعانه» که مهلتشان تمام شده ⇒ لغو (پولی برداشته نشده است). خروجی: تعداد."""
+    now_utc = now_utc or _dt.datetime.utcnow()
+    cut = now_utc - _dt.timedelta(minutes=cfg["hold_min"])
+    n = 0
+    async with Session() as s:
+        for ap in (await s.scalars(select(BkAppt).where(BkAppt.bot_id == bot_id, BkAppt.status == "hold", BkAppt.created_at < cut))).all():
+            ap.status, ap.cancel_reason = "cancelled", "پرداختِ بیعانه در مهلت انجام نشد"
+            n += 1
+        if n:
+            await s.commit()
+    return n

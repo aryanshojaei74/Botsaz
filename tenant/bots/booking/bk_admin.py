@@ -142,7 +142,7 @@ async def bka_help(cb: CallbackQuery, bot: Bot):
     from tenant.bots.booking.bk_help import help_text
     key = cb.data.split(":")[2]
     back = {"home": "bka:home", "ap": "bka:ap", "cat": "bka:cat", "tm": "bka:tm", "cu": "bka:cu:0", "fin": "bka:fin",
-            "cfg": "bka:cfg", "rep": "bka:stats"}.get(key, "bka:home")
+            "cfg": "bka:cfg", "rep": "bka:stats", "dep": "bka:dep"}.get(key, "bka:home")
     await _show(cb, help_text(key), [[_btn("⬅️ بازگشت", back, ButtonStyle.DANGER)]])
     await cb.answer()
 
@@ -338,8 +338,14 @@ async def bka_act(cb: CallbackQuery, bot: Bot):
     a = await E.set_status(row.id, int(aid), status, reason, only_from=only_from)
     if not a:
         return await cb.answer("این نوبت قبلاً تعیین‌تکلیف شده یا پیدا نشد.", show_alert=True)
+    refund_line = ""
+    if act in ("no", "cx"):                      # رد/لغوِ مجموعه ⇒ بیعانه کامل برمی‌گردد (اتمی و idempotent)
+        refunded = await E.refund_deposit(row.id, a.id, await E.get_cfg(row.id), force_full=True)
+        if refunded:
+            refund_line = f"\n\n💳 بیعانهٔ <b>{refunded:,}</b> تومان به کیف پولت برگشت."
+            toast += f" (بیعانهٔ {refunded:,} تومان برگشت)"
     if note:
-        await _tell_customer(bot, a, note.format(card=_appt_card(a)))
+        await _tell_customer(bot, a, note.format(card=_appt_card(a)) + refund_line)
     await cb.answer(toast)
     await _show(cb, _admin_card(a, await E.paid_of(row.id, a.id)), await _appt_actions(a))
 
@@ -959,7 +965,10 @@ async def bka_off_del(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 _TOGGLES = {"bk_auto_confirm": ("تأییدِ خودکارِ نوبت‌ها", "نوبت‌ها بدونِ تأییدِ شما قطعی می‌شوند", "هر نوبت باید توسطِ شما تأیید شود"),
             "bk_use_staff": ("انتخابِ پرسنل توسطِ مشتری", "مشتری پرسنل انتخاب می‌کند", "بدونِ پرسنل (یک مجموعه)")}
-_NUMS = {"bk_slot_step": ("فاصلهٔ شروعِ نوبت‌ها (دقیقه)", "مثلاً 30"),
+_NUMS = {"bk_deposit_value": ("مقدارِ بیعانه (تومان؛ در حالتِ درصدی: ۱ تا ۱۰۰)", "مثلاً 100000 یا 30"),
+         "bk_refund_hours": ("بازگشتِ بیعانه در لغوِ مشتری تا چند ساعت قبل از نوبت", "مثلاً 24"),
+         "bk_hold_min": ("مهلتِ پرداختِ بیعانه (دقیقه)", "مثلاً 15"),
+         "bk_slot_step": ("فاصلهٔ شروعِ نوبت‌ها (دقیقه)", "مثلاً 30"),
          "bk_lead_min": ("حداقل فاصلهٔ رزرو تا شروعِ نوبت (دقیقه)", "مثلاً 60"),
          "bk_days_ahead": ("تا چند روزِ آینده قابلِ رزرو باشد", "مثلاً 14"),
          "bk_cancel_hours": ("مهلتِ لغو توسطِ مشتری (ساعت قبل از نوبت)", "مثلاً 12"),
@@ -977,13 +986,16 @@ async def bka_cfg(cb: CallbackQuery, bot: Bot, state: FSMContext):
     cfg = await E.get_cfg(row.id)
     rows = [[_btn(("✅ " if cfg["auto_confirm"] else "⬜️ ") + "تأییدِ خودکارِ نوبت‌ها", "bka:cfgt:bk_auto_confirm", ButtonStyle.PRIMARY)],
             [_btn(("✅ " if cfg["use_staff"] else "⬜️ ") + "انتخابِ پرسنل توسطِ مشتری", "bka:cfgt:bk_use_staff", ButtonStyle.PRIMARY)]]
-    cur = {"bk_slot_step": cfg["step"], "bk_lead_min": cfg["lead"], "bk_days_ahead": cfg["days_ahead"], "bk_cancel_hours": cfg["cancel_h"],
+    cur = {"bk_deposit_value": cfg["dep_value"], "bk_refund_hours": cfg["refund_h"], "bk_hold_min": cfg["hold_min"], "bk_slot_step": cfg["step"], "bk_lead_min": cfg["lead"], "bk_days_ahead": cfg["days_ahead"], "bk_cancel_hours": cfg["cancel_h"],
            "bk_remind1_h": cfg["remind1"], "bk_remind2_h": cfg["remind2"]}
     for k, (lbl, _ex) in _NUMS.items():
+        if k in ("bk_deposit_value", "bk_refund_hours", "bk_hold_min"):
+            continue                      # این‌ها در صفحهٔ «💳 بیعانه» هستند
         rows.append([_btn(f"{lbl}: {cur[k]}", f"bka:cfgv:{k}")])
     for k, lbl in _TEXTS.items():
         have = {"bk_biz_name": cfg["biz_name"], "bk_biz_address": cfg["biz_address"], "bk_biz_phone": cfg["biz_phone"], "bk_welcome": cfg["welcome"]}[k]
         rows.append([_btn(f"{'✅' if have else '➕'} {lbl}", f"bka:cfgv:{k}")])
+    rows.insert(2, [_btn("💳 بیعانه (پیش‌پرداخت از کیف پول)", "bka:dep", ButtonStyle.SUCCESS)])
     rows.append(_help_btn("cfg"))
     rows.append(BACK_HOME)
     await _show(cb, "⚙️ <b>تنظیمات رزرو</b>\nروی هر مورد بزن تا تغییر دهی:", rows)
@@ -1034,16 +1046,21 @@ async def bka_cfg_save(msg: Message, bot: Bot, state: FSMContext):
     txt = (msg.text or "").strip()
     if key in _NUMS:
         n = _num(txt)
-        lim = {"bk_slot_step": (5, 240), "bk_lead_min": (0, 10080), "bk_days_ahead": (1, 60), "bk_cancel_hours": (0, 336),
+        lim = {"bk_deposit_value": (0, 1_000_000_000), "bk_refund_hours": (0, 720), "bk_hold_min": (5, 180), "bk_slot_step": (5, 240), "bk_lead_min": (0, 10080), "bk_days_ahead": (1, 60), "bk_cancel_hours": (0, 336),
                "bk_remind1_h": (0, 168), "bk_remind2_h": (0, 168)}[key]
         if n is None or not (lim[0] <= n <= lim[1]):
-            return await msg.answer(f"عددی بینِ {lim[0]} و {lim[1]} بفرست.")
+            return await msg.answer(f"عددی بینِ {lim[0]:,} و {lim[1]:,} بفرست.")
+        if key == "bk_deposit_value":
+            from tenant import get_setting
+            if (await get_setting(row.id, "bk_deposit_mode", "off")) == "percent" and n > 100:
+                return await msg.answer("در حالتِ «درصدی» عددی بینِ ۰ تا ۱۰۰ بفرست.")
         val = str(n)
     else:
         val = "" if txt in ("-", "—") else txt[:300]
     await set_setting(row.id, key, val)
     await state.clear()
-    await msg.answer("✅ ذخیره شد.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_btn("⚙️ تنظیمات", "bka:cfg", ButtonStyle.PRIMARY)], BACK_HOME]))
+    back = [_btn("💳 بیعانه", "bka:dep", ButtonStyle.PRIMARY)] if key in ("bk_deposit_value", "bk_hold_min", "bk_refund_hours") else [_btn("⚙️ تنظیمات", "bka:cfg", ButtonStyle.PRIMARY)]
+    await msg.answer("✅ ذخیره شد.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[back, BACK_HOME]))
 
 
 # ───────────────────────── آمار ─────────────────────────
@@ -1077,3 +1094,51 @@ async def bka_stats(cb: CallbackQuery, bot: Bot):
         lines += ["", "🏆 پرطرفدارترین خدمات:"] + [f"• {_esc(n)} — {c}" for n, c in top]
     await _show(cb, "\n".join(lines), [_help_btn("rep"), BACK_HOME])
     await cb.answer()
+
+
+# ───────────────────────── بیعانه ─────────────────────────
+
+_DEP_MODES = ["off", "fixed", "percent"]
+_DEP_LBL = {"off": "⬜️ خاموش", "fixed": "💵 مبلغِ ثابت", "percent": "٪ درصدی از قیمتِ خدمت"}
+
+
+@booking_router.callback_query(F.data == "bka:dep")
+async def bka_deposit(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    cfg = await E.get_cfg(row.id)
+    mode = cfg["dep_mode"]
+    val_txt = {"off": "—", "fixed": f"{cfg['dep_value']:,} تومان", "percent": f"{cfg['dep_value']}٪"}[mode]
+    text = ("💳 <b>بیعانه (پیش‌پرداخت)</b>\n\n"
+            f"حالت: <b>{_DEP_LBL[mode]}</b>\nمقدار: <b>{val_txt}</b>\n"
+            f"مهلتِ پرداخت: <b>{cfg['hold_min']}</b> دقیقه (ساعت تا آن موقع برایِ مشتری نگه داشته می‌شود)\n"
+            f"بازگشتِ بیعانه در لغوِ مشتری: تا <b>{cfg['refund_h']}</b> ساعت قبل از نوبت\n\n"
+            "مشتری بیعانه را از <b>کیف پولِ خودش در همین ربات</b> می‌پردازد (کیف پول با همهٔ درگاه‌هایِ ربات شارژ می‌شود). "
+            "اگر رد کنی یا نوبت را لغو کنی، بیعانه کامل برمی‌گردد؛ «عدم حضور» بیعانه را نگه می‌دارد. "
+            "نوبت‌هایِ دستیِ مالک بیعانه ندارند.")
+    rows = [[_btn(f"حالت: {_DEP_LBL[mode]} (زدن = تغییر)", "bka:depm", ButtonStyle.PRIMARY)],
+            [_btn(f"✏️ مقدار: {val_txt}", "bka:cfgv:bk_deposit_value")],
+            [_btn(f"⏳ مهلتِ پرداخت: {cfg['hold_min']} دقیقه", "bka:cfgv:bk_hold_min")],
+            [_btn(f"↩️ مهلتِ بازگشت: {cfg['refund_h']} ساعت", "bka:cfgv:bk_refund_hours")],
+            _help_btn("dep"), [_btn("⬅️ بازگشت", "bka:cfg", ButtonStyle.DANGER)]]
+    await _show(cb, text, rows)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data == "bka:depm")
+async def bka_deposit_mode(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    from tenant import get_setting, set_setting
+    cur = await get_setting(row.id, "bk_deposit_mode", "off")
+    nxt = _DEP_MODES[(_DEP_MODES.index(cur) + 1) % 3] if cur in _DEP_MODES else "fixed"
+    await set_setting(row.id, "bk_deposit_mode", nxt)
+    if nxt == "percent":                          # مقدارِ ثابتِ قبلی (مثلاً ۱۰۰٬۰۰۰) در حالتِ درصدی بی‌معناست
+        v = int(float(await get_setting(row.id, "bk_deposit_value", "0") or 0))
+        if v > 100 or v <= 0:
+            await set_setting(row.id, "bk_deposit_value", "30")
+    await cb.answer("تغییر کرد")
+    await bka_deposit(cb, bot, state)

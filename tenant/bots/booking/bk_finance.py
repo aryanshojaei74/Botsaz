@@ -27,7 +27,7 @@ from tenant.bots.booking.handlers import booking_router
 from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
 
-METHOD_FA = {"cash": "💵 نقد", "card": "💳 کارت", "online": "🌐 آنلاین", "other": "➖ سایر"}
+METHOD_FA = {"cash": "💵 نقد", "card": "💳 کارت", "online": "🌐 آنلاین", "wallet": "👛 کیف پول (بیعانه)", "other": "➖ سایر"}
 BACK_FIN = [_btn("⬅️ بازگشت", "bka:fin", ButtonStyle.DANGER)]
 PAGE = 8
 
@@ -50,7 +50,7 @@ async def bka_pay_start(cb: CallbackQuery, bot: Bot):
         return await cb.answer("پیدا نشد", show_alert=True)
     paid = await E.paid_of(row.id, aid)
     left = max(int(a.price or 0) - paid, 0)
-    rows = [[_btn(f"{lbl}", f"bka:pm:{aid}:{k}", ButtonStyle.PRIMARY)] for k, lbl in METHOD_FA.items()]
+    rows = [[_btn(f"{lbl}", f"bka:pm:{aid}:{k}", ButtonStyle.PRIMARY)] for k, lbl in METHOD_FA.items() if k != "wallet"]
     rows.append([_btn("⬅️ بازگشت", f"bka:a:{aid}:up:0", ButtonStyle.DANGER)])
     await _show(cb, f"💵 <b>ثبتِ پرداختِ نوبت #{aid}</b>\nقیمت: {_t(a.price)} · پرداخت‌شده: {_t(paid)} · مانده: <b>{_t(left)}</b>\n\nروشِ پرداخت؟", rows)
     await cb.answer()
