@@ -16848,6 +16848,13 @@ async def adm_bot_days_start(cb: CallbackQuery, state: FSMContext):
     await state.update_data(op=op, bot_id=bot_id, src=src, unit=unit)
     label = "افزودن" if op == "add" else "کسر"
     unit_lbl = "ساعت" if unit == "hours" else "روز"
+    if op == "restore":      # PATCH_ADM_RESTORE_CUSTOM_DAYS_V1
+        await cb.message.answer(
+            "♻️ ربات از بایگانی خارج و فعال می‌شود. چند <b>روز</b> از همین الان اعتبار داشته باشد؟\n"
+            "فقط عدد بفرست (مثلاً <code>2</code>).",
+            reply_markup=await smart_cancel_kb(), parse_mode="HTML")
+        await cb.answer()
+        return
     await cb.message.answer(
         f"عدد {unit_lbl} موردنظر برای {label} از سررسید را بفرست "
         f"(مثلاً {'6' if unit == 'hours' else '5'}):",
@@ -16871,6 +16878,22 @@ async def adm_bot_days_apply(msg: Message, state: FSMContext):
         return
     days = int(raw)
     unit_lbl = "ساعت" if unit == "hours" else "روز"
+    if op == "restore":      # PATCH_ADM_RESTORE_CUSTOM_DAYS_V1
+        if days > 365:
+            await msg.answer("حداکثر ۳۶۵ روز.", reply_markup=await smart_home_kb(msg.from_user.id))
+            return
+        ok, err, was = await _admin_resume_core(msg.bot, bot_id, custom_days=days)
+        if not ok:
+            await msg.answer(err or "خطا", reply_markup=await smart_home_kb(msg.from_user.id))
+            return
+        await msg.answer("منوی اصلی:", reply_markup=await smart_home_kb(msg.from_user.id))
+        await msg.answer(f"✅ ربات بازگردانی شد و {days} روز از همین الان اعتبار دارد." if was
+                         else "✅ ربات فعال شد (در بایگانی نبود؛ سررسید تغییر نکرد).")
+        built = await _build_bot_detail(bot_id, src)
+        if built:
+            text, kb = built
+            await msg.answer(text, reply_markup=kb)
+        return
     async with Session() as s:
         r = await s.get(BotRow, bot_id)
         if not r:
@@ -16991,7 +17014,9 @@ async def _build_bot_detail(bot_id: int, src: str = "bots", viewer_id: int | Non
                                             callback_data=f"abot:{twin_id}:all",
                                             style=ButtonStyle.SUCCESS)])
     if archived_at:
-        toggle_btn = hx_button("♻️ بازگردانی از بایگانی", callback_data=f"abotresume:{bot_id}")
+        toggle_btn = hx_button("♻️ بازگردانی از بایگانی (۱ دورهٔ کامل)", callback_data=f"abotresume:{bot_id}")
+        # PATCH_ADM_RESTORE_CUSTOM_DAYS_V1 — بازگردانی با مدتِ دلخواه (مثلاً ۲ روز) به‌جایِ یک ماهِ کامل
+        released_rows.append([hx_button("♻️ بازگردانی با مدتِ دلخواه (روز)", callback_data=f"abotdays:restore:{bot_id}:{src}")])
         from config import archive_retention_days, archive_reason_text
         retention = archive_retention_days(plan, archive_reason)
         elapsed = (datetime.datetime.now() - archived_at).days
@@ -18009,27 +18034,21 @@ async def viol_ack(cb: CallbackQuery):
     await cb.answer("ثبت شد؛ ممنون که قوانین را رعایت می‌کنی 🙏", show_alert=True)
 
 
-@router.callback_query(F.data.startswith("abotresume:"))
-async def adm_bot_resume(cb: CallbackQuery, bot: Bot):
-    if not await has_perm(cb.from_user.id, "adm:bots"):
-        await cb.answer("دسترسی ندارید", show_alert=True)
-        return
-    bot_id = int(cb.data.split(":")[1])
+async def _admin_resume_core(bot: Bot, bot_id: int, custom_days: int | None = None) -> tuple[bool, str | None, bool]:
+    """فعال‌سازی/بازگردانیِ رباتِ مستأجر توسطِ مدیر. خروجی: (موفق؟، پیامِ خطا، از بایگانی بود؟).
+    custom_days (فقط برایِ خروج از بایگانی): به‌جایِ یک دورهٔ کاملِ پلن، «همین‌قدر روز از حالا» اعتبار می‌دهد (PATCH_ADM_RESTORE_CUSTOM_DAYS_V1)."""
     async with Session() as s:
         r = await s.get(BotRow, bot_id)
         if not r:
-            await cb.answer("یافت نشد", show_alert=True)
-            return
+            return False, "یافت نشد", False
         # === PATCH_RELEASED_TOKEN_TWIN_V1 ===
         # رکوردی که توکنش به رکوردِ جدیدتر داده شده نباید فعال شود؛ قبلاً
         # فعال می‌شد و یک رباتِ «زامبی» با توکنِ نامعتبر می‌ساخت که فقط
         # خطا تولید می‌کرد (trial_cleanup: Token is invalid).
         from bot_utils import is_released_token
         if is_released_token(r.token):
-            await cb.answer("⚠️ این رکوردِ قدیمی است و توکنش به ربات جدیدِ همین "
-                            "مالک داده شده؛ قابلِ فعال‌سازی نیست. رکوردِ فعال را باز کن.",
-                            show_alert=True)
-            return
+            return False, ("⚠️ این رکوردِ قدیمی است و توکنش به ربات جدیدِ همین "
+                           "مالک داده شده؛ قابلِ فعال‌سازی نیست. رکوردِ فعال را باز کن."), False
         was_archived = r.archived_at is not None
         r.status = "active"
         r.lock_reason = None  # === PATCH_BOT_OFF_REASON_V1 === پاک‌کردنِ دلیلِ خاموشیِ قبلی
@@ -18038,7 +18057,8 @@ async def adm_bot_resume(cb: CallbackQuery, bot: Bot):
             r.archived_at = None
             r.archive_reason = None
             r.last_expiry_notice = None
-            r.plan_expires_at = plan_expiry_from_now(r.plan)
+            r.plan_expires_at = (datetime.datetime.now() + datetime.timedelta(days=int(custom_days))
+                                 if custom_days else plan_expiry_from_now(r.plan))
         owner, uname = r.owner_id, r.username
         token = r.token
         await s.commit()
@@ -18066,6 +18086,19 @@ async def adm_bot_resume(cb: CallbackQuery, bot: Bot):
         await bot.send_message(owner, note)
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+    return True, None, was_archived
+
+
+@router.callback_query(F.data.startswith("abotresume:"))
+async def adm_bot_resume(cb: CallbackQuery, bot: Bot):
+    if not await has_perm(cb.from_user.id, "adm:bots"):
+        await cb.answer("دسترسی ندارید", show_alert=True)
+        return
+    bot_id = int(cb.data.split(":")[1])
+    ok, err, _was = await _admin_resume_core(bot, bot_id)
+    if not ok:
+        await cb.answer(err or "خطا", show_alert=True)
+        return
     await cb.answer("ربات فعال شد")
     await _render_bot_detail(cb, bot_id)
 
