@@ -144,7 +144,7 @@ async def bka_help(cb: CallbackQuery, bot: Bot):
     from tenant.bots.booking.bk_help import help_text
     key = cb.data.split(":")[2]
     back = {"home": "bka:home", "ap": "bka:ap", "cat": "bka:cat", "tm": "bka:tm", "cu": "bka:cu:0", "fin": "bka:fin",
-            "cfg": "bka:cfg", "rep": "bka:stats", "dep": "bka:dep", "chan": "bka:chan"}.get(key, "bka:home")
+            "cfg": "bka:cfg", "rep": "bka:stats", "dep": "bka:dep", "chan": "bka:chan", "gen": "bka:gen"}.get(key, "bka:home")
     await _show(cb, help_text(key), [[_btn("⬅️ بازگشت", back, ButtonStyle.DANGER)]])
     await cb.answer()
 
@@ -343,6 +343,7 @@ async def bka_generic_tools(cb: CallbackQuery, bot: Bot, state: FSMContext):
             continue
         rows.append([_btn(f"{title} ({counts[key]})", f"bka:gc:{key}", ButtonStyle.PRIMARY)])
         lines.append(f"{title} — {desc}")
+    rows.append(_help_btn("gen"))
     rows.append([_btn("📅 بازگشت به پنلِ رزرو", "bka:home", ButtonStyle.SUCCESS)])
     await _show(cb, "🧰 <b>ابزارهایِ عمومیِ ربات</b>\nتنظیماتِ مشترکِ ربات، دسته‌بندی‌شده:\n\n" + "\n".join(lines), rows)
     await cb.answer()
@@ -360,6 +361,7 @@ async def bka_generic_cat(cb: CallbackQuery, bot: Bot):
         await cb.answer("در این دسته موردی برایِ پلنِ فعلیِ ربات نیست.", show_alert=True)
         return
     rows = [[_btn(lbl, c, ButtonStyle.PRIMARY)] for lbl, c in sel]
+    rows.append(_help_btn("gen"))
     rows.append([_btn("⬅️ بازگشت به ابزارها", "bka:gen", ButtonStyle.DANGER)])
     intro = next((d for k, _t, d in GEN_CATS if k == key), "")
     lines = [f"<b>{title}</b>", intro, ""]
