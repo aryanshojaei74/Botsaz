@@ -14009,7 +14009,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "451"
+BUILD_ID = "452"
 
 
 @tenant_router.message(Command("version"))
@@ -17697,7 +17697,7 @@ def _trial_summary_text(cfg: dict, labels: dict | None = None) -> str:
             pkey = cfg.get("trial_panel_key")
             lines.append(f"پنل: <b>{(labels or {}).get(pkey) or PANEL_LABELS.get(pkey, '— تنظیم نشده —')}</b>")
         lines.append(f"حجم: <b>{_trial_gb_label(str(cfg.get('trial_gb', '—')))}</b>")
-        lines.append(f"مدت: <b>{cfg.get('trial_days', '—')} روز</b>")
+        lines.append(f"مدت: <b>{_trial_duration_label(str(cfg.get('trial_days', 0)), str(cfg.get('trial_hours', 0) or 0)) if cfg.get('trial_days') is not None else '—'}</b>")
         _u = str(cfg.get('trial_users', 0) or 0)
         lines.append(f"تعداد کاربر: <b>{'♾️ نامحدود' if _u == '0' else _u}</b>")
     else:
@@ -17714,7 +17714,7 @@ def _trial_summary_text(cfg: dict, labels: dict | None = None) -> str:
                 lines.append("حجم: <b>♾️ نامحدود</b>")
             else:
                 lines.append(f"حجم: <b>{_trial_gb_label(str(cfg.get('trial_gb', '—')))}</b>")
-            lines.append(f"مدت: <b>{cfg.get('trial_days', '—')} روز</b>")
+            lines.append(f"مدت: <b>{_trial_duration_label(str(cfg.get('trial_days', 0)), str(cfg.get('trial_hours', 0) or 0)) if cfg.get('trial_days') is not None else '—'}</b>")
             _u = str(cfg.get('trial_users', 0) or 0)
             lines.append(f"تعداد کاربر: <b>{'♾️ نامحدود' if _u == '0' else _u}</b>")
     _limit = str(cfg.get("trial_claim_limit", 1) or 0)
@@ -18365,7 +18365,7 @@ def _trial_fix_view(cfg: dict, mb_id: int) -> tuple[str, InlineKeyboardMarkup]:
     fields = []
     if not unlimited:
         fields.append(_b(f"📦 حجم: {gb_lbl}", f"thb:trfixask:gb:{mb_id}"))
-    fields.append(_b(f"📅 مدت: {days} روز", f"thb:trfixask:days:{mb_id}"))
+    fields.append(_b(f"📅 مدت: {_trial_duration_label(str(days), str(cfg.get('trial_hours', 0) or 0))}", f"thb:trfixask:days:{mb_id}"))
     fields.append(_b(f"👥 کاربر: {users_lbl}", f"thb:trfixask:users:{mb_id}"))
     rows = [fields[i:i + 2] for i in range(0, len(fields), 2)]
     _cat = cfg.get("trial_category")
@@ -18452,7 +18452,9 @@ _TRIAL_FIX_PROMPTS = {
     "gb": ("📦 حجم تست را بفرست:\n"
            "• گیگ: مثلاً <code>2</code> (برابر ۲ گیگ)\n"
            "• مگابایت: مثلاً <code>0.300</code> (برابر ۳۰۰ مگابایت)"),
-    "days": "📅 مدت تست را به <b>روز</b> بفرست (مثلاً <code>3</code>):",
+    "days": ("📅 مدتِ تست را بفرست — <b>روز یا ساعت</b> (تیکت #912):\n"
+             "• <code>3</code> = ۳ روز\n• <code>6h</code> یا <code>6 ساعت</code> = ۶ ساعت\n"
+             "• <code>1d 12h</code> = ۱ روز و ۱۲ ساعت"),
     "users": "👥 تعداد کاربر مجاز (اتصال هم‌زمان) را بفرست — <code>0</code> یعنی نامحدود:",
 }
 
@@ -18497,8 +18499,11 @@ async def thb_trial_fix_value(msg: Message, bot: Bot, state: FSMContext):
         except ValueError:
             pass
     elif field == "days":
-        if t.isdigit() and int(t) > 0:
-            val = str(int(t))
+        # === PATCH_TRIAL_BTN_HOURS_V1 === (تیکت #912) مدتِ تستِ دکمه هم مثلِ تنظیماتِ کلی «ساعت» بپذیرد؛ حذفِ خودکار از پنل بعد از پایانِ تست مثلِ قبل
+        _pd = _parse_trial_duration_input(msg.text or "")
+        if _pd and (_pd[0] + _pd[1]) > 0:
+            await _trial_cfg_update(mb_id, trial_days=str(_pd[0]), trial_hours=str(_pd[1]) if _pd[1] else None)
+            val = "__done__"
     elif field == "users":
         if t.isdigit() and int(t) >= 0:
             val = str(int(t))
@@ -18507,7 +18512,10 @@ async def thb_trial_fix_value(msg: Message, bot: Bot, state: FSMContext):
                          reply_markup=_trial_cancel_kb(mb_id))
         return
     key = {"gb": "trial_gb", "days": "trial_days", "users": "trial_users"}[field]
-    cfg = await _trial_cfg_update(mb_id, **{key: val}) or {}
+    if val == "__done__":      # PATCH_TRIAL_BTN_HOURS_V1: روز/ساعت همین‌جا ذخیره شد
+        cfg = await _trial_cfg_update(mb_id) or {}
+    else:
+        cfg = await _trial_cfg_update(mb_id, **{key: val}) or {}
     # پاک‌کردن پرسش و پاسخ تا چت تمیز بماند
     for mid in (data.get("fix_prompt_id"), msg.message_id):
         if mid:
@@ -18549,7 +18557,7 @@ async def trial_btn_wait_gb(msg: Message, bot: Bot, state: FSMContext):
     stored = str(int(val)) if val == int(val) else str(val)
     await _trial_cfg_update(mb_id, trial_gb=stored)
     await state.set_state(_TrialBtnFSM.days)
-    await msg.answer("📅 مدتِ ثابتِ تست را به روز وارد کن (مثلاً <code>3</code>):",
+    await msg.answer("📅 مدتِ ثابتِ تست را وارد کن — روز یا ساعت (مثلاً <code>3</code> = ۳ روز، <code>6h</code> = ۶ ساعت):",
                      reply_markup=_trial_cancel_kb(mb_id))
 
 
@@ -18560,12 +18568,12 @@ async def trial_btn_wait_days(msg: Message, bot: Bot, state: FSMContext):
         await state.clear(); return
     data = await state.get_data()
     mb_id = data.get("trial_mb_id")
-    val = _trial_int(msg.text)
-    if val is None:
-        await msg.answer("❌ یک عددِ صحیحِ مثبت بفرست (مثلاً 3).",
-                         reply_markup=_trial_cancel_kb(mb_id))
+    _pd = _parse_trial_duration_input(msg.text or "")      # PATCH_TRIAL_BTN_HOURS_V1 (تیکت #912): روز یا ساعت
+    if not _pd or (_pd[0] + _pd[1]) <= 0:
+        await msg.answer("❌ مدت را مثلاً به این شکل بفرست: <code>3</code> (روز)، <code>6h</code> یا <code>6 ساعت</code>.",
+                         reply_markup=_trial_cancel_kb(mb_id), parse_mode="HTML")
         return
-    cfg = await _trial_cfg_update(mb_id, trial_days=str(val))
+    cfg = await _trial_cfg_update(mb_id, trial_days=str(_pd[0]), trial_hours=str(_pd[1]) if _pd[1] else None)
     await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🏷 انتخابِ دستهٔ انبارِ تست", callback_data=f"thb:trcatpick:{mb_id}:top", style=ButtonStyle.PRIMARY)],
