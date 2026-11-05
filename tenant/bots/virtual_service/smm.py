@@ -15396,6 +15396,9 @@ async def vnum_auto_buy(cb: CallbackQuery, bot: Bot, state: FSMContext):
         _chk_price = int(_r.final_price)
     async with Session() as s:
         b = await s.get(BotUser, buyer.id)
+        if float(b.balance) < _chk_price:      # PATCH_VS_GRACE_V1 (شمارهٔ مجازی) — پیش‌چک
+            from tenant.shared import vs_grace as _vsg
+            _chk_price, _ = await _vsg.apply(row.id, cb.from_user.id, b.balance, _chk_price, record=False)
         if float(b.balance) < _chk_price:
             await cb.answer(
                 f"❌ موجودیِ کیف‌پول کافی نیست. کمبود: {_chk_price - int(b.balance):,} تومان",
@@ -15450,6 +15453,9 @@ async def _vnum_auto_buy_locked(cb, bot, row, country, api_key, sp_country, sp_s
                     logger.exception("لغوِ سفارشِ SMSPool بعد از ردِ کدِ تخفیف ناموفق بود")
                 await cb.message.answer(f"❌ {_e}")
                 return
+        if float(b.balance) < real_price:      # PATCH_VS_GRACE_V1 (شمارهٔ مجازی)
+            from tenant.shared import vs_grace as _vsg
+            real_price, _ = await _vsg.apply(row.id, cb.from_user.id, b.balance, real_price)
         if float(b.balance) < real_price:
             # موجودی بینِ چک اول و رسیدنِ پاسخِ SMSPool ممکن است تغییر کرده
             # باشد — احتیاطاً همینجا سفارشِ SMSPool را لغو کن تا هدر نرود.
@@ -20627,6 +20633,9 @@ async def vnum_number_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
             except VsdError as _e:
                 await cb.answer(f"❌ {_e}", show_alert=True)
                 return
+        if float(b.balance) < real_price:      # PATCH_VS_GRACE_V1 (شمارهٔ مجازی)
+            from tenant.shared import vs_grace as _vsg
+            real_price, _ = await _vsg.apply(row.id, cb.from_user.id, b.balance, real_price)
         if float(b.balance) < real_price:
             await cb.answer(
                 f"❌ موجودیِ کیف‌پول کافی نیست. کمبود: {real_price - int(b.balance):,} تومان",
@@ -20735,6 +20744,9 @@ async def vnum_manual_buy_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
             except VsdError as _e:
                 await cb.answer(f"❌ {_e}", show_alert=True)
                 return
+        if float(b.balance) < real_price:      # PATCH_VS_GRACE_V1 (شمارهٔ مجازی)
+            from tenant.shared import vs_grace as _vsg
+            real_price, _ = await _vsg.apply(row.id, cb.from_user.id, b.balance, real_price)
         if float(b.balance) < real_price:
             await cb.answer(
                 f"❌ موجودیِ کیف‌پول کافی نیست. کمبود: {real_price - int(b.balance):,} تومان",

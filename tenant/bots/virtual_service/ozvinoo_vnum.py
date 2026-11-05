@@ -1718,6 +1718,9 @@ async def ozv_buy(cb: CallbackQuery, bot: Bot, state: FSMContext):
     buyer, _ = await get_or_create_user(row.id, cb.from_user.id, cb.from_user.full_name, cb.from_user.username or "", return_created=True)
     async with Session() as s:
         b = await s.get(BotUser, buyer.id)
+        if b and float(b.balance) < _chk_price:      # PATCH_VS_GRACE_V1 (شمارهٔ مجازی) — پیش‌چک
+            from tenant.shared import vs_grace as _vsg
+            _chk_price, _ = await _vsg.apply(row.id, cb.from_user.id, b.balance, _chk_price, record=False)
         if not b or float(b.balance) < _chk_price:
             await cb.answer(f"❌ موجودی کافی نیست. کمبود: {_chk_price - int(float(b.balance) if b else 0):,} تومان", show_alert=True)
             return
@@ -1777,6 +1780,9 @@ async def _ozv_buy_locked(cb, bot, row, country, provider, api_country_id, buyer
                     await _pv_cancel(provider, api_order_id)
                     await cb.message.answer(f"❌ {_e}\nسفارشِ ارائه‌دهنده لغو شد و وجهی کسر نشد.")
                     return
+            if b and float(b.balance) < real_price:      # PATCH_VS_GRACE_V1 (شمارهٔ مجازی)
+                from tenant.shared import vs_grace as _vsg
+                real_price, _ = await _vsg.apply(row.id, cb.from_user.id, b.balance, real_price)
             if not b or float(b.balance) < real_price:
                 await _pv_cancel(provider, api_order_id)
                 await cb.message.answer("❌ موجودی در لحظهٔ نهایی کافی نبود؛ سفارش ارائه‌دهنده لغو شد.")

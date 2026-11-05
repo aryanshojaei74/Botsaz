@@ -99,3 +99,21 @@ async def test_ai_order_lookup_by_code_only_for_own_orders(db):
     other = await AI._order_lookup_context(BOT, TG, "کد 2020")                  # سفارشِ کاربرِ دیگر
     assert "لایک" not in other and "پیدا نشد" in other
     assert await AI._order_lookup_context(BOT, TG, "سلام") == ""
+
+
+def test_custom_text_is_the_whole_quote_no_fixed_header_added():
+    # SINA: متنِ تنظیم‌شده نباید داخلِ یک قالبِ ثابت بنشیند (تیتر/خط‌ها دوبار می‌آمد)
+    txt = "🌟 ارفاق ویژه برای شما\n💰 مبلغ فاکتور: {invoice} تومان\n⭕️ اختلاف: {diff} تومان\n✅ ممنون از همراهی شما"
+    blk = G.build_block(txt, 110700, 110000, 700)
+    assert blk.startswith("<blockquote expandable>") and blk.endswith("</blockquote>")
+    assert blk.count("ارفاق") == 1 and "110,700" in blk and "700 تومان" in blk and "👛" not in blk
+    assert "{invoice}" not in blk and "{{" not in blk
+    dflt = G.build_block("", 110700, 110000, 700)
+    assert "ارفاقِ ویژه" in dflt and "110,000" in dflt
+
+
+@pytest.mark.asyncio
+async def test_apply_precheck_does_not_record(db):
+    await _cfg()
+    price, ok = await G.apply(BOT, TG, 110000, 110700, record=False)
+    assert ok and price == 110000 and not G.peek_block(BOT, TG)

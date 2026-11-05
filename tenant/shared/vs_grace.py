@@ -27,7 +27,11 @@ vs_grace_router = Router(name="vs_grace")
 
 KEY_ON, KEY_TIERS, KEY_TEXT, KEY_TOTAL = "vs_grace_on", "vs_grace_tiers", "vs_grace_text", "vs_grace_total"
 MAX_TIERS = 10
-DEFAULT_TEXT = ("به‌خاطر همراهیِ شما، همین اختلاف را پوشش دادیم و سفارشتان بدونِ نیاز به شارژِ اضافه تأیید و انجام شد.")
+DEFAULT_TEXT = ("🌟 ارفاقِ ویژه برایِ شما\n"
+                "💰 مبلغِ فاکتور: {invoice} تومان\n"
+                "👛 موجودیِ شما: {balance} تومان\n"
+                "📊 اختلاف: {diff} تومان\n\n"
+                "✔️ به‌خاطر همراهیِ شما، همین اختلاف را پوشش دادیم و سفارشتان بدونِ نیاز به شارژِ اضافه تأیید و انجام شد.")
 _TTL = 600                                   # ثانیه: بلوکِ ارفاق تا این‌قدر بعد از اعمال برایِ پیامِ ثبتِ همان کاربر می‌ماند
 _PENDING: dict[tuple[int, int], tuple[float, str]] = {}
 _DIG = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
@@ -73,15 +77,15 @@ def pick_tier(tiers: list[dict], price: float) -> dict | None:
 
 
 def build_block(text: str, invoice: int, balance: int, diff: int) -> str:
-    body = (text or DEFAULT_TEXT).replace("{invoice}", f"{invoice:,}").replace("{balance}", f"{balance:,}").replace("{diff}", f"{diff:,}")
-    return ("<blockquote expandable>🌟 <b>ارفاقِ ویژه برایِ شما</b>\n"
-            f"💰 مبلغِ فاکتور: <b>{invoice:,}</b> تومان\n"
-            f"👛 موجودیِ شما: <b>{balance:,}</b> تومان\n"
-            f"📊 اختلاف: <b>{diff:,}</b> تومان\n\n"
-            f"✔️ {html.escape(body, quote=False)}</blockquote>")
+    """کلِ نقل‌قولِ جمع‌شونده = «متنِ ارفاق» که مالک تنظیم کرده (یا پیش‌فرض)؛ متغیرها: {invoice} {balance} {diff} (یا با دو آکولاد).
+    (SINA: قبلاً متنِ مالک داخلِ یک قالبِ ثابتِ دیگر می‌نشست و تیتر/خط‌ها دوبار می‌آمد.)"""
+    body = text or DEFAULT_TEXT
+    for name, val in (("invoice", f"{invoice:,}"), ("balance", f"{balance:,}"), ("diff", f"{diff:,}")):
+        body = body.replace("{{" + name + "}}", val).replace("{" + name + "}", val)
+    return f"<blockquote expandable>{html.escape(body, quote=False)}</blockquote>"
 
 
-async def apply(bot_id: int, tg_id: int, balance, price):
+async def apply(bot_id: int, tg_id: int, balance, price, record: bool = True):
     """اگر کمبودِ موجودی در محدودهٔ ارفاق است: (قیمتِ جدید = موجودی، True)؛ وگرنه (قیمتِ بدونِ تغییر، False).
     هرگز exception نمی‌دهد؛ هر خطا = بدونِ ارفاق."""
     try:
@@ -94,6 +98,8 @@ async def apply(bot_id: int, tg_id: int, balance, price):
         tier = pick_tier(await load_tiers(bot_id), pr)
         if not tier or short > tier["max"]:
             return price, False
+        if not record:                                  # پیش‌چک (مثلاً شمارهٔ مجازی قبل از سفارشِ ارائه‌دهنده): فقط «پوشش‌پذیر بودن»
+            return (int(bal) if isinstance(price, int) else bal), True
         text = await _gs(bot_id, KEY_TEXT, "")
         _PENDING[(bot_id, tg_id)] = (time.time(), build_block(text, int(round(pr)), int(bal), int(round(short))))
         if len(_PENDING) > 5000:
@@ -281,9 +287,10 @@ async def vsg_text(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return
     await state.set_state(GraceFSM.text)
     await cb.message.answer(
-        "✏️ متنِ ارفاق را بفرست (همان جمله‌ای که داخلِ نقلِ‌قول زیرِ ✔️ می‌آید).\n"
-        "می‌توانی از <code>{invoice}</code> (مبلغ فاکتور)، <code>{balance}</code> (موجودیِ مشتری) و <code>{diff}</code> (اختلاف) استفاده کنی.\n"
-        "برایِ بازگشت به متنِ پیش‌فرض بنویس <code>-</code>", parse_mode="HTML")
+        "✏️ <b>کلِ متنِ نقلِ‌قولِ ارفاق</b> را بفرست (چند خطی؛ دقیقاً همین متن با ایموجی‌ها نشان داده می‌شود، چیزِ دیگری به آن اضافه نمی‌شود).\n"
+        "متغیرها: <code>{invoice}</code> مبلغِ فاکتور، <code>{balance}</code> موجودیِ مشتری، <code>{diff}</code> اختلاف.\n"
+        "برایِ بازگشت به متنِ پیش‌فرض بنویس <code>-</code>\n\n"
+        "<b>متنِ پیش‌فرض:</b>\n<pre>" + html.escape(DEFAULT_TEXT, quote=False) + "</pre>", parse_mode="HTML")
     await cb.answer()
 
 
