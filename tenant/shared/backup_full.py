@@ -286,6 +286,13 @@ async def _owner_row(cb_or_msg, bot: Bot):
     from tenant import get_bot_row
     row = await get_bot_row(bot)
     if not row or cb_or_msg.from_user.id != row.owner_id:
+        # PATCH_BACKUP_FEEDBACK_V1: به ادمینِ غیرمالک بگو چرا (قبلاً دکمه بی‌صدا کار نمی‌کرد)
+        try:
+            if row and hasattr(cb_or_msg, "answer") and getattr(cb_or_msg, "data", None):
+                await cb_or_msg.answer("🔒 بک‌آپ فقط برایِ مالکِ ربات در دسترس است (فایل شاملِ کلیدهایِ پنل و اطلاعاتِ مشتری‌هاست).",
+                                       show_alert=True)
+        except Exception:      # noqa: BLE001
+            logger.debug("پاسخِ دسترسیِ بک‌آپ ممکن نشد")
         return None
     return row
 
@@ -297,8 +304,16 @@ async def full_export(cb: CallbackQuery, bot: Bot):
         await cb.answer()
         return
     await cb.answer("⏳ در حالِ ساختنِ بک‌آپِ کامل...")
-    data = await build_full_backup(row.id)
-    raw = dump_bytes(data)
+    # === PATCH_BACKUP_FEEDBACK_V1 === قبلاً اگر ساختِ فایل خطا می‌داد (ربات‌هایِ بزرگ/دادهٔ خراب) هیچ پیامی نمی‌آمد و
+    # به نظر می‌رسید «دکمه کار نمی‌کند»؛ حالا خطا لاگ می‌شود و به مالک می‌گوید.
+    try:
+        data = await build_full_backup(row.id)
+        raw = dump_bytes(data)
+    except Exception:
+        logger.exception("بک‌آپ کامل: ساختِ فایل برایِ ربات %s ناموفق بود", row.id)
+        await cb.message.answer("❌ ساختِ بک‌آپ با خطا روبه‌رو شد. چند دقیقه بعد دوباره امتحان کن؛ اگر تکرار شد کدِ ربات "
+                                f"(<code>{row.id}</code>) را برایِ پشتیبانیِ بات‌ساز بفرست.", parse_mode="HTML")
+        return
     if len(raw) > MAX_SEND:
         await cb.message.answer("❌ حجمِ بک‌آپ از سقفِ ارسالِ تلگرام بیشتر شد؛ با پشتیبانی تماس بگیر.")
         return

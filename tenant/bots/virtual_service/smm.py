@@ -10857,6 +10857,9 @@ async def smmu_bulk_confirm(cb: CallbackQuery, bot: Bot, state: FSMContext):
             _ad = await _smm_auto_discount(row.id, cb.from_user.id, int(total), session=s)
             if _ad:
                 final_total = float(_ad["final"])
+        if uu and float(uu.balance) < final_total:      # PATCH_VS_GRACE_V1
+            from tenant.shared import vs_grace as _vsg
+            final_total, _ = await _vsg.apply(row.id, cb.from_user.id, uu.balance, final_total)
         if not uu or float(uu.balance) < final_total:
             bal = float(uu.balance) if uu else 0
             await cb.answer()
@@ -11304,6 +11307,9 @@ async def smm_place_order(bot: Bot, row, msg, v, link: str, qty: int, price: int
             _ad = await _smm_auto_discount(row.id, msg.from_user.id, int(price), session=s)
             if _ad:
                 final_price = float(_ad["final"])
+        if uu and float(uu.balance) < final_price:      # PATCH_VS_GRACE_V1
+            from tenant.shared import vs_grace as _vsg
+            final_price, _ = await _vsg.apply(row.id, msg.from_user.id, uu.balance, final_price)
         if not uu or float(uu.balance) < final_price:
             bal = float(uu.balance) if uu else 0
             from tenant.shared import vs_pay as _vp   # PATCH_VS_PAY_V1 — دکمهٔ «شارژ حساب»
@@ -14018,6 +14024,9 @@ async def gift_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
             if _fd.ok and _fd.discount > 0:
                 _note_extra = f" (تخفیف اولین خرید −{_fd.discount:,})"
                 price = _fd.final_price
+        if float(b.balance) < price:      # PATCH_VS_GRACE_V1
+            from tenant.shared import vs_grace as _vsg
+            price, _ = await _vsg.apply(row.id, cb.from_user.id, b.balance, price)
         if float(b.balance) < price:
             await s.rollback()        # قفلِ ردیف آزاد شود، بعد پیام برود
             await cb.answer("❌ موجودی کافی نیست.")
@@ -16258,6 +16267,9 @@ async def prm_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
             if _fd.ok and _fd.discount > 0:
                 _note_extra = f" (تخفیف اولین خرید −{_fd.discount:,})"
                 price = _fd.final_price
+        if float(b.balance) < price:      # PATCH_VS_GRACE_V1
+            from tenant.shared import vs_grace as _vsg
+            price, _ = await _vsg.apply(row.id, cb.from_user.id, b.balance, price)
         if float(b.balance) < price:
             await s.rollback()        # قفلِ ردیف آزاد شود، بعد پیام برود
             await cb.answer("❌ موجودی کافی نیست.")
@@ -17434,6 +17446,9 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext, _wallet: str 
             if _fd.ok and _fd.discount > 0:
                 _note_extra = f" (تخفیف اولین خرید −{_fd.discount:,})"
                 price = _fd.final_price
+        if float(b.balance) < price:      # PATCH_VS_GRACE_V1
+            from tenant.shared import vs_grace as _vsg
+            price, _ = await _vsg.apply(row.id, msg.from_user.id, b.balance, price)
         if float(b.balance) < price:
             await state.clear()
             from tenant.shared import vs_pay as _vp   # PATCH_VS_PAY_V1 — دکمهٔ «شارژ حساب»
@@ -18150,6 +18165,9 @@ async def srx_anon_choice(cb: CallbackQuery, bot: Bot, state: FSMContext):
         if _fd.ok and _fd.discount > 0:
             _note_extra = f" (تخفیف اولین خرید −{_fd.discount:,})"
             price = _fd.final_price
+        if float(b.balance) < price:      # PATCH_VS_GRACE_V1
+            from tenant.shared import vs_grace as _vsg
+            price, _ = await _vsg.apply(row.id, _fu.id, b.balance, price)
         if float(b.balance) < price:
             await msg.answer(f"❌ موجودیِ کیف‌پول کافی نیست. کمبود: {price - int(b.balance):,} تومان")
             return
@@ -18574,6 +18592,9 @@ async def place_stars_order(bot: Bot, row, *, buyer_tg_id: int, buyer_name: str,
             price, _fbd = await _first_buy_price(row.id, buyer_tg_id, price, session=s)
             if _fbd:
                 _fb_note = f" (تخفیف اولین خرید −{_fbd:,})"
+        if float(b.balance) < price:      # PATCH_VS_GRACE_V1
+            from tenant.shared import vs_grace as _vsg
+            price, _ = await _vsg.apply(row.id, buyer_tg_id, b.balance, price)
         if float(b.balance) < price:
             raise StarsOrderError(
                 f"موجودیِ کیف‌پول کافی نیست. کمبود: {price - int(b.balance):,} تومان",

@@ -82,6 +82,8 @@ VARS: dict[str, tuple[str, str, str]] = {
     "order_date":     ("order", "تاریخِ ثبتِ سفارش", "۱۴۰۵/۰۷/۰۶"),
     "status":         ("order", "وضعیتِ فعلیِ سفارش", "✅ تکمیل"),
     "service_id":     ("order", "شناسهٔ سرویس در پنل", "47"),
+    # === PATCH_VS_GRACE_V1 === بلوکِ «ارفاق خرید»: فقط وقتی ارفاق اعمال شده پر است، وگرنه خالی
+    "grace":          ("order", "نقلِ‌قولِ «ارفاقِ ویژه» (فقط اگر به این خرید ارفاق داده شده؛ وگرنه کاملاً خالی)", "ارفاقِ ویژه برایِ شما: اختلافِ ۷۰۰ تومان پوشش داده شد"),
     # === PATCH_SMM_PARTIAL_V1 === مخصوصِ پیامِ «نیمه‌تمام» (در بقیهٔ وضعیت‌ها هم مقدارِ معقول دارند)
     # === PATCH_SMM_REFILL_V1 ===
     "refill_id":      ("order", "کدِ پیگیریِ آخرین درخواستِ ریفیلِ این سفارش", "48211"),
@@ -269,6 +271,12 @@ async def _order_values(names: set[str], bot_id: int | None, order) -> dict[str,
     # گزارشِ فدایی: «کدِ سفارشی که در پیام می‌آید با لیستِ سفارشاتِ پنلِ مدیریت یکی نیست». {{order_id}}
     # شناسهٔ داخلیِ دیتابیس بود و لیستِ ادمین/«سفارش‌های من» کدِ پیگیری را نشان می‌دهند. حالا هر دو
     # متغیر یک عدد می‌دهند (کدِ پیگیری؛ فقط برایِ سفارش‌هایِ خیلی قدیمیِ بدونِ کد، همان شناسه).
+    if "grace" in names:      # PATCH_VS_GRACE_V1 — HTML خام (بلوکِ نقل‌قولِ ساخته‌شدهٔ خودِ ماژول)؛ بدونِ ارفاق ⇒ خالی
+        try:
+            from tenant.shared.vs_grace import peek_block
+            v["grace"] = peek_block(bot_id or 0, getattr(o, "user_telegram_id", None))
+        except Exception:      # noqa: BLE001
+            v["grace"] = ""
     if "order_id" in names:
         v["order_id"] = _esc(getattr(o, "tracking_code", None) or o.id)
     if "tracking_code" in names:

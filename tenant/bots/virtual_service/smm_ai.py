@@ -415,7 +415,7 @@ def _bot_system_prompt(row) -> str:
 برای خرید خدمات، کاربر را به دکمه/مسیر واقعی درج‌شده در context راهنمایی کن. اگر قیمت یا شرایط در context هست (مثلاً قیمت استارز یا تون) همان را با عدد بگو و بعد مسیرِ خرید را بگو؛ فقط وقتی واقعاً اطلاعاتی نیست کاربر را به پشتیبانی ارجاع بده.
 برای تأکید می‌توانی از **متنِ پررنگ** استفاده کنی (ربات آن را درست نمایش می‌دهد) ولی زیاد استفاده نکن.
 در مورد سفارش‌ها فقط از اطلاعات همان کاربر استفاده کن. هرگز کلید API، اطلاعات کاربران دیگر یا دادهٔ داخلی را افشا نکن. زمان قطعی تکمیل سفارش را وعده نده.
-اگر کاربر لیست/وضعیتِ سفارش‌هایش را خواست، همان خط‌هایِ «آخرین سفارش‌هایِ همین مشتری» را (کدِ پیگیری، سرویس، تعداد، وضعیت، مبلغ) بده؛ نگو اطلاعات در دسترس نیست. فقط اگر آن بخش واقعاً «هنوز سفارشی ثبت نکرده» می‌گوید همین را بگو. هرگز سفارش، کدِ پیگیری، مبلغ یا وضعیتی از خودت نساز؛ فقط از همان خط‌ها بگو. اگر تعدادِ کلِ سفارش‌ها بیشتر از موردهایِ آمده است، همین را بگو و بقیه را از «سفارش‌هایِ من» در منویِ ربات ببیند. برایِ پیگیریِ سفارشِ مشخص، کدِ پیگیری را از کاربر بخواه یا به «پشتیبانی ← تیکت» ارجاع بده؛ برایِ لغو هم تیکت.
+اگر کاربر لیست/وضعیتِ سفارش‌هایش را خواست، همان خط‌هایِ «آخرین سفارش‌هایِ همین مشتری» را (کدِ پیگیری، سرویس، تعداد، وضعیت، مبلغ) بده؛ نگو اطلاعات در دسترس نیست. فقط اگر آن بخش واقعاً «هنوز سفارشی ثبت نکرده» می‌گوید همین را بگو. هرگز سفارش، کدِ پیگیری، مبلغ یا وضعیتی از خودت نساز؛ فقط از همان خط‌ها بگو. اگر تعدادِ کلِ سفارش‌ها بیشتر از موردهایِ آمده است، همین را بگو و بقیه را از «سفارش‌هایِ من» در منویِ ربات ببیند. برایِ پیگیریِ سفارشِ مشخص: اگر «نتیجهٔ پیگیریِ کدِ سفارش» در context هست، همان را (سرویس، وضعیت، مبلغ، تاریخ و ساعتِ ثبت) به‌صورتِ خلاصه و دقیق بگو؛ اگر نیست از کاربر کدِ پیگیری را بخواه. برایِ لغوِ سفارش مسیرِ درست این است: منویِ ربات ← «📦 سفارش‌هایِ من» ← روی همان سفارش بزن ← «🚫 درخواستِ لغوِ سفارش» (فقط وقتی سفارش هنوز قابلِ لغو است دکمه می‌آید و لغو قطعی نیست و پنل باید بپذیرد؛ نتیجه را همان‌جا و در پیام می‌بیند). اگر دکمه را ندید یا سفارش قابلِ لغو نبود، «پشتیبانی ← تیکت» را پیشنهاد بده.
 قیمتِ سرویس را از خطِ همان سرویس بگو، و مسیرِ خرید را از «دکمه‌هایِ منو» بگو؛ دکمهٔ استارز/تون فقط برایِ خریدِ استارز/تون است، نه بوست/ممبر/لایک."""
 
 
@@ -562,6 +562,38 @@ async def _user_facts_context(bot_id: int, telegram_id: int) -> str:
         return "\n".join(lines)
     except Exception:      # noqa: BLE001
         logger.exception("[SMM_AI] خواندنِ وضعیتِ حسابِ کاربر ناموفق بود")
+        return ""
+
+
+async def _order_lookup_context(bot_id: int, telegram_id: int, text: str) -> str:
+    """PATCH_AI_ORDER_BY_CODE_V1 (SINA: «اکسا سفارشمو با کد پیگیری ۱۵۱۵ پیگیری کن ⇒ وضعیت و مشخصاتش را بگوید»).
+    اگر در پیامِ کاربر کدِ پیگیری هست (عددِ ۳ تا ۱۲ رقمی یا SMM-123)، **فقط سفارشِ خودِ همین کاربر** با آن کد (از کلِ سفارش‌ها، نه فقط
+    ۶ تایِ آخر) با ساعتِ ثبت و وضعیت به context اضافه می‌شود؛ کدِ دیگران/ناموجود ⇒ «پیدا نشد» (هیچ‌چیزِ دیگری لو نمی‌رود)."""
+    import re as _re
+    t = (text or "").translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    codes = []
+    for m in _re.finditer(r"(?<![\w])(?:SMM[-_ ]?)?(\d{3,12})(?!\w)", t, flags=_re.I):
+        c = m.group(1)
+        if c not in codes:
+            codes.append(c)
+    if not codes:
+        return ""
+    try:
+        from tenant.bots.virtual_service.smm import user_vs_orders
+        from tenant import _jalali_date_time
+        out = []
+        for c in codes[:3]:
+            found = [i for i in await user_vs_orders(bot_id, telegram_id, c) if str(i["code"]).lower().lstrip("#") == c.lower()]
+            if not found:
+                out.append(f"پیگیریِ کدِ {c}: سفارشی با این کد در سفارش‌هایِ همین مشتری پیدا نشد (ممکن است کد را اشتباه نوشته باشد).")
+                continue
+            o = found[0]
+            d, tm = _jalali_date_time(o.get("at")) if o.get("at") else ("—", "—")
+            out.append(f"پیگیریِ کدِ {c}: سرویس: {o['name']}؛ وضعیت: {o['status']}؛ مبلغ: {int(o['price']):,} تومان؛ "
+                       f"تاریخِ ثبت: {d}؛ ساعتِ ثبت: {tm}.")
+        return "نتیجهٔ پیگیریِ کدِ سفارش (فقط همین مشتری):\n" + "\n".join(out)
+    except Exception:      # noqa: BLE001
+        logger.exception("[SMM_AI] پیگیریِ سفارش با کد ناموفق بود")
         return ""
 
 
@@ -1018,7 +1050,8 @@ async def smmai_ask_answer(msg: Message, bot: Bot, state: FSMContext):
     provider = await _get_provider(row.id)
     await msg.answer("⏳ در حالِ فکر کردن...")
     # PATCH_AI_ORDERS_FIRST_V1 — سفارش‌هایِ کاربر اول می‌آید تا برشِ «سختِ» انتهایِ context (fit_context) آن را نبُرد
-    context = (await _recent_orders_context(row.id, msg.from_user.id)
+    context = (await _order_lookup_context(row.id, msg.from_user.id, msg.text) + "\n\n"
+               + await _recent_orders_context(row.id, msg.from_user.id)
                + "\n\n" + await _user_facts_context(row.id, msg.from_user.id)
                + "\n\n" + await _live_bot_context(row.id, row, msg.from_user.id))
     answer = await ask_ai(provider, api_key, msg.text, context,
@@ -1146,7 +1179,8 @@ async def _smm_ai_answer_in_group(msg: Message, question: str, row) -> None:
     provider = await _get_provider(row.id)
     logger.info(f"[SMM_AI_GROUP] bot_id={row.id} provider={provider} — در حالِ فراخوانیِ AI برایِ سؤال={question!r}")
     # PATCH_AI_ORDERS_FIRST_V1 — سفارش‌هایِ کاربر اول می‌آید تا برشِ «سختِ» انتهایِ context (fit_context) آن را نبُرد
-    context = (await _recent_orders_context(row.id, msg.from_user.id)
+    context = (await _order_lookup_context(row.id, msg.from_user.id, question) + "\n\n"
+               + await _recent_orders_context(row.id, msg.from_user.id)
                + "\n\n" + await _user_facts_context(row.id, msg.from_user.id)
                + "\n\n" + await _live_bot_context(row.id, row, msg.from_user.id))
     answer = await ask_ai(provider, api_key, question, context,

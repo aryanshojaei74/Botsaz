@@ -93,6 +93,7 @@ from tenant.shared.top_customers import top_customers_router
 from tenant.shared.dice_game import dice_game_router  # === PATCH_DICE_GAME_V1 ===
 from tenant.shared.group_wallet import group_wallet_router  # === PATCH_GROUP_WALLET_V1 ===
 from tenant.shared.group_help import group_help_router  # === PATCH_GROUP_HELP_V1 ===
+from tenant.shared.vs_grace import vs_grace_router  # === PATCH_VS_GRACE_V1 ===
 from tenant.shared.group_betting import betting_router  # === PATCH_GROUP_BETTING_V1 ===
 from tenant.bots.virtual_service.smm_ai import smm_ai_router  # === PATCH_SMM_AI_ASSISTANT_V1 ===
 from tenant.shared.backup_restore import backup_router, backup_menu  # === PATCH_BOT_BACKUP_V1 ===
@@ -262,6 +263,7 @@ tenant_router.include_router(rpt_router)  # === PATCH_REFERRAL_POINTS_V1 ===
 from tenant_group_guard import tenant_group_guard_router  # === PATCH_TENANT_GROUP_GUARD_V1 ===
 tenant_router.include_router(tenant_group_guard_router)
 tenant_router.include_router(group_help_router)  # === PATCH_GROUP_HELP_V1 ===
+tenant_router.include_router(vs_grace_router)  # === PATCH_VS_GRACE_V1 ===
 tenant_router.include_router(group_wallet_router)  # === PATCH_GROUP_WALLET_V1 ===
 tenant_router.include_router(betting_router)  # === PATCH_GROUP_BETTING_V1 ===
 from tenant.shared.wager_games import wager_games_router  # === PATCH_WAGER_TENANT_V1 ===
@@ -3310,6 +3312,28 @@ def _nav_install(bot) -> None:
                                 logger.exception("vs_msg_override: اعمالِ ایموجیِ پرمیوم روی متنِ دلخواه ناموفق بود")
                 except Exception:
                     logger.exception("vs_msg_override hook failed")
+        # === PATCH_VS_GRACE_V1 === «ارفاق خرید»: متغیرِ {{grace}} در پیامِ ثبتِ سفارش ⇒ بلوکِ ارفاق یا خالی؛ پیامِ پیش‌فرض ⇒ بلوک در انتها
+        if name in ("SendMessage", "EditMessageText") and isinstance(getattr(method, "text", None), str) \
+                and isinstance(getattr(method, "chat_id", None), int) and method.chat_id > 0:
+            try:
+                from tenant.shared.vs_msg_override import rule_keys as _vs_rk, _PLACED as _VS_PLACED
+                _t0 = method.text
+                _has_var = "{{grace}}" in _t0 or "{grace}" in _t0
+                _is_placed = (_vs_rk(_t0) == _VS_PLACED)
+                if _has_var or _is_placed:
+                    _rowg = await get_bot_row(bot_)
+                    if _rowg:
+                        from tenant.shared.vs_grace import decorate as _vs_grace_dec
+                        _t1 = _vs_grace_dec(_rowg.id, method.chat_id, _t0, is_default_placed=_is_placed)
+                        if _t1 != _t0:
+                            method = method.model_copy(update={"text": _t1, "parse_mode": "HTML", "entities": None})
+                            try:
+                                from premium_emoji_dynamic import _PremiumEmojiMiddleware as _PEM2
+                                await _PEM2()._rewrite_text(bot_, method)
+                            except Exception:
+                                logger.exception("vs_grace: اعمالِ ایموجیِ پرمیوم ناموفق بود")
+            except Exception:
+                logger.exception("vs_grace hook failed")
         # === PATCH_ORDER_SUPPORT_BTN_TOGGLE_V1 === (فدایی) خاموش‌کردنِ دکمهٔ «📞 پشتیبانی (پیگیریِ سفارش)» زیرِ پیام‌هایِ سفارش
         if isinstance(mk, InlineKeyboardMarkup) and any(
                 str(getattr(b, "callback_data", "") or "").startswith("gift:support:")
@@ -13985,7 +14009,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "448"
+BUILD_ID = "449"
 
 
 @tenant_router.message(Command("version"))

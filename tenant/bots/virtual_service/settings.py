@@ -106,7 +106,17 @@ async def _hesabpay(cb, bot):
     await hesabpay_admin_start(cb, bot)
 
 
+async def _vs_grace(cb, bot):
+    from tenant.shared.vs_grace import vsg_menu_entry     # PATCH_VS_GRACE_V1
+    await vsg_menu_entry(cb, bot)
+
+
 register_settings_items(section_key("finance", KIND), [
+    SettingsItem(
+        label="🤝 ارفاق خرید (کمبودِ کمِ موجودی)", callback="vsg:menu",
+        handler=_vs_grace,
+        after=("set:discount_purchase_toggle", "tadm:discounts", "set:toggle_payphone"),
+    ),
     # === PATCH_SMM_ORDER_CHANNEL_V1 === در بقیهٔ انواع دیده نمی‌شود
     SettingsItem(
         label="🛰 متصل‌کردنِ کانالِ انجامِ سفارشات", callback="tadm:smmorderchannel",

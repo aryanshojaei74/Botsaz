@@ -610,7 +610,7 @@ def test_section_key_format(reg):
 def test_virtual_finance_items_registered(vs):
     regmod, mod = vs
     items = regmod.registered_items(regmod.section_key("finance", "virtual_service"))
-    assert {i.callback for i in items} == {"tadm:smmorderchannel", "set:hesabpay", "btr:admin"}
+    assert {i.callback for i in items} == {"tadm:smmorderchannel", "set:hesabpay", "btr:admin", "vsg:menu"}
     for i in items:
         assert i.handler is not None and not i.owner_only and not i.needs_state
 
@@ -632,7 +632,7 @@ def test_finance_items_keep_previous_positions(vs):
     items = regmod.visible_items(regmod.section_key("finance", "virtual_service"), "pro")
     out = [cb for _, cb in regmod.merge_into(base, items)]
     assert out == ["tadm:receiptchannel", "set:txlog", "set:kyc", "tadm:smmorderchannel",
-                   "set:wallet_receipt_buttons", "set:phonelog", "set:toggle_payphone",
+                   "set:wallet_receipt_buttons", "set:phonelog", "set:toggle_payphone", "vsg:menu",
                    "set:crypto", "set:hesabpay", "set:swap", "btr:admin"]
 
 
@@ -641,7 +641,7 @@ def test_finance_items_when_optional_neighbours_missing(vs):
     base = [("a", "tadm:receiptchannel"), ("s", "set:swap")]        # نه crypto، نه payphone، …
     items = regmod.visible_items(regmod.section_key("finance", "virtual_service"), "pro")
     out = [cb for _, cb in regmod.merge_into(base, items)]
-    assert out == ["tadm:receiptchannel", "tadm:smmorderchannel", "set:hesabpay", "set:swap", "btr:admin"]
+    assert out == ["tadm:receiptchannel", "tadm:smmorderchannel", "set:hesabpay", "set:swap", "btr:admin", "vsg:menu"]
 
 
 @pytest.mark.parametrize("plan", _plans())

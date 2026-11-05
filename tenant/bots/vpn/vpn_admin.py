@@ -4348,7 +4348,8 @@ async def vpn_plan_limit_ip(msg: Message, bot: Bot, state: FSMContext):
     kb_rows.append([InlineKeyboardButton(text="🚫 بدون دسته‌بندی", callback_data="tvpn:plancatpick:-", style=ButtonStyle.PRIMARY)])
     await msg.answer(
         "🏷 این پلن تویِ کدوم دسته‌بندی باشه؟ یکی از دسته‌های موجود رو انتخاب کن، یا "
-        "نامِ دستهٔ جدید رو بفرست (حداکثر ۲۰ کاراکتر؛ مثلاً «پلن حرفه‌ای»):",
+        "نامِ دستهٔ جدید رو بفرست (حداکثر ۲۰ کاراکتر؛ مثلاً «پلن حرفه‌ای»):\n\n"
+        "🗑 برایِ حذفِ یک دسته: بعد از ساختِ پلن، «ویرایشِ پلن ← 🏷 دسته ← 🗑 حذف دسته‌بندی‌ها» را بزن.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
 
 
@@ -4821,6 +4822,8 @@ async def vpn_plan_category_menu(cb: CallbackQuery, bot: Bot, state: FSMContext)
         # می‌شود.
         rows.append([_b(f"{mark}🏷 {cat}", f"tvpn:plancatset:{key}:{p.id}:i{idx}")])
     rows.append([_b(("✅ " if not cur else "") + "🚫 بدون دسته‌بندی", f"tvpn:plancatset:{key}:{p.id}:-")])
+    if _cats:      # PATCH_VPN_CATEGORY_MANAGER_V1
+        rows.append([_b("🗑 حذف دسته‌بندی‌ها", f"tvpn:catmgr:{key}:{p.id}", style=ButtonStyle.DANGER)])
     rows.append([_b("⬅️ بازگشت", f"tvpn:planmenu:{key}:{p.id}")])
     await state.set_state(VpnPlanEditFSM.value)
     await state.update_data(pe_field="category", pe_plan_id=p.id, pe_key=key)
@@ -4870,6 +4873,83 @@ async def vpn_plan_category_set(cb: CallbackQuery, bot: Bot, state: FSMContext):
         await cb.message.edit_text(text, reply_markup=kb)
     except Exception:
         await cb.message.answer(text, reply_markup=kb)
+
+
+# === PATCH_VPN_CATEGORY_MANAGER_V1 === (Mobin VPN: «دسته‌ها را نمی‌توانم حذف کنم»)
+# دسته‌بندی‌هایِ پلن فقط یک رشته رویِ خودِ پلن‌هاست؛ پس «حذفِ دسته» = برداشتنِ آن رشته از همهٔ پلن‌هایِ این دسته
+# (پلن‌ها حذف نمی‌شوند؛ می‌روند «بدون دسته‌بندی»).
+async def _plan_cats_with_counts(bot_id: int) -> list[tuple[str, int]]:
+    from sqlalchemy import func as _f
+    async with Session() as s:
+        rows = (await s.execute(
+            select(VpnPlan.category, _f.count(VpnPlan.id)).where(
+                VpnPlan.bot_id == bot_id, VpnPlan.category.is_not(None), VpnPlan.category != "")
+            .group_by(VpnPlan.category).order_by(VpnPlan.category))).all()
+    return [(c, int(n)) for c, n in rows if c]
+
+
+async def _render_cat_manager(cb: CallbackQuery, row, key: str, plan_id: str, note: str = ""):
+    cats = await _plan_cats_with_counts(row.id)
+    rows = [[InlineKeyboardButton(text=f"🗑 {c} ({n} پلن)", callback_data=f"tvpn:catdel:{key}:{plan_id}:i{i}",
+                                  style=ButtonStyle.DANGER)] for i, (c, n) in enumerate(cats)]
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"tvpn:plancat:{key}:{plan_id}", style=ButtonStyle.PRIMARY)])
+    text = (note + "\n\n" if note else "") + (
+        "🗑 <b>حذفِ دسته‌بندی‌هایِ پلن</b>\n\nروی دسته‌ای که نمی‌خواهی بزن. پلن‌هایِ آن دسته <b>حذف نمی‌شوند</b>؛ "
+        "فقط «بدون دسته‌بندی» می‌شوند." if cats else "هیچ دسته‌بندی‌ای باقی نمانده ✅")
+    try:
+        await cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    except Exception:      # noqa: BLE001
+        await cb.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+
+
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:catmgr:"))
+async def vpn_cat_manager(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    _, _, key, plan_id = cb.data.split(":")
+    row, p = await _plan_get(cb, bot, int(plan_id))
+    if not p:
+        return
+    await state.clear()
+    await _render_cat_manager(cb, row, key, plan_id)
+    await cb.answer()
+
+
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:catdel:"))
+async def vpn_cat_delete_ask(cb: CallbackQuery, bot: Bot):
+    _, _, key, plan_id, ref = cb.data.split(":")
+    row, p = await _plan_get(cb, bot, int(plan_id))
+    if not p:
+        return
+    cats = await _plan_cats_with_counts(row.id)
+    try:
+        cat, n = cats[int(ref[1:])]
+    except (ValueError, IndexError):
+        await cb.answer("این دسته دیگر موجود نیست.", show_alert=True)
+        return await _render_cat_manager(cb, row, key, plan_id)
+    rows = [[InlineKeyboardButton(text="✅ بله، حذف کن", callback_data=f"tvpn:catdelgo:{key}:{plan_id}:i{ref[1:]}", style=ButtonStyle.DANGER)],
+            [InlineKeyboardButton(text="❌ نه", callback_data=f"tvpn:catmgr:{key}:{plan_id}", style=ButtonStyle.PRIMARY)]]
+    await cb.message.edit_text(f"❓ دستهٔ «{cat}» حذف شود؟\n{n} پلن «بدون دسته‌بندی» می‌شوند (خودِ پلن‌ها می‌مانند).",
+                               reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await cb.answer()
+
+
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:catdelgo:"))
+async def vpn_cat_delete_go(cb: CallbackQuery, bot: Bot):
+    from sqlalchemy import update as _upd
+    _, _, key, plan_id, ref = cb.data.split(":")
+    row, p = await _plan_get(cb, bot, int(plan_id))
+    if not p:
+        return
+    cats = await _plan_cats_with_counts(row.id)
+    try:
+        cat, n = cats[int(ref[1:])]
+    except (ValueError, IndexError):
+        await cb.answer("این دسته دیگر موجود نیست.", show_alert=True)
+        return await _render_cat_manager(cb, row, key, plan_id)
+    async with Session() as s:
+        await s.execute(_upd(VpnPlan).where(VpnPlan.bot_id == row.id, VpnPlan.category == cat).values(category=None))
+        await s.commit()
+    await cb.answer("🗑 حذف شد")
+    await _render_cat_manager(cb, row, key, plan_id, f"✅ دستهٔ «{cat}» حذف شد ({n} پلن بدون دسته‌بندی شدند).")
 
 
 @vpn_admin_router.callback_query(F.data.startswith("tvpn:plancolor:"))
@@ -5100,6 +5180,8 @@ async def vpn_cat_menu(cb: CallbackQuery, bot: Bot):
                               style=ButtonStyle.PRIMARY),
          InlineKeyboardButton(text="🔽 پایین بردنِ دسته", callback_data=f"tvpn:catmv:{key}:{idx}:dn",
                               style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="🗑 حذفِ این دسته", callback_data=f"tvpn:catdelask:{key}:{idx}",
+                              style=ButtonStyle.DANGER)],     # PATCH_VPN_CATEGORY_MANAGER_V1
         [InlineKeyboardButton(text="⬅️ بازگشت به پلن‌ها", callback_data=f"tvpn:plans:{key}",
                               style=ButtonStyle.DANGER)],
     ])
@@ -5112,6 +5194,49 @@ async def vpn_cat_menu(cb: CallbackQuery, bot: Bot):
     except Exception:
         await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
     await cb.answer()
+
+
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:catdelask:"))
+async def vpn_cat_del_ask_panel(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    _, _, key, idx = cb.data.split(":")
+    names = await panel_category_order(row.id, key)
+    try:
+        cat = names[int(idx)]
+    except (ValueError, IndexError):
+        await cb.answer("دسته پیدا نشد (شاید تغییر کرده).", show_alert=True)
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ بله، حذف کن", callback_data=f"tvpn:catdelok:{key}:{idx}", style=ButtonStyle.DANGER)],
+        [InlineKeyboardButton(text="❌ نه", callback_data=f"tvpn:catmenu:{key}:{idx}", style=ButtonStyle.PRIMARY)]])
+    await cb.message.edit_text(f"❓ دستهٔ «{cat}» حذف شود؟\nپلن‌هایِ این دسته <b>حذف نمی‌شوند</b>؛ فقط «بدون دسته‌بندی» می‌شوند.",
+                               reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
+
+
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:catdelok:"))
+async def vpn_cat_del_go_panel(cb: CallbackQuery, bot: Bot):
+    from sqlalchemy import update as _upd
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    _, _, key, idx = cb.data.split(":")
+    names = await panel_category_order(row.id, key)
+    try:
+        cat = names[int(idx)]
+    except (ValueError, IndexError):
+        await cb.answer("دسته پیدا نشد (شاید قبلاً حذف شده).", show_alert=True)
+        return
+    async with Session() as s:
+        res = await s.execute(_upd(VpnPlan).where(VpnPlan.bot_id == row.id, VpnPlan.panel_key == key,
+                                                  VpnPlan.category == cat).values(category=None))
+        await s.commit()
+    await cb.answer("🗑 حذف شد")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text="⬅️ بازگشت به پلن‌ها", callback_data=f"tvpn:plans:{key}", style=ButtonStyle.PRIMARY)]])
+    await cb.message.edit_text(f"✅ دستهٔ «{cat}» حذف شد؛ {res.rowcount or 0} پلن «بدون دسته‌بندی» شدند.", reply_markup=kb)
 
 
 @vpn_admin_router.callback_query(F.data.startswith("tvpn:catmv:"))
