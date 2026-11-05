@@ -117,6 +117,7 @@ async def test_home_hubs_help_and_generic_tools(env):
 
 @pytest.mark.asyncio
 async def test_admin_entry_points_open_the_booking_panel(env):
+    ADM._LAST_CAT.clear()          # حافظهٔ «آخرین دستهٔ ابزارها» بینِ تست‌ها نشت نکند
     cb = FCb("tadm:menu", OWNER)
     await tenant.tadm_menu(cb, env.bot)
     assert "bka:ap" in cb.buttons() and "bka:fin" in cb.buttons()

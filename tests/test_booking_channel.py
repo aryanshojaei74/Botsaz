@@ -63,3 +63,4 @@ async def test_back_from_generic_pages_returns_to_the_same_tools_category(env):
     home = FCb("tadm:menu", OWNER)
     await tenant.tadm_menu(home, env.bot)
     assert "bka:ap" in home.buttons()                               # پنلِ رزرو
+    ADM._LAST_CAT.clear()
