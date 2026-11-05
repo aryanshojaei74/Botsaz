@@ -4078,6 +4078,32 @@ def _action_kb_base(field: str = "vpn_sales") -> InlineKeyboardMarkup:
         b.adjust(1)
         return b.as_markup()
     # پیش‌فرض: فروش VPN / کانفیگ
+    # === PATCH_ACTION_KB_NO_VPN_LEAK_V1 === (ربات رزرو در مرحلهٔ «عملکردِ دکمه‌ها» گزینه‌هایِ VPN نشان می‌داد)
+    # قبلاً هر زمینه‌ای که شاخهٔ اختصاصی نداشت (رزرو، مدیریتِ گروه، هلپ‌دسک، تبدیلِ فایل) به لیستِ VPN می‌افتاد.
+    # حالا فقط «فروش VPN» (یا زمینهٔ نامشخصِ قدیمی) لیستِ VPN را می‌گیرد؛ بقیه فقط عملکردهایِ خودشان را.
+    if field == "booking":
+        b.button(text="📅 نوبت‌گیری (رزرو وقت)", callback_data="act:book_show", style=ButtonStyle.SUCCESS)
+        b.button(text="🗓 نوبت‌های من", callback_data="act:book_my", style=ButtonStyle.SUCCESS)
+        b.button(text="💰 کیف پول (برایِ بیعانه)", callback_data="act:wallet")
+        b.button(text="👤 مشخصات کاربری", callback_data="act:profile")
+        b.button(text="🎫 ثبت تیکت", callback_data="act:ticket")
+        b.button(text="👥 زیرمجموعه‌گیری", callback_data="act:referral")
+        b.button(text="🗂 زیرمنو (دکمه‌های بیشتر)", callback_data="act:submenu")
+        b.button(text="🌐 مینی‌اپ (باز کردن لینک به‌صورت وب‌اپ)", callback_data="act:web_app")
+        b.button(text="📝 نمایش متن/پیام آزاد", callback_data="act:skip")
+        b.button(text="🧩 بعداً تنظیم می‌کنم", callback_data="act:skip")
+        b.adjust(1)
+        return b.as_markup()
+    if field in ("community_mgmt", "support_desk", "file_link") or (field not in (None, "", "vpn_sales")):
+        # زمینه‌هایِ بدونِ شاخهٔ اختصاصی: فقط عملکردهایِ عمومی (بدونِ VPN/SMM/رزرو/…)
+        b.button(text="👤 مشخصات کاربری", callback_data="act:profile")
+        b.button(text="🎫 ثبت تیکت", callback_data="act:ticket")
+        b.button(text="🗂 زیرمنو (دکمه‌های بیشتر)", callback_data="act:submenu")
+        b.button(text="🌐 مینی‌اپ (باز کردن لینک به‌صورت وب‌اپ)", callback_data="act:web_app")
+        b.button(text="📝 نمایش متن/پیام آزاد", callback_data="act:skip")
+        b.button(text="🧩 بعداً تنظیم می‌کنم", callback_data="act:skip")
+        b.adjust(1)
+        return b.as_markup()
     b.button(text="🛒 خرید کانفیگ (حجم/روز/تعداد)", callback_data="act:buy_config", style=ButtonStyle.SUCCESS)
     b.button(text="🛰 خرید VPN خودکار (پنل X-UI)", callback_data="act:buy_vpn", style=ButtonStyle.SUCCESS)
     b.button(text="🔵 خرید از پنل سنایی", callback_data="act:buy_vpn_sanai", style=ButtonStyle.SUCCESS)
@@ -4108,6 +4134,8 @@ def _action_kb_base(field: str = "vpn_sales") -> InlineKeyboardMarkup:
 ACTION_TITLE = {
     # === PATCH_PARTNER_V4 ===
     "pnr_build": "ساخت ربات (فروش به کاربر)", "pnr_mybots": "ربات‌های من",
+    "book_show": "نوبت‌گیری (رزرو وقت)", "book_my": "نوبت‌های من",      # PATCH_ACTION_KB_NO_VPN_LEAK_V1
+    "pyar_panels": "پنل‌های من (پنل‌یار)",
     "buy_config": "خرید کانفیگ", "buy_vpn": "خرید VPN خودکار",
     "buy_vpn_sanai": "خرید از پنل سنایی", "buy_vpn_pasargad": "خرید از پنل پاسارگاد",
     "buy_vpn_pasarguard": "خرید از پنل PasarGuard",
