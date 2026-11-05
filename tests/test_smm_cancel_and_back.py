@@ -97,7 +97,9 @@ async def test_product_page_back_button_row(db, notified, monkeypatch):
     rows = [[(b.text, b.callback_data) for b in r] for r in shown["kb"].inline_keyboard]
     assert rows[-1] == [("⬅️ بازگشت به لیست", "smmu:type:telegram:members:3"), ("🏠 منوی اصلی", "mbtn:home")]
     ok = await smm.send_smm_product_page(cb, None, sid, St())
-    assert [(b.text, b.callback_data) for b in shown["kb"].inline_keyboard[-1]] == [("🏠 منوی اصلی", "mbtn:home")]
+    # PATCH_SMM_SHORTCUT_BACK_TO_LIST_V1: بدونِ back_cb (میانبرِ /<شماره>) هم «بازگشت به لیست» به لیستِ محصولاتِ همان پلتفرم+نوع می‌رود
+    last = [(b.text, b.callback_data) for b in shown["kb"].inline_keyboard[-1]]
+    assert last[0][0] == "⬅️ بازگشت به لیست" and last[0][1].startswith("smmu:type:") and last[-1] == ("🏠 منوی اصلی", "mbtn:home")
 
 
 @pytest.mark.asyncio

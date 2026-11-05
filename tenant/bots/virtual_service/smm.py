@@ -10384,6 +10384,20 @@ async def send_smm_product_page(msg_or_cb, bot: Bot, vid: int, state: FSMContext
         return False
     is_cb = isinstance(msg_or_cb, CallbackQuery)
     target = msg_or_cb.message if is_cb else msg_or_cb
+    # === PATCH_SMM_SHORTCUT_BACK_TO_LIST_V1 === (SINA) صفحهٔ محصول از میانبرِ «/۸۲۹۵۲» یا مسیرهایِ مستقیم هیچ دکمهٔ «بازگشت» نداشت؛
+    # حالا به «لیستِ محصولاتِ» همان پلتفرم+نوع برمی‌گردد (نه به دسته‌بندی‌ها).
+    if not back_cb and not breadcrumb:
+        try:
+            _tree, _ = await _user_active_tree(row.id)
+            for _pk, _types in _tree.items():
+                for _tk, _its in _types.items():
+                    if any(i.get("pk") == vid for i in _its):
+                        back_cb = f"smmu:type:{_pk}:{_tk}:1"
+                        raise StopIteration
+        except StopIteration:
+            pass
+        except Exception:
+            logger.exception("[SMM] پیدا کردنِ لیستِ مبدأ برایِ دکمهٔ بازگشتِ صفحهٔ محصول ناموفق بود")
     # === PATCH_SMM_VNUM_ROUTE_V1 ===
     # شمارهٔ مجازی نه لینک می‌خواهد نه تعداد؛ کارتِ خودش را بفرست.
     if _is_vnum_service(v):
