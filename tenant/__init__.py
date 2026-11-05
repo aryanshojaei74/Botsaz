@@ -12404,6 +12404,37 @@ async def _sec_finance_opts(bot_id: int, plan: str) -> list[tuple[str, str]]:
     return opts
 
 
+# === PATCH_BOOKING_TOOLS_HUB_V1 ===
+# پنلِ رزرو همیشه شیشه‌ای است؛ ولی زیرمنوهایِ عمومی در حالتِ «کیبوردی» ReplyKeyboard برمی‌گردانند و
+# «ابزارهایِ عمومی» خالی می‌شد. این پرچم فقط برایِ ساختنِ کیبوردِ شیشه‌ایِ همان زیرمنوها است.
+import contextvars as _ctxv
+_FORCE_INLINE_ADMIN = _ctxv.ContextVar("force_inline_admin", default=False)
+
+
+async def _admin_reply_mode(bot_id: int) -> bool:
+    if _FORCE_INLINE_ADMIN.get():
+        return False
+    return await get_setting(bot_id, "menu_mode", "reply") != "inline"
+
+
+async def tools_inline_items(bot_id: int, plan: str, paused: bool) -> list[tuple[str, str]]:
+    """همهٔ (برچسب، callback)هایِ زیرمنوهایِ عمومیِ مالی/آمار/ادمین/تنظیمات، همیشه در قالبِ شیشه‌ای."""
+    tok = _FORCE_INLINE_ADMIN.set(True)
+    out: list[tuple[str, str]] = []
+    try:
+        for kb in (await _sec_settings_kb(bot_id, plan, "inline", paused),
+                   await _sec_finance_kb(bot_id, plan),
+                   await _sec_stats_kb(bot_id, plan),
+                   await _sec_admins_kb(bot_id, plan)):
+            for r in getattr(kb, "inline_keyboard", []):
+                for b in r:
+                    if b.callback_data and b.callback_data not in ("noop", "tadm:menu"):
+                        out.append((b.text, b.callback_data))
+    finally:
+        _FORCE_INLINE_ADMIN.reset(tok)
+    return out
+
+
 async def _sec_finance_kb(bot_id: int, plan: str) -> InlineKeyboardMarkup | ReplyKeyboardMarkup:
     """زیرمنوی مالی و کیف پول با چیدمان گروه‌بندی‌شده و رنگ‌بندی ثابت."""
     opts = await _sec_finance_opts(bot_id, plan)
@@ -12468,7 +12499,7 @@ async def _sec_finance_kb(bot_id: int, plan: str) -> InlineKeyboardMarkup | Repl
         "tadm:welcomebonus": ButtonStyle.SUCCESS,
         "tadm:chgbonus": ButtonStyle.SUCCESS,   # PATCH_CHARGE_BONUS_V1
     }
-    if await get_setting(bot_id, "menu_mode", "reply") != "inline":
+    if await _admin_reply_mode(bot_id):
         rows = []
         for group in groups:
             row = []
@@ -12521,7 +12552,7 @@ async def _sec_stats_kb(bot_id: int, plan: str) -> InlineKeyboardMarkup | ReplyK
     _pst = [("📈 آمار زمانی (سفارش/شارژ/زیرمجموعه)", "pst:menu")] if ok(Feature.BOT_STATS) else []
     styles["pst:menu"] = ButtonStyle.SUCCESS
     groups = [opts[0:2], _pst, opts[2:3], opts[3:4], opts[4:5], opts[5:6]]
-    if await get_setting(bot_id, "menu_mode", "reply") != "inline":
+    if await _admin_reply_mode(bot_id):
         rows = [[KeyboardButton(text=lbl, style=styles.get(cbd, _tadm_opt_style(lbl)))
                  for lbl, cbd in group] for group in groups if group]
         rows.append([KeyboardButton(text="⬅️ بازگشت", style=ButtonStyle.DANGER)])
@@ -12563,7 +12594,7 @@ async def _sec_admins_kb(bot_id: int, plan: str = "free") -> InlineKeyboardMarku
         opts.append(("📣 ارسال پیام همگانی", "tadm:broadcast"))
     if ok(Feature.POLL):
         opts.append(("📋 نظرسنجی‌ها", "tadm:polls"))
-    if await get_setting(bot_id, "menu_mode", "reply") != "inline":
+    if await _admin_reply_mode(bot_id):
         # Reply Keyboard نیز از فیلدِ style پشتیبانی می‌کند؛ همان رنگ‌بندیِ
         # حالتِ Inline را برای دکمه‌های این بخش به‌صورت مستقیم ارسال می‌کنیم.
         _styles = {
@@ -12771,7 +12802,7 @@ async def _sec_settings_kb(bot_id: int, plan: str, menu_mode_v: str, bot_paused:
     used = {cb for row in requested_rows for _, cb in row}
     requested_rows.extend([[item] for item in opts if item[1] not in used])
 
-    if menu_mode_v != "inline" and plan != "partner":
+    if menu_mode_v != "inline" and plan != "partner" and not _FORCE_INLINE_ADMIN.get():
         # === PATCH_REPLY_KEYBOARD_BUTTON_STYLE_V1 ===
         # KeyboardButton در Bot API نیز style می‌پذیرد؛ بنابراین رنگ واقعی
         # ایوگرام روی خودِ دکمه اعمال می‌شود و متنِ اصلی دست‌نخورده می‌ماند.
@@ -13952,7 +13983,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "440"
+BUILD_ID = "441"
 
 
 @tenant_router.message(Command("version"))

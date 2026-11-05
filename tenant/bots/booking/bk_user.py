@@ -163,17 +163,64 @@ async def _pick_day(cb, row, sv: BkService, staff_id: int, cfg: dict):
                         "لطفاً بعداً دوباره سر بزن یا با مجموعه تماس بگیر.",
                     [[_btn("⬅️ بازگشت", back, ButtonStyle.DANGER)]])
         return await cb.answer()
-    rows, line = [], []
-    for d in days:
-        line.append(_btn(E.fa_date_long(d), f"bk:d:{sv.id}:{staff_id}:{d.strftime('%Y%m%d')}", ButtonStyle.PRIMARY))
-        if len(line) == 2:
-            rows.append(line)
-            line = []
-    if line:
+    await _show_month(cb, sv, staff_id, days, back, None, cfg)
+
+
+def _cal_text(sv, cfg) -> str:
+    today = E.iran_now().date()
+    return (f"💈 <b>{_esc(sv.name)}</b> — {_dur_txt(sv.duration_min)} — {_price_txt(sv.price)}\n"
+            f"📆 امروز: {E.fa_date_long(today)}\n\n📅 روزِ مورد نظر را از تقویم انتخاب کن "
+            "(▫️ = زمانِ خالی ندارد):")
+
+
+async def _show_month(cb, sv: BkService, staff_id: int, days, back: str, ym: int | None, cfg: dict):
+    from tenant.bots.booking import calendar_ui as C
+    cal = E.cur_cal()
+    open_set = set(days)
+    if ym is None:
+        ym = C.ym_of(min(open_set), cal)
+    rows = []
+    grid = C.build_month(open_set, ym, cal)
+    for r_i, week in enumerate(grid):
+        line = []
+        for text, d in week:
+            if r_i == 0:
+                line.append(_btn(text, "bk:noop", ButtonStyle.PRIMARY))
+            elif d is not None:
+                line.append(_btn(text, f"bk:d:{sv.id}:{staff_id}:{d.strftime('%Y%m%d')}", ButtonStyle.SUCCESS))
+            else:
+                line.append(_btn(text, "bk:noop"))
         rows.append(line)
+    prv, nxt = C.neighbours(open_set, ym, cal)
+    nav = [_btn("◀️" if prv is not None else "·", f"bk:cm:{sv.id}:{staff_id}:{prv}" if prv is not None else "bk:noop"),
+           _btn(f"🗓 {C.month_title(ym, cal)}", "bk:noop"),
+           _btn("▶️" if nxt is not None else "·", f"bk:cm:{sv.id}:{staff_id}:{nxt}" if nxt is not None else "bk:noop")]
+    rows.insert(0, nav)
     rows.append([_btn("⬅️ بازگشت", back, ButtonStyle.DANGER)])
-    await _show(cb, f"💈 <b>{_esc(sv.name)}</b> — {_dur_txt(sv.duration_min)} — {_price_txt(sv.price)}\n\n📅 روز را انتخاب کن:", rows)
+    await _show(cb, _cal_text(sv, cfg), rows)
     await cb.answer()
+
+
+@booking_router.callback_query(F.data == "bk:noop")
+async def bk_noop(cb: CallbackQuery):
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data.startswith("bk:cm:"))
+async def bk_month(cb: CallbackQuery, bot: Bot):
+    row = await _row(bot)
+    if not row:
+        return await cb.answer()
+    _, _, sid, stf, ym = cb.data.split(":")
+    sv = await _service(row.id, int(sid))
+    if not sv:
+        return await cb.answer("این خدمت دیگر موجود نیست.", show_alert=True)
+    cfg = await E.get_cfg(row.id)
+    days = await E.open_days(row.id, sv, int(stf) or None, cfg)
+    if not days:
+        return await cb.answer("زمانِ خالی نیست.", show_alert=True)
+    back = f"bk:s:{sv.id}" if (cfg["use_staff"] and int(stf)) else "bk:home"
+    await _show_month(cb, sv, int(stf), days, back, int(ym), cfg)
 
 
 def _pd(s: str) -> _dt.date:

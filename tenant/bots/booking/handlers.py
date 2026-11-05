@@ -30,6 +30,34 @@ logger = _get_logger(__name__)
 
 booking_router = Router()
 
+
+# === PATCH_BOOKING_V25_CAL === سیستمِ تاریخِ (شمسی/میلادی) هر ربات را برایِ همین درخواست تنظیم می‌کند
+from aiogram import BaseMiddleware as _BaseMW
+
+
+class _CalMiddleware(_BaseMW):
+    async def __call__(self, handler, event, data):
+        tok = None
+        try:
+            from tenant import get_bot_row, get_setting
+            bot = data.get("bot")
+            row = await get_bot_row(bot) if bot is not None else None
+            if row is not None:
+                from tenant.bots.booking import engine as _E
+                tok = _E.set_cal(await get_setting(row.id, "bk_cal", "jalali"))
+        except Exception:      # noqa: BLE001
+            logger.debug("bk cal middleware: پیش‌فرضِ شمسی")
+        try:
+            return await handler(event, data)
+        finally:
+            if tok is not None:
+                from tenant.bots.booking import engine as _E
+                _E._CAL.reset(tok)
+
+
+booking_router.callback_query.outer_middleware(_CalMiddleware())
+booking_router.message.outer_middleware(_CalMiddleware())
+
 WEEKDAY_FA = ["شنبه", "یک‌شنبه", "دو‌شنبه", "سه‌شنبه", "چهار‌شنبه", "پنج‌شنبه", "جمعه"]
 
 

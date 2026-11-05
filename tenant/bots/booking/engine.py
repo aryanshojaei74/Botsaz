@@ -34,6 +34,7 @@ DEFAULTS = {
     "bk_deposit_value": "0",     # fixed ⇒ تومان؛ percent ⇒ درصد (۱..۱۰۰)
     "bk_refund_hours": "24",     # لغوِ مشتری تا این‌قدر ساعت قبل ⇒ بیعانه برمی‌گردد
     "bk_hold_min": "15",         # مهلتِ پرداختِ بیعانه (دقیقه)؛ ساعت تا آن موقع برایِ مشتری نگه داشته می‌شود
+    "bk_cal": "jalali",          # سیستمِ تاریخِ ربات: jalali | gregorian
     "bk_biz_name": "",
     "bk_biz_address": "",
     "bk_biz_phone": "",
@@ -86,7 +87,22 @@ def parse_hm(s: str) -> int | None:
     return h * 60 + m
 
 
+# === PATCH_BOOKING_V25_CAL === سیستمِ تاریخِ رباتِ جاری (هر درخواست توسطِ میدلور تنظیم می‌شود)
+import contextvars as _ctxv
+_CAL = _ctxv.ContextVar("bk_cal", default="jalali")
+
+
+def set_cal(v: str):
+    return _CAL.set("gregorian" if v == "gregorian" else "jalali")
+
+
+def cur_cal() -> str:
+    return _CAL.get()
+
+
 def fa_date(d: _dt.date) -> str:
+    if _CAL.get() == "gregorian":
+        return d.strftime("%Y/%m/%d")
     try:
         import jdatetime as _jd
         return _jd.date.fromgregorian(date=d).strftime("%Y/%m/%d")
@@ -99,17 +115,21 @@ def fa_date_long(d: _dt.date) -> str:
 
 
 def parse_fa_date(s: str, today: _dt.date | None = None) -> _dt.date | None:
-    """تاریخِ شمسیِ «1405/08/14» (یا «08/14» = سالِ جاری) ⇒ date میلادی؛ نامعتبر ⇒ None."""
+    """تاریخِ «1405/08/14» (شمسی) یا «2026/11/05» (میلادی؛ سال ≥ ۱۷۰۰) ⇒ date میلادی؛
+    «08/14» = سالِ جاریِ تقویمِ انتخابی؛ نامعتبر ⇒ None."""
     t = to_en_digits(s).strip().replace("-", "/")
     parts = [p for p in t.split("/") if p]
     try:
         import jdatetime as _jd
         nums = [int(p) for p in parts]
+        base = today or iran_now().date()
         if len(nums) == 2:
-            y = _jd.date.fromgregorian(date=today or iran_now().date()).year
+            y = base.year if _CAL.get() == "gregorian" else _jd.date.fromgregorian(date=base).year
             nums = [y] + nums
         if len(nums) != 3:
             return None
+        if nums[0] >= 1700:
+            return _dt.date(nums[0], nums[1], nums[2])
         return _jd.date(nums[0], nums[1], nums[2]).togregorian()
     except Exception:      # noqa: BLE001
         return None
@@ -186,6 +206,7 @@ async def get_cfg(bot_id: int) -> dict:
         "dep_mode": cfg["bk_deposit_mode"] if cfg["bk_deposit_mode"] in ("fixed", "percent") else "off",
         "dep_value": _i("bk_deposit_value", 0, 1_000_000_000), "refund_h": _i("bk_refund_hours", 0, 24 * 30),
         "hold_min": _i("bk_hold_min", 5, 180),
+        "cal": "gregorian" if cfg["bk_cal"] == "gregorian" else "jalali",
     }
 
 

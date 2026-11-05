@@ -185,18 +185,105 @@ async def bka_hub_time(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await cb.answer()
 
 
+# ─── ابزارهایِ عمومی (PATCH_BOOKING_TOOLS_HUB_V1): دسته‌بندی‌شده؛ همه از همان قابلیت‌هایِ سایرِ ربات‌ها ───
+GEN_CATS = [
+    ("pay", "💳 پرداخت و کارت", "شماره کارت، درگاه‌ها، کیف پول، کد تخفیفِ خرید، کانالِ رسیدها و لاگِ تراکنش‌ها"),
+    ("ui", "🎨 ظاهر و منو", "دکمه‌هایِ صفحهٔ اصلی، خوش‌آمدگویی، نوعِ منو (شیشه‌ای/کیبوردی)، رنگ‌ها"),
+    ("promo", "🎁 تخفیف و پاداش", "کدِ تخفیف، هدیهٔ ورود، پاداشِ دعوت، نظرسنجی"),
+    ("usr", "👥 کاربران و پیام‌ها", "مدیریتِ کاربران، پیامِ همگانی، تیکت‌ها، عضویتِ اجباری، ادمین‌ها، پنلِ پیامکی"),
+    ("rep", "📊 گزارش و اعلان", "گزارشِ فروش، اطلاعِ خریدِ خودکار، ورودِ کاربرِ جدید"),
+    ("bot", "⚙️ مدیریتِ ربات", "خاموش/روشن، بک‌آپِ کامل، تنظیماتِ گروه، آنتی‌اسپم"),
+]
+_GEN_MAP = {
+    "pay": ("set:card", "set:zarinpal", "set:zibal", "set:crypto", "set:swap", "set:tonpays", "set:hesabpay", "set:ton_direct",
+            "set:coin_direct", "set:stars", "set:auto_approve_toggle", "set:wallet_pay_toggle", "set:wallet_charge_toggle",
+            "set:card_purchase_toggle", "set:discount_purchase_toggle", "set:toggle_payphone", "gwname:menu", "gwl:menu",
+            "wlim:menu", "tadm:receiptchannel", "tadm:orders", "tadm:payguide", "tadm:bulkwallet", "set:wallet_receipt_buttons",
+            "set:uniquepay", "set:hooshpay", "set:blupal", "set:apay", "set:abangateway", "wcode:menu", "set:txlog"),
+    "ui": ("tadm:homebtns", "tadm:btn_colors", "set:welcome", "set:startreact", "vso:menu", "set:menu_mode", "set:nav_kb_only",
+           "set:nav_prev", "set:homemenutext", "pemj:menu:0", "thst:menu"),
+    "promo": ("tadm:discounts", "tadm:welcomebonus", "tadm:chgbonus", "tadm:firstbuy", "set:ref_reward", "rpt:menu", "set:productrating", "dga:menu"),
+    "usr": ("tadm:users", "tadm:broadcast", "tadm:polls", "psms:menu", "set:kyc", "supp:contact", "set:phonelog"),
+    "rep": ("tadm:stats", "tadm:buyinfo:today:0", "pst:menu", "tadm:trustreport", "tc:settings"),
+    "bot": ("set:bot_toggle", "set:paused_text", "tadm:backup:menu", "set:antispam", "tadm:chpost", "miniapp:panel", "miniapp:nft", "tadm:groupsettings"),
+}
+_GEN_PREFIX = {   # مواردی که callbackشان پارامتر دارد یا وضعیت‌دار است
+    "pay": ("tadm:txlog", "tadm:txch", "set:txlog"),
+    "usr": ("tadm:tickets", "tadm:ticket", "tadm:admins", "tadm:support", "tadm:forcejoin", "tadm:fj", "set:admin"),
+    "rep": ("set:purchase_notify", "set:new_user_notify", "set:notify"),
+    "bot": ("tadm:group", "set:group", "grp:"),
+}
+
+
+def _gen_cat_of(label: str, cb: str) -> str:
+    for key, cbs in _GEN_MAP.items():
+        if cb in cbs:
+            return key
+    for key, pre in _GEN_PREFIX.items():
+        if cb.startswith(pre):
+            return key
+    if "لاگ" in label:
+        return "pay"
+    if any(w in label for w in ("تیکت", "پشتیبان", "ادمین", "عضویت", "اجباری", "کانال")):
+        return "usr"
+    if any(w in label for w in ("اطلاع", "آمار", "گزارش")):
+        return "rep"
+    if "گروه" in label:
+        return "bot"
+    return "bot"
+
+
+async def _gen_items(row) -> list[tuple[str, str]]:
+    from tenant import tools_inline_items
+    items = await tools_inline_items(row.id, row.plan, row.status == "paused")
+    if row.plan in ("growth", "pro") and not any(c == "tadm:groupsettings" for _l, c in items):
+        items = items + [("⚙️ تنظیماتِ گروه (اتصال به گروه)", "tadm:groupsettings")]
+    seen, out = set(), []
+    for lbl, cb in items:
+        if cb in seen or cb.startswith(("tadm:sec:", "set:hub_")):
+            continue
+        seen.add(cb)
+        out.append((lbl, cb))
+    return out
+
+
 @booking_router.callback_query(F.data == "bka:gen")
-async def bka_generic_tools(cb: CallbackQuery, bot: Bot):
-    """ابزارهایِ عمومیِ همهٔ ربات‌هایِ بات‌ساز (ادمین‌ها، تیکت، کیف‌پول، آنتی‌اسپم، …) — جدا از پنلِ رزرو."""
+async def bka_generic_tools(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """ابزارهایِ عمومیِ ربات، دسته‌بندی‌شده تا قاطی نباشد (کارت/درگاه، منو، تخفیف، کاربران، گزارش، مدیریت)."""
     row = await _guard(cb, bot)
     if not row:
         return
-    from tenant import tadmin_kb
-    kb = await tadmin_kb(row.id, row.field, row.plan, True)
-    rows = [list(r) for r in kb.inline_keyboard] if hasattr(kb, "inline_keyboard") else []
+    await state.clear()
+    items = await _gen_items(row)
+    counts: dict[str, int] = {}
+    for lbl, c in items:
+        k = _gen_cat_of(lbl, c)
+        counts[k] = counts.get(k, 0) + 1
+    rows, lines = [], []
+    for key, title, desc in GEN_CATS:
+        if not counts.get(key):
+            continue
+        rows.append([_btn(f"{title} ({counts[key]})", f"bka:gc:{key}", ButtonStyle.PRIMARY)])
+        lines.append(f"{title} — {desc}")
     rows.append([_btn("📅 بازگشت به پنلِ رزرو", "bka:home", ButtonStyle.SUCCESS)])
-    await _show(cb, "🧰 <b>ابزارهایِ عمومیِ ربات</b>\nاین بخش‌ها مشترک بینِ همهٔ ربات‌هایِ بات‌ساز است (ادمین‌ها، تیکت‌ها، کیف‌پول، …). "
-                    "کارهایِ مخصوصِ رزرو را از «پنلِ رزرو» انجام بده.", rows)
+    await _show(cb, "🧰 <b>ابزارهایِ عمومیِ ربات</b>\nتنظیماتِ مشترکِ ربات، دسته‌بندی‌شده:\n\n" + "\n".join(lines), rows)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data.startswith("bka:gc:"))
+async def bka_generic_cat(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    key = cb.data.split(":")[2]
+    title = next((t for k, t, _d in GEN_CATS if k == key), "🧰 ابزارها")
+    sel = [(lbl, c) for lbl, c in await _gen_items(row) if _gen_cat_of(lbl, c) == key]
+    if not sel:
+        await cb.answer("در این دسته موردی برایِ پلنِ فعلیِ ربات نیست.", show_alert=True)
+        return
+    rows = [[_btn(lbl, c, ButtonStyle.PRIMARY)] for lbl, c in sel]
+    rows.append([_btn("⬅️ بازگشت به ابزارها", "bka:gen", ButtonStyle.DANGER)])
+    await _show(cb, f"<b>{title}</b>", rows)
     await cb.answer()
 
 
@@ -999,10 +1086,27 @@ async def bka_cfg(cb: CallbackQuery, bot: Bot, state: FSMContext):
         have = {"bk_biz_name": cfg["biz_name"], "bk_biz_address": cfg["biz_address"], "bk_biz_phone": cfg["biz_phone"], "bk_welcome": cfg["welcome"]}[k]
         rows.append([_btn(f"{'✅' if have else '➕'} {lbl}", f"bka:cfgv:{k}")])
     rows.insert(2, [_btn("💳 بیعانه (پیش‌پرداخت از کیف پول)", "bka:dep", ButtonStyle.SUCCESS)])
+    rows.insert(3, [_btn("📆 سیستمِ تاریخِ ربات: " + ("میلادی" if cfg["cal"] == "gregorian" else "شمسی (جلالی)") + " — بزن تغییر کند",
+                         "bka:cal", ButtonStyle.PRIMARY)])
     rows.append(_help_btn("cfg"))
     rows.append(BACK_HOME)
     await _show(cb, "⚙️ <b>تنظیمات رزرو</b>\nروی هر مورد بزن تا تغییر دهی:", rows)
     await cb.answer()
+
+
+@booking_router.callback_query(F.data == "bka:cal")
+async def bka_cal_toggle(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """تاریخِ کلِ ربات (تقویمِ انتخابِ روز، کارت‌ها، یادآوری‌ها) را بینِ شمسی و میلادی عوض می‌کند."""
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    from tenant import get_setting, set_setting
+    cur = await get_setting(row.id, "bk_cal", "jalali")
+    new = "jalali" if cur == "gregorian" else "gregorian"
+    await set_setting(row.id, "bk_cal", new)
+    E.set_cal(new)
+    await cb.answer("تاریخِ ربات " + ("میلادی" if new == "gregorian" else "شمسی") + " شد ✅")
+    await bka_cfg(cb, bot, state)
 
 
 @booking_router.callback_query(F.data.startswith("bka:cfgt:"))

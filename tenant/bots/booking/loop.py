@@ -41,6 +41,7 @@ async def run_once(now: _dt.datetime | None = None, bot_factory=None) -> int:
             if not row or row.status != "active" or not row.token:
                 continue
             cfg = await E.get_cfg(bot_id)
+            E.set_cal(cfg.get("cal", "jalali"))      # PATCH_BOOKING_V25_CAL
             due = [(a, E.reminder_due(a, cfg, now)) for a in items]
             due = [(a, k) for a, k in due if k]
             if not due:
