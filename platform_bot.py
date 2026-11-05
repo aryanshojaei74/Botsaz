@@ -6777,6 +6777,77 @@ async def build_msg_text(msg: Message, state: FSMContext):
     await return_to_action_preview(msg, state, msg.from_user.id)
 
 
+# === PATCH_BUILD_RESTART_RESUME_V1 ===
+# گزارش: وسطِ مرحلهٔ «عملکردِ دکمه‌ها» سرویس ری‌استارت شد و دکمه‌ها دیگر جواب ندادند
+# (state ویزارد از دست رفته بود؛ هندلرها همه Build.action را شرط می‌کنند). دکمه‌ها و
+# اکشن‌ها همان لحظه در دیتابیس ذخیره می‌شوند، پس ویزارد را از روی DB دوباره می‌سازیم.
+_BUILD_RESUME_RE = r"^(batap:\d+|bafin|act:.+|amsg:(yes|no)|abk:(act|mp|q)|bact:back)$"
+
+
+async def _rehydrate_build_state(cb: CallbackQuery, state: FSMContext) -> bool:
+    """state ویزارد را از روی دکمه‌های ذخیره‌شدهٔ دیتابیس بازسازی می‌کند. True اگر موفق شد."""
+    uid = cb.from_user.id
+    btn_id = None
+    if (cb.data or "").startswith("batap:"):
+        try:
+            btn_id = int(cb.data.split(":")[1])
+        except (ValueError, IndexError):
+            btn_id = None
+    async with Session() as s:
+        bot_row = None
+        if btn_id:
+            mb = await s.get(MainButton, btn_id)
+            if mb:
+                cand = await s.get(BotRow, mb.bot_id)
+                if cand and cand.owner_id == uid:
+                    bot_row = cand
+        if bot_row is None:
+            bot_row = (await s.scalars(
+                select(BotRow).where(BotRow.owner_id == uid).order_by(BotRow.id.desc()).limit(1)
+            )).first()
+        if bot_row is None:
+            return False
+        rows = (await s.scalars(
+            select(MainButton).where(MainButton.bot_id == bot_row.id)
+            .order_by(MainButton.row, MainButton.col)
+        )).all()
+        if not rows:
+            return False
+        assign = [{"id": m.id, "label": m.label, "row": m.row, "col": m.col,
+                   "color": m.color, "action_set": bool(m.action)} for m in rows]
+        field = bot_row.field or "vpn_sales"
+        plan = bot_row.plan or Plan.FREE.value
+        bot_pk = bot_row.id
+    await state.set_state(Build.action)
+    await state.update_data(
+        assign=assign, grid_field=field, grid_plan=plan, build_bot_id=bot_pk,
+        cur_btn_id=btn_id, action_flow_msgs=[],
+        action_preview_chat_id=cb.message.chat.id, action_preview_msg_id=cb.message.message_id,
+    )
+    return True
+
+
+@router.callback_query(F.data.regexp(_BUILD_RESUME_RE))
+async def build_resume_after_restart(cb: CallbackQuery, state: FSMContext):
+    """دکمهٔ مرحلهٔ «عملکرد دکمه‌ها» بدون state (مثلاً بعد از ری‌استارت)."""
+    if cb.message is None:
+        await cb.answer()
+        return
+    if not await _rehydrate_build_state(cb, state):
+        await cb.answer("این مرحله منقضی شده؛ از «🗂 ربات‌های من» ادامه بده.", show_alert=True)
+        return
+    data = cb.data or ""
+    if data.startswith("batap:"):
+        await build_action_tap(cb, state)
+        return
+    if data == "bafin":
+        await build_action_finish(cb, state)
+        return
+    # بقیه (انتخابِ عملکرد/پیام) به دکمهٔ مشخصی وصل نیست؛ مرحله را از اول نشان بده
+    await cb.answer("ادامهٔ ساخت بازیابی شد 👇")
+    await start_action_stage(cb.message, state)
+
+
 @router.callback_query(Build.grid, F.data.startswith("grid:"))
 async def build_grid(cb: CallbackQuery, state: FSMContext):
     parts = cb.data.split(":")
