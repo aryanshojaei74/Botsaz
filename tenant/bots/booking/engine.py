@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 
 from config import Session
-from models import BkAppt, BkCustomer, BkHours, BkOff, BkPayment, BkService, BkStaff
+from models import BkAppt, BkCounter, BkCustomer, BkHours, BkOff, BkPayment, BkService, BkStaff
 
 from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
@@ -306,6 +306,55 @@ async def day_slots(bot_id: int, service: BkService, d: _dt.date, staff_id: int 
 
 # ───────────────────────── ثبت/لغو ─────────────────────────
 
+def appt_code(ap) -> int:
+    """کدِ پیگیریِ نمایشی. رکوردِ قدیمیِ هنوز بدونِ کد ⇒ شناسهٔ داخلی (تا اولین تخصیص)."""
+    return int(getattr(ap, "seq", 0) or 0) or int(ap.id)
+
+
+async def next_seq(s, bot_id: int) -> int:
+    """کدِ پیگیریِ بعدیِ این ربات (۱، ۲، ۳، …) — اتمی (UPDATE ... RETURNING روی ردیفِ شمارنده، پس دو رزروِ هم‌زمان کدِ یکسان نمی‌گیرند)
+    و در همان تراکنشِ فراخوان؛ اگر ثبتِ نوبت شکست بخورد کد هم برنمی‌گردد/نمی‌سوزد. اولین بار برایِ هر ربات، نوبت‌هایِ قدیمیِ بدونِ کد
+    به ترتیبِ شناسه کد می‌گیرند."""
+    from sqlalchemy import update
+    from sqlalchemy.exc import IntegrityError
+    cnt = await s.scalar(select(BkCounter).where(BkCounter.bot_id == bot_id))
+    if cnt is None:
+        old = (await s.scalars(select(BkAppt).where(BkAppt.bot_id == bot_id).order_by(BkAppt.seq.desc(), BkAppt.id))).all()
+        base = max([a.seq or 0 for a in old] + [0])
+        for a in sorted((x for x in old if not x.seq), key=lambda x: x.id):
+            base += 1
+            a.seq = base
+        try:
+            async with s.begin_nested():
+                s.add(BkCounter(bot_id=bot_id, last_seq=base))
+                await s.flush()
+        except IntegrityError:                  # پروسهٔ دیگری هم‌زمان ساخت ⇒ همان را به‌روز می‌کنیم
+            pass
+    res = await s.execute(update(BkCounter).where(BkCounter.bot_id == bot_id).values(last_seq=BkCounter.last_seq + 1).returning(BkCounter.last_seq))
+    return int(res.scalar_one())
+
+
+async def find_by_code(bot_id: int, code: int) -> BkAppt | None:
+    """نوبت را با کدِ پیگیریِ همین ربات پیدا می‌کند (کدِ تخصیص‌نیافتهٔ قدیمی: شناسهٔ داخلی)."""
+    async with Session() as s:
+        ap = await s.scalar(select(BkAppt).where(BkAppt.bot_id == bot_id, BkAppt.seq == int(code)).limit(1))
+        if ap is None:
+            ap = await s.scalar(select(BkAppt).where(BkAppt.bot_id == bot_id, BkAppt.seq == 0, BkAppt.id == int(code)).limit(1))
+        return ap
+
+
+def parse_code(text: str) -> int | None:
+    """«#12» / «12» / «۱۲» ⇒ 12؛ نامعتبر ⇒ None."""
+    t = to_en_digits(text or "").strip().lstrip("#").strip()
+    return int(t) if t.isdigit() and 0 < int(t) < 10**9 else None
+
+
+async def payments_of(bot_id: int, appt_id: int) -> list[BkPayment]:
+    async with Session() as s:
+        return list((await s.scalars(select(BkPayment).where(BkPayment.bot_id == bot_id, BkPayment.appt_id == appt_id)
+                                      .order_by(BkPayment.id))).all())
+
+
 def has_telegram(tg_id) -> bool:
     """مشتریِ دستی (ثبت‌شده توسطِ مالک، بدونِ تلگرام) شناسهٔ منفی دارد؛ به او پیام/یادآوری فرستاده نمی‌شود."""
     try:
@@ -341,7 +390,7 @@ _BOOK_LOCKS: dict = {}
 
 def _book_lock(bot_id: int, d: _dt.date):
     import asyncio
-    k = (bot_id, d.isoformat())
+    k = (id(asyncio.get_running_loop()), bot_id, d.isoformat())      # قفل به loopِ جاری بسته است (هر loop قفلِ خودش را دارد)
     if len(_BOOK_LOCKS) > 512:           # حافظه محدود بماند
         for kk in [x for x, v in _BOOK_LOCKS.items() if not v.locked()][:256]:
             _BOOK_LOCKS.pop(kk, None)
@@ -367,6 +416,7 @@ async def _book_locked(bot_id, tg_id, service, d, start, staff_id, name, phone, 
                     price=int(service.price or 0), customer_name=(name or "")[:80], phone=(phone or "")[:20],
                     note=(note or "")[:1000], deposit=dep, created_at=_dt.datetime.utcnow(),
                     status="hold" if dep > 0 else ("confirmed" if (cfg["auto_confirm"] or by_owner) else "pending"))
+        ap.seq = await next_seq(s, bot_id)         # کدِ پیگیری (از ۱، مخصوصِ همین ربات) در همان تراکنشِ ثبتِ نوبت
         s.add(ap)
         # پروندهٔ مشتری: ساخت/به‌روزرسانیِ نام و شماره (یادداشت و «مسدود» دست‌نخورده می‌ماند)
         cu = await s.scalar(select(BkCustomer).where(BkCustomer.bot_id == bot_id, BkCustomer.tg_id == int(tg_id)))
@@ -551,7 +601,7 @@ def _money_lock(appt_id: int):
     if len(_MONEY_LOCKS) > 1024:
         for kk in [x for x, v in _MONEY_LOCKS.items() if not v.locked()][:512]:
             _MONEY_LOCKS.pop(kk, None)
-    return _MONEY_LOCKS.setdefault(int(appt_id), asyncio.Lock())
+    return _MONEY_LOCKS.setdefault((id(asyncio.get_running_loop()), int(appt_id)), asyncio.Lock())
 
 
 async def pay_deposit(bot_id: int, appt_id: int, tg_id: int, cfg: dict, now_utc: _dt.datetime | None = None):
@@ -591,7 +641,7 @@ async def pay_deposit(bot_id: int, appt_id: int, tg_id: int, cfg: dict, now_utc:
                     ap.status = "hold"
                     await s.commit()
                     return "insufficient", {"need": amt, "balance": bal, "appt": ap}
-                s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=-amt, kind="booking_deposit", note=f"بیعانهٔ نوبت #{ap.id}"))
+                s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=-amt, kind="booking_deposit", note=f"بیعانهٔ نوبت #{appt_code(ap)}"))
                 s.add(BkPayment(bot_id=bot_id, appt_id=ap.id, amount=amt, method="wallet", note="بیعانه", created_at=now_utc))
             ap.status = "confirmed" if cfg["auto_confirm"] else "pending"
             await s.commit()
@@ -635,7 +685,7 @@ async def refund_deposit(bot_id: int, appt_id: int, cfg: dict, force_full: bool,
         if not u:
             return 0
         u.balance = float(u.balance or 0) + net
-        s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=net, kind="booking_refund", note=f"بازگشتِ بیعانهٔ نوبت #{ap.id}"))
+        s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=net, kind="booking_refund", note=f"بازگشتِ بیعانهٔ نوبت #{appt_code(ap)}"))
         s.add(BkPayment(bot_id=bot_id, appt_id=appt_id, amount=-net, method="wallet", note="بازگشتِ بیعانه", created_at=_dt.datetime.utcnow()))
         await s.commit()
         return net

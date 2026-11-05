@@ -4257,7 +4257,17 @@ class BkAppt(Base):
     remind2_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     # بیعانهٔ الزامیِ این نوبت (تومان؛ تصویرِ سیاستِ زمانِ رزرو). status="hold" یعنی منتظرِ پرداختِ بیعانه (ساعت موقتاً رزرو است).
     deposit: Mapped[int] = mapped_column(Integer, default=0)
+    # کدِ پیگیریِ مشتری: شمارهٔ ترتیبیِ «هر ربات» که از ۱ شروع می‌شود (جدا از شناسهٔ داخلیِ دیتابیس). ۰ = هنوز تخصیص نیافته (رکوردِ قدیمی).
+    seq: Mapped[int] = mapped_column(Integer, default=0, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class BkCounter(Base):
+    """شمارندهٔ کدِ پیگیریِ هر رباتِ رزرو؛ افزایشش با UPDATE ... RETURNING اتمی است."""
+    __tablename__ = "bk_counters"
+
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), primary_key=True)
+    last_seq: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class BkCustomer(Base):
@@ -4288,4 +4298,4 @@ class BkPayment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
 
 
-TENANT_OWNED_MODELS += [BkAppt, BkHours, BkOff, BkStaff, BkService, BkCustomer, BkPayment]
+TENANT_OWNED_MODELS += [BkAppt, BkHours, BkOff, BkStaff, BkService, BkCustomer, BkPayment, BkCounter]

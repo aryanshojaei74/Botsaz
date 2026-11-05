@@ -6504,6 +6504,9 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
     elif action == "book_my":
         from tenant.bots.booking.handlers import book_my_appointments  # === PATCH_TENANT_SPLIT_PHASE2_BOOKING_V1 ===
         await book_my_appointments(_FakeCb(msg), bot)
+    elif action == "book_track":       # PATCH_BOOKING_TRACK_V1 — پیگیریِ نوبت با کدِ پیگیری
+        from tenant.bots.booking.bk_user import bk_track_start
+        await bk_track_start(_FakeCb(msg), bot, state)
     elif action == "do_start":
         # === PATCH_BTN_ACTION_RESTART_V1 ===
         # همان مسیرِ /start صدا زده می‌شود تا رفتار دقیقاً یکی باشد
@@ -13949,7 +13952,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "438"
+BUILD_ID = "439"
 
 
 @tenant_router.message(Command("version"))
@@ -15205,6 +15208,8 @@ _SIMPLE_ACTIONS: dict[str, tuple[str, str, frozenset | None]] = {
                     frozenset({"booking"})),
     "book_my":     ("🗓 نوبت‌های من", "این دکمه حالا نوبت‌های رزروشدهٔ کاربر را نشان می‌دهد.",
                     frozenset({"booking"})),
+    "book_track":  ("🔎 پیگیری نوبت (با کد)", "این دکمه حالا از کاربر «کدِ پیگیری» می‌گیرد و وضعیت/پرداخت‌هایِ نوبتش را نشان می‌دهد.",
+                    frozenset({"booking"})),
     # === PATCH_BTN_ACTION_RESTART_V1 ===
     # درخواستِ ادمین‌ها: دکمه‌ای که با زدنش ربات دوباره استارت بخورد —
     # مفید برایِ «بازگشت به شروع» یا وقتی کاربر در منویی گیر کرده.
@@ -15923,6 +15928,8 @@ def _thb_kb_action_pick(mb, bot_field: str = "", plan: str = "", category: str =
                 continue
             if _akey in ("buy_panel_market", "buy_metered"):
                 continue   # PATCH_PANEL_SHOP_ACTION_V1 / PATCH_METERED_BTN_ACTION_V1: در دستهٔ «فروش» نشان داده می‌شوند
+            if _akey == "track_order" and bot_field == "booking":
+                continue   # PATCH_BOOKING_TRACK_V1: «پیگیریِ کد سفارش» برایِ رزرو معنا ندارد؛ «🔎 پیگیری نوبت» جایگزینش است
             rows.append([InlineKeyboardButton(text=f"{_alabel} — تبدیل به این",
                                               callback_data=f"thb:setsimple:{_akey}:{mb.id}", style=ButtonStyle.PRIMARY)])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت به دسته‌ها", callback_data=f"thb:cat:action:{mb.id}", style=ButtonStyle.DANGER)])

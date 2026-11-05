@@ -4084,6 +4084,7 @@ def _action_kb_base(field: str = "vpn_sales") -> InlineKeyboardMarkup:
     if field == "booking":
         b.button(text="📅 نوبت‌گیری (رزرو وقت)", callback_data="act:book_show", style=ButtonStyle.SUCCESS)
         b.button(text="🗓 نوبت‌های من", callback_data="act:book_my", style=ButtonStyle.SUCCESS)
+        b.button(text="🔎 پیگیری نوبت (با کد)", callback_data="act:book_track", style=ButtonStyle.SUCCESS)
         b.button(text="💰 کیف پول (برایِ بیعانه)", callback_data="act:wallet")
         b.button(text="👤 مشخصات کاربری", callback_data="act:profile")
         b.button(text="🎫 ثبت تیکت", callback_data="act:ticket")
@@ -4134,7 +4135,7 @@ def _action_kb_base(field: str = "vpn_sales") -> InlineKeyboardMarkup:
 ACTION_TITLE = {
     # === PATCH_PARTNER_V4 ===
     "pnr_build": "ساخت ربات (فروش به کاربر)", "pnr_mybots": "ربات‌های من",
-    "book_show": "نوبت‌گیری (رزرو وقت)", "book_my": "نوبت‌های من",      # PATCH_ACTION_KB_NO_VPN_LEAK_V1
+    "book_show": "نوبت‌گیری (رزرو وقت)", "book_my": "نوبت‌های من", "book_track": "پیگیری نوبت (با کد)",      # PATCH_ACTION_KB_NO_VPN_LEAK_V1
     "pyar_panels": "پنل‌های من (پنل‌یار)",
     "buy_config": "خرید کانفیگ", "buy_vpn": "خرید VPN خودکار",
     "buy_vpn_sanai": "خرید از پنل سنایی", "buy_vpn_pasargad": "خرید از پنل پاسارگاد",

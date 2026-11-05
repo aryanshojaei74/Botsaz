@@ -34,6 +34,7 @@ STATUS_FA = {"hold": "🟠 منتظرِ پرداختِ بیعانه", "pending":
 
 
 class BkFSM(StatesGroup):
+    track = State()
     name = State()
     phone = State()
     note = State()
@@ -411,7 +412,7 @@ async def bk_confirm(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await cb.answer("ثبت شد ✅")
     done = ("✅ <b>نوبتت قطعی شد!</b>" if ap.status == "confirmed"
             else "✅ <b>نوبتت ثبت شد</b> و منتظرِ تأییدِ مجموعه است؛ به‌محضِ تأیید خبرت می‌کنیم.")
-    await cb.message.answer(f"{done}\n\n{_appt_card(ap)}\n\nکدِ پیگیری: <code>#{ap.id}</code>", parse_mode="HTML")
+    await cb.message.answer(f"{done}\n\n{_appt_card(ap)}\n\nکدِ پیگیری: <code>#{E.appt_code(ap)}</code>", parse_mode="HTML")
     await _notify_owner_new(bot, row, ap, cb.from_user)
     try:
         from tenant import main_kb_or_remove
@@ -429,6 +430,7 @@ def _appt_card(ap: BkAppt) -> str:
     if int(ap.deposit or 0) > 0:
         lines.append(f"💳 بیعانه: {int(ap.deposit):,} تومان")
     lines.append(f"وضعیت: {STATUS_FA.get(ap.status, ap.status)}")
+    lines.append(f"🔖 کدِ پیگیری: <b>#{E.appt_code(ap)}</b>")
     return "\n".join(lines)
 
 
@@ -441,7 +443,7 @@ async def _notify_owner_new(bot: Bot, row, ap: BkAppt, user):
         head = "🆕 نوبتِ جدیدِ قطعی" if ap.status == "confirmed" else "🆕 درخواستِ نوبتِ جدید"
         if int(ap.deposit or 0) > 0:
             head += f" (💳 بیعانهٔ {int(ap.deposit):,} تومان پرداخت شد)"
-        text = f"{head} #{ap.id}\n\n{_appt_card(ap)}\n\n👤 {who}\n🔗 {link}"
+        text = f"{head} #{E.appt_code(ap)}\n\n{_appt_card(ap)}\n\n👤 {who}\n🔗 {link}"
         if ap.note:
             text += f"\n📝 {_esc(ap.note)}"
         rows = []
@@ -469,13 +471,15 @@ async def bk_my(cb, bot: Bot):
         txt = "🗓 <b>نوبت‌هایِ من</b>\n\nنوبتِ فعالی نداری."
         if past:
             txt += "\n\n<b>آخرین نوبت‌ها:</b>\n" + "\n".join(
-                f"• {E.fa_date(_dt.date.fromisoformat(a.date_str))} {E.fmt_hm(a.start_min)} — {_esc(a.service_name)} — {STATUS_FA.get(a.status, a.status)}"
+                f"• #{E.appt_code(a)} · {E.fa_date(_dt.date.fromisoformat(a.date_str))} {E.fmt_hm(a.start_min)} — {_esc(a.service_name)} — {STATUS_FA.get(a.status, a.status)}"
                 for a in past)
-        await _show(cb, txt, [[_btn("➕ نوبتِ جدید", "bk:home", ButtonStyle.SUCCESS)], _back_home()])
+        await _show(cb, txt, [[_btn("📜 سابقه و پیگیری", "bk:hist:0", ButtonStyle.PRIMARY), _btn("🔎 پیگیری با کد", "bk:trk", ButtonStyle.PRIMARY)],
+                              [_btn("➕ نوبتِ جدید", "bk:home", ButtonStyle.SUCCESS)], _back_home()])
         return await cb.answer()
-    rows = [[_btn(("🟠 " if a.status == "hold" else "") + f"{E.fa_date(_dt.date.fromisoformat(a.date_str))} {E.fmt_hm(a.start_min)} · {a.service_name}",
+    rows = [[_btn(("🟠 " if a.status == "hold" else "") + f"#{E.appt_code(a)} · {E.fa_date(_dt.date.fromisoformat(a.date_str))} {E.fmt_hm(a.start_min)} · {a.service_name}",
                   f"bk:v:{a.id}", ButtonStyle.PRIMARY)] for a in aps]
-    rows += [[_btn("➕ نوبتِ جدید", "bk:home", ButtonStyle.SUCCESS)], _back_home()]
+    rows += [[_btn("📜 سابقه و پیگیری", "bk:hist:0", ButtonStyle.PRIMARY), _btn("🔎 پیگیری با کد", "bk:trk", ButtonStyle.PRIMARY)],
+             [_btn("➕ نوبتِ جدید", "bk:home", ButtonStyle.SUCCESS)], _back_home()]
     await _show(cb, "🗓 <b>نوبت‌هایِ من</b>\nبرایِ جزئیات/لغو روی نوبت بزن:", rows)
     await cb.answer()
 
@@ -483,6 +487,38 @@ async def bk_my(cb, bot: Bot):
 @booking_router.callback_query(F.data == "bk:my")
 async def bk_my_cb(cb: CallbackQuery, bot: Bot):
     await bk_my(cb, bot)
+
+
+PAY_FA = {"cash": "💵 نقد", "card": "💳 کارت", "online": "🌐 آنلاین", "wallet": "👛 کیف پول", "other": "➖ سایر"}
+
+
+async def _view_payload(row, ap: BkAppt, cfg: dict, back: str = "bk:my"):
+    """متن و دکمه‌هایِ صفحهٔ جزئیاتِ یک نوبت (برایِ «نوبت‌هایِ من»، «سابقه» و «پیگیری با کد») — شاملِ ریزِ پرداخت‌ها و بیعانه."""
+    ok, why = E.can_cancel(ap, cfg)
+    text = f"🗓 <b>نوبت #{E.appt_code(ap)}</b>\n\n{_appt_card(ap)}"
+    pays = await E.payments_of(row.id, ap.id)
+    if pays:
+        lines = []
+        for p in pays:
+            d = E.fa_date((p.created_at + _dt.timedelta(hours=3, minutes=30)).date()) if p.created_at else ""
+            lines.append(f"• {d} {PAY_FA.get(p.method, p.method)}: {'↩️ بازگشت ' if p.amount < 0 else ''}{abs(int(p.amount)):,} تومان"
+                         + (f" — {_esc(p.note)}" if p.note else ""))
+        net = sum(int(p.amount) for p in pays)
+        text += "\n\n💵 <b>پرداخت‌ها:</b>\n" + "\n".join(lines) + f"\nخالصِ پرداخت‌شده: <b>{net:,}</b> از {int(ap.price or 0):,} تومان"
+    if ap.status in ("cancelled", "rejected") and ap.cancel_reason:
+        text += f"\n\n🗒 {_esc(ap.cancel_reason)}"
+    rows = []
+    if ap.status == "hold" and E.hold_left_min(ap, cfg) > 0:
+        rows.append([_btn(f"👛 پرداختِ بیعانه ({int(ap.deposit):,})", f"bk:pay:{ap.id}", ButtonStyle.SUCCESS)])
+    if ok:
+        rows.append([_btn("❌ لغوِ این نوبت", f"bk:x:{ap.id}", ButtonStyle.DANGER)])
+    elif ap.status in E.ACTIVE_STATUSES and why:
+        text += f"\n\n<i>{_esc(why)}</i>"
+        if cfg["biz_phone"]:
+            text += f"\n☎️ {_esc(cfg['biz_phone'])}"
+    rows.append([_btn("🔎 پیگیریِ نوبتِ دیگر", "bk:trk", ButtonStyle.PRIMARY)])
+    rows.append([_btn("⬅️ بازگشت", back, ButtonStyle.DANGER)])
+    return text, rows
 
 
 @booking_router.callback_query(F.data.startswith("bk:v:"))
@@ -499,18 +535,83 @@ async def bk_view(cb: CallbackQuery, bot: Bot):
         if E.hold_left_min(ap, cfg) <= 0:
             return await cb.answer("مهلتِ پرداختِ این نوبت تمام شده است.", show_alert=True)
         return await _pay_screen(cb, row, ap, cfg)
-    ok, why = E.can_cancel(ap, cfg)
-    rows = []
-    if ok:
-        rows.append([_btn("❌ لغوِ این نوبت", f"bk:x:{ap.id}", ButtonStyle.DANGER)])
-    text = f"🗓 <b>نوبت #{ap.id}</b>\n\n{_appt_card(ap)}"
-    if not ok and ap.status in E.ACTIVE_STATUSES and why:
-        text += f"\n\n<i>{_esc(why)}</i>"
-        if cfg["biz_phone"]:
-            text += f"\n☎️ {_esc(cfg['biz_phone'])}"
-    rows.append([_btn("⬅️ بازگشت", "bk:my", ButtonStyle.DANGER)])
+    text, rows = await _view_payload(row, ap, cfg)
     await _show(cb, text, rows)
     await cb.answer()
+
+
+# ───────────────────────── پیگیری با کد و سابقه ─────────────────────────
+
+HIST_PAGE = 8
+
+
+@booking_router.callback_query(F.data.startswith("bk:hist:"))
+async def bk_history(cb: CallbackQuery, bot: Bot):
+    row = await _row(bot)
+    if not row:
+        return await cb.answer()
+    page = int(cb.data.split(":")[2])
+    async with Session() as s:
+        from sqlalchemy import func as _f
+        total = int(await s.scalar(select(_f.count()).select_from(BkAppt).where(BkAppt.bot_id == row.id, BkAppt.tg_id == cb.from_user.id)) or 0)
+        aps = (await s.scalars(select(BkAppt).where(BkAppt.bot_id == row.id, BkAppt.tg_id == cb.from_user.id)
+                               .order_by(BkAppt.id.desc()).offset(page * HIST_PAGE).limit(HIST_PAGE))).all()
+    if not aps:
+        await _show(cb, "📜 <b>سابقهٔ نوبت‌ها</b>\n\nهنوز نوبتی ثبت نکرده‌ای.", [[_btn("🔎 پیگیری با کد", "bk:trk", ButtonStyle.PRIMARY)], _back_home()])
+        return await cb.answer()
+    rows = [[_btn(f"#{E.appt_code(a)} · {E.fa_date(_dt.date.fromisoformat(a.date_str))} · {a.service_name} · {STATUS_FA.get(a.status, a.status)[:2]}",
+                  f"bk:v:{a.id}", ButtonStyle.PRIMARY)] for a in aps]
+    nav = []
+    if page > 0:
+        nav.append(_btn("⬅️ قبلی", f"bk:hist:{page - 1}"))
+    if (page + 1) * HIST_PAGE < total:
+        nav.append(_btn("بعدی ➡️", f"bk:hist:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([_btn("🔎 پیگیری با کد", "bk:trk", ButtonStyle.PRIMARY)])
+    rows.append([_btn("⬅️ بازگشت", "bk:my", ButtonStyle.DANGER)])
+    await _show(cb, f"📜 <b>سابقهٔ نوبت‌هایِ من</b> — {total} نوبت\nبرایِ جزئیات و پرداخت‌ها روی هر نوبت بزن:", rows)
+    await cb.answer()
+
+
+async def bk_track_start(cb, bot: Bot, state: FSMContext):
+    """ورودِ «🔎 پیگیریِ نوبت» (دکمهٔ منو یا دکمهٔ داخلِ ربات): کدِ پیگیری را می‌گیرد."""
+    await state.clear()
+    await state.set_state(BkFSM.track)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[_btn("📜 سابقهٔ من", "bk:hist:0", ButtonStyle.PRIMARY)], [_btn("❌ انصراف", "bk:trkx", ButtonStyle.DANGER)]])
+    await cb.message.answer("🔎 <b>پیگیریِ نوبت</b>\n\n«کدِ پیگیری» نوبتت را بفرست (همان عددی که بعد از ثبتِ نوبت گرفتی؛ مثلاً <code>12</code>).",
+                            reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data == "bk:trk")
+async def bk_track_cb(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    await bk_track_start(cb, bot, state)
+
+
+@booking_router.callback_query(F.data == "bk:trkx")
+async def bk_track_cancel(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    await state.clear()
+    await cb.answer("انصراف داده شد")
+    await bk_my(cb, bot)
+
+
+@booking_router.message(BkFSM.track, F.text)
+async def bk_track_in(msg: Message, bot: Bot, state: FSMContext):
+    row = await _row(bot)
+    if not row:
+        return
+    code = E.parse_code(msg.text or "")
+    if code is None:
+        return await msg.answer("کدِ پیگیری فقط یک عدد است (مثلاً <code>12</code>). دوباره بفرست یا «❌ انصراف» را بزن.", parse_mode="HTML")
+    ap = await E.find_by_code(row.id, code)
+    # برایِ جلوگیریِ از لو رفتنِ نوبتِ دیگران، «وجود نداشتن» و «مالِ دیگری بودن» یک پیام دارند
+    if not ap or ap.tg_id != msg.from_user.id:
+        return await msg.answer("نوبتی با این کد برایِ شما پیدا نشد. کد را دوباره بررسی کن (در پیامِ ثبتِ نوبت و «🗓 نوبت‌هایِ من» هست).")
+    await state.clear()
+    cfg = await E.get_cfg(row.id)
+    text, rows = await _view_payload(row, ap, cfg, back="bk:my")
+    await msg.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
 
 
 @booking_router.callback_query(F.data.startswith("bk:x:"))
@@ -560,7 +661,7 @@ async def bk_cancel_do(cb: CallbackQuery, bot: Bot):
         from tenant import _notify_admins
         extra = (f"\n💳 بیعانه: {refunded:,} تومان به کیف پولِ مشتری برگشت." if refunded else
                  ("\n💳 بیعانه طبقِ قانون برگردانده نشد (نزدیکِ زمانِ نوبت)." if int(ap.deposit or 0) > 0 else ""))
-        await _notify_admins(bot, row, f"❎ نوبت #{aid} توسطِ مشتری لغو شد.\n\n{_appt_card(ap)}\n👤 {_esc(ap.customer_name)} — <code>{_esc(ap.phone)}</code>{extra}")
+        await _notify_admins(bot, row, f"❎ نوبت #{E.appt_code(ap)} توسطِ مشتری لغو شد.\n\n{_appt_card(ap)}\n👤 {_esc(ap.customer_name)} — <code>{_esc(ap.phone)}</code>{extra}")
     except Exception:      # noqa: BLE001
         logger.exception("bk: اطلاعِ لغو به مالک ناموفق")
     await bk_my(cb, bot)
@@ -609,7 +710,7 @@ async def bk_pay(cb: CallbackQuery, bot: Bot):
     await cb.answer("پرداخت شد ✅")
     done = ("✅ <b>بیعانه پرداخت شد و نوبتت قطعی شد!</b>" if ap.status == "confirmed"
             else "✅ <b>بیعانه پرداخت شد و نوبتت ثبت شد</b>؛ منتظرِ تأییدِ مجموعه است و به‌محضِ تأیید خبرت می‌کنیم.")
-    await cb.message.answer(f"{done}\n\n{_appt_card(ap)}\n\nکدِ پیگیری: <code>#{ap.id}</code>", parse_mode="HTML")
+    await cb.message.answer(f"{done}\n\n{_appt_card(ap)}\n\nکدِ پیگیری: <code>#{E.appt_code(ap)}</code>", parse_mode="HTML")
     await _notify_owner_new(bot, row, ap, cb.from_user)
     try:
         from tenant import main_kb_or_remove

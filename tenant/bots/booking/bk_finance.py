@@ -52,7 +52,7 @@ async def bka_pay_start(cb: CallbackQuery, bot: Bot):
     left = max(int(a.price or 0) - paid, 0)
     rows = [[_btn(f"{lbl}", f"bka:pm:{aid}:{k}", ButtonStyle.PRIMARY)] for k, lbl in METHOD_FA.items() if k != "wallet"]
     rows.append([_btn("⬅️ بازگشت", f"bka:a:{aid}:up:0", ButtonStyle.DANGER)])
-    await _show(cb, f"💵 <b>ثبتِ پرداختِ نوبت #{aid}</b>\nقیمت: {_t(a.price)} · پرداخت‌شده: {_t(paid)} · مانده: <b>{_t(left)}</b>\n\nروشِ پرداخت؟", rows)
+    await _show(cb, f"💵 <b>ثبتِ پرداختِ نوبت #{E.appt_code(a)}</b>\nقیمت: {_t(a.price)} · پرداخت‌شده: {_t(paid)} · مانده: <b>{_t(left)}</b>\n\nروشِ پرداخت؟", rows)
     await cb.answer()
 
 
@@ -303,7 +303,7 @@ async def bka_customer_view(cb: CallbackQuery, bot: Bot, state: FSMContext):
         text += f"\n\n📝 <b>یادداشت:</b>\n{_esc(c.note)}"
     if recent:
         text += "\n\n<b>آخرین نوبت‌ها:</b>\n" + "\n".join(
-            f"• {E.fa_date(_dt.date.fromisoformat(a.date_str))} {E.fmt_hm(a.start_min)} — {_esc(a.service_name)} — {STATUS_FA.get(a.status, a.status)}" for a in recent)
+            f"• #{E.appt_code(a)} · {E.fa_date(_dt.date.fromisoformat(a.date_str))} {E.fmt_hm(a.start_min)} — {_esc(a.service_name)} — {STATUS_FA.get(a.status, a.status)}" for a in recent)
     rows = [[_btn("📝 یادداشت", f"bka:cun:{tg}", ButtonStyle.PRIMARY),
              _btn("✅ رفعِ مسدودی" if c.blocked else "🚫 مسدودکردن", f"bka:cub:{tg}", ButtonStyle.SUCCESS if c.blocked else ButtonStyle.DANGER)],
             BACK_CU]

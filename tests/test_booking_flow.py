@@ -276,7 +276,7 @@ async def test_seed_menu_buttons_is_idempotent(env):
     await ADM.bka_seed_buttons(FCb("bka:seedbtn", OWNER), env.bot)
     async with env.mk() as s:
         acts = sorted(b.action for b in (await s.scalars(select(models.MainButton).where(models.MainButton.bot_id == BOT))).all())
-    assert acts == ["book_my", "book_show"]
+    assert acts == ["book_my", "book_show", "book_track"]
     await ADM.bka_seed_buttons(FCb("bka:seedbtn", OWNER), env.bot)
     async with env.mk() as s:
-        assert len((await s.scalars(select(models.MainButton).where(models.MainButton.bot_id == BOT))).all()) == 2
+        assert len((await s.scalars(select(models.MainButton).where(models.MainButton.bot_id == BOT))).all()) == 3

@@ -307,7 +307,7 @@ async def bka_m_confirm(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if E.has_telegram(ap.tg_id):
         try:
             from tenant.bots.booking.bk_user import _appt_card
-            await bot.send_message(ap.tg_id, f"✅ <b>نوبتی برایِ شما ثبت شد</b>\n\n{_appt_card(ap)}\n\nکدِ پیگیری: <code>#{ap.id}</code>", parse_mode="HTML")
+            await bot.send_message(ap.tg_id, f"✅ <b>نوبتی برایِ شما ثبت شد</b>\n\n{_appt_card(ap)}\n\nکدِ پیگیری: <code>#{E.appt_code(ap)}</code>", parse_mode="HTML")
         except Exception:      # noqa: BLE001
             logger.info("booking: پیامِ نوبتِ دستی به مشتری نرسید (tg=%s)", ap.tg_id)
     await _show(cb, f"✅ <b>نوبت ثبت شد</b>\n\n{_admin_card(ap, 0)}", await _appt_actions(ap))

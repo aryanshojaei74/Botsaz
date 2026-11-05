@@ -123,17 +123,17 @@ async def worker_alive(max_age_min: int = 15) -> bool:
 async def _expire_stale(now: _dt.datetime, bot_factory=None) -> None:
     """۱) نوبتِ «در انتظارِ تأیید» که زمانش گذشته ⇒ لغو و بیعانه (اگر هست) کامل برگردد. ۲) «منتظرِ بیعانه»هایِ منقضی ⇒ لغو (پولی نرفته)."""
     try:
-        stale: list[tuple[int, int, int]] = []          # (bot_id, appt_id, tg_id)
+        stale: list[tuple[int, int, int, int]] = []          # (bot_id, appt_id, tg_id, کدِ پیگیری)
         async with Session() as s:
             aps = (await s.scalars(select(BkAppt).where(BkAppt.status == "pending", BkAppt.date_str <= now.date().isoformat()))).all()
             for a in aps:
                 if E.appt_start_dt(a) <= now:
                     a.status, a.cancel_reason = "cancelled", "زمانِ نوبت بدونِ تأیید گذشت"
-                    stale.append((a.bot_id, a.id, a.tg_id))
+                    stale.append((a.bot_id, a.id, a.tg_id, E.appt_code(a)))
             if stale:
                 await s.commit()
         cfgs: dict[int, dict] = {}
-        for bot_id, aid, tg in stale:
+        for bot_id, aid, tg, code in stale:
             cfg = cfgs.get(bot_id) or await E.get_cfg(bot_id)
             cfgs[bot_id] = cfg
             refunded = await E.refund_deposit(bot_id, aid, cfg, force_full=True)
@@ -144,7 +144,7 @@ async def _expire_stale(now: _dt.datetime, bot_factory=None) -> None:
                     if row and row.token:
                         bot = bot_factory(row) if bot_factory else Bot(token=row.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
                         try:
-                            await bot.send_message(tg, f"ℹ️ نوبتِ #{aid} تأیید نشد و زمانش گذشت؛ بیعانهٔ <b>{refunded:,}</b> تومان به کیف پولت برگشت.", parse_mode="HTML")
+                            await bot.send_message(tg, f"ℹ️ نوبتِ #{code} تأیید نشد و زمانش گذشت؛ بیعانهٔ <b>{refunded:,}</b> تومان به کیف پولت برگشت.", parse_mode="HTML")
                         finally:
                             if not bot_factory:
                                 await bot.session.close()

@@ -46,6 +46,7 @@ class BkAdm(StatesGroup):
     m_name = State()
     m_phone = State()
     m_note = State()
+    code = State()
     cu_note = State()
     cu_search = State()
 
@@ -87,8 +88,8 @@ async def build_home(row) -> tuple[str, InlineKeyboardMarkup]:
         n_tmr = await cnt(BkAppt.date_str == tmr, BkAppt.status.in_(E.ACTIVE_STATUSES))
         n_svc = int(await s.scalar(select(func.count()).select_from(BkService).where(BkService.bot_id == row.id, BkService.active.is_(True))) or 0)
         n_hours = int(await s.scalar(select(func.count()).select_from(BkHours).where(BkHours.bot_id == row.id)) or 0)
-        n_btn = int(await s.scalar(select(func.count()).select_from(MainButton).where(
-            MainButton.bot_id == row.id, MainButton.action.in_(("book_show", "book_my")))) or 0)
+        n_btn = int(await s.scalar(select(func.count(func.distinct(MainButton.action))).where(
+            MainButton.bot_id == row.id, MainButton.action.in_(("book_show", "book_my", "book_track")))) or 0)
     title = f"📅 <b>{_esc(cfg['biz_name'])}</b>" if cfg["biz_name"] else "📅 <b>پنل رزرو و نوبت‌دهی</b>"
     text = (f"{title}\n\n🟡 در انتظار تأیید: <b>{pending}</b>\n📅 امروز: <b>{n_today}</b> نوبت · فردا: <b>{n_tmr}</b>\n"
             f"💈 خدماتِ فعال: <b>{n_svc}</b>")
@@ -97,7 +98,7 @@ async def build_home(row) -> tuple[str, InlineKeyboardMarkup]:
         todo.append("➕ یک «خدمت» اضافه کن (💈 خدمات و پرسنل)")
     if not n_hours:
         todo.append("🕘 «ساعت کاری» را تنظیم کن (🕘 زمان‌بندی)")
-    if not n_btn:
+    if n_btn == 0:
         todo.append("🧩 دکمهٔ «نوبت‌گیری» را به منویِ ربات اضافه کن (دکمهٔ پایین)")
     if todo:
         text += "\n\n⚠️ <b>برایِ شروع:</b>\n" + "\n".join(todo)
@@ -110,8 +111,8 @@ async def build_home(row) -> tuple[str, InlineKeyboardMarkup]:
         [_btn("💰 مالی", "bka:fin", ButtonStyle.PRIMARY), _btn("📊 گزارش‌ها", "bka:stats", ButtonStyle.PRIMARY)],
         [_btn("⚙️ تنظیمات", "bka:cfg", ButtonStyle.PRIMARY), _btn("🧰 ابزارهایِ عمومیِ ربات", "bka:gen", ButtonStyle.PRIMARY)],
     ]
-    if not n_btn:
-        rows.append([_btn("🧩 افزودنِ دکمه‌هایِ رزرو به منویِ ربات", "bka:seedbtn", ButtonStyle.SUCCESS)])
+    if n_btn < 3:
+        rows.append([_btn("🧩 افزودنِ دکمه‌هایِ رزرو به منویِ ربات (نوبت‌گیری، نوبت‌هایِ من، پیگیری)", "bka:seedbtn", ButtonStyle.SUCCESS)])
     rows.append(_help_btn("home"))
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -153,6 +154,7 @@ async def bka_hub_appts(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return
     await state.clear()
     rows = [[_btn("➕ ثبتِ نوبتِ دستی (حضوری/تلفنی)", "bka:m", ButtonStyle.SUCCESS)],
+            [_btn("🔎 جستجو با کدِ پیگیری", "bka:code", ButtonStyle.PRIMARY)],
             [_btn("🟡 در انتظار تأیید", "bka:l:pend:0", ButtonStyle.SUCCESS)],
             [_btn("📅 امروز", "bka:l:today:0", ButtonStyle.PRIMARY), _btn("🗓 فردا", "bka:l:tmr:0", ButtonStyle.PRIMARY)],
             [_btn("🔜 همهٔ نوبت‌هایِ آینده", "bka:l:up:0", ButtonStyle.PRIMARY)],
@@ -208,7 +210,8 @@ async def bka_seed_buttons(cb: CallbackQuery, bot: Bot):
         have = {b.action for b in (await s.scalars(select(MainButton).where(MainButton.bot_id == row.id))).all()}
         top = int(await s.scalar(select(func.coalesce(func.max(MainButton.row), -1)).where(MainButton.bot_id == row.id)) or -1)
         added = 0
-        for action, label, color in (("book_show", "📅 نوبت‌گیری", "success"), ("book_my", "🗓 نوبت‌های من", "primary")):
+        for action, label, color in (("book_show", "📅 نوبت‌گیری", "success"), ("book_my", "🗓 نوبت‌های من", "primary"),
+                                     ("book_track", "🔎 پیگیری نوبت", "primary")):
             if action in have:
                 continue
             added += 1
@@ -251,7 +254,7 @@ async def bka_list(cb: CallbackQuery, bot: Bot):
     for a in aps:
         d = _dt.date.fromisoformat(a.date_str)
         icon = STATUS_FA.get(a.status, "")[:2]
-        rows.append([_btn(f"{icon} {E.fa_date(d)} {E.fmt_hm(a.start_min)} · {a.customer_name or '—'} · {a.service_name}",
+        rows.append([_btn(f"{icon} #{E.appt_code(a)} · {E.fa_date(d)} {E.fmt_hm(a.start_min)} · {a.customer_name or '—'} · {a.service_name}",
                           f"bka:a:{a.id}:{kind}:{page}", ButtonStyle.PRIMARY)])
     nav = []
     if page > 0:
@@ -267,7 +270,7 @@ async def bka_list(cb: CallbackQuery, bot: Bot):
 
 def _admin_card(a: BkAppt, paid: int = 0) -> str:
     link = E.tg_link_html(a.tg_id)
-    t = f"📌 <b>نوبت #{a.id}</b>\n\n{_appt_card(a)}\n\n👤 {_esc(a.customer_name)}\n📱 <code>{_esc(a.phone)}</code>\n🔗 {link}"
+    t = f"📌 <b>نوبت #{E.appt_code(a)}</b>\n\n{_appt_card(a)}\n\n👤 {_esc(a.customer_name)}\n📱 <code>{_esc(a.phone)}</code>\n🔗 {link}"
     if a.price or paid:
         left = max(int(a.price or 0) - int(paid), 0)
         t += f"\n💵 پرداخت‌شده: <b>{int(paid):,}</b> از {int(a.price or 0):,} تومان" + (f" — مانده: <b>{left:,}</b>" if left else " ✅")
@@ -1142,3 +1145,30 @@ async def bka_deposit_mode(cb: CallbackQuery, bot: Bot, state: FSMContext):
             await set_setting(row.id, "bk_deposit_value", "30")
     await cb.answer("تغییر کرد")
     await bka_deposit(cb, bot, state)
+
+
+# ───────────────────────── جستجو با کدِ پیگیری ─────────────────────────
+
+@booking_router.callback_query(F.data == "bka:code")
+async def bka_code_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    if not await _guard(cb, bot):
+        return
+    await state.set_state(BkAdm.code)
+    await cb.message.answer("🔎 <b>کدِ پیگیریِ</b> نوبت را بفرست (مثلاً <code>12</code>):", parse_mode="HTML")
+    await cb.answer()
+
+
+@booking_router.message(BkAdm.code, F.text)
+async def bka_code_in(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard_msg(msg, bot)
+    if not row:
+        return
+    code = E.parse_code(msg.text or "")
+    if code is None:
+        return await msg.answer("کد فقط یک عدد است (مثلاً <code>12</code>).", parse_mode="HTML")
+    ap = await E.find_by_code(row.id, code)
+    await state.clear()
+    if not ap:
+        return await msg.answer("نوبتی با این کد پیدا نشد.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[BACK_AP]))
+    paid = await E.paid_of(row.id, ap.id)
+    await msg.answer(_admin_card(ap, paid), reply_markup=InlineKeyboardMarkup(inline_keyboard=await _appt_actions(ap)), parse_mode="HTML")
