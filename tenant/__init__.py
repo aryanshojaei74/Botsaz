@@ -92,6 +92,7 @@ from tenant.bots.funstat.handlers import funstat_bot_router  # === PATCH_FUNSTAT
 from tenant.shared.top_customers import top_customers_router
 from tenant.shared.dice_game import dice_game_router  # === PATCH_DICE_GAME_V1 ===
 from tenant.shared.group_wallet import group_wallet_router  # === PATCH_GROUP_WALLET_V1 ===
+from tenant.shared.group_help import group_help_router  # === PATCH_GROUP_HELP_V1 ===
 from tenant.shared.group_betting import betting_router  # === PATCH_GROUP_BETTING_V1 ===
 from tenant.bots.virtual_service.smm_ai import smm_ai_router  # === PATCH_SMM_AI_ASSISTANT_V1 ===
 from tenant.shared.backup_restore import backup_router, backup_menu  # === PATCH_BOT_BACKUP_V1 ===
@@ -260,6 +261,7 @@ tenant_router.include_router(gate_router)
 tenant_router.include_router(rpt_router)  # === PATCH_REFERRAL_POINTS_V1 ===
 from tenant_group_guard import tenant_group_guard_router  # === PATCH_TENANT_GROUP_GUARD_V1 ===
 tenant_router.include_router(tenant_group_guard_router)
+tenant_router.include_router(group_help_router)  # === PATCH_GROUP_HELP_V1 ===
 tenant_router.include_router(group_wallet_router)  # === PATCH_GROUP_WALLET_V1 ===
 tenant_router.include_router(betting_router)  # === PATCH_GROUP_BETTING_V1 ===
 from tenant.shared.wager_games import wager_games_router  # === PATCH_WAGER_TENANT_V1 ===
@@ -13983,7 +13985,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "446"
+BUILD_ID = "447"
 
 
 @tenant_router.message(Command("version"))
