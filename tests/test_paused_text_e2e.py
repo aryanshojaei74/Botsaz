@@ -91,7 +91,8 @@ async def env(request, monkeypatch):
 async def test_owner_sees_the_button_clicks_it_and_saves_text(env):
     dp, bot, cap, tenant = env["dp"], env["bot"], env["cap"], env["tenant"]
     # ۱) صفحهٔ «دکمه‌ها و تنظیمات» را با روترِ واقعی باز می‌کنیم
-    await dp.feed_update(bot, cb_update("tadm:sec:settings"))
+    # رزرو: «دکمه‌ها و تنظیمات» جایش را به «ابزارهایِ عمومی» داده (PATCH_BOOKING_TOOLS_HUB_V1)؛ همین دکمه در دستهٔ «مدیریتِ ربات» است
+    await dp.feed_update(bot, cb_update("bka:gc:bot" if env["field"] == "booking" else "tadm:sec:settings"))
     screens = cap.shown()
     assert screens, "هیچ صفحه‌ای نمایش داده نشد"
     LABEL = "✏️ متن خاموش بودن ربات"
