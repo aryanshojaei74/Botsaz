@@ -1059,14 +1059,20 @@ def fmt_vol(gb, mb=None) -> str:
 
 
 def _acc_hours(a) -> int:
-    """PATCH_TRIAL_HOURS_DISPLAY_V1 (تیکت #912) — مدتِ تستِ ساعتی: days=0 ولی expires_at ثبت شده ⇒ تعدادِ ساعت (۱..۷۲۰)، وگرنه ۰."""
+    """PATCH_TRIAL_HOURS_DISPLAY_V1 (تیکت #912) — مدتِ تستِ ساعتی: days=0 ولی expires_at ثبت شده ⇒ تعدادِ ساعت (۱..۷۲۰)، وگرنه ۰.
+    منبعِ اصلی expires_at−created_at است؛ اگر created_at با منطقهٔ زمانیِ دیتابیس ثبت شده و اختلاف غیرمعتبر شد،
+    «ساعتِ باقی‌مانده تا پایان» (گردِ رو به بالا) نشان داده می‌شود تا هرگز «بی‌انقضا»یِ غلط نیاید."""
     try:
-        if int(getattr(a, "days", 0) or 0) == 0 and getattr(a, "expires_at", None) and getattr(a, "created_at", None):
+        if int(getattr(a, "days", 0) or 0) != 0 or not getattr(a, "expires_at", None):
+            return 0
+        if getattr(a, "created_at", None):
             h = round((a.expires_at - a.created_at).total_seconds() / 3600)
-            return h if 0 < h <= 720 else 0
+            if 0 < h <= 720:
+                return h
+        left = (a.expires_at - _dt.datetime.utcnow()).total_seconds() / 3600
+        return int(-(-left // 1)) if 0 < left <= 720 else 0
     except Exception:      # noqa: BLE001
-        pass
-    return 0
+        return 0
 
 
 def _svc_label(plan_title: str | None, volume_gb: int, days: int,

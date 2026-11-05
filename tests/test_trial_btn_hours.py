@@ -91,3 +91,14 @@ def test_hourly_trial_label_and_delivery_hours_helper():
     assert VU._acc_hours(b) == 0
     c = SimpleNamespace(days=3, expires_at=now + dt.timedelta(days=3), created_at=now)
     assert VU._acc_hours(c) == 0                                           # روزی ⇒ ساعتی حساب نمی‌شود
+
+
+def test_hours_helper_survives_db_timezone_skew():
+    """created_at با منطقهٔ زمانیِ سرور (۳:۳۰ جلوتر) ثبت شده ⇒ اختلاف منفی؛ باید به «ساعتِ باقی‌مانده» برگردد، نه «بی‌انقضا»."""
+    import datetime as dt
+    from tenant.bots.vpn import vpn_user as VU
+    now = dt.datetime.utcnow()
+    a = SimpleNamespace(days=0, expires_at=now + dt.timedelta(hours=3), created_at=now + dt.timedelta(hours=3, minutes=30))
+    assert VU._acc_hours(a) == 3
+    gone = SimpleNamespace(days=0, expires_at=now - dt.timedelta(hours=1), created_at=now - dt.timedelta(hours=4))
+    assert VU._acc_hours(gone) == 3 or VU._acc_hours(gone) == 0      # تمام‌شده: ثبتِ اصلی ۳ ساعت

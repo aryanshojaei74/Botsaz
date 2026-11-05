@@ -9437,6 +9437,9 @@ async def do_free_trial(msg, bot: "Bot", bot_id: int, u: BotUser,
                     sub_link=sub_link, volume_gb=gb_int, days=days,
                     plan_title="تست رایگان", status="active",
                     # PATCH_TRIAL_HOURS_DISPLAY_V1: زمانِ پایانِ واقعیِ تست (روز+ساعت) ثبت شود تا «۶ ساعت» به‌جایِ «بی‌انقضا» نشان داده شود
+                    # created_at صریحاً UTC: server_default (now() دیتابیس) در منطقهٔ زمانیِ سرور ذخیره می‌شد (تهران +۳:۳۰) و اختلافِ
+                    # expires_at−created_at منفی می‌شد ⇒ «بی‌انقضا» (گزارش: «نصب کردم ولی تغییر نکرد»)
+                    created_at=_dt.datetime.utcnow(),
                     expires_at=(None if _onhold or not hours else
                                 _dt.datetime.utcnow() + _dt.timedelta(days=int(days or 0), hours=int(hours or 0))),
                     svc_code=await _new_svc_code(s, bot_id), first_conn_notified=False)
@@ -14025,7 +14028,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "455"
+BUILD_ID = "456"
 
 
 @tenant_router.message(Command("version"))
