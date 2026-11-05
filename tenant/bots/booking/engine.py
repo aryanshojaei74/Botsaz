@@ -34,6 +34,7 @@ DEFAULTS = {
     "bk_deposit_value": "0",     # fixed ⇒ تومان؛ percent ⇒ درصد (۱..۱۰۰)
     "bk_refund_hours": "24",     # لغوِ مشتری تا این‌قدر ساعت قبل ⇒ بیعانه برمی‌گردد
     "bk_hold_min": "15",         # مهلتِ پرداختِ بیعانه (دقیقه)؛ ساعت تا آن موقع برایِ مشتری نگه داشته می‌شود
+    "bk_appt_channel": "",       # کانالِ تأییدِ نوبت‌ها (chat id)؛ خالی = خاموش
     "bk_cal": "jalali",          # سیستمِ تاریخِ ربات: jalali | gregorian
     "bk_biz_name": "",
     "bk_biz_address": "",

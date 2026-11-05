@@ -29,6 +29,7 @@ PAGE = 8
 
 
 class BkAdm(StatesGroup):
+    chan = State()
     sv_name = State()
     sv_dur = State()
     sv_price = State()
@@ -143,7 +144,7 @@ async def bka_help(cb: CallbackQuery, bot: Bot):
     from tenant.bots.booking.bk_help import help_text
     key = cb.data.split(":")[2]
     back = {"home": "bka:home", "ap": "bka:ap", "cat": "bka:cat", "tm": "bka:tm", "cu": "bka:cu:0", "fin": "bka:fin",
-            "cfg": "bka:cfg", "rep": "bka:stats", "dep": "bka:dep"}.get(key, "bka:home")
+            "cfg": "bka:cfg", "rep": "bka:stats", "dep": "bka:dep", "chan": "bka:chan"}.get(key, "bka:home")
     await _show(cb, help_text(key), [[_btn("⬅️ بازگشت", back, ButtonStyle.DANGER)]])
     await cb.answer()
 
@@ -437,6 +438,14 @@ async def bka_act(cb: CallbackQuery, bot: Bot):
     if note:
         await _tell_customer(bot, a, note.format(card=_appt_card(a)) + refund_line)
     await cb.answer(toast)
+    if await _is_appt_channel(row.id, cb):
+        who = cb.from_user.full_name if cb.from_user else ""
+        try:
+            await cb.message.edit_text(_admin_card(a, await E.paid_of(row.id, a.id)) + f"\n\n{toast} — توسط {_esc(who)}",
+                                       parse_mode="HTML", reply_markup=None)
+        except Exception:      # noqa: BLE001
+            logger.debug("ویرایشِ پیامِ کانال ممکن نشد")
+        return
     await _show(cb, _admin_card(a, await E.paid_of(row.id, a.id)), await _appt_actions(a))
 
 
@@ -1086,12 +1095,102 @@ async def bka_cfg(cb: CallbackQuery, bot: Bot, state: FSMContext):
         have = {"bk_biz_name": cfg["biz_name"], "bk_biz_address": cfg["biz_address"], "bk_biz_phone": cfg["biz_phone"], "bk_welcome": cfg["welcome"]}[k]
         rows.append([_btn(f"{'✅' if have else '➕'} {lbl}", f"bka:cfgv:{k}")])
     rows.insert(2, [_btn("💳 بیعانه (پیش‌پرداخت از کیف پول)", "bka:dep", ButtonStyle.SUCCESS)])
-    rows.insert(3, [_btn("📆 سیستمِ تاریخِ ربات: " + ("میلادی" if cfg["cal"] == "gregorian" else "شمسی (جلالی)") + " — بزن تغییر کند",
+    rows.insert(3, [_btn("📡 کانالِ تأییدِ نوبت‌ها", "bka:chan", ButtonStyle.PRIMARY)])
+    rows.insert(4, [_btn("📆 سیستمِ تاریخِ ربات: " + ("میلادی" if cfg["cal"] == "gregorian" else "شمسی (جلالی)") + " — بزن تغییر کند",
                          "bka:cal", ButtonStyle.PRIMARY)])
     rows.append(_help_btn("cfg"))
     rows.append(BACK_HOME)
     await _show(cb, "⚙️ <b>تنظیمات رزرو</b>\nروی هر مورد بزن تا تغییر دهی:", rows)
     await cb.answer()
+
+
+async def _is_appt_channel(bot_id: int, cb: CallbackQuery) -> bool:
+    from tenant import get_setting
+    ch = (await get_setting(bot_id, "bk_appt_channel", "")).strip()
+    return bool(ch) and cb.message is not None and str(cb.message.chat.id) == ch
+
+
+async def _chan_screen(cb_or_msg, row, note: str = ""):
+    from tenant import get_setting
+    ch = (await get_setting(row.id, "bk_appt_channel", "")).strip()
+    rows = [[_btn("🔗 اتصال/تغییرِ کانال", "bka:chan:set", ButtonStyle.SUCCESS)]]
+    if ch:
+        rows += [[_btn("🧪 ارسالِ پیامِ آزمایشی", "bka:chan:test", ButtonStyle.PRIMARY)],
+                 [_btn("🗑 قطعِ اتصال", "bka:chan:off", ButtonStyle.DANGER)]]
+    rows += [_help_btn("chan"), [_btn("⬅️ بازگشت", "bka:cfg", ButtonStyle.DANGER)]]
+    text = (note + "\n\n" if note else "") + (
+        "📡 <b>کانالِ تأییدِ نوبت‌ها</b>\n\n"
+        + (f"✅ متصل: <code>{ch}</code>\n\nهر درخواستِ نوبتِ جدید با دکمهٔ ✅ تأیید / ❌ رد در کانال می‌آید؛ هر ادمینِ ربات می‌تواند همان‌جا تعیین‌تکلیف کند."
+           if ch else "❌ هنوز کانالی وصل نشده است.\n\nربات را در کانال <b>ادمین</b> کن (با اجازهٔ ارسال پیام)، بعد «اتصال» را بزن."))
+    if isinstance(cb_or_msg, Message):
+        await cb_or_msg.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    else:
+        await _show(cb_or_msg, text, rows)
+
+
+@booking_router.callback_query(F.data == "bka:chan")
+async def bka_chan(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    await _chan_screen(cb, row)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data.in_({"bka:chan:set", "bka:chan:test", "bka:chan:off"}))
+async def bka_chan_act(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    from tenant import get_setting, set_setting
+    act = cb.data.split(":")[2]
+    if act == "set":
+        await state.set_state(BkAdm.chan)
+        await cb.message.answer("📡 آیدیِ کانال (مثل <code>@mychannel</code> یا <code>-100123…</code>) را بفرست، "
+                                "یا یک پیام از کانال را برایِ من فوروارد کن.\n⚠️ ربات باید در کانال ادمین باشد.", parse_mode="HTML")
+        return await cb.answer()
+    if act == "off":
+        await set_setting(row.id, "bk_appt_channel", "")
+        await cb.answer("قطع شد")
+        return await _chan_screen(cb, row)
+    ch = (await get_setting(row.id, "bk_appt_channel", "")).strip()
+    try:
+        await bot.send_message(int(ch), "🧪 پیامِ آزمایشیِ کانالِ تأییدِ نوبت‌ها — اتصال برقرار است ✅")
+        await cb.answer("پیام آزمایشی ارسال شد ✅", show_alert=True)
+    except Exception as e:      # noqa: BLE001
+        await cb.answer(f"ارسال نشد: {str(e)[:150]}", show_alert=True)
+
+
+@booking_router.message(BkAdm.chan)
+async def bka_chan_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard_msg(msg, bot)
+    if not row:
+        return
+    from tenant import set_setting
+    target = None
+    fo = getattr(msg, "forward_origin", None)
+    if fo is not None and getattr(fo, "chat", None) is not None:
+        target = fo.chat.id
+    elif getattr(msg, "forward_from_chat", None):
+        target = msg.forward_from_chat.id
+    else:
+        t = (msg.text or "").strip()
+        t = t.replace("https://t.me/", "@").replace("t.me/", "@")
+        if t.lstrip("-").isdigit():
+            target = int(t)
+        elif t.startswith("@") and len(t) > 2:
+            target = t
+    if target is None:
+        return await msg.answer("❌ نامعتبر. @یوزرنیمِ کانال، آیدیِ عددیِ -100… یا یک پیامِ فورواردی بفرست.")
+    try:
+        chat = await bot.get_chat(target)
+        await bot.send_message(chat.id, "✅ کانالِ تأییدِ نوبت‌ها وصل شد؛ درخواست‌هایِ نوبت از این به بعد اینجا می‌آید.")
+    except Exception as e:      # noqa: BLE001
+        return await msg.answer(f"❌ به کانال پیام نرسید: {_esc(str(e)[:150])}\nمطمئن شو ربات در کانال ادمین است و دوباره بفرست.")
+    await set_setting(row.id, "bk_appt_channel", str(chat.id))
+    await state.clear()
+    await _chan_screen(msg, row, "✅ کانال وصل شد.")
 
 
 @booking_router.callback_query(F.data == "bka:cal")

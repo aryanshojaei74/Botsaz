@@ -497,8 +497,22 @@ async def _notify_owner_new(bot: Bot, row, ap: BkAppt, user):
         if ap.status == "pending":
             rows.append([_btn("✅ تأیید", f"bka:ok:{ap.id}", ButtonStyle.SUCCESS), _btn("❌ رد", f"bka:no:{ap.id}", ButtonStyle.DANGER)])
         await _notify_admins(bot, row, text, InlineKeyboardMarkup(inline_keyboard=rows) if rows else None)
+        await _post_to_channel(bot, row, text, rows)
     except Exception:      # noqa: BLE001
         logger.exception("bk: اطلاع به مالک ناموفق بود")
+
+
+async def _post_to_channel(bot: Bot, row, text: str, rows: list) -> None:
+    """PATCH_BOOKING_V25_CHAN — کپیِ درخواستِ نوبت در کانالِ تأیید (اگر وصل شده)."""
+    try:
+        from tenant import get_setting
+        ch = (await get_setting(row.id, "bk_appt_channel", "")).strip()
+        if not ch:
+            return
+        await bot.send_message(int(ch), text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None,
+                               parse_mode="HTML")
+    except Exception:      # noqa: BLE001
+        logger.info("bk: ارسال به کانالِ تأییدِ نوبت‌ها ناموفق بود")
 
 
 # ───────────────────────── ۵) نوبت‌هایِ من / لغو ─────────────────────────
@@ -708,6 +722,7 @@ async def bk_cancel_do(cb: CallbackQuery, bot: Bot):
         from tenant import _notify_admins
         extra = (f"\n💳 بیعانه: {refunded:,} تومان به کیف پولِ مشتری برگشت." if refunded else
                  ("\n💳 بیعانه طبقِ قانون برگردانده نشد (نزدیکِ زمانِ نوبت)." if int(ap.deposit or 0) > 0 else ""))
+        await _post_to_channel(bot, row, f"❎ نوبت #{E.appt_code(ap)} توسطِ مشتری لغو شد.\n\n{_appt_card(ap)}", [])
         await _notify_admins(bot, row, f"❎ نوبت #{E.appt_code(ap)} توسطِ مشتری لغو شد.\n\n{_appt_card(ap)}\n👤 {_esc(ap.customer_name)} — <code>{_esc(ap.phone)}</code>{extra}")
     except Exception:      # noqa: BLE001
         logger.exception("bk: اطلاعِ لغو به مالک ناموفق")
