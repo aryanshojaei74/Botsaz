@@ -8,10 +8,10 @@ from aiogram import Bot
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from config import Session
-from models import BkAppt, Bot as BotRow
+from models import BkAppt, Bot as BotRow, PlatformSetting
 
 from tenant.bots.booking import engine as E
 
@@ -48,6 +48,8 @@ async def run_once(now: _dt.datetime | None = None, bot_factory=None) -> int:
             bot = bot_factory(row) if bot_factory else Bot(token=row.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
             try:
                 for a, k in due:
+                    if not await _claim(a.id, k):          # پروسهٔ دیگری همین یادآوری را گرفته (یا قبلاً فرستاده شده)
+                        continue
                     left = E.appt_start_dt(a) - now
                     hrs = max(1, round(left.total_seconds() / 3600))
                     when = "کمتر از یک ساعت" if left < _dt.timedelta(hours=1) else f"حدود {hrs} ساعت"
@@ -58,13 +60,7 @@ async def run_once(now: _dt.datetime | None = None, bot_factory=None) -> int:
                         sent += 1
                     except Exception:      # noqa: BLE001
                         logger.info("booking: یادآوری به %s نرسید", a.tg_id)
-                    async with Session() as s:
-                        a2 = await s.get(BkAppt, a.id)
-                        if a2:
-                            # یادآوریِ دوم یعنی اولی هم دیگر لازم نیست
-                            a2.remind2_sent = a2.remind2_sent or k == 2
-                            a2.remind1_sent = True
-                            await s.commit()
+                        await _unclaim(a.id, k)             # ارسال نشد ⇒ دورِ بعد دوباره تلاش شود
             finally:
                 if not bot_factory:
                     await bot.session.close()
@@ -72,6 +68,56 @@ async def run_once(now: _dt.datetime | None = None, bot_factory=None) -> int:
             logger.exception("booking loop: خطا (bot=%s)", bot_id)
     await _expire_stale(now)
     return sent
+
+
+async def _claim(appt_id: int, kind: int) -> bool:
+    """«ثبتِ اتمی» پرچمِ یادآوری قبل از ارسال: حتی اگر دو پروسه هم‌زمان بالا باشند (ری‌استارت/اجرایِ دوباره) فقط یکی می‌فرستد.
+    یادآوریِ دوم یعنی اولی هم دیگر لازم نیست."""
+    async with Session() as s:
+        if kind == 2:
+            res = await s.execute(update(BkAppt).where(BkAppt.id == appt_id, BkAppt.remind2_sent.is_(False))
+                                  .values(remind2_sent=True, remind1_sent=True))
+        else:
+            res = await s.execute(update(BkAppt).where(BkAppt.id == appt_id, BkAppt.remind1_sent.is_(False), BkAppt.remind2_sent.is_(False))
+                                  .values(remind1_sent=True))
+        await s.commit()
+        return (res.rowcount or 0) == 1
+
+
+async def _unclaim(appt_id: int, kind: int) -> None:
+    try:
+        async with Session() as s:
+            await s.execute(update(BkAppt).where(BkAppt.id == appt_id).values(**({"remind2_sent": False} if kind == 2 else {"remind1_sent": False})))
+            await s.commit()
+    except Exception:      # noqa: BLE001
+        logger.exception("booking: برگرداندنِ پرچمِ یادآوری ناموفق")
+
+
+BEAT_KEY = "bk_worker_beat"
+
+
+async def beat() -> None:
+    """ضربانِ ورکر: داشبوردِ مالک اگر ضربان قدیمی باشد هشدار می‌دهد (ورکر خاموش/نصب‌نشده)."""
+    try:
+        async with Session() as s:
+            r = await s.scalar(select(PlatformSetting).where(PlatformSetting.key == BEAT_KEY))
+            val = _dt.datetime.utcnow().isoformat()
+            if r:
+                r.value = val
+            else:
+                s.add(PlatformSetting(key=BEAT_KEY, value=val))
+            await s.commit()
+    except Exception:      # noqa: BLE001
+        logger.exception("booking: ثبتِ ضربانِ ورکر ناموفق")
+
+
+async def worker_alive(max_age_min: int = 15) -> bool:
+    try:
+        async with Session() as s:
+            r = await s.scalar(select(PlatformSetting).where(PlatformSetting.key == BEAT_KEY))
+        return bool(r and r.value and (_dt.datetime.utcnow() - _dt.datetime.fromisoformat(r.value)) < _dt.timedelta(minutes=max_age_min))
+    except Exception:      # noqa: BLE001
+        return False
 
 
 async def _expire_stale(now: _dt.datetime) -> None:
@@ -94,6 +140,7 @@ async def booking_loop() -> None:
     await asyncio.sleep(45)
     while True:
         try:
+            await beat()
             await run_once()
         except Exception:      # noqa: BLE001
             logger.exception("booking_loop failed")

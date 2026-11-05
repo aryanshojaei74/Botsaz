@@ -12093,6 +12093,9 @@ async def _admin_panel_kb(row):
     if row.plan == "partner":
         from tenant.partner_bot.partner_menu import partner_home_kb
         return await partner_home_kb(row.id)
+    if row.field == "booking":      # PATCH_BOOKING_V2 — پنلِ اختصاصیِ رزرو
+        from tenant.bots.booking.bk_admin import home_kb
+        return await home_kb(row)
     return await tadmin_kb(row.id, row.field, row.plan, True)
 
 
@@ -13946,7 +13949,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "434"
+BUILD_ID = "435"
 
 
 @tenant_router.message(Command("version"))
@@ -13974,6 +13977,11 @@ async def tenant_admin(msg: Message, bot: Bot):
     if row.plan == "partner":
         from tenant.partner_bot.partner_menu import partner_home_text
         _cap = await partner_home_text(row.id)
+    elif row.field == "booking":      # PATCH_BOOKING_V2 — پنلِ اختصاصیِ رزرو (متن + کیبوردِ خودش)
+        from tenant.bots.booking.bk_admin import build_home
+        _cap, _kb = await build_home(row)
+        await msg.answer(_cap, reply_markup=_kb, parse_mode="HTML")
+        return
     else:
         _cap = "🛠 <b>پنل مدیریت ربات</b>\n\nیک بخش انتخاب کن:"
     await msg.answer(_cap, reply_markup=await _admin_panel_kb(row))
@@ -14127,6 +14135,9 @@ async def tadm_home(cb: CallbackQuery, bot: Bot, state: FSMContext):
 @tenant_router.callback_query(F.data == "tadm:menu")
 async def tadm_menu(cb: CallbackQuery, bot: Bot):
     row    = await get_bot_row(bot)
+    if row and row.field == "booking" and row.plan != "partner":      # PATCH_BOOKING_V2 — پنلِ اختصاصیِ رزرو
+        from tenant.bots.booking.bk_admin import bk_dashboard
+        return await bk_dashboard(cb, bot)
     field  = row.field if row else "vpn_sales"
     plan   = row.plan  if row else "free"
     # === PATCH_PARTNER_V8 ===

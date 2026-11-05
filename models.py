@@ -4258,4 +4258,32 @@ class BkAppt(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
-TENANT_OWNED_MODELS += [BkAppt, BkHours, BkOff, BkStaff, BkService]
+class BkCustomer(Base):
+    """پروندهٔ مشتریِ ربات رزرو: مشخصات، یادداشتِ مالک و «مسدود» (نمی‌تواند نوبت بگیرد)."""
+    __tablename__ = "bk_customers"
+    __table_args__ = (UniqueConstraint("bot_id", "tg_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    tg_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    name: Mapped[str | None] = mapped_column(String(80))
+    phone: Mapped[str | None] = mapped_column(String(20), index=True)
+    note: Mapped[str | None] = mapped_column(Text)
+    blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class BkPayment(Base):
+    """پرداختِ ثبت‌شده برایِ یک نوبت (نقد/کارت/آنلاین/…). مبلغ به تومان."""
+    __tablename__ = "bk_payments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    appt_id: Mapped[int] = mapped_column(Integer, index=True)
+    amount: Mapped[int] = mapped_column(Integer, default=0)
+    method: Mapped[str] = mapped_column(String(10), default="cash")      # cash | card | online | other
+    note: Mapped[str | None] = mapped_column(String(160))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+TENANT_OWNED_MODELS += [BkAppt, BkHours, BkOff, BkStaff, BkService, BkCustomer, BkPayment]

@@ -241,7 +241,7 @@ async def test_admin_setup_services_hours_offs_and_settings(env):
     # داشبورد و آمار بدونِ خطا
     d = FCb("bka:home", OWNER)
     await ADM.bk_dashboard(d, env.bot)
-    assert "مدیریت رزرو" in d.texts()
+    assert "پنل رزرو" in d.texts()
     s_ = FCb("bka:stats", OWNER)
     await ADM.bka_stats(s_, env.bot)
     assert "آمار" in s_.texts()

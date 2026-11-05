@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import select
 
 from config import Session
-from models import BkAppt, BkHours, BkOff, BkService, BkStaff
+from models import BkAppt, BkCustomer, BkHours, BkOff, BkPayment, BkService, BkStaff
 
 from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
@@ -300,6 +300,10 @@ async def book(bot_id: int, tg_id: int, service: BkService, d: _dt.date, start: 
                name: str, phone: str, note: str, cfg: dict, now: _dt.datetime | None = None):
     """نوبت را ثبت می‌کند؛ قبل از ثبت دوباره موجود بودنِ ساعت را از دیتابیس می‌سنجد.
     خروجی: (BkAppt | None, خطا | None) — خطا: 'taken' | 'bad_time'."""
+    async with Session() as s:
+        cu = await s.scalar(select(BkCustomer).where(BkCustomer.bot_id == bot_id, BkCustomer.tg_id == int(tg_id)))
+    if cu and cu.blocked:
+        return None, "blocked"
     snap = await load_snapshot(bot_id, d, d)
     res = await resources_for(bot_id, cfg, service.id, staff_id)
     slots = dict(slots_for_day(snap, d, service.duration_min, cfg, res, now))
@@ -317,6 +321,12 @@ async def book(bot_id: int, tg_id: int, service: BkService, d: _dt.date, start: 
                     price=int(service.price or 0), customer_name=(name or "")[:80], phone=(phone or "")[:20],
                     note=(note or "")[:1000], status="confirmed" if cfg["auto_confirm"] else "pending")
         s.add(ap)
+        # پروندهٔ مشتری: ساخت/به‌روزرسانیِ نام و شماره (یادداشت و «مسدود» دست‌نخورده می‌ماند)
+        cu = await s.scalar(select(BkCustomer).where(BkCustomer.bot_id == bot_id, BkCustomer.tg_id == int(tg_id)))
+        if cu is None:
+            s.add(BkCustomer(bot_id=bot_id, tg_id=int(tg_id), name=(name or "")[:80], phone=(phone or "")[:20]))
+        else:
+            cu.name, cu.phone = (name or cu.name or "")[:80], (phone or cu.phone or "")[:20]
         await s.commit()
         return ap, None
 
@@ -366,3 +376,63 @@ def reminder_due(ap: BkAppt, cfg: dict, now: _dt.datetime | None = None) -> int:
     if cfg["remind1"] and not ap.remind1_sent and left <= _dt.timedelta(hours=cfg["remind1"]):
         return 1
     return 0
+
+
+# ───────────────────────── مالی ─────────────────────────
+
+async def paid_of(bot_id: int, appt_id: int) -> int:
+    from sqlalchemy import func as _f
+    async with Session() as s:
+        return int(await s.scalar(select(_f.coalesce(_f.sum(BkPayment.amount), 0)).where(
+            BkPayment.bot_id == bot_id, BkPayment.appt_id == appt_id)) or 0)
+
+
+async def add_payment(bot_id: int, appt_id: int, amount: int, method: str = "cash", note: str = "") -> BkPayment | None:
+    async with Session() as s:
+        ap = await s.get(BkAppt, appt_id)
+        if not ap or ap.bot_id != bot_id or amount <= 0:
+            return None
+        p = BkPayment(bot_id=bot_id, appt_id=appt_id, amount=int(amount), method=method if method in ("cash", "card", "online", "other") else "other",
+                      note=(note or "")[:160])
+        s.add(p)
+        await s.commit()
+        return p
+
+
+async def finance_summary(bot_id: int, now: _dt.datetime | None = None) -> dict:
+    """گزارشِ مالیِ نقدی: دریافتی‌ها (بر اساسِ تاریخِ ثبتِ پرداخت)، مطالباتِ انجام‌شده‌هایِ بی‌پرداخت، و درآمدِ پیش‌رو."""
+    from sqlalchemy import func as _f
+    now = now or iran_now()
+    today = now.date()
+    d7, d30 = today - _dt.timedelta(days=6), today - _dt.timedelta(days=29)
+    async with Session() as s:
+        pays = (await s.scalars(select(BkPayment).where(BkPayment.bot_id == bot_id, BkPayment.created_at >= _dt.datetime.combine(d30, _dt.time())))).all()
+        by_day: dict[str, int] = {}
+        by_method: dict[str, int] = {}
+        t_today = t7 = t30 = 0
+        for p in pays:
+            # created_at به UTC ذخیره می‌شود ⇒ تبدیل به وقتِ ایران
+            ld = (p.created_at + _dt.timedelta(hours=3, minutes=30)).date()
+            by_day[ld.isoformat()] = by_day.get(ld.isoformat(), 0) + p.amount
+            by_method[p.method] = by_method.get(p.method, 0) + p.amount
+            t30 += p.amount
+            if ld >= d7:
+                t7 += p.amount
+            if ld == today:
+                t_today += p.amount
+        done = (await s.scalars(select(BkAppt).where(BkAppt.bot_id == bot_id, BkAppt.status == "done"))).all()
+        paid_map = dict((await s.execute(select(BkPayment.appt_id, _f.sum(BkPayment.amount)).where(BkPayment.bot_id == bot_id)
+                                        .group_by(BkPayment.appt_id))).all())
+        owed = [(a, int(a.price or 0) - int(paid_map.get(a.id, 0) or 0)) for a in done]
+        owed = [(a, o) for a, o in owed if o > 0]
+        upcoming = int(await s.scalar(select(_f.coalesce(_f.sum(BkAppt.price), 0)).where(
+            BkAppt.bot_id == bot_id, BkAppt.status == "confirmed", BkAppt.date_str >= today.isoformat())) or 0)
+        by_service = (await s.execute(select(BkAppt.service_name, _f.count(), _f.coalesce(_f.sum(BkAppt.price), 0)).where(
+            BkAppt.bot_id == bot_id, BkAppt.status == "done", BkAppt.date_str >= d30.isoformat())
+            .group_by(BkAppt.service_name).order_by(_f.sum(BkAppt.price).desc()).limit(6))).all()
+        by_staff = (await s.execute(select(BkAppt.staff_name, _f.count(), _f.coalesce(_f.sum(BkAppt.price), 0)).where(
+            BkAppt.bot_id == bot_id, BkAppt.status == "done", BkAppt.date_str >= d30.isoformat(), BkAppt.staff_id != 0)
+            .group_by(BkAppt.staff_name).order_by(_f.sum(BkAppt.price).desc()).limit(6))).all()
+    return {"today": t_today, "d7": t7, "d30": t30, "by_day": by_day, "by_method": by_method,
+            "owed_total": sum(o for _a, o in owed), "owed": owed, "upcoming": upcoming,
+            "by_service": [(n, int(c), int(v)) for n, c, v in by_service], "by_staff": [(n or "—", int(c), int(v)) for n, c, v in by_staff]}

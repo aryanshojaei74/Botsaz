@@ -498,4 +498,4 @@ async def _is_foreign(obj, bot) -> bool:
 
 
 # === PATCH_BOOKING_V2 === هندلرهایِ جریانِ جدید روی همین router ثبت می‌شوند
-from tenant.bots.booking import bk_user as _bk_user, bk_admin as _bk_admin  # noqa: E402,F401
+from tenant.bots.booking import bk_user as _bk_user, bk_admin as _bk_admin, bk_finance as _bk_finance  # noqa: E402,F401

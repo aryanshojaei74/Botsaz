@@ -394,6 +394,8 @@ async def bk_confirm(cb: CallbackQuery, bot: Bot, state: FSMContext):
     ap, err = await E.book(row.id, cb.from_user.id, sv, d, st, int(data.get("bk_stf") or 0) or None,
                            data.get("bk_name", ""), data["bk_phone"], data.get("bk_note", ""), cfg)
     await state.clear()
+    if err == "blocked":
+        return await cb.answer("امکانِ رزرو برایِ حسابِ شما فعال نیست؛ لطفاً با مجموعه تماس بگیرید.", show_alert=True)
     if err or not ap:
         await cb.answer("این ساعت همین الان رزرو شد؛ لطفاً ساعتِ دیگری انتخاب کن.", show_alert=True)
         return await bk_start(cb, bot)
