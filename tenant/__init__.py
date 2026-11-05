@@ -13983,7 +13983,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "444"
+BUILD_ID = "445"
 
 
 @tenant_router.message(Command("version"))
@@ -14170,8 +14170,8 @@ async def tadm_home(cb: CallbackQuery, bot: Bot, state: FSMContext):
 async def tadm_menu(cb: CallbackQuery, bot: Bot):
     row    = await get_bot_row(bot)
     if row and row.field == "booking" and row.plan != "partner":      # PATCH_BOOKING_V2 — پنلِ اختصاصیِ رزرو
-        from tenant.bots.booking.bk_admin import bk_dashboard
-        return await bk_dashboard(cb, bot)
+        from tenant.bots.booking.bk_admin import reopen_tools      # PATCH_BOOKING_TOOLS_BACK_V1
+        return await reopen_tools(cb, bot)
     field  = row.field if row else "vpn_sales"
     plan   = row.plan  if row else "free"
     # === PATCH_PARTNER_V8 ===
@@ -14223,6 +14223,9 @@ async def tadm_sec_products(cb: CallbackQuery, bot: Bot):
     row = await _section_ok(cb, bot, "products")
     if not row:
         return
+    if row.field == "booking" and row.plan != "partner":      # PATCH_BOOKING_TOOLS_BACK_V1
+        from tenant.bots.booking.bk_admin import reopen_tools
+        return await reopen_tools(cb, bot, home_if_none=False)
     await _sec_nav(cb, _sec_products_text(row.field),
                    await _sec_products_kb(row.id, row.field, row.plan))
     await cb.answer()
@@ -14403,6 +14406,9 @@ async def tadm_sec_finance(cb: CallbackQuery, bot: Bot):
     row = await _section_ok(cb, bot, "finance")
     if not row:
         return
+    if row.field == "booking" and row.plan != "partner":      # PATCH_BOOKING_TOOLS_BACK_V1
+        from tenant.bots.booking.bk_admin import reopen_tools
+        return await reopen_tools(cb, bot, home_if_none=False)
     await _sec_nav(
         cb, "💰 <b>مالی و کیف پول</b>\n\nمدیریت سفارش‌ها، کارت‌به‌کارت و درگاه‌های پرداخت:",
         await _sec_finance_kb(row.id, row.plan))
@@ -14414,6 +14420,9 @@ async def tadm_sec_stats(cb: CallbackQuery, bot: Bot):
     row = await _section_ok(cb, bot, "stats")
     if not row:
         return
+    if row.field == "booking" and row.plan != "partner":      # PATCH_BOOKING_TOOLS_BACK_V1
+        from tenant.bots.booking.bk_admin import reopen_tools
+        return await reopen_tools(cb, bot, home_if_none=False)
     await _sec_nav(
         cb, "📊 <b>آمار و گزارشات</b>\n\nآمار کاربران، تیکت‌ها و ارسال همگانی:",
         await _sec_stats_kb(row.id, row.plan))
@@ -14425,6 +14434,9 @@ async def tadm_sec_admins(cb: CallbackQuery, bot: Bot):
     row = await _section_ok(cb, bot, "admins")
     if not row:
         return
+    if row.field == "booking" and row.plan != "partner":      # PATCH_BOOKING_TOOLS_BACK_V1
+        from tenant.bots.booking.bk_admin import reopen_tools
+        return await reopen_tools(cb, bot, home_if_none=False)
     await _sec_nav(
         cb, "👮 <b>ادمین‌ها و پشتیبانی</b>\n\nمدیریت ادمین‌ها، پشتیبانی، تیکت‌ها و ارتباط با کاربران:",
         await _sec_admins_kb(row.id, row.plan))
@@ -14436,6 +14448,9 @@ async def tadm_sec_settings(cb: CallbackQuery, bot: Bot):
     row = await _section_ok(cb, bot, "settings")
     if not row:
         return
+    if row.field == "booking" and row.plan != "partner":      # PATCH_BOOKING_TOOLS_BACK_V1
+        from tenant.bots.booking.bk_admin import reopen_tools
+        return await reopen_tools(cb, bot, home_if_none=False)
     menu_mode_v = await get_setting(row.id, "menu_mode", "reply")
     bot_paused  = row.status == "paused"
     await _sec_nav(

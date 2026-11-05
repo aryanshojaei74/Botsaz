@@ -126,6 +126,7 @@ async def bk_dashboard(cb, bot: Bot):
     row = await _guard(cb, bot)
     if not row:
         return
+    _LAST_CAT.pop((row.id, cb.from_user.id), None)
     text, kb = await build_home(row)
     await _show(cb, text, kb.inline_keyboard)
     await cb.answer()
@@ -325,13 +326,11 @@ async def _gen_items(row) -> list[tuple[str, str]]:
     return out
 
 
-@booking_router.callback_query(F.data == "bka:gen")
-async def bka_generic_tools(cb: CallbackQuery, bot: Bot, state: FSMContext):
-    """ابزارهایِ عمومیِ ربات، دسته‌بندی‌شده تا قاطی نباشد (کارت/درگاه، منو، تخفیف، کاربران، گزارش، مدیریت)."""
-    row = await _guard(cb, bot)
-    if not row:
-        return
-    await state.clear()
+# آخرین دسته‌ایِ ابزارها که هر ادمین باز کرده — تا دکمهٔ «بازگشت»ِ صفحه‌هایِ عمومی دقیقاً به همان دسته برگردد
+_LAST_CAT: dict[tuple[int, int], str] = {}
+
+
+async def _render_hub(cb, row):
     items = await _gen_items(row)
     counts: dict[str, int] = {}
     for lbl, c in items:
@@ -346,20 +345,13 @@ async def bka_generic_tools(cb: CallbackQuery, bot: Bot, state: FSMContext):
     rows.append(_help_btn("gen"))
     rows.append([_btn("📅 بازگشت به پنلِ رزرو", "bka:home", ButtonStyle.SUCCESS)])
     await _show(cb, "🧰 <b>ابزارهایِ عمومیِ ربات</b>\nتنظیماتِ مشترکِ ربات، دسته‌بندی‌شده:\n\n" + "\n".join(lines), rows)
-    await cb.answer()
 
 
-@booking_router.callback_query(F.data.startswith("bka:gc:"))
-async def bka_generic_cat(cb: CallbackQuery, bot: Bot):
-    row = await _guard(cb, bot)
-    if not row:
-        return
-    key = cb.data.split(":")[2]
+async def _render_cat(cb, row, key: str) -> bool:
     title = next((t for k, t, _d in GEN_CATS if k == key), "🧰 ابزارها")
     sel = [(lbl, c) for lbl, c in await _gen_items(row) if _gen_cat_of(lbl, c) == key]
     if not sel:
-        await cb.answer("در این دسته موردی برایِ پلنِ فعلیِ ربات نیست.", show_alert=True)
-        return
+        return False
     rows = [[_btn(lbl, c, ButtonStyle.PRIMARY)] for lbl, c in sel]
     rows.append(_help_btn("gen"))
     rows.append([_btn("⬅️ بازگشت به ابزارها", "bka:gen", ButtonStyle.DANGER)])
@@ -370,6 +362,46 @@ async def bka_generic_cat(cb: CallbackQuery, bot: Bot):
         if d:
             lines.append(f"▫️ <b>{_esc(lbl.split(':')[0].strip())}</b>: {d}")
     await _show(cb, "\n".join(lines), rows)
+    return True
+
+
+async def reopen_tools(cb: CallbackQuery, bot: Bot, home_if_none: bool = True):
+    """بازگشت از صفحه‌هایِ عمومی (tadm:menu / tadm:sec:*): به همان دسته‌ایِ ابزارها که ادمین از آن آمده بود؛
+    اگر چیزی به یاد نبود ⇒ صفحهٔ اصلیِ ابزارها (یا پنلِ رزرو)."""
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    key = _LAST_CAT.get((row.id, cb.from_user.id))
+    if key and await _render_cat(cb, row, key):
+        return await cb.answer()
+    if home_if_none:
+        return await bk_dashboard(cb, bot)
+    await _render_hub(cb, row)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data == "bka:gen")
+async def bka_generic_tools(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """ابزارهایِ عمومیِ ربات، دسته‌بندی‌شده تا قاطی نباشد (کارت/درگاه، منو، تخفیف، کاربران، گزارش، مدیریت)."""
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    _LAST_CAT.pop((row.id, cb.from_user.id), None)
+    await _render_hub(cb, row)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data.startswith("bka:gc:"))
+async def bka_generic_cat(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    key = cb.data.split(":")[2]
+    if not await _render_cat(cb, row, key):
+        await cb.answer("در این دسته موردی برایِ پلنِ فعلیِ ربات نیست.", show_alert=True)
+        return
+    _LAST_CAT[(row.id, cb.from_user.id)] = key
     await cb.answer()
 
 
