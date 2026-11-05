@@ -41,5 +41,5 @@ async def test_items_exist_in_reply_mode_and_are_categorized(db):
     cats = {A._gen_cat_of(l, c) for l, c in items}
     assert {"pay", "ui", "promo", "usr", "rep", "bot"} <= cats
     assert A._gen_cat_of("x", "set:card") == "pay" and A._gen_cat_of("x", "tadm:homebtns") == "ui"
-    for l, c in items:
-        print(A._gen_cat_of(l, c), c, l)
+    missing = [c for _l, c in items if c not in A.GEN_DESC]
+    assert not missing, missing        # هر ابزار توضیحِ ادمین دارد
