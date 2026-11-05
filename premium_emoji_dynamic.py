@@ -31,7 +31,9 @@ premium_emoji_dynamic.py — هستهٔ مشترکِ «جایگزینیِ خود
 """
 from __future__ import annotations
 
+import re
 import time
+from functools import lru_cache
 from html.parser import HTMLParser
 from html import unescape as _unescape
 
@@ -45,6 +47,15 @@ logger = _get_logger(__name__)
 
 def _utf16_len(s: str) -> int:
     return len(s.encode("utf-16-le")) // 2
+
+
+@lru_cache(maxsize=64)
+def _keys_re(keys: tuple):
+    """PATCH_PREMIUM_EMOJI_REGEX_V1 — یک regexِ واحد از کلیدهایِ نگاشت (به ترتیبِ «بلندترین اول»؛ همان اولویتِ قبلی).
+    قبلاً برایِ هر کاراکترِ متن، همهٔ کلیدها با startswith چک می‌شد (O(طول × تعدادِ کلید)) و در پیام‌هایِ بلند/نگاشت‌هایِ بزرگ
+    رویدادلوپ چند ثانیه گیر می‌کرد (loopwatch: premium_emoji_dynamic.hx_dynamic)."""
+    ks = [k for k in keys if k]
+    return re.compile("|".join(re.escape(k) for k in ks)) if ks else None
 
 
 def utf16_slice(text: str, offset: int, length: int) -> str:
@@ -77,29 +88,27 @@ def plain_apply_map(text: str, mapping: dict[str, tuple[str, str]]):
     out: list[str] = []
     entities: list[MessageEntity] = []
     utf16_pos = 0
-    i = 0
     matched_any = False
-    while i < len(text):
-        matched = None
-        for k in keys:
-            if text.startswith(k, i):
-                matched = k
-                break
-        if matched:
-            premium_id, display = mapping[matched]
-            out.append(display)
-            length = _utf16_len(display)
-            entities.append(MessageEntity(
-                type="custom_emoji", offset=utf16_pos, length=length,
-                custom_emoji_id=premium_id))
-            utf16_pos += length
-            i += len(matched)
-            matched_any = True
-        else:
-            ch = text[i]
-            out.append(ch)
-            utf16_pos += _utf16_len(ch)
-            i += 1
+    rx = _keys_re(tuple(keys))
+    if rx is None:
+        return text, []
+    pos = 0
+    for m in rx.finditer(text):
+        if m.start() > pos:
+            chunk = text[pos:m.start()]
+            out.append(chunk)
+            utf16_pos += _utf16_len(chunk)
+        premium_id, display = mapping[m.group(0)]
+        out.append(display)
+        length = _utf16_len(display)
+        entities.append(MessageEntity(
+            type="custom_emoji", offset=utf16_pos, length=length,
+            custom_emoji_id=premium_id))
+        utf16_pos += length
+        matched_any = True
+        pos = m.end()
+    if pos < len(text):
+        out.append(text[pos:])
     if not matched_any:
         return text, []
     return "".join(out), entities
@@ -126,6 +135,7 @@ class _DynHXParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.mapping = mapping
         self.keys = sorted(mapping.keys(), key=len, reverse=True)
+        self._key_re = _keys_re(tuple(self.keys))
         self.out: list[str] = []
         self.utf16_pos = 0
         self.entities: list[MessageEntity] = []
@@ -144,34 +154,31 @@ class _DynHXParser(HTMLParser):
             self.out.append(data)
             self.utf16_pos += _utf16_len(data)
             return
-        i = 0
-        while i < len(data):
-            matched = None
-            for k in self.keys:
-                if data.startswith(k, i):
-                    matched = k
-                    break
-            if matched:
-                premium_id, display = self.mapping[matched]
-                start = self.utf16_pos
-                self.out.append(display)
-                length = _utf16_len(display)
-                self.utf16_pos += length
-                self.entities.append(MessageEntity(
-                    type="custom_emoji", offset=start, length=length,
-                    custom_emoji_id=premium_id))
-                self.matched_any = True
-                i += len(matched)
-                continue
-            j = i
-            while j < len(data) and not any(data.startswith(k, j) for k in self.keys):
-                j += 1
-            if j == i:
-                j += 1
-            chunk = data[i:j]
-            self.out.append(chunk)
-            self.utf16_pos += _utf16_len(chunk)
-            i = j
+        rx = self._key_re
+        if rx is None:
+            self.out.append(data)
+            self.utf16_pos += _utf16_len(data)
+            return
+        pos = 0
+        for m in rx.finditer(data):
+            if m.start() > pos:
+                chunk = data[pos:m.start()]
+                self.out.append(chunk)
+                self.utf16_pos += _utf16_len(chunk)
+            premium_id, display = self.mapping[m.group(0)]
+            start = self.utf16_pos
+            self.out.append(display)
+            length = _utf16_len(display)
+            self.utf16_pos += length
+            self.entities.append(MessageEntity(
+                type="custom_emoji", offset=start, length=length,
+                custom_emoji_id=premium_id))
+            self.matched_any = True
+            pos = m.end()
+        if pos < len(data):
+            tail = data[pos:]
+            self.out.append(tail)
+            self.utf16_pos += _utf16_len(tail)
 
     def handle_data(self, data):
         self._append_text(data)
