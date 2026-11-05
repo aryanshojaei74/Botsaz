@@ -684,6 +684,14 @@ async def _do_plan_purchase(cb: CallbackQuery, bot: Bot, mode: str):
         br.plan = want_plan
         br.plan_expires_at = new_exp
         br.status = "active"
+        # === PATCH_PARTNER_RENEW_UNARCHIVE_V1 ===
+        # باگِ گزارش‌شده (تیکت #2963): ربات بعد از انقضا بایگانی شده بود؛ تمدید فقط تاریخ/وضعیت را عوض می‌کرد ولی
+        # archived_at می‌ماند ⇒ ربات در «ربات‌های من» نمی‌آمد (فقط در بایگانی) و مدیریتش ممکن نبود. حالا مثلِ مسیرِ
+        # افزودنِ روزِ مدیر از بایگانی خارج می‌شود و وب‌هوک برمی‌گردد.
+        was_archived = bool(br.archived_at)
+        br.archived_at = None
+        br.archive_reason = None
+        br.last_expiry_notice = None
 
         ps = await s.scalar(select(PartnerSale).where(
             PartnerSale.partner_bot_id == pb.id,
@@ -708,6 +716,11 @@ async def _do_plan_purchase(cb: CallbackQuery, bot: Bot, mode: str):
                               amount=price, count=1)
     except Exception:
         logger.exception("گزارشِ خریدِ ارتقا/تمدید ناموفق بود")
+    if was_archived:
+        try:
+            await set_tenant_webhook(tok)
+        except Exception:
+            logger.exception("بازگرداندنِ وب‌هوکِ ربات پس از تمدیدِ رباتِ بایگانی‌شده ناموفق بود")
     try:
         from tenant.partner_bot.partner_sales import invalidate_pb_cache
         invalidate_pb_cache(row.id)
