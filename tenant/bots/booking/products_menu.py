@@ -19,8 +19,10 @@ async def _opts(bot_id: int, plan: str) -> list[tuple[str, str]]:
 # ───────────── حالتِ منویِ کیبوردی (PATCH_SETTINGS_REGISTRY_V4_PRODUCTS_KB) ─────────────
 
 async def _kb_booking(msg, row, bot, state):
-    from tenant.bots.booking.handlers import booking_admin_kb  # === PATCH_TENANT_SPLIT_PHASE2_BOOKING_V1 ===
-    await msg.answer("📅 <b>مدیریت رزرو</b>", reply_markup=booking_admin_kb())
+    # PATCH_BOOKING_V2 — داشبوردِ جدیدِ رزرو
+    from tenant import _FakeCb
+    from tenant.bots.booking.bk_admin import bk_dashboard
+    await bk_dashboard(_FakeCb(msg), bot)
 
 
 register_products_menu("booking", ProductsMenu(

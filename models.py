@@ -4176,3 +4176,86 @@ class ManualRenewRequest(Base):
 
 
 TENANT_OWNED_MODELS += [ManualRenewRequest]
+
+
+# ═══════════════════════════════════════════
+#  ربات رزرو و نوبت‌دهیِ حرفه‌ای — PATCH_BOOKING_V2
+#  (جدول‌هایِ قدیمیِ Appointment/AppointmentSlot دست‌نخورده می‌مانند؛ این‌ها جدولِ جدیدند)
+# ═══════════════════════════════════════════
+
+class BkService(Base):
+    """خدمتِ قابلِ رزرو (مثلاً «کوتاهی مو»، «ویزیتِ عمومی»): مدت و قیمت."""
+    __tablename__ = "bk_services"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    duration_min: Mapped[int] = mapped_column(Integer, default=30)
+    price: Mapped[int] = mapped_column(Integer, default=0)            # تومان؛ ۰ = «توافقی/رایگان»
+    description: Mapped[str | None] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class BkStaff(Base):
+    """پرسنل/متخصص (اختیاری). service_ids خالی = همهٔ خدمات."""
+    __tablename__ = "bk_staff"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    service_ids: Mapped[str | None] = mapped_column(String(400))      # "1,4,7"
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class BkHours(Base):
+    """بازهٔ کاریِ هفتگی. staff_id=0 یعنی ساعتِ کاریِ کلِ مجموعه؛ چند ردیف در یک روز = استراحتِ بینِ آن‌ها."""
+    __tablename__ = "bk_hours"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    staff_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    weekday: Mapped[int] = mapped_column(Integer)                     # ۰=شنبه … ۶=جمعه
+    start_min: Mapped[int] = mapped_column(Integer)                   # دقیقه از نیمه‌شب
+    end_min: Mapped[int] = mapped_column(Integer)
+
+
+class BkOff(Base):
+    """تعطیلیِ یک تاریخ (کل روز یا یک بازه). staff_id=0 = کلِ مجموعه."""
+    __tablename__ = "bk_offs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    staff_id: Mapped[int] = mapped_column(Integer, default=0)
+    date_str: Mapped[str] = mapped_column(String(10), index=True)     # YYYY-MM-DD
+    start_min: Mapped[int | None] = mapped_column(Integer)            # None = کلِ روز
+    end_min: Mapped[int | None] = mapped_column(Integer)
+    reason: Mapped[str | None] = mapped_column(String(120))
+
+
+class BkAppt(Base):
+    """نوبتِ ثبت‌شده. status: pending | confirmed | cancelled | rejected | done | noshow."""
+    __tablename__ = "bk_appts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    tg_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    service_id: Mapped[int] = mapped_column(Integer, default=0)
+    service_name: Mapped[str] = mapped_column(String(120))
+    staff_id: Mapped[int] = mapped_column(Integer, default=0)
+    staff_name: Mapped[str | None] = mapped_column(String(80))
+    date_str: Mapped[str] = mapped_column(String(10), index=True)     # YYYY-MM-DD
+    start_min: Mapped[int] = mapped_column(Integer)
+    end_min: Mapped[int] = mapped_column(Integer)
+    price: Mapped[int] = mapped_column(Integer, default=0)
+    customer_name: Mapped[str | None] = mapped_column(String(80))
+    phone: Mapped[str | None] = mapped_column(String(20))
+    note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(12), default="pending", index=True)
+    cancel_reason: Mapped[str | None] = mapped_column(String(160))
+    remind1_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    remind2_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+TENANT_OWNED_MODELS += [BkAppt, BkHours, BkOff, BkStaff, BkService]

@@ -184,6 +184,8 @@ from platform_funstat import funstat_router
 router.include_router(funstat_router)
 from platform_panel_seller import panel_seller_gate_router   # === PATCH_PANEL_SELLER_V1 ===
 router.include_router(panel_seller_gate_router)
+from platform_booking import booking_gate_router   # === PATCH_BOOKING_V2 ===
+router.include_router(booking_gate_router)
 from platform_gift_emoji import gift_emoji_router   # === PATCH_GIFT_CEMOJI_V1 ===
 router.include_router(gift_emoji_router)
 # === PATCH_STATS_SHARE_V1 ===
@@ -324,7 +326,7 @@ def _fields_ordered():
     return sorted(FIELDS.items(), key=lambda kv: kv[0] not in ACTIVE_FIELDS)
 
 
-ACTIVE_FIELDS = {"vpn_sales", "virtual_service", "ad_bot", "escrow_bot", "giveaway", "panel_seller"}  # PATCH_FUNSTAT_BOT_V1 / PATCH_ESCROW_BOT_KIND_V1
+ACTIVE_FIELDS = {"vpn_sales", "virtual_service", "ad_bot", "escrow_bot", "giveaway", "panel_seller", "booking"}  # PATCH_FUNSTAT_BOT_V1 / PATCH_ESCROW_BOT_KIND_V1
 
 # قیمت پلن‌ها به تومان (بعداً از تنظیمات قابل ویرایش می‌شود)
 PLAN_PRICE = {Plan.GROWTH.value: 5_000_000, Plan.PRO.value: 15_000_000}
@@ -712,7 +714,21 @@ PANEL_SELLER_TEMPLATE_PITCH = (
     "پنل‌هایِ پشتیبانی‌شده: خانوادهٔ مرزبان (مرزبان، ربکا، پاسارگادِ قدیمی، ریک‌پنل)."
 )
 
+# === PATCH_BOOKING_V2 ===
+BOOKING_TEMPLATE_PITCH = (
+    "📅 <b>ربات رزرو و نوبت‌دهی</b> — مخصوصِ سالن‌هایِ زیبایی، کلینیک‌ها، مطب‌ها و هر کسب‌وکارِ نوبتی\n\n"
+    "• 💈 خدمات با مدت و قیمت؛ مشتری خدمت را انتخاب می‌کند\n"
+    "• 🕘 ساعتِ کاریِ هفتگی + استراحت + روزهایِ تعطیل؛ مشتری فقط ساعت‌هایِ <b>واقعاً خالی</b> را می‌بیند (تداخل ممکن نیست)\n"
+    "• 👥 چند پرسنل/متخصص، هر کدام با برنامه و خدماتِ خودش (اختیاری)\n"
+    "• 📲 مالک مشخصاتِ مشتری (نام، شماره، توضیح) را لحظه‌ای می‌گیرد و با یک دکمه تأیید/رد می‌کند؛ مشتری خبردار می‌شود\n"
+    "• ⏰ یادآوریِ خودکار (۲۴ ساعت و ۲ ساعت قبل) برایِ کاهشِ «نیامدن»\n"
+    "• ↩️ لغوِ نوبت توسطِ مشتری تا مهلتِ قابلِ تنظیم\n"
+    "• 📊 آمار، پرونده‌یِ مشتری و تنظیماتِ کامل\n\n"
+    "💡 فقط در <b>پلنِ حرفه‌ای</b> ساخته می‌شود."
+)
+
 FIELD_PITCH = {
+    "booking": BOOKING_TEMPLATE_PITCH,  # PATCH_BOOKING_V2
     "panel_seller": PANEL_SELLER_TEMPLATE_PITCH,  # PATCH_PANEL_SELLER_V1
     "giveaway": GIVEAWAY_TEMPLATE_PITCH,  # PATCH_GIVEAWAY_BOT_V1
     "escrow_bot": ESCROW_BOT_TEMPLATE_PITCH,  # PATCH_ESCROW_BOT_KIND_V1
@@ -5436,6 +5452,16 @@ async def show_pitch(cb: CallbackQuery, state: FSMContext):
         from platform_funstat import create_gate
         if not await create_gate(cb):
             return
+    # === PATCH_BOOKING_V2 === مرحلهٔ تست: فقط با دسترسیِ دستیِ مدیر (و فقط پلنِ حرفه‌ای)
+    if cb.data.split(":", 1)[1] == "booking":
+        from platform_booking import create_gate as _bk_gate
+        if not await _bk_gate(cb):
+            return
+        try:
+            from platform_booking import ensure_trial as _bk_trial
+            await _bk_trial(cb.from_user.id, cb.from_user.full_name or "")
+        except Exception:
+            logger.exception("booking: ساختِ تستِ رایگان هنگامِ نمایشِ پلن‌ها ناموفق بود")
     # === PATCH_PANEL_SELLER_V1 === مرحلهٔ تست: فقط با دسترسیِ دستیِ مدیر (و فقط پلنِ حرفه‌ای)
     if cb.data.split(":", 1)[1] == "panel_seller":
         from platform_panel_seller import create_gate as _ps_gate
@@ -5454,7 +5480,7 @@ async def show_pitch(cb: CallbackQuery, state: FSMContext):
     paid = plans_paid_enabled()
     cdown = plans_countdown_text()
     at_free_cap = bool(data.get("at_free_cap"))
-    _only_pro = (data.get("field") == "panel_seller")      # PATCH_PANEL_SELLER_V1
+    _only_pro = (data.get("field") in ("panel_seller", "booking"))      # PATCH_PANEL_SELLER_V1 / PATCH_BOOKING_V2
     for plan in Plan:
         if _only_pro and plan != Plan.PRO:
             continue
@@ -5581,6 +5607,11 @@ async def show_pitch(cb: CallbackQuery, state: FSMContext):
         free_note = (
             "\n\n💡 این نوعِ ربات فقط در <b>پلنِ حرفه‌ای</b> ساخته می‌شود."
         )
+    elif field == "booking":
+        # === PATCH_BOOKING_V2 ===
+        free_note = (
+            "\n\n💡 ربات رزرو و نوبت‌دهی فقط در <b>پلنِ حرفه‌ای</b> ساخته می‌شود."
+        )
     elif field == "giveaway":
         # === PATCH_GIVEAWAY_BOT_V1 ===
         free_note = (
@@ -5651,6 +5682,15 @@ async def choose_plan(cb: CallbackQuery, state: FSMContext):
             await cb.answer("ربات پنل‌فروشی فقط در پلنِ حرفه‌ای ساخته می‌شود.", show_alert=True)
             return
         if not await _ps_g.allowed(cb.from_user.id):
+            await cb.answer("این نوعِ ربات در مرحلهٔ تست است و برایِ حسابِ تو فعال نشده.", show_alert=True)
+            return
+    # === PATCH_BOOKING_V2 === ربات رزرو فقط حرفه‌ای (حتی با callbackِ دست‌ساز) و فقط با دسترسیِ تست
+    if _fd == "booking":
+        from tenant.bots.booking import gate as _bk_g
+        if plan != Plan.PRO.value:
+            await cb.answer("ربات رزرو و نوبت‌دهی فقط در پلنِ حرفه‌ای ساخته می‌شود.", show_alert=True)
+            return
+        if not await _bk_g.allowed(cb.from_user.id):
             await cb.answer("این نوعِ ربات در مرحلهٔ تست است و برایِ حسابِ تو فعال نشده.", show_alert=True)
             return
     # === PATCH_PLAN_SALE_LOCK_V1 ===
@@ -7812,7 +7852,7 @@ async def edt_field_start(cb: CallbackQuery, state: FSMContext):
     for key, title in _fields_ordered():
         if key == cur_field:
             continue
-        if key in ("funstat", "panel_seller"):
+        if key in ("funstat", "panel_seller", "booking"):
             continue  # PATCH_FUNSTAT_BOT_V1 / PATCH_PANEL_SELLER_V1: فقط از مسیرِ «ساخت ربات» (با دروازهٔ تست)
         if key in ACTIVE_FIELDS:
             cb_data = f"edt_field_free:{bot_id}:{key}" if exempt else f"edt_field_pay:{bot_id}:{key}"
@@ -7853,7 +7893,7 @@ async def edt_field_free_apply(cb: CallbackQuery, state: FSMContext):
         if r.field in ACTIVE_FIELDS:
             await cb.answer("زمینهٔ فعلیِ این ربات هنوز فعاله؛ این تغییر رایگان نیست.", show_alert=True)
             return
-        if field_key not in ACTIVE_FIELDS or field_key not in FIELDS or field_key == "panel_seller":   # PATCH_PANEL_SELLER_V1: فقط از «ساخت ربات»
+        if field_key not in ACTIVE_FIELDS or field_key not in FIELDS or field_key in ("panel_seller", "booking"):   # PATCH_PANEL_SELLER_V1 / PATCH_BOOKING_V2: فقط از «ساخت ربات»
             await cb.answer("این زمینه در دسترس نیست.", show_alert=True)
             return
         old_title = FIELDS.get(r.field, r.field)
@@ -7887,7 +7927,7 @@ async def edt_field_pay_start(cb: CallbackQuery, state: FSMContext):
                 "خریداری‌شده (نه رویِ دورهٔ تست) در دسترسه.",
                 show_alert=True)
             return
-        if field_key not in ACTIVE_FIELDS or field_key not in FIELDS or field_key == "panel_seller":   # PATCH_PANEL_SELLER_V1: فقط از «ساخت ربات»
+        if field_key not in ACTIVE_FIELDS or field_key not in FIELDS or field_key in ("panel_seller", "booking"):   # PATCH_PANEL_SELLER_V1 / PATCH_BOOKING_V2: فقط از «ساخت ربات»
             await cb.answer("این زمینه در دسترس نیست.", show_alert=True)
             return
         u = await get_user(s, cb.from_user.id, cb.from_user.full_name,

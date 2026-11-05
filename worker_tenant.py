@@ -42,6 +42,7 @@ from tenant.bots.virtual_service.gift_sync import gift_sync_loop as _gift_sync_l
 from tenant.shared.daily_report import daily_report_loop as _daily_report_loop  # PATCH_DAILY_REPORT_V1
 from tenant.bots.vpn.autorenew import autorenew_loop as _autorenew_loop  # PATCH_VPN_AUTORENEW_V1
 from tenant.bots.panel_seller.loop import panel_seller_loop as _panel_seller_loop  # PATCH_PANEL_SELLER_V1
+from tenant.bots.booking.loop import booking_loop as _booking_loop  # PATCH_BOOKING_V2
 
 # === PATCH_TRAFFIC_OUT_CLEANUP_V1 ===
 # همان چرخه، این‌بار برایِ سرویس‌هایِ پولی‌ای که حجمشان تمام شده.
@@ -164,6 +165,7 @@ async def _worker_startup():
         _autorenew_loop(),   # PATCH_VPN_AUTORENEW_V1: تمدیدِ خودکار از کیف‌پول
         _panel_seller_loop(),   # PATCH_PANEL_SELLER_V1: اعمالِ سقف‌ها/انقضا و هشدارِ ادمین‌هایِ فروخته‌شده
         _giveaway_loop(),   # PATCH_GIVEAWAY_BOT_V1: پایانِ خودکارِ قرعه‌کشی‌ها + شمارندهٔ اعلان‌ها
+        _booking_loop(),   # PATCH_BOOKING_V2: یادآوریِ خودکارِ نوبت‌ها
     ):
         mt.spawn(_coro)
 

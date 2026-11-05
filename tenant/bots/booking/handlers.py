@@ -116,6 +116,12 @@ async def book_back(cb: CallbackQuery, bot: Bot):
 
 @booking_router.callback_query(F.data == "book:show")
 async def book_show_slots(cb: CallbackQuery, bot: Bot):
+    # PATCH_BOOKING_V2 — جریانِ جدیدِ رزرو (خدمت ← روز ← ساعت ← مشخصات)
+    from tenant.bots.booking.bk_user import bk_start
+    return await bk_start(cb, bot)
+
+
+async def _legacy_book_show_slots(cb: CallbackQuery, bot: Bot):
     bot_row = await get_bot_row_by_token(bot.token)
     if not bot_row:
         await cb.answer()
@@ -290,6 +296,12 @@ async def book_reject(cb: CallbackQuery, bot: Bot):
 
 @booking_router.callback_query(F.data == "book:my")
 async def book_my_appointments(cb: CallbackQuery, bot: Bot):
+    # PATCH_BOOKING_V2
+    from tenant.bots.booking.bk_user import bk_my
+    return await bk_my(cb, bot)
+
+
+async def _legacy_book_my_appointments(cb: CallbackQuery, bot: Bot):
     bot_row = await get_bot_row_by_token(bot.token)
     if not bot_row:
         await cb.answer()
@@ -346,12 +358,9 @@ def booking_admin_kb() -> InlineKeyboardMarkup:
 
 @booking_router.callback_query(F.data == "tadm:booking")
 async def badm_menu(cb: CallbackQuery, bot: Bot):
-    bot_row = await get_bot_row_by_token(bot.token)
-    if not bot_row or cb.from_user.id != bot_row.owner_id:
-        await cb.answer()
-        return
-    await cb.message.edit_text("📅 <b>مدیریت رزرو</b>", reply_markup=booking_admin_kb())
-    await cb.answer()
+    # PATCH_BOOKING_V2 — داشبوردِ جدیدِ رزرو (مالک و ادمین‌ها)
+    from tenant.bots.booking.bk_admin import bk_dashboard
+    await bk_dashboard(cb, bot)
 
 
 @booking_router.callback_query(F.data == "badm:pending")
@@ -486,3 +495,7 @@ async def _is_foreign(obj, bot) -> bool:
     from tenant import get_bot_row as _gbr
     _r = await _gbr(bot)
     return bool(_r) and obj.bot_id != _r.id
+
+
+# === PATCH_BOOKING_V2 === هندلرهایِ جریانِ جدید روی همین router ثبت می‌شوند
+from tenant.bots.booking import bk_user as _bk_user, bk_admin as _bk_admin  # noqa: E402,F401
