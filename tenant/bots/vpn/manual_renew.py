@@ -64,7 +64,28 @@ async def price_for(bot_id: int, cfg) -> int:
         fixed = int(float(_fa2en(await get_setting(bot_id, "mrenew_price", "0")) or 0))
     except Exception:
         fixed = 0
-    return fixed if fixed > 0 else int(getattr(cfg, "price", 0) or 0)
+    if fixed > 0:
+        return fixed
+    cur = await _current_spec_price(bot_id, cfg)
+    return cur if cur > 0 else int(getattr(cfg, "price", 0) or 0)
+
+
+async def _current_spec_price(bot_id: int, cfg) -> int:
+    """PATCH_MANUAL_RENEW_CURRENT_PRICE_V1 — گزارشِ MidnightSoul: «قیمتِ سرویس عوض شده ولی تمدید با قیمتِ قبلیِ خرید حساب می‌شود».
+    Config.price قیمتِ *همان ردیفِ فروخته‌شده* است و بعد از تغییرِ قیمت عوض نمی‌شود. «قیمتِ فعلی» = قیمتِ تازه‌ترین ردیفِ هم‌مشخصات
+    (همان دسته/حجم/روز) که هنوز فروخته نشده؛ اگر موجودی نیست، تازه‌ترین ردیفِ هم‌مشخصات (فروخته‌شده یا نه) که قیمتش > ۰ است."""
+    try:
+        base = (Config.bot_id == bot_id, Config.volume_gb == cfg.volume_gb, Config.days == cfg.days,
+                Config.price > 0, Config.id != cfg.id)
+        cat = (Config.category == cfg.category) if cfg.category else (Config.category.is_(None))
+        async with Session() as s:
+            for extra in ((Config.status != "sold",), ()):
+                p = await s.scalar(select(Config.price).where(*base, cat, *extra).order_by(Config.id.desc()).limit(1))
+                if p:
+                    return int(p)
+    except Exception:      # noqa: BLE001
+        logger.exception("manual_renew: خواندنِ قیمتِ فعلیِ هم‌مشخصات ناموفق بود (قیمتِ قبلی استفاده شد)")
+    return 0
 
 
 async def renew_button(bot_id: int, cid: int) -> InlineKeyboardButton | None:

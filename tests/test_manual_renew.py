@@ -127,3 +127,23 @@ async def test_other_users_config_is_refused(env):
     await env["dp"].feed_update(env["bot"], cb_update(f"mrn:wal:{cid}", uid=999001))
     async with config.Session() as s:
         assert (await s.scalars(select(models.ManualRenewRequest))).all() == []
+
+
+@pytest.mark.asyncio
+async def test_renew_price_follows_current_price_of_same_spec(env):
+    """PATCH_MANUAL_RENEW_CURRENT_PRICE_V1 (MidnightSoul): قیمتِ تمدید = قیمتِ فعلیِ هم‌مشخصات، نه قیمتِ ردیفِ فروخته‌شده."""
+    _vpn(env)
+    from tenant.bots.vpn.manual_renew import price_for
+    cid = await _setup(env)                                   # ردیفِ فروخته‌شده: 10GB/30d با قیمتِ قدیمیِ 60000
+    async with config.Session() as s:
+        c = await s.get(models.Config, cid)
+    assert await price_for(env["bid"], c) == 60000            # هنوز همخوانی ندارد ⇒ قیمتِ خودش
+    async with config.Session() as s:                         # ادمین قیمتِ جدید را روی موجودیِ هم‌مشخصات گذاشته
+        s.add(models.Config(bot_id=env["bid"], code=92, volume_gb=10, days=30, payload="vless://y", status="in_stock", price=75000))
+        s.add(models.Config(bot_id=env["bid"], code=93, volume_gb=20, days=30, payload="vless://z", status="in_stock", price=1))  # مشخصاتِ دیگر
+        await s.commit()
+    assert await price_for(env["bid"], c) == 75000
+    import tenant
+    await tenant.set_setting(env["bid"], "mrenew_price", "50000")   # قیمتِ ثابتِ مالک همیشه برنده است
+    tenant._SETTING_CACHE.clear()
+    assert await price_for(env["bid"], c) == 50000
