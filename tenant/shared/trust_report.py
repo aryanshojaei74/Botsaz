@@ -189,7 +189,7 @@ def _panel_keywords(panel_name: str | None) -> set[str]:
         for lbl in PANEL_LABELS.values():
             kws |= toks(lbl)
     except Exception:      # noqa: BLE001
-        pass
+        logger.debug("trust_report: فهرستِ برچسبِ پنل‌ها در دسترس نبود (فقط نامِ همین پنل استفاده شد)")
     return kws
 
 

@@ -381,7 +381,7 @@ async def backup_menu(cb: CallbackQuery, bot: Bot):
         # PATCH_BACKUP_FEEDBACK_V1: ادمینِ غیرمالک دلیلش را ببیند (قبلاً بی‌صدا بود: «بک‌آپ کار نمی‌کند»)
         await cb.answer("🔒 بک‌آپ فقط برایِ مالکِ ربات در دسترس است.", show_alert=True)
         if row and not getattr(cb, "data", ""):          # حالتِ کیبوردی (_FakeCb): answer بی‌اثر است ⇒ پیام بفرست
-            await cb.message.answer("🔒 بک‌آپ فقط برایِ مالکِ ربات در دسترس است.")
+            await bot.send_message(cb.from_user.id, "🔒 بک‌آپ فقط برایِ مالکِ ربات در دسترس است.")
         return
     text, kb = await _backup_menu_content(row.id)
     try:
