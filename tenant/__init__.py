@@ -284,7 +284,8 @@ _include(vs_pay_router)  # === PATCH_VS_PAY_V1 ===
 _include(wdr_router)  # === PATCH_WRONG_DELETE_REFUND_V1 === تأییدِ ادمین برایِ عودتِ حذفِ اشتباهِ سرویس
 _include(community_router, "community_mgmt")  # === PATCH_COMMUNITY_MGMT_V1 ===
 _include(funstat_bot_router, "funstat")  # === PATCH_FUNSTAT_BOT_V1 ===
-from tenant.bots.giveaway import giveaway_router  # === PATCH_GIVEAWAY_BOT_V1 ===
+from tenant.bots.giveaway import giveaway_router, giveaway_shared_router  # === PATCH_GIVEAWAY_BOT_V1 ===
+tenant_router.include_router(giveaway_shared_router)   # PATCH_GIVEAWAY_PRO_V1: شرکت/قرعه‌کشیِ حرفه‌ای در همهٔ ربات‌ها
 _include(giveaway_router, "giveaway")
 from tenant.shared.sms_verify import sms_verify_router   # === PATCH_SMS_VERIFY_V1 ===
 tenant_router.include_router(sms_verify_router)
@@ -6848,6 +6849,12 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
         _row_ps = await get_bot_row(bot)
         if _row_ps:
             await (_ps_buy if action == "psel_buy" else _ps_my)(msg, bot, _row_ps, msg.from_user.id)
+    elif action == "gw_pro":
+        # === PATCH_GIVEAWAY_PRO_V1 ===
+        from tenant.bots.giveaway.pro import show_hub as _gwp_hub
+        _row_gwp = await get_bot_row(bot)
+        if _row_gwp:
+            await _gwp_hub(msg, bot, _row_gwp, msg.from_user.id)
     elif action in ("giveaway", "giveaway_results"):
         # === PATCH_GIVEAWAY_BOT_V1 ===
         from tenant.bots.giveaway.user import show_list as _gw_list, show_results_list as _gw_res
@@ -14071,7 +14078,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "461"
+BUILD_ID = "462"
 
 
 @tenant_router.message(Command("version"))
@@ -15310,6 +15317,8 @@ _SIMPLE_ACTIONS: dict[str, tuple[str, str, frozenset | None]] = {
                          frozenset({"panel_seller"})),
     "giveaway":         ("🎰 قرعه‌کشی‌هایِ فعال", "این دکمه حالا قرعه‌کشی‌هایِ فعال را با دکمهٔ شرکت نشان می‌دهد.",
                          frozenset({"giveaway"})),
+    # === PATCH_GIVEAWAY_PRO_V1 === (در همهٔ ربات‌ها)
+    "gw_pro":           ("🎰 ربات قرعه‌کشیِ حرفه‌ای بات‌ساز", "این دکمه حالا منویِ قرعه‌کشیِ حرفه‌ای (ساخت، مدیریت، پروفایل، زبان) را باز می‌کند.", None),
     "giveaway_results": ("🏆 نتایجِ قرعه‌کشی‌ها", "این دکمه حالا نتایجِ قرعه‌کشی‌هایِ پایان‌یافته را نشان می‌دهد.",
                          frozenset({"giveaway"})),
     "funstat_search": ("🔎 جست‌وجویِ Fun Stat",

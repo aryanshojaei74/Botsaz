@@ -9,9 +9,15 @@ from tenant.bots.giveaway.admin import giveaway_admin_router
 from tenant.bots.giveaway.group import giveaway_group_router
 from tenant.bots.giveaway.user import giveaway_user_router, on_start  # noqa: F401
 
+# === PATCH_GIVEAWAY_PRO_V1 === شرکت در قرعه‌کشی + منویِ حرفه‌ایِ gwp: در همهٔ انواعِ ربات؛ ادمین/گروهِ قدیمی فقط نوعِ giveaway
+from tenant.bots.giveaway.pro import giveaway_pro_router  # noqa: E402
+
+giveaway_shared_router = Router(name="giveaway_shared")
+giveaway_shared_router.include_router(giveaway_user_router)
+giveaway_shared_router.include_router(giveaway_pro_router)
+
 giveaway_router = Router(name="giveaway")
 giveaway_router.include_router(giveaway_admin_router)
-giveaway_router.include_router(giveaway_user_router)
 giveaway_router.include_router(giveaway_group_router)
 
 from tenant.bots.giveaway import products_menu as _products_menu  # noqa: E402,F401

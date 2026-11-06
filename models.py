@@ -3959,6 +3959,13 @@ class Giveaway(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     ended_at: Mapped[datetime | None] = mapped_column(DateTime)
     seed_note: Mapped[str | None] = mapped_column(String(80))                 # برایِ بازبینی: چند نفر/چند شانس موقعِ قرعه
+    # === PATCH_GIVEAWAY_PRO_V1 === «قرعه‌کشیِ حرفه‌ای» (دکمهٔ عملکردِ gw_pro در هر ربات)
+    pro: Mapped[bool] = mapped_column(Boolean, default=False)                 # کارتِ حرفه‌ای + مسیرِ ساختِ ۹ مرحله‌ای
+    capacity: Mapped[int] = mapped_column(Integer, default=0)                 # حداکثرِ شرکت‌کننده (۰ = نامحدود)
+    min_participants: Mapped[int] = mapped_column(Integer, default=0)         # کمتر از این ⇒ قرعه‌کشی لغو (۰ = بدون حداقل)
+    access: Mapped[str | None] = mapped_column(String(12), default="all")     # all | premium
+    channels: Mapped[str | None] = mapped_column(Text)                        # JSON: کانال‌هایِ اجباریِ همین قرعه‌کشی [{"id":-100…,"u":"name"}]
+    organizer: Mapped[str | None] = mapped_column(String(80))                 # نامِ نمایشیِ برگزارکننده (@یوزرنیم)
 
 
 class GiveawayPrize(Base):

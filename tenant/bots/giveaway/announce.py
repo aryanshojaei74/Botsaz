@@ -160,20 +160,33 @@ async def deliver_prize(bot: Bot, row, g: Giveaway, w: GiveawayWinner, entry: Gi
 
 # ───────────────────────── پایانِ قرعه‌کشی ─────────────────────────
 
-async def make_member_check(bot: Bot, row, concurrency: int = 8):
-    """None اگر عضویتِ اجباری تعریف نشده؛ وگرنه async (uid)→bool (عضو؟)."""
+async def make_member_check(bot: Bot, row, concurrency: int = 8, g: Giveaway | None = None):
+    """None اگر عضویتِ اجباری تعریف نشده؛ وگرنه async (uid)→bool (عضو؟). g: کانال‌هایِ اجباریِ خودِ قرعه‌کشی (pro) هم چک شوند."""
     from models import ForceJoin
     async with Session() as s:
         has = await s.scalar(select(ForceJoin.id).where(ForceJoin.bot_id == row.id, ForceJoin.is_active == True))  # noqa: E712
-    if has is None:
+    own = []
+    if g is not None and getattr(g, "pro", False):
+        from tenant.bots.giveaway.pro import channels_of
+        own = [c["id"] for c in channels_of(g)]
+    if has is None and not own:
         return None
-    from tenant import check_force_join
     sem = asyncio.Semaphore(concurrency)
 
     async def _check(uid: int):
         async with sem:
-            nj = await check_force_join(bot, row.id, uid, bypass_cache=True)
-        return not nj
+            if has is not None:
+                from tenant import check_force_join
+                if await check_force_join(bot, row.id, uid, bypass_cache=True):
+                    return False
+            for cid in own:
+                try:
+                    m = await bot.get_chat_member(cid, uid)
+                except Exception:      # noqa: BLE001 — خطا ⇒ حذفش نمی‌کنیم
+                    continue
+                if getattr(m, "status", "") in ("left", "kicked"):
+                    return False
+        return True
     return _check
 
 
@@ -182,8 +195,22 @@ async def finish_giveaway(bot: Bot, row, gid: int, notify_admin_chat: int | None
     g0 = await E.get_giveaway(gid, row.id)
     if g0 is None:
         return E.DrawResult(False, "notfound")
-    check = await make_member_check(bot, row)
+    check = await make_member_check(bot, row, g=g0)
     res = await E.draw(gid, row.id, check)
+    if not res.ok and res.reason == "min_not_met":      # PATCH_GIVEAWAY_PRO_V1: کمتر از حداقل ⇒ لغو + اطلاع
+        gc = await E.get_giveaway(gid, row.id)
+        txt = ("⛔️ <b>" + esc(g0.title) + "</b>\n\nقرعه‌کشی لغو شد: تعدادِ شرکت‌کنندگان (" + fa(res.participants)
+               + " نفر) کمتر از حداقلِ لازم (" + fa(g0.min_participants) + " نفر) بود.")
+        try:
+            await refresh_posts(bot, gc, txt, None)
+        except Exception:      # noqa: BLE001
+            logger.debug("giveaway: ادیتِ اعلانِ لغو ناموفق")
+        if notify_admin_chat:
+            try:
+                await bot.send_message(notify_admin_chat, txt, parse_mode="HTML")
+            except Exception:      # noqa: BLE001
+                logger.debug("giveaway: خبرِ لغو به مدیر نرفت")
+        return res
     if not res.ok:
         return res
     g = await E.get_giveaway(gid, row.id)

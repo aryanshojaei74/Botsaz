@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import time
 
 from aiogram import Bot
@@ -57,7 +58,10 @@ async def refresh_counters_once(now: float | None = None) -> int:
         gids = list((await s.scalars(select(GiveawayPost.giveaway_id).distinct())).all())
         gs = [g for g in (await s.scalars(select(Giveaway).where(Giveaway.id.in_(gids), Giveaway.status == "active"))).all()] if gids else []
     for g in gs:
-        if now - _last_refresh.get(g.id, -1e9) < REFRESH_EVERY:
+        every = REFRESH_EVERY
+        if getattr(g, "pro", False):            # PATCH_GIVEAWAY_PRO_V1: شمارشِ معکوس/نوارِ پیشرفت — تازه‌سازیِ سریع‌تر
+            every = 45.0 if (g.ends_at and (g.ends_at - datetime.utcnow()).total_seconds() < 3600) else 180.0
+        if now - _last_refresh.get(g.id, -1e9) < every:
             continue
         _last_refresh[g.id] = now
         try:

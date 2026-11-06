@@ -192,6 +192,13 @@ class NewGiveaway:
     starts_at: datetime | None = None
     ends_at: datetime | None = None
     created_by: int | None = None
+    # === PATCH_GIVEAWAY_PRO_V1 ===
+    pro: bool = False
+    capacity: int = 0
+    min_participants: int = 0
+    access: str = "all"
+    channels: str | None = None
+    organizer: str | None = None
 
 
 @dataclass
@@ -212,7 +219,10 @@ async def create_giveaway(bot_id: int, data: NewGiveaway, prizes: list[NewPrize]
             winners_count=n, status="active", require_phone=data.require_phone, captcha=data.captcha,
             ref_bonus=max(0, int(data.ref_bonus)), ref_max=max(0, int(data.ref_max)),
             hide_winners=data.hide_winners, notify_all=data.notify_all, starts_at=data.starts_at,
-            ends_at=data.ends_at, created_by=data.created_by)
+            ends_at=data.ends_at, created_by=data.created_by,
+            pro=bool(data.pro), capacity=max(0, int(data.capacity or 0)), min_participants=max(0, int(data.min_participants or 0)),
+            access=(data.access if data.access in ("all", "premium") else "all"), channels=data.channels,
+            organizer=(data.organizer or None))
         s.add(g)
         await s.flush()
         for rank in range(1, n + 1):
@@ -226,7 +236,7 @@ async def create_giveaway(bot_id: int, data: NewGiveaway, prizes: list[NewPrize]
 @dataclass
 class JoinResult:
     ok: bool
-    reason: str = ""            # closed | not_started | phone_needed | phone_used | exists
+    reason: str = ""            # closed | not_started | phone_needed | phone_used | exists | full
     entry: GiveawayEntry | None = None
     inviter_tg: int | None = None    # اگر شانسِ اضافه گرفت، برایِ اطلاع‌رسانی
     inviter_chances: int = 0
@@ -247,6 +257,10 @@ async def join(gid: int, bot_id: int, user_tg: int, name: str = "", username: st
             GiveawayEntry.giveaway_id == gid, GiveawayEntry.user_tg == user_tg))
         if ex is not None:
             return JoinResult(False, "exists", ex)
+        if int(getattr(g, "capacity", 0) or 0) > 0:          # PATCH_GIVEAWAY_PRO_V1: ظرفیت پر شد
+            n_now = int(await s.scalar(select(func.count(GiveawayEntry.id)).where(GiveawayEntry.giveaway_id == gid)) or 0)
+            if n_now >= int(g.capacity):
+                return JoinResult(False, "full")
         if g.require_phone:
             if not phone:
                 return JoinResult(False, "phone_needed")
@@ -303,6 +317,17 @@ async def draw(gid: int, bot_id: int, is_member: MemberCheck | None = None, rng:
         if g.status != "active":
             return DrawResult(False, "not_active")
         entries = list((await s.scalars(select(GiveawayEntry).where(GiveawayEntry.giveaway_id == gid))).all())
+        # === PATCH_GIVEAWAY_PRO_V1 === کمتر از حداقلِ شرکت‌کننده ⇒ لغو (بدونِ برنده)
+        _min = int(getattr(g, "min_participants", 0) or 0)
+        if _min > 0 and len(entries) < _min:
+            g_c = await s.get(Giveaway, gid, with_for_update=True)
+            if g_c is not None and g_c.status == "active":
+                g_c.status = "cancelled"
+                g_c.ended_at = datetime.utcnow()
+                g_c.seed_note = f"min:{len(entries)}/{_min}"[:80]
+                await s.commit()
+                return DrawResult(False, "min_not_met", [], participants=len(entries))
+            return DrawResult(False, "not_active")
     left = 0
     if is_member is not None:
         for e in entries:

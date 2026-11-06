@@ -68,6 +68,9 @@ async def show_detail(event, bot: Bot, row, gid: int, uid: int, back: str = "lis
     if g is None or g.status == "draft":
         await edit_or_send(event, "این قرعه‌کشی پیدا نشد.", kb(back_row("gw:list"), HOME_ROW))
         return
+    if getattr(g, "pro", False):          # PATCH_GIVEAWAY_PRO_V1
+        from tenant.bots.giveaway.pro import show_card as _pro_card
+        return await _pro_card(event, bot, row, gid, uid, note=note, back="gwp:act" if back == "list" else "gwp:home")
     prizes = await E.prizes_of(gid)
     n = await E.count_entries(gid)
     entry = await E.entry_of(gid, uid)
@@ -171,6 +174,11 @@ async def _begin_join(ev, bot: Bot, row, state: FSMContext, gid: int, uid: int, 
     left = _locked(row.id, uid)
     if left:
         return await say(f"به‌خاطرِ پاسخِ غلطِ مکرر، {fa(left // 60 + 1)} دقیقه صبر کن.", True)
+    if getattr(g, "pro", False):          # PATCH_GIVEAWAY_PRO_V1: ظرفیت / پریمیوم / کانالِ اجباریِ همین قرعه‌کشی
+        from tenant.bots.giveaway import pro as _pro
+        block = await _pro.join_block(ev, bot, row, g, uid)
+        if block:
+            return await say(block, True)
     await ack()
     if await _forcejoin_block(ev, bot, row, uid, gid):
         return
@@ -225,7 +233,7 @@ async def _finish(event, bot: Bot, row, state: FSMContext, g, uid: int) -> None:
     if not res.ok:
         msg = {"closed": "این قرعه‌کشی پایان یافته است.", "not_started": "این قرعه‌کشی هنوز شروع نشده است.",
                "phone_used": "این شماره قبلاً برایِ شخصِ دیگری ثبت شده است.", "phone_needed": "تأییدِ شماره لازم است.",
-               "exists": "قبلاً ثبت‌نام کرده‌ای ✅"}.get(res.reason, "ثبت‌نام ممکن نشد.")
+               "exists": "قبلاً ثبت‌نام کرده‌ای ✅", "full": "ظرفیتِ این قرعه‌کشی تکمیل شده است."}.get(res.reason, "ثبت‌نام ممکن نشد.")
         await edit_or_send(event, "❌ " + msg, kb(back_row(f"gw:v:{g.id}"), HOME_ROW))
         return
     if res.inviter_tg:

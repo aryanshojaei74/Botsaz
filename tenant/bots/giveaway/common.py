@@ -135,6 +135,9 @@ def parse_payload(payload: str | None) -> tuple[int, int | None] | None:
 
 def card_text(g: Giveaway, prizes: list[GiveawayPrize], participants: int, entry: GiveawayEntry | None = None,
               chances_n: int = 0, invited: int = 0, link: str | None = None) -> str:
+    if getattr(g, "pro", False):          # PATCH_GIVEAWAY_PRO_V1: کارتِ حرفه‌ای (اعلان‌ها/گروه‌ها فارسی)
+        from tenant.bots.giveaway.pro import card_text_pro
+        return card_text_pro(g, prizes, participants, "fa")
     st = {"active": "🟢 فعال", "ended": "🏁 پایان‌یافته", "cancelled": "⛔️ لغوشده", "draft": "📝 پیش‌نویس"}.get(g.status, g.status)
     lines = [f"🎰 <b>{esc(g.title)}</b>", ""]
     if g.description:
