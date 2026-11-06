@@ -74,6 +74,7 @@ from platform_offsite_backup import offsite_backup_loop
 from platform_sadmin import sadmin_loop
 from platform_selfsaz_pro import selfsaz_watch_loop
 from server_status import probe_loop as server_status_probe_loop   # PATCH_SERVER_STATUS_V1
+from platform_hosting_autodel import hosting_autodel_loop   # PATCH_HOSTING_AUTODEL_V1
 
 
 async def _worker_startup():
@@ -123,6 +124,8 @@ async def _worker_startup():
         selfsaz_watch_loop(mp.platform_bot),
         # === PATCH_SERVER_STATUS_V1 === اندازه‌گیریِ سلامت/سرعتِ سرورها برایِ مینی‌اپِ وضعیت
         server_status_probe_loop(),
+        # === PATCH_HOSTING_AUTODEL_V1 === حذفِ خودکارِ سرور فعال‌سازیِ تمام‌شده بعد از N روز
+        hosting_autodel_loop(mp.platform_bot),
     ):
         mp.spawn(_coro)
 

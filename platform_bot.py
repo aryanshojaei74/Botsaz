@@ -15426,7 +15426,8 @@ async def _vip_screen() -> tuple[str, InlineKeyboardMarkup]:
         f"💳 پرداختیِ کاربر: <b>{final:,}</b> تومان\n\n"
         f"🎁 تستِ رایگان: <b>{c['vip_free_uses']}</b> بار برای هر کاربر\n"
         f"⏳ مدتِ هر تست: <b>{c['vip_free_minutes']}</b> دقیقه\n"
-        f"💬 پشتیبانی: <b>{('@' + _sup) if (_sup := await get_pset('vip_support', '')) else 'غیرفعال'}</b>\n\n"
+        f"💬 پشتیبانی: <b>{('@' + _sup) if (_sup := await get_pset('vip_support', '')) else 'غیرفعال'}</b>\n"
+        f"🗑 حذفِ خودکارِ سرورِ تمام‌شده: <b>{__import__('platform_hosting_autodel').label(await __import__('platform_hosting_autodel').get_days())}</b>\n\n"
         "این مقادیر بلافاصله در مینی‌اپ اعمال می‌شوند."
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -15444,6 +15445,9 @@ async def _vip_screen() -> tuple[str, InlineKeyboardMarkup]:
         # === PATCH_SUPPORT_V1 ===
         [hx_button("💬 پشتیبانی مینی‌اپ", callback_data="vip:set:support",
                    style=ButtonStyle.PRIMARY)],
+        # === PATCH_HOSTING_AUTODEL_V1 ===
+        [hx_button("🗑 حذفِ خودکارِ سرورِ تمام‌شده (چرخش: خاموش/۱/۲/۳/۷/۱۴ روز)", callback_data="vip:autodel",
+                   style=ButtonStyle.DANGER)],
         # === PATCH_VIP_IN_ROOT_PANEL_V1 === بازگشت به ریشهٔ پنلِ مدیریت
         [hx_button("⬅️ بازگشت", callback_data="adm:back",
                    style=ButtonStyle.DANGER)],
@@ -16425,6 +16429,25 @@ async def vip_menu(cb: CallbackQuery):
     except Exception:
         await cb.message.answer(txt, reply_markup=kb)
     await cb.answer()
+
+
+@router.callback_query(F.data == "vip:autodel")
+async def vip_autodel_cycle(cb: CallbackQuery):
+    """PATCH_HOSTING_AUTODEL_V1 — خاموش ← ۱ ← ۲ ← ۳ ← ۷ ← ۱۴ روز (روزهایِ بعد از تمام‌شدنِ مهلت)."""
+    if not await has_perm(cb.from_user.id, "adm:settings"):
+        await cb.answer("دسترسی نداری", show_alert=True)
+        return
+    import platform_hosting_autodel as HA
+    cur = await HA.get_days()
+    nxt = HA.OPTIONS[(HA.OPTIONS.index(cur) + 1) % len(HA.OPTIONS)] if cur in HA.OPTIONS else HA.DEFAULT_DAYS
+    await set_pset(HA.KEY, str(nxt))
+    await cb.answer(("🗑 حذفِ خودکار خاموش شد." if not nxt else
+                     f"🗑 سرورِ تمام‌شده {nxt} روز بعد از پایانِ مهلت خودکار و برای همیشه حذف می‌شود."), show_alert=True)
+    txt, kb = await _vip_screen()
+    try:
+        await cb.message.edit_text(txt, reply_markup=kb)
+    except Exception:
+        await cb.message.answer(txt, reply_markup=kb)
 
 
 _VIP_ASK = {
