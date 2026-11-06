@@ -2541,9 +2541,23 @@ def _webapp_url(b) -> str | None:
     رد می‌کند (BUTTON_URL_INVALID) و محافظِ ارسال دکمه را بی‌صدا برمی‌داشت. برایِ این لینک‌ها دکمه به‌صورتِ دکمهٔ متنیِ معمولی
     می‌ماند و با زدنش، دکمهٔ لینکِ «باز کردن» فرستاده می‌شود (نگاه کن به هندلرِ action == "web_app")."""
     url = _webapp_raw_url(b)
-    if url and _is_tg_link(url):
+    if url and (_is_tg_link(url) or _webapp_inline_flag(b)):
         return None
     return url
+
+
+def _webapp_inline_flag(b) -> bool:
+    """PATCH_WEBAPP_INLINE_AUTH_V1 — مالک خواسته مینی‌اپِ این دکمه از «دکمهٔ شیشه‌ای» باز شود (تلگرام فقط آنجا initData/احراز هویت می‌دهد)."""
+    try:
+        return bool((json.loads(getattr(b, "config", None) or "{}") or {}).get("webapp_inline"))
+    except Exception:      # noqa: BLE001
+        return False
+
+
+def _webapp_url_inline(b) -> str | None:
+    """آدرسِ وب‌اپ برایِ دکمهٔ *شیشه‌ای* (زیرِ پیام) — همان وب‌اپِ مستقیم، مگر لینکِ t.me (که url عادی می‌شود)."""
+    url = _webapp_raw_url(b)
+    return None if (url and _is_tg_link(url)) else url
 
 
 # === PATCH_BUTTON_CHANNEL_LINK_V1 === (پشتیبانِ بات‌ساز) عملکردِ «لینک مستقیم به کانال/گروه/سایت»
@@ -2625,7 +2639,7 @@ def _kbtn_for(b, style):
 def _ibtn_for(b, style):
     """InlineKeyboardButton هر دکمهٔ منو — با اعمال استایل و ایموجی پرمیوم در صورت وجود."""
     kw = {"text": b.label, "callback_data": f"mbtn:{b.id}"}
-    _wa = _webapp_url(b)
+    _wa = _webapp_url_inline(b)
     if _wa:
         # دکمهٔ مینی‌اپ: به‌جای callback مستقیماً وب‌اپ باز می‌شود
         kw.pop("callback_data", None)
@@ -6885,8 +6899,8 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
             await msg.answer("ℹ️ لینکِ این دکمه هنوز تنظیم نشده است.",
                              reply_markup=await inline_back_kb(bot_id))
     elif action == "web_app":
-        _wa = _webapp_url(btn)
         _tg = _webapp_raw_url(btn)
+        _wa = _webapp_url_inline(btn)          # PATCH_WEBAPP_INLINE_AUTH_V1: از دکمهٔ شیشه‌ایِ زیرِ پیام ⇒ initData (احراز هویت) می‌آید
         if not _wa and _tg and _is_tg_link(_tg):      # PATCH_WEBAPP_TME_LINK_V1: لینکِ t.me ⇒ دکمهٔ لینکِ معمولی (مینی‌اپِ ربات با startapp)
             rows = [[InlineKeyboardButton(text=f"🌐 باز کردن {btn.label}", url=_tg, style=ButtonStyle.SUCCESS)]]
             br = await inline_back_row(bot_id)
@@ -14057,7 +14071,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "460"
+BUILD_ID = "461"
 
 
 @tenant_router.message(Command("version"))
@@ -15856,6 +15870,10 @@ def _thb_kb_action(mb, bot_field: str = "", plan: str = "") -> InlineKeyboardMar
     elif mb.action == "web_app":
         rows.append([InlineKeyboardButton(text="🔗 تغییر لینکِ دلخواه",
                                           callback_data=f"thb:setwebapp:{mb.id}", style=ButtonStyle.PRIMARY)])
+        # === PATCH_WEBAPP_INLINE_AUTH_V1 === (Weirdnet) وب‌اپِ باز‌شده از کیبوردِ پایین احرازِ هویت (initData) ندارد
+        rows.append([InlineKeyboardButton(
+            text=("🔐 احرازِ هویت: " + ("✅ باز شدن با دکمهٔ شیشه‌ای" if _webapp_inline_flag(mb) else "⬜ مستقیم از کیبورد (بدونِ احراز) — بزن تا عوض شود")),
+            callback_data=f"thb:wainl:{mb.id}", style=ButtonStyle.SUCCESS)])
         rows.append([InlineKeyboardButton(text="↩️ حذف «ورود به لینک دلخواه»",
                                           callback_data=f"thb:unsetwebapp:{mb.id}", style=ButtonStyle.DANGER)])
     elif mb.action in _SIMPLE_ACTIONS:
@@ -16148,8 +16166,11 @@ def _thb_text(mb, is_disabled: bool) -> str:
         lines.append(f"📅 بازه روز: {_rng('days', 'روز')}")
         lines.append(f"🔢 بازه تعداد: {_rng('counts', 'عدد')}")
     if mb.action == "web_app":
-        _wa = _webapp_url(mb)
+        _wa = _webapp_raw_url(mb)
         lines.append(f"🌐 لینک مینی‌اپ: {_wa or '⚠️ تنظیم نشده'}")
+        if _wa and not _is_tg_link(_wa):
+            lines.append("🔐 حالتِ باز شدن: " + ("از دکمهٔ شیشه‌ای (با احراز هویتِ تلگرام) ✅" if _webapp_inline_flag(mb)
+                                                else "مستقیم از کیبوردِ پایین (بدونِ احراز هویتِ تلگرام)"))
     if mb.action == "channel_link":          # PATCH_BUTTON_CHANNEL_LINK_V1
         lines.append(f"🔗 لینکِ مقصد: {_link_url(mb) or '⚠️ تنظیم نشده'}")
     # === PATCH_DICE_GAME_DIRECT_BTN_V1 ===
@@ -19870,7 +19891,7 @@ async def thb_set_webapp(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return
     await state.set_state(HomeBtnFSM.set_webapp_url)
     await state.update_data(webapp_mb_id=mb_id)
-    cur = _webapp_url(mb)
+    cur = _webapp_raw_url(mb)
     await cb.message.answer(
         "🌐 <b>ورود به لینک دلخواه (Web App)</b>\n\n"
         + (f"لینک فعلی: {cur}\n\n" if cur else "")
@@ -20045,6 +20066,40 @@ async def thb_unset_link(cb: CallbackQuery, bot: Bot):
     except Exception:
         await cb.message.answer(_thb_text(mb, is_dis), reply_markup=_thb_kb(mb, is_dis))
     await cb.answer("حذف شد")
+
+
+@tenant_router.callback_query(F.data.startswith("thb:wainl:"))
+async def thb_webapp_inline_toggle(cb: CallbackQuery, bot: Bot):
+    """PATCH_WEBAPP_INLINE_AUTH_V1 — روشن/خاموشِ «باز شدن مینی‌اپ با دکمهٔ شیشه‌ای (برایِ احرازِ هویت)»."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    mb_id = int(cb.data.split(":")[2])
+    async with Session() as s:
+        mb = await s.get(MainButton, mb_id)
+        if not mb or mb.bot_id != row.id or mb.action != "web_app":
+            await cb.answer("دکمه پیدا نشد.", show_alert=True)
+            return
+        try:
+            cfg = json.loads(mb.config or "{}") or {}
+        except Exception:      # noqa: BLE001
+            cfg = {}
+        if cfg.get("webapp_inline"):
+            cfg.pop("webapp_inline", None)
+        else:
+            cfg["webapp_inline"] = True
+        mb.config = json.dumps(cfg, ensure_ascii=False)
+        await s.commit()
+        on = bool(cfg.get("webapp_inline"))
+    async with Session() as s:
+        mb = await s.get(MainButton, mb_id)
+    is_dis = mb_id in await _disabled_btn_ids(row.id)
+    try:
+        await cb.message.edit_text(_thb_text(mb, is_dis), reply_markup=_thb_kb(mb, is_dis))
+    except Exception:      # noqa: BLE001
+        await cb.message.answer(_thb_text(mb, is_dis), reply_markup=_thb_kb(mb, is_dis))
+    await cb.answer("✅ از این به بعد با زدنِ دکمه، یک دکمهٔ شیشه‌ایِ «باز کردن» می‌آید و مینی‌اپ با احرازِ هویت باز می‌شود."
+                    if on else "حالت مستقیم (از کیبوردِ پایین) فعال شد.", show_alert=True)
 
 
 @tenant_router.callback_query(F.data.startswith("thb:unsetwebapp:"))
