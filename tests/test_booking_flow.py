@@ -16,6 +16,7 @@ import tenant
 from tenant.bots.booking import bk_admin as ADM
 from tenant.bots.booking import bk_user as U
 from tenant.bots.booking import engine as E
+from tenant.bots.booking import loop as _bk_loop  # noqa: F401  (باید قبل از fixture ایمپورت شود تا Session آن هم جایگزین شود؛ وگرنه test_reminder_loop تنها اجرا که شود «no such table»)
 
 OWNER, CUST, CUST2, BOT = 1, 500, 501, 21
 NOW = dt.datetime(2026, 11, 5, 8, 0)           # پنج‌شنبه ۱۴۰۵/۰۸/۱۴
