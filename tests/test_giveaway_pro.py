@@ -410,3 +410,14 @@ async def test_support_button(env):
 def test_action_registered_for_all_kinds():
     a = tenant._SIMPLE_ACTIONS["gw_pro"]
     assert a[2] is None and "قرعه" in a[0]
+
+
+def test_wizard_action_picker_offers_gw_pro_for_every_field():
+    import platform_bot as PB
+    for f in ("vpn_sales", "virtual_service", "digital_shop", "booking", "giveaway", "general", "funstat", "escrow_bot", "community_mgmt"):
+        kbm = PB.action_kb(f, back_cb="x")
+        cs = [b.callback_data for r in kbm.inline_keyboard for b in r]
+        assert "act:gw_pro" in cs, f
+        assert cs[-1] == "x"
+    assert "act:gw_pro" not in [b.callback_data for r in PB.action_kb("partner").inline_keyboard for b in r]
+    assert PB.ACTION_TITLE["gw_pro"]

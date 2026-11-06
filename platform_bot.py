@@ -3945,6 +3945,16 @@ def action_kb(field: str = "vpn_sales", back_cb: str | None = None) -> InlineKey
 
 
 def _action_kb_base(field: str = "vpn_sales") -> InlineKeyboardMarkup:
+    """PATCH_GIVEAWAY_PRO_V1 — عملکردِ «قرعه‌کشیِ حرفه‌ای» در همهٔ زمینه‌ها؛ درست قبل از ردیفِ آخر (بعداً تنظیم می‌کنم)."""
+    kb = _action_kb_base_inner(field)
+    rows = [list(r) for r in kb.inline_keyboard]
+    if field != "partner" and not any(b.callback_data == "act:gw_pro" for r in rows for b in r):
+        new = [hx_button("🎰 ربات قرعه‌کشیِ حرفه‌ای بات‌ساز", callback_data="act:gw_pro", style=ButtonStyle.SUCCESS)]
+        rows.insert(max(0, len(rows) - 1), new)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _action_kb_base_inner(field: str = "vpn_sales") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if field == "general":
         # ربات عمومی (منوی آزاد): اقدام‌های غیر-VPN
