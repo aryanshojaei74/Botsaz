@@ -224,6 +224,10 @@ async def test_hub_six_buttons_for_admin_and_language_toggle(env):
     t, mk = c.message.edits[0]
     assert cbs(mk)[:7] == ["gwp:new", "gwp:mgr", "gwp:act", "gwp:prof", "gwp:sup", "gwp:lang", "gwp:cfg"]
     assert "🌐 Language" in labels(mk)
+    assert "gwp:main" not in cbs(mk)                      # ربات مشتری: دکمهٔ بازگشتِ مادر نیست
+    mrow = SimpleNamespace(id=BOT, owner_id=OWNER, status="platform")
+    _, mk_m = await P.hub_content(FakeBot(), mrow, OWNER)
+    assert cbs(mk_m)[-1] == "gwp:main"
     c2 = cb("gwp:lang", uid=OWNER)
     await P.gwp_lang(c2, FakeBot(), fsm())
     t2, mk2 = c2.message.edits[0]

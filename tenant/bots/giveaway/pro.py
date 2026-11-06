@@ -377,6 +377,8 @@ async def hub_content(bot: Bot, row, uid: int, lang: str | None = None):
     rows.append([btn(t("b_support"), "gwp:sup", style=ButtonStyle.PRIMARY), btn(t("b_lang"), "gwp:lang", style=ButtonStyle.PRIMARY)])
     if await _is_admin(row, uid):
         rows.append([btn(t("b_settings"), "gwp:cfg")])
+    if getattr(row, "status", "") == "platform":          # ربات مادر: بازگشت به منویِ اصلیِ بات‌ساز
+        rows.append([btn(t("b_home"), "gwp:main", style=ButtonStyle.DANGER)])
     return t("hub_title") + "\n\n" + t("hub_text"), kb(*rows)
 
 

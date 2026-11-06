@@ -4615,6 +4615,26 @@ async def hm_home_smart(cb: CallbackQuery, state: FSMContext):
     await cb.message.answer("🏠 منوی اصلی:", reply_markup=await smart_home_kb(cb.from_user.id, show_admin))
 
 
+@router.callback_query(F.data == "gwp:main")
+async def gwp_main_home(cb: CallbackQuery, state: FSMContext):
+    """PATCH_GIVEAWAY_PRO_V1 — «🏠 منوی اصلی» از منویِ قرعه‌کشیِ حرفه‌ای؛ طبقِ حالتِ منویِ ربات (اینلاین/کیبوردی)."""
+    await cb.answer()
+    await state.clear()
+    show_admin = await _home_show_admin(cb.from_user.id)
+    if await get_pset("home_menu_mode", "reply") == "inline":
+        try:
+            await cb.message.edit_text("🏠 منوی اصلی:", reply_markup=home_inline_kb(cb.from_user.id, show_admin))
+            return
+        except Exception:
+            logger.debug("gwp main: ادیت ممکن نشد؛ پیامِ تازه")
+    try:
+        await cb.message.delete()
+    except Exception:
+        logger.debug("gwp main: حذفِ پیام ممکن نشد")
+    await cb.message.answer("🏠 منوی اصلی:", reply_markup=await smart_home_kb(
+        cb.from_user.id, show_admin=show_admin, private=True))
+
+
 @router.callback_query(F.data == "hm:home")
 async def hm_home(cb: CallbackQuery, state: FSMContext):
     await _delete_home_aux_messages(state, cb.message.bot)
