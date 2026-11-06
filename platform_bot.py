@@ -131,6 +131,13 @@ router.include_router(ticket_router)
 # باید قبل از catch-all محافظ گروه ثبت شود تا پیام‌های مالی گروه مصرف نشوند.
 from platform_group_help import platform_group_help_router   # === PATCH_PLATFORM_GROUP_HELP_V1 ===
 router.include_router(platform_group_help_router)
+# === PATCH_GIVEAWAY_PRO_V1 === قرعه‌کشیِ حرفهٔ ربات مادر (فقط اینجا؛ ربات‌هایِ مستأجر ندارند)
+try:
+    from tenant.bots.giveaway.pro import mother_routers as _gwp_mother_routers
+    for _gwp_r in _gwp_mother_routers():
+        router.include_router(_gwp_r)
+except Exception:      # noqa: BLE001
+    logger.exception("نصبِ قرعه‌کشیِ حرفه‌ای رویِ ربات مادر ناموفق بود")
 from platform_group_money import platform_group_money_router
 router.include_router(platform_group_money_router)
 # === PATCH_PLATFORM_WAGER_V1 === شرط‌بندی ایکس‌او / سنگ‌کاغذ‌قیچی / تاس (قبل از هندلر کلی متن بازی‌های تاس)
@@ -1252,7 +1259,8 @@ _HCB_COLOR_LABEL = {"danger": "🔴 قرمز", "success": "🟢 سبز", "primar
 _HCB_TYPE_LABEL = {"text": "📝 نمایش متن", "web_app": "🌐 مینی‌اپ", "url": "🔗 لینک",
                    "invite_campaign": "🎁 قرعه‌کشی دعوت دوستان", "submenu": "📁 زیرمنو",
                    "trial_request": "🧪 درخواست ربات تست",
-                   "server_status": "📡 وضعیت سرورها"}  # PATCH_PLATFORM_HOME_SUBMENUS_COMMANDS_V1 / PATCH_SERVER_STATUS_V1
+                   "server_status": "📡 وضعیت سرورها",
+                   "gw_pro": "🎰 قرعه‌کشیِ حرفه‌ای"}   # PATCH_GIVEAWAY_PRO_V1 — فقط ربات مادر  # PATCH_PLATFORM_HOME_SUBMENUS_COMMANDS_V1 / PATCH_SERVER_STATUS_V1
 
 
 def _status_url() -> str:
@@ -1461,6 +1469,9 @@ async def _run_custom_home_btn(b: dict, msg: Message, state: FSMContext | None =
             await trial_request_start(msg, state, bot)
         else:
             await msg.answer("این دکمه در حال حاضر قابل اجرا نیست، دوباره تلاش کن.")
+    elif btype == "gw_pro":           # PATCH_GIVEAWAY_PRO_V1
+        from tenant.bots.giveaway.pro import mother_row, show_hub
+        await show_hub(msg, msg.bot, await mother_row(), msg.chat.id if getattr(msg, "chat", None) else msg.from_user.id)
     elif btype == "server_status":
         _su = _status_url()
         if not _su:
@@ -2767,6 +2778,8 @@ async def hcb_new_label(msg: Message, state: FSMContext):
                               callback_data=f"hcb:settype:trial_request:{bid}", style=ButtonStyle.PRIMARY)],
         [hx_button("📡 وضعیت سرورها (مینی‌اپ زنده)",
                               callback_data=f"hcb:settype:server_status:{bid}", style=ButtonStyle.SUCCESS)],
+        [hx_button("🎰 ربات قرعه‌کشیِ حرفه‌ای بات‌ساز",
+                              callback_data=f"hcb:settype:gw_pro:{bid}", style=ButtonStyle.SUCCESS)],
     ])
     await msg.answer("🎯 حالا نوع دکمه را انتخاب کن:", reply_markup=kb)
 
@@ -2805,6 +2818,8 @@ async def hcb_type_menu(cb: CallbackQuery):
                               callback_data=f"hcb:settype:trial_request:{bid}", style=ButtonStyle.PRIMARY)],
         [hx_button("📡 وضعیت سرورها (مینی‌اپ زنده)",
                               callback_data=f"hcb:settype:server_status:{bid}", style=ButtonStyle.SUCCESS)],
+        [hx_button("🎰 ربات قرعه‌کشیِ حرفه‌ای بات‌ساز",
+                              callback_data=f"hcb:settype:gw_pro:{bid}", style=ButtonStyle.SUCCESS)],
         [hx_button("⬅️ بازگشت", callback_data=f"hcb:pick:{bid}",
                               style=ButtonStyle.DANGER)],
     ])
@@ -2818,8 +2833,14 @@ async def hcb_set_type(cb: CallbackQuery, state: FSMContext):
         return
     _, _, btype, bid = cb.data.split(":")
     b = _hcb_find(bid)
-    if not b or btype not in ("text", "web_app", "url", "invite_campaign", "submenu", "trial_request", "server_status"):  # PATCH_PLATFORM_HOME_SUBMENUS_COMMANDS_2_V1
+    if not b or btype not in ("text", "web_app", "url", "invite_campaign", "submenu", "trial_request", "server_status", "gw_pro"):  # PATCH_PLATFORM_HOME_SUBMENUS_COMMANDS_2_V1
         await cb.answer("نامعتبر", show_alert=True)
+        return
+    if btype == "gw_pro":             # PATCH_GIVEAWAY_PRO_V1
+        b["type"] = btype
+        await _hcb_save()
+        await _hcb_show_menu(cb, b)
+        await cb.answer("✅ این دکمه حالا منویِ «قرعه‌کشیِ حرفه‌ای» (ساخت، مدیریت، پروفایل، زبان) را باز می‌کند.")
         return
     if btype == "server_status":      # PATCH_SERVER_STATUS_V1
         b["type"] = btype
@@ -3945,16 +3966,6 @@ def action_kb(field: str = "vpn_sales", back_cb: str | None = None) -> InlineKey
 
 
 def _action_kb_base(field: str = "vpn_sales") -> InlineKeyboardMarkup:
-    """PATCH_GIVEAWAY_PRO_V1 — عملکردِ «قرعه‌کشیِ حرفه‌ای» در همهٔ زمینه‌ها؛ درست قبل از ردیفِ آخر (بعداً تنظیم می‌کنم)."""
-    kb = _action_kb_base_inner(field)
-    rows = [list(r) for r in kb.inline_keyboard]
-    if field != "partner" and not any(b.callback_data == "act:gw_pro" for r in rows for b in r):
-        new = [hx_button("🎰 ربات قرعه‌کشیِ حرفه‌ای بات‌ساز", callback_data="act:gw_pro", style=ButtonStyle.SUCCESS)]
-        rows.insert(max(0, len(rows) - 1), new)
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def _action_kb_base_inner(field: str = "vpn_sales") -> InlineKeyboardMarkup:
     b = InlineKeyboardBuilder()
     if field == "general":
         # ربات عمومی (منوی آزاد): اقدام‌های غیر-VPN
@@ -4166,7 +4177,6 @@ ACTION_TITLE = {
     "funstat_search": "🔎 جست‌وجویِ Fun Stat",  # PATCH_FUNSTAT_BOT_V1
     "psel_buy": "🧩 خریدِ پنل", "psel_my": "🗂 پنل‌هایِ من",  # PATCH_PANEL_SELLER_V1
     "giveaway": "🎰 قرعه‌کشی‌هایِ فعال",  # PATCH_GIVEAWAY_BOT_V1
-    "gw_pro": "🎰 قرعه‌کشیِ حرفه‌ای",  # PATCH_GIVEAWAY_PRO_V1
     "giveaway_results": "🏆 نتایجِ قرعه‌کشی‌ها",  # PATCH_GIVEAWAY_BOT_V1
     "escrow": "🤝 معامله با واسطه (واسطه‌گری)",  # PATCH_ESCROW_BOT_KIND_V1
     "web_app": "🌐 مینی‌اپ (باز کردن لینک به‌صورت وب‌اپ)",
@@ -4378,7 +4388,8 @@ async def start(msg: Message, command: CommandObject, state: FSMContext, bot: Bo
     await state.clear()
     await ensure_home_loaded()
     await sweep_trials(bot)
-    referrer = fa_to_int(command.args) if command.args else None
+    _gw_args = command.args if (command.args or "").startswith("gw_") else None     # PATCH_GIVEAWAY_PRO_V1
+    referrer = fa_to_int(command.args) if (command.args and not _gw_args) else None
     if referrer == msg.from_user.id:
         referrer = None
     async with Session() as s:
@@ -4498,6 +4509,13 @@ async def start(msg: Message, command: CommandObject, state: FSMContext, bot: Bo
     # === PATCH_PARTNER_V18 ===
     # ورود به ویزاردِ چیدمانِ صفحهٔ اصلی برایِ رباتی که تازه از یک
     # رباتِ همکار خریده شده. رباتِ همکار لینکِ ?start=bld_<id> می‌دهد.
+    elif deep_arg.startswith("gw_"):          # PATCH_GIVEAWAY_PRO_V1: لینکِ قرعه‌کشیِ رباتِ مادر
+        try:
+            from tenant.bots.giveaway.pro import mother_row
+            from tenant.bots.giveaway.user import on_start as _gw_on_start
+            await _gw_on_start(msg, bot, await mother_row(), deep_arg, state)
+        except Exception:      # noqa: BLE001
+            logger.exception("باز کردنِ لینکِ قرعه‌کشی ناموفق بود")
     elif deep_arg.startswith("bld_"):
         _bid = deep_arg[len("bld_"):]
         if _bid.isdigit():

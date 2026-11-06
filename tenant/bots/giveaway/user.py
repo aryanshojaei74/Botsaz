@@ -40,8 +40,8 @@ class GwUserFSM(StatesGroup):
 
 
 async def _row(bot: Bot):
-    from tenant import get_bot_row
-    return await get_bot_row(bot)
+    from tenant.bots.giveaway.pro import _row as _pro_row      # PATCH_GIVEAWAY_PRO_V1: ربات مادر هم پشتیبانی می‌شود
+    return await _pro_row(bot)
 
 
 # ───────────────────────── فهرست و کارت ─────────────────────────

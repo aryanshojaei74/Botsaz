@@ -306,9 +306,47 @@ def card_text_pro(g: Giveaway, prizes, participants: int, lang: str = "fa", now:
 
 # ═══════════════════════════ دسترسی‌ها ═══════════════════════════
 
+MOTHER_TOKEN = "mother:platform"      # ردیفِ مجازیِ «ربات مادر» (status=platform؛ هیچ حلقه/رانری آن را به‌عنوان رباتِ مشتری برنمی‌دارد)
+
+
+def is_mother_bot(bot: Bot) -> bool:
+    from config import PLATFORM_BOT_TOKEN
+    return bool(PLATFORM_BOT_TOKEN) and getattr(bot, "token", None) == PLATFORM_BOT_TOKEN
+
+
+async def mother_row():
+    """ردیفِ مجازیِ رباتِ مادر (بات‌ساز اصلی) برایِ قرعه‌کشیِ حرفه‌ای؛ اگر نبود ساخته می‌شود."""
+    from config import PLATFORM_ADMIN_ID
+    from models import Bot as BotRow
+    async with Session() as s:
+        row = await s.scalar(select(BotRow).where(BotRow.token == MOTHER_TOKEN))
+        if row is None:
+            row = BotRow(owner_id=PLATFORM_ADMIN_ID, token=MOTHER_TOKEN, username="botsaz_mother", field="giveaway",
+                         plan="pro", status="platform")
+            s.add(row)
+            await s.commit()
+            await s.refresh(row)
+        return row
+
+
 async def _row(bot: Bot):
+    if is_mother_bot(bot):
+        return await mother_row()
     from tenant import get_bot_row
     return await get_bot_row(bot)
+
+
+def mother_routers() -> list[Router]:
+    """کپیِ مستقلِ هندلرهایِ شرکت (gw:) و منویِ حرفه‌ای (gwp:) برایِ نصب رویِ روترِ رباتِ مادر
+    (خودِ روترهایِ اصلی ممکن است قبلاً به tenant_router وصل شده باشند و aiogram اجازهٔ دو والد نمی‌دهد)."""
+    from tenant.bots.giveaway.user import giveaway_user_router
+    out = []
+    for src in (giveaway_user_router, giveaway_pro_router):
+        r = Router(name=src.name + "_mother")
+        for name, obs in src.observers.items():
+            r.observers[name].handlers.extend(obs.handlers)
+        out.append(r)
+    return out
 
 
 async def _can_create(row, uid: int) -> bool:
@@ -387,7 +425,11 @@ async def gwp_support(cb: CallbackQuery, bot: Bot):
         return await cb.answer()
     from tenant import get_setting, normalize_link_url
     lang = await get_lang(row.id, cb.from_user.id)
-    raw = (await get_setting(row.id, "support_contact", "")).strip()
+    if getattr(row, "status", "") == "platform":
+        from platform_bot import get_pset
+        raw = (await get_pset("support_contact", "")).strip()
+    else:
+        raw = (await get_setting(row.id, "support_contact", "")).strip()
     url = normalize_link_url(raw) if raw else None
     if not url:
         return await cb.answer(tr(lang, "support_none"), show_alert=True)

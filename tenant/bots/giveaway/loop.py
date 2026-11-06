@@ -26,6 +26,14 @@ _last_refresh: dict[int, float] = {}
 _unauth_logged: set[int] = set()
 
 
+def _token_for(row) -> str:
+    """PATCH_GIVEAWAY_PRO_V1: ردیفِ مجازیِ رباتِ مادر توکنِ واقعیِ پلتفرم را از env می‌گیرد."""
+    if row is not None and getattr(row, "status", "") == "platform":
+        from config import PLATFORM_BOT_TOKEN
+        return PLATFORM_BOT_TOKEN or ""
+    return getattr(row, "token", "") or ""
+
+
 async def end_due_once() -> int:
     """قرعه‌کشی‌هایِ فعالی که ends_at‌شان رسیده را پایان می‌دهد؛ تعدادِ انجام‌شده."""
     done = 0
@@ -33,9 +41,10 @@ async def end_due_once() -> int:
         try:
             async with Session() as s:
                 row = await s.get(BotRow, bot_id)
-            if row is None or not row.token or row.status != "active":
+            tok = _token_for(row)
+            if row is None or not tok or row.status not in ("active", "platform"):
                 continue
-            bot = Bot(token=row.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+            bot = Bot(token=tok, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
             try:
                 res = await A.finish_giveaway(bot, row, gid, notify_admin_chat=row.owner_id)
                 done += 1 if res.ok else 0
@@ -67,9 +76,10 @@ async def refresh_counters_once(now: float | None = None) -> int:
         try:
             async with Session() as s:
                 row = await s.get(BotRow, g.bot_id)
-            if row is None or not row.token:
+            tok = _token_for(row)
+            if row is None or not tok:
                 continue
-            bot = Bot(token=row.token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+            bot = Bot(token=tok, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
             try:
                 n += await A.refresh_posts(bot, g)
             finally:

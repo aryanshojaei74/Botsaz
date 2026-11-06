@@ -407,17 +407,62 @@ async def test_support_button(env):
     assert "https://t.me/helper" in cbs(c.message.edits[0][1])
 
 
-def test_action_registered_for_all_kinds():
-    a = tenant._SIMPLE_ACTIONS["gw_pro"]
-    assert a[2] is None and "قرعه" in a[0]
-
-
-def test_wizard_action_picker_offers_gw_pro_for_every_field():
+def test_not_offered_to_tenant_bots():
+    assert "gw_pro" not in tenant._SIMPLE_ACTIONS
     import platform_bot as PB
-    for f in ("vpn_sales", "virtual_service", "digital_shop", "booking", "giveaway", "general", "funstat", "escrow_bot", "community_mgmt"):
-        kbm = PB.action_kb(f, back_cb="x")
-        cs = [b.callback_data for r in kbm.inline_keyboard for b in r]
-        assert "act:gw_pro" in cs, f
-        assert cs[-1] == "x"
-    assert "act:gw_pro" not in [b.callback_data for r in PB.action_kb("partner").inline_keyboard for b in r]
-    assert PB.ACTION_TITLE["gw_pro"]
+    for f in ("vpn_sales", "virtual_service", "digital_shop", "booking", "giveaway", "general", "partner"):
+        cs = [b.callback_data for r in PB.action_kb(f).inline_keyboard for b in r]
+        assert "act:gw_pro" not in cs, f
+    assert "gw_pro" not in PB.ACTION_TITLE
+
+
+async def test_mother_row_and_routing(env, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "PLATFORM_BOT_TOKEN", "999:MOTHER")
+    row = await P.mother_row()
+    assert row.status == "platform" and row.token == P.MOTHER_TOKEN and row.id != BOT
+    assert (await P.mother_row()).id == row.id                 # idempotent
+    mb = SimpleNamespace(token="999:MOTHER")
+    assert P.is_mother_bot(mb) and not P.is_mother_bot(SimpleNamespace(token="5:T"))
+    assert (await P._row(mb)).id == row.id and (await USR._row(mb)).id == row.id
+    assert (await P._row(SimpleNamespace(token="5:T"))).id == BOT
+
+
+async def test_mother_loops_use_platform_token(env, monkeypatch):
+    import config
+    from tenant.bots.giveaway import loop as LOOP
+    monkeypatch.setattr(config, "PLATFORM_BOT_TOKEN", "999:MOTHER")
+    mrow = SimpleNamespace(status="platform", token=P.MOTHER_TOKEN)
+    assert LOOP._token_for(mrow) == "999:MOTHER" and LOOP._token_for(ROW) == "5:T" and LOOP._token_for(None) == ""
+
+
+def test_mother_routers_attach_without_conflict():
+    from aiogram import Router
+    parent = Router()
+    rs = P.mother_routers()
+    for r in rs:
+        parent.include_router(r)
+    parent2 = Router()
+    for r in P.mother_routers():              # دوباره هم کپیِ تازه می‌دهد
+        parent2.include_router(r)
+    assert sum(len(r.callback_query.handlers) for r in rs) > 20
+
+
+def test_platform_home_button_type_gw_pro():
+    import platform_bot as PB
+    assert "gw_pro" in PB._HCB_TYPE_LABEL
+
+
+async def test_platform_home_button_opens_hub_for_mother(env, monkeypatch):
+    import platform_bot as PB
+    out = []
+
+    async def answer(t, **kw):
+        out.append((t, kw.get("reply_markup")))
+
+    msg = SimpleNamespace(bot=FakeBot(), chat=SimpleNamespace(id=OWNER), from_user=SimpleNamespace(id=OWNER), answer=answer)
+    monkeypatch.setattr(PB, "PLATFORM_ADMIN_ID", OWNER, raising=False)
+    import config
+    monkeypatch.setattr(config, "PLATFORM_ADMIN_ID", OWNER)
+    await PB._run_custom_home_btn({"type": "gw_pro", "label": "ق"}, msg, None, None)
+    assert out and "gwp:new" in cbs(out[0][1]) and "gwp:lang" in cbs(out[0][1])
