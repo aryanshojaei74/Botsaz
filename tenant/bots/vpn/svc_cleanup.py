@@ -257,3 +257,51 @@ async def exp_all_do(cb: CallbackQuery, bot: Bot):
             lines.append(f"• {c:,}× {why}")
     text, kb = await render_list(row.id, 0)
     await cb.message.answer("\n".join(lines) + "\n\n" + text, reply_markup=kb)
+
+
+# ───────────── حذفِ خودکارِ سرویسِ منقضی N روز بعد از انقضا (PATCH_EXPIRED_DELETE_DAYS_V1) ─────────────
+# منطقِ حذف داخلِ vpn_expiry_loop (main_tenant.py) است؛ این‌جا فقط تنظیمِ مالک (کلیدِ expired_delete_days).
+# ۰ = رفتارِ قبلی (بعد از چند اخطار؛ پیش‌فرضِ ۳ اخطار + مهلتِ اطمینان).
+EXPDEL_OPTIONS = (0, 1, 2, 3, 7, 14, 30)
+EXPDEL_PREFIX = "🗑 حذفِ خودکارِ سرویسِ منقضی"
+
+
+def expdel_text(v: int) -> str:
+    return "پیش‌فرض (بعد از اخطارها)" if not v else f"{v} روز بعد از انقضا"
+
+
+async def expdel_label(bot_id: int) -> str:
+    from tenant import get_setting
+    try:
+        v = int(float(await get_setting(bot_id, "expired_delete_days", "0") or 0))
+    except (TypeError, ValueError):
+        v = 0
+    return f"{EXPDEL_PREFIX}: {expdel_text(v)}"
+
+
+async def expdel_cycle(cb, bot: Bot):
+    """هر بار زدن: خاموش(پیش‌فرض) ← ۱ ← ۲ ← ۳ ← ۷ ← ۱۴ ← ۳۰ روز. هر دو حالتِ شیشه‌ای و کیبوردی."""
+    from tenant.bots.vpn.vpn_admin import _owner as _o
+    from tenant import get_setting, set_setting
+    row = await _o(cb, bot)
+    if not row or row.field != "vpn_sales":
+        return
+    try:
+        cur = int(float(await get_setting(row.id, "expired_delete_days", "0") or 0))
+    except (TypeError, ValueError):
+        cur = 0
+    nxt = EXPDEL_OPTIONS[(EXPDEL_OPTIONS.index(cur) + 1) % len(EXPDEL_OPTIONS)] if cur in EXPDEL_OPTIONS else 2
+    await set_setting(row.id, "expired_delete_days", str(nxt))
+    note = (f"✅ از این به بعد سرویسِ منقضی‌شده {nxt} روز بعد از انقضا خودکار از پنل و ربات حذف می‌شود (اگر تمدید نشود)."
+            if nxt else "✅ حذفِ خودکار به حالتِ پیش‌فرض برگشت (بعد از ارسالِ اخطارها).")
+    await cb.answer(note[:190], show_alert=True)
+    try:
+        from tenant import tadm_sec_settings
+        await tadm_sec_settings(cb, bot)
+    except Exception:      # noqa: BLE001
+        logger.debug("expdel: تازه‌سازیِ منویِ تنظیمات ممکن نشد")
+
+
+@svc_cleanup_router.callback_query(F.data == "set:expdel")
+async def expdel_cb(cb: CallbackQuery, bot: Bot):
+    await expdel_cycle(cb, bot)

@@ -198,6 +198,7 @@ VPN_CALLBACKS = {
     "tadm:edit_guides", "tadm:cfgguide", "tadm:cfgnameprompt", "set:trial",
     "set:buy_onhold", "set:autorenew", "qrbg:menu", "tadm:groupsettings",   # PATCH_VPN_AUTORENEW_V1
     "vtl:menu", "set:cat_icons",   # PATCH_VPN_TITLES_IN_SETTINGS_V1
+    "set:expdel",   # PATCH_EXPIRED_DELETE_DAYS_V1
     "vrf:cfg",    # PATCH_VPN_REFUND_V1
     "mrn:cfg",    # PATCH_MANUAL_RENEW_V1
     "stk:menu",   # PATCH_STOCK_ALARM_V1
@@ -233,7 +234,7 @@ def test_vpn_menu_order_matches_previous_layout(vpn):
     assert out == ["tadm:homebtns", "tadm:btn_colors", "tadm:edit_guides", "tadm:cfgguide",
                    "tadm:cfgnameprompt", "set:trial", "gwname:menu", "set:buy_onhold", "set:autorenew",
                    "set:welcome", "dga:menu", "qrbg:menu", "pemj:menu:0",
-                   "set:homemenutext", "tadm:backup:menu", "tadm:groupsettings", "tadm:apikey", "miniapp:panel", "vtl:menu", "set:cat_icons", "vrf:cfg", "stk:menu", "mrn:cfg"]
+                   "set:homemenutext", "tadm:backup:menu", "tadm:groupsettings", "tadm:apikey", "miniapp:panel", "vtl:menu", "set:cat_icons", "set:expdel", "vrf:cfg", "stk:menu", "mrn:cfg"]
 
 
 def test_vpn_group_settings_only_on_paid_plans(vpn):

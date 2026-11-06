@@ -553,6 +553,11 @@ async def vpn_expiry_loop():
                 except (TypeError, ValueError):
                     warn_limit = 3
                 warn_limit = max(1, min(warn_limit, 10))
+                # === PATCH_EXPIRED_DELETE_DAYS_V1 === «حذفِ خودکارِ سرویسِ منقضی N روز بعد از انقضا» (قابلِ تنظیم؛ ۰/خالی = رفتارِ قبلی)
+                try:
+                    exp_del_days = max(0, min(int(float(await _setting_get(bot_id, "expired_delete_days", "0") or 0)), 90))
+                except (TypeError, ValueError):
+                    exp_del_days = 0
                 try:
                     for (aid, email, tg_id, title, last_notice, code,
                          vol_gb, p_days, exp_at, warn_cnt,
@@ -603,9 +608,10 @@ async def vpn_expiry_loop():
                         # را بلاک کرده باشد و اخطارها به مقصد نرسند، حساب
                         # تا ابد روی پنل نماند).
                         _hard_grace_ms = (warn_limit + GRACE_DAYS) * 86_400_000
-                        if exp > 0 and (
-                                (now_ms > exp and warn_cnt >= warn_limit)
-                                or now_ms > exp + _hard_grace_ms):
+                        _del_due = ((now_ms > exp and warn_cnt >= warn_limit) or now_ms > exp + _hard_grace_ms)
+                        if exp_del_days:                      # مهلتِ مشخصِ مالک: فقط «N روز بعد از انقضا» ملاک است
+                            _del_due = now_ms > exp + exp_del_days * 86_400_000
+                        if exp > 0 and _del_due:
                             try:
                                 await client.delete_account(email)
                             except Exception:
@@ -620,9 +626,11 @@ async def vpn_expiry_loop():
                                 "⛔️ سرویس شما به دلیل <b>عدم تمدید پس از انقضا</b> "
                                 "به‌صورت دائمی حذف شد.\n\n"
                                 f"{info}\n\n"
-                                f"<blockquote>⚠️ پس از انقضای سرویس، {warn_limit} "
-                                "اخطار برای شما ارسال شد و تمدیدی انجام نگرفت. "
-                                "این سرویس اکنون هم از پنل و هم از بخش "
+                                + (f"<blockquote>⚠️ {exp_del_days} روز از انقضای سرویس گذشت و تمدیدی انجام نگرفت. "
+                                   if exp_del_days else
+                                   f"<blockquote>⚠️ پس از انقضای سرویس، {warn_limit} "
+                                   "اخطار برای شما ارسال شد و تمدیدی انجام نگرفت. ")
+                                + "این سرویس اکنون هم از پنل و هم از بخش "
                                 "«کانفیگ‌های من» حذف شده و قابل بازیابی نیست. "
                                 "در صورت نیاز می‌توانید سرویس جدید ایجاد کنید.</blockquote>")
                             try:
@@ -702,12 +710,17 @@ async def vpn_expiry_loop():
                                 expired_warn = True
                                 _n = warn_cnt + 1
                                 _left = max(warn_limit - _n, 0)
+                                _days_gone = int(-days_left)
+                                _days_left_del = max(0, exp_del_days - _days_gone) if exp_del_days else 0
                                 warns.append(
                                     "⛔️ سرویس شما <b>منقضی شده</b> است.\n"
-                                    f"🔔 اخطار <b>{_n}</b> از <b>{warn_limit}</b>\n\n"
-                                    "<blockquote>‼️ "
-                                    + (f"تنها <b>{_left} اخطار</b> دیگر باقی مانده؛ پس از آن "
-                                       if _left else "این <b>آخرین اخطار</b> است؛ ")
+                                    + (f"⏳ <b>{_days_left_del} روز</b> تا حذفِ دائمی باقی مانده\n\n" if exp_del_days
+                                       else f"🔔 اخطار <b>{_n}</b> از <b>{warn_limit}</b>\n\n")
+                                    + "<blockquote>‼️ "
+                                    + ((f"اگر تا {_days_left_del} روز دیگر تمدید نکنی، " if _days_left_del else "این <b>آخرین فرصت</b> است؛ ")
+                                       if exp_del_days else
+                                       (f"تنها <b>{_left} اخطار</b> دیگر باقی مانده؛ پس از آن "
+                                        if _left else "این <b>آخرین اخطار</b> است؛ "))
                                     + "سرویس شما به‌صورت خودکار و دائمی از پنل و از بخش "
                                       "«کانفیگ‌های من» <b>حذف</b> می‌شود!</blockquote>")
                             elif days_left <= days_threshold_f:

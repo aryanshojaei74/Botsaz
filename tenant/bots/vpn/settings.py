@@ -61,6 +61,16 @@ async def _cat_icons_label(bot_id: int) -> str:
     return _CAT_ICONS_PREFIX + ": " + ("✅ روشن" if on else "⛔️ خاموش")
 
 
+async def _expdel_label(bot_id: int) -> str:
+    from tenant.bots.vpn.svc_cleanup import expdel_label
+    return await expdel_label(bot_id)
+
+
+async def _expdel(cb, bot):
+    from tenant.bots.vpn.svc_cleanup import expdel_cycle     # PATCH_EXPIRED_DELETE_DAYS_V1
+    await expdel_cycle(cb, bot)
+
+
 async def _cat_icons(cb, bot):
     from tenant import set_cat_icons
     await set_cat_icons(cb, bot)
@@ -153,6 +163,12 @@ register_settings_items(KIND, [
         label="💸 برگشت وجه سرویس", callback="vrf:cfg",
         handler=_refund_cfg, needs_state=True,
         after=("vtl:menu",),
+    ),
+    SettingsItem(
+        label="🗑 حذفِ خودکارِ سرویسِ منقضی: پیش‌فرض (بعد از اخطارها)", callback="set:expdel",
+        handler=_expdel, label_fn=_expdel_label, label_prefix="🗑 حذفِ خودکارِ سرویسِ منقضی",
+        visible=_has("PANEL_INTEGRATION"),
+        after=("set:cat_icons", "vtl:menu"),
     ),
     SettingsItem(
         label=_CAT_ICONS_PREFIX + ": ✅ روشن", callback="set:cat_icons",
