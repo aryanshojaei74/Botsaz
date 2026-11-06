@@ -218,6 +218,23 @@ def strip_panel_tag(text, panel_name: str | None = None) -> str:
     return _fix(t).strip() or t
 
 
+def strip_panel_prefix(product, panel_name: str | None) -> str:
+    """PATCH_TRUST_PRODUCT_SPEC_ONLY_V1 — وقتی قالبِ مالک خودش {panel} را جدا نشان می‌دهد، «🛒 سفارش» نباید دوباره نامِ پنل را
+    تکرار کند: «👑 رویال — نامحدود · ۳۰ روز» ⇒ «نامحدود · ۳۰ روز»، «🥇طلایی — +10 گیگ / +365 روز» ⇒ «+10 گیگ / +365 روز».
+    فقط وقتی پیشوندِ قبل از «—/-/·/:» همان نامِ پنل باشد و باقی‌مانده خالی نباشد."""
+    import re
+    t = "" if product is None else str(product)
+    pn = re.sub(r"[^\w\u0600-\u06FF]", "", panel_name or "", flags=re.UNICODE).lower()
+    if not pn:
+        return t
+    m = re.match(r"^\s*(.+?)\s*(?:—|–|-|·|:|\|)\s*(.+?)\s*$", t)
+    if not m:
+        return t
+    head = re.sub(r"[^\w\u0600-\u06FF]", "", m.group(1), flags=re.UNICODE).lower()
+    rest = m.group(2).strip()
+    return rest if (head and rest and head == pn) else t
+
+
 async def send_trust_channel_post(
     bot: Bot, bot_id: int, *,
     buyer_telegram_id: int | None,
@@ -282,6 +299,8 @@ async def send_trust_channel_post(
 # === PATCH_TRUST_CHANNEL_CUSTOM_TEXT_V1 ===
         custom_template = await get_setting(bot_id, "trust_channel_template", "")
         if custom_template:
+            if "{panel}" in custom_template:      # PATCH_TRUST_PRODUCT_SPEC_ONLY_V1: نامِ پنل در {panel} آمده؛ {product} فقط مشخصات
+                product_name = strip_panel_prefix(product_name, panel_name)
             # === PATCH_TRUST_CHANNEL_BIDI_V1 === هر مقدار ایزوله می‌شود
             text = (custom_template
                     .replace("{buyer}", _iso(user_order_txt))
