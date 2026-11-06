@@ -1471,7 +1471,7 @@ async def _run_custom_home_btn(b: dict, msg: Message, state: FSMContext | None =
             await msg.answer("این دکمه در حال حاضر قابل اجرا نیست، دوباره تلاش کن.")
     elif btype == "gw_pro":           # PATCH_GIVEAWAY_PRO_V1
         from tenant.bots.giveaway.pro import mother_row, show_hub
-        await show_hub(msg, msg.bot, await mother_row(), msg.chat.id if getattr(msg, "chat", None) else msg.from_user.id)
+        await show_hub(msg, msg.bot, await mother_row(), msg.chat.id)      # چتِ خصوصی: chat.id == آیدیِ کاربر (نه from_user: msg ممکن است پیامِ خودِ ربات باشد)
     elif btype == "server_status":
         _su = _status_url()
         if not _su:
