@@ -4041,6 +4041,15 @@ GATEWAY_LABELS: dict[str, tuple[str, str]] = {
 }
 
 
+# === PATCH_BLUPAL_WALLET_KEYBOARD_FIX_V1 === برچسبِ پیش‌فرضِ دکمهٔ «شارژ کیف پول» که در show_wallet ساخته می‌شود.
+# در حالتِ کیبوردی فقط متنِ برچسب می‌رسد؛ اگر dispatcher فقط «💳 شارژ با <نام>» را بشناسد، این برچسب‌هایِ طولانی بی‌واکنش می‌مانند
+# (بلوپال/هوش‌پی). هر دو مکان از همین ثابت استفاده می‌کنند تا از هم جدا نشوند.
+WALLET_FULL_LABELS: dict[str, str] = {
+    "blupal":   "💳 شارژ با بلوپال (کارت‌به‌کارت خودکار)",
+    "hooshpay": "💳 شارژ با هوش‌پی (کارت‌به‌کارت آنی)",
+}
+
+
 def is_default_word(txt: str) -> bool:
     """کلمهٔ «برگرد به پیش‌فرض» با هر املایی (فاصله/نیم‌فاصله/ی عربی/حروف بزرگ). قبلاً فقط چهار شکلِ دقیق قبول می‌شد و
     «پیش فرض» یا «پیش‌ فرض» به‌عنوانِ خودِ اسمِ دکمه ذخیره می‌شد."""
@@ -7904,12 +7913,14 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         await upu_start(_FakeCb(msg), bot, state)
         return
     # === PATCH_HOOSHPAY_GATEWAY_V1 ===
-    if msg.text and msg.text in await gw_label_set(bot_id, "hooshpay", "💳 شارژ با"):
+    if msg.text and (msg.text == WALLET_FULL_LABELS["hooshpay"]
+                     or msg.text in await gw_label_set(bot_id, "hooshpay", "💳 شارژ با")):
         from tenant.gateways.hooshpay_admin import hou_start
         await hou_start(_FakeCb(msg), bot, state)
         return
     # === PATCH_BLUPAL_TENANT_V1 ===
-    if msg.text and msg.text in await gw_label_set(bot_id, "blupal", "💳 شارژ با"):
+    if msg.text and (msg.text == WALLET_FULL_LABELS["blupal"]
+                     or msg.text in await gw_label_set(bot_id, "blupal", "💳 شارژ با")):
         from tenant.gateways.blupal_admin import bpu_start
         await bpu_start(_FakeCb(msg), bot, state)
         return
@@ -8388,7 +8399,7 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
         from tenant.gateways.hooshpay import is_available as _hp_ok3
         if await _hp_ok3(bot_id) and await get_setting(bot_id, "hooshpay_show_wallet", "1") == "1":
             from tenant.gateways.gateway_layout import gw_custom_label as _gwcl_hp
-            options.append((await _gwcl_hp(bot_id, "hooshpay", "💳 شارژ با هوش‌پی (کارت‌به‌کارت آنی)"),
+            options.append((await _gwcl_hp(bot_id, "hooshpay", WALLET_FULL_LABELS["hooshpay"]),
                             "w:hooshpay", succ))
     except Exception:
         logger.exception("بررسیِ دسترسیِ هوش‌پی ناموفق بود")
@@ -8397,7 +8408,7 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
         from tenant.gateways.blupal import is_available as _bp_ok3
         if await _bp_ok3(bot_id) and (_bp_repl_w or await get_setting(bot_id, "blupal_show_wallet", "1") == "1"):
             from tenant.gateways.gateway_layout import gw_custom_label as _gwcl_bp
-            options.append((await _gwcl_bp(bot_id, "blupal", "💳 شارژ با بلوپال (کارت‌به‌کارت خودکار)"),
+            options.append((await _gwcl_bp(bot_id, "blupal", WALLET_FULL_LABELS["blupal"]),
                             "w:blupal", succ))
     except Exception:
         logger.exception("بررسیِ دسترسیِ بلوپال ناموفق بود")
@@ -14071,7 +14082,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "467"
+BUILD_ID = "468"
 
 
 @tenant_router.message(Command("version"))

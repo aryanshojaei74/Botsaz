@@ -743,3 +743,19 @@ async def test_sheba_in_payer_field_does_not_block_the_user(env, monkeypatch):
     monkeypatch.setattr(BP, "get_invoice", _sheba)
     ok, _m, _c = await BP.settle_charge(5, "bpk9")
     assert ok and await _blocked(maker) == (False, 100_000.0) and sent == []
+
+
+# === PATCH_BLUPAL_WALLET_KEYBOARD_FIX_V1 ===
+def test_wallet_full_labels_are_recognised_by_keyboard_dispatcher():
+    """تیکت #916: در حالتِ کیبوردی دکمهٔ «💳 شارژ با بلوپال (کارت‌به‌کارت خودکار)» بی‌واکنش بود، چون dispatcher فقط
+    «💳 شارژ با بلوپال» را می‌شناخت. هم دکمه و هم dispatcher باید از یک ثابت استفاده کنند."""
+    import inspect
+    import tenant
+    for key in ("blupal", "hooshpay"):
+        lab = tenant.WALLET_FULL_LABELS[key]
+        short = f"💳 شارژ با {tenant.GATEWAY_LABELS[key][0]}"
+        assert lab.startswith(short) and lab != short
+    src = inspect.getsource(tenant)
+    for key in ("blupal", "hooshpay"):
+        ref = f'WALLET_FULL_LABELS["{key}"]'
+        assert src.count(ref) == 2, key          # یک‌بار ساختِ دکمه، یک‌بار تشخیصِ متن
