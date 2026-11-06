@@ -2513,15 +2513,35 @@ def _strip_broken_webapp_buttons_reply(
     return ReplyKeyboardMarkup(keyboard=new_rows, resize_keyboard=True)
 
 
-def _webapp_url(b) -> str | None:
-    """آدرس مینی‌اپ (Web App) ذخیره‌شده در config دکمه — اگر action دکمه web_app باشد."""
+def _is_tg_link(url: str) -> bool:
+    """لینکِ خودِ تلگرام (t.me / telegram.me)؛ مثلاً لینکِ مینی‌اپِ یک ربات «https://t.me/bot?startapp»."""
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(url).netloc or "").lower().split(":")[0]
+    except Exception:      # noqa: BLE001
+        return False
+    return host in ("t.me", "telegram.me", "telegram.dog")
+
+
+def _webapp_raw_url(b) -> str | None:
     if getattr(b, "action", None) != "web_app" or not getattr(b, "config", None):
         return None
     try:
         url = ((json.loads(b.config) or {}).get("webapp_url") or "").strip()
     except Exception:
         return None
-    if not _is_valid_webapp_url(url):
+    return url if _is_valid_webapp_url(url) else None
+
+
+def _webapp_url(b) -> str | None:
+    """آدرس مینی‌اپ (Web App) ذخیره‌شده در config دکمه — اگر action دکمه web_app باشد.
+
+    === PATCH_WEBAPP_TME_LINK_V1 === (Weirdnet: «دکمهٔ مینی‌اپ ساختم ولی در منو نشان نمی‌دهد»)
+    لینکِ t.me (مثلاً مینی‌اپِ خودِ ربات: https://t.me/Bot?startapp) را تلگرام برایِ دکمهٔ web_app **در کیبوردِ پایین**
+    رد می‌کند (BUTTON_URL_INVALID) و محافظِ ارسال دکمه را بی‌صدا برمی‌داشت. برایِ این لینک‌ها دکمه به‌صورتِ دکمهٔ متنیِ معمولی
+    می‌ماند و با زدنش، دکمهٔ لینکِ «باز کردن» فرستاده می‌شود (نگاه کن به هندلرِ action == "web_app")."""
+    url = _webapp_raw_url(b)
+    if url and _is_tg_link(url):
         return None
     return url
 
@@ -6866,7 +6886,16 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
                              reply_markup=await inline_back_kb(bot_id))
     elif action == "web_app":
         _wa = _webapp_url(btn)
-        if _wa:
+        _tg = _webapp_raw_url(btn)
+        if not _wa and _tg and _is_tg_link(_tg):      # PATCH_WEBAPP_TME_LINK_V1: لینکِ t.me ⇒ دکمهٔ لینکِ معمولی (مینی‌اپِ ربات با startapp)
+            rows = [[InlineKeyboardButton(text=f"🌐 باز کردن {btn.label}", url=_tg, style=ButtonStyle.SUCCESS)]]
+            br = await inline_back_row(bot_id)
+            if br:
+                rows.append(br)
+            kb = InlineKeyboardMarkup(inline_keyboard=rows)
+            kb = await _attach_support(bot_id, kb, support_enabled, contact=support_contact, mb=btn)
+            await msg.answer((action_header or "برای باز کردن مینی‌اپ روی دکمهٔ زیر بزنید 👇"), reply_markup=kb)
+        elif _wa:
             rows = [[InlineKeyboardButton(text=f"🌐 باز کردن {btn.label}",
                                           web_app=WebAppInfo(url=_wa))]]
             br = await inline_back_row(bot_id)
@@ -14028,7 +14057,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "457"
+BUILD_ID = "458"
 
 
 @tenant_router.message(Command("version"))
