@@ -57,6 +57,7 @@ logger = _get_logger(__name__)
 print = _PrintLogger(__name__)  # هدایتِ print()های موجود در این فایل به logging
 
 smm_router = Router()
+from tenant.bots.virtual_service import fragapi as _fapi   # PATCH_FRAGAPI_V1
 from aiogram.types import LinkPreviewOptions as _LPO
 _LPO_ON = _LPO(is_disabled=False)   # PATCH_NO_LINK_PREVIEW_V1: پیش‌نمایشِ لینک فقط برایِ گیفتِ NFT/سفارشی
 # === PATCH_VSO_ALL_KINDS_V1 === روترِ «راه‌اندازیِ حرفه‌ایِ ورود» برایِ همهٔ انواعِ ربات (VPN هم) ثبت می‌شود
@@ -295,6 +296,7 @@ class SmmFSM(StatesGroup):
     stars_margin_in = State()       # ادمین درصدِ سودِ نرخِ خودکار را می‌نویسد
     stars_min_in = State()          # ادمین حداقلِ تعداد را می‌نویسد
     stars_max_in = State()          # ادمین حداکثرِ تعداد را می‌نویسد
+    fragapi_key_in = State()        # === PATCH_FRAGAPI_V1 === توکنِ JWTِ fragment-api.com
     tgtools_key_in = State()        # === PATCH_TGTOOLS_STARS_V1 === مالک کلیدِ API سایتِ TGTools را می‌فرستد
     # === PATCH_STAR_REACTION_V1 ===
     srx_qty_in = State()            # مشتری تعدادِ ری‌اکشنِ استارزی را می‌نویسد
@@ -2594,6 +2596,9 @@ async def smm_panels_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     # === PATCH_FRAGMENT_WALLET_V1 ===
     rows.append([InlineKeyboardButton(text="🔗 اتصال به فرگمنت (استارزِ خودکار)",
                                       callback_data="smm:fragment:menu")])
+    # === PATCH_FRAGAPI_V1 ===
+    rows.append([InlineKeyboardButton(text="🔗 اتصال به Fragment API (استارز/پرمیومِ خودکار)",
+                                      callback_data="fapi:menu")])
     # === PATCH_TGTOOLS_AUTO_SECTION_V1 === TGTools هم «اتصالِ خودکار» است، نه دستی
     rows.append([InlineKeyboardButton(text="🤖 اتصال به TGTools (استارزِ خودکار)",
                                       callback_data="ssl:tgt")])
@@ -16365,6 +16370,28 @@ async def prm_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
         order_id = order.id
     await vsd_clear(state)   # PATCH_VS_DISCOUNT_V1
 
+    # === PATCH_FRAGAPI_V1 === پرمیومِ خودکار با Fragment API (اگر TGTools-premium روشن نیست)
+    if not await _tgt_premium_on(row.id) and await _fapi.premium_on(row.id):
+        async with Session() as s:
+            o = await s.get(GiftOrder, order_id)
+            if o is not None and await _is_foreign(o, bot):
+                o = None
+            o.status = "awaiting_admin"
+            await s.commit()
+        await cb.answer("✅ پرداخت شد")
+        await cb.message.answer(
+            f"✅ سفارش شما با موفقیت ثبت شد! 🎉\n\nپرمیوم در حالِ فعال‌سازی است؛ تا چند دقیقهٔ دیگر خبرت می‌کنم.\n"
+            f"🔖 کد پیگیری: <code>{trk}</code>", parse_mode="HTML")
+        from tenant import _notify_admins
+        await _notify_admins(
+            bot, row,
+            f"🌟 سفارشِ پرمیوم (خریدِ خودکار با Fragment API) — #{await order_no(GiftOrder, order_id)}\n"
+            f"پلن: {months} ماهه\n💰 {price:,} تومان\n🎯 مقصد: {dest_label}\n🔖 کد: {trk}\n\n"
+            "خریدِ خودکار شروع شد؛ نتیجه با پیامِ جداگانه می‌آید. اگر خودت می‌خواهی دستی هدیه بدهی، "
+            "اول در داشبوردِ fragment-api.com مطمئن شو سفارش انجام نشده.", await _prm_admin_kb(order_id))
+        _fapi.spawn(bot, row, order_id, "premium")
+        return
+
     # === PATCH_TGTOOLS_PREMIUM_V1 === خریدِ خودکار با TGTools (اگر روشن و کلید ثبت باشد)
     if await _tgt_premium_on(row.id):
         async with Session() as s:
@@ -16559,6 +16586,7 @@ async def _tgt_premium_price(bot_id: int, months: int, margin_pct: float) -> int
 
 
 async def _prm_admin_kb(order_id: int) -> InlineKeyboardMarkup:
+    _o = None
     rows = [[
         InlineKeyboardButton(text="✅ انجام شد", callback_data=f"prm:done:{order_id}", style=ButtonStyle.SUCCESS),
         InlineKeyboardButton(text="❌ رد", callback_data=f"prm:reject:{order_id}", style=ButtonStyle.DANGER),
@@ -16571,6 +16599,12 @@ async def _prm_admin_kb(order_id: int) -> InlineKeyboardMarkup:
                                               style=ButtonStyle.PRIMARY)])
     except Exception:
         logger.exception("tgtools: ساختِ دکمهٔ پرمیوم ناموفق")
+    try:   # PATCH_FRAGAPI_V1
+        if _o and await _get_setting(_o.bot_id, "fragapi_jwt", ""):
+            rows.append([InlineKeyboardButton(text="🔗 خرید با Fragment API", callback_data=f"fapi:go:p:{order_id}",
+                                              style=ButtonStyle.PRIMARY)])
+    except Exception:
+        logger.exception("fragapi: ساختِ دکمهٔ پرمیوم ناموفق")
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -18804,6 +18838,13 @@ async def _stars_admin_kb(order_id: int) -> InlineKeyboardMarkup:
                                               style=ButtonStyle.PRIMARY)])
     except Exception:
         logger.exception("tgtools: ساختِ دکمهٔ ارسال خودکار ناموفق")
+    # === PATCH_FRAGAPI_V1 === دکمهٔ ارسال با Fragment API وقتی توکن ثبت شده
+    try:
+        if _o and await _get_setting(_o.bot_id, "fragapi_jwt", ""):
+            rows.append([InlineKeyboardButton(text="🔗 ارسال خودکار با Fragment API",
+                                              callback_data=f"fapi:go:s:{order_id}", style=ButtonStyle.PRIMARY)])
+    except Exception:
+        logger.exception("fragapi: ساختِ دکمهٔ ارسال ناموفق")
     # === PATCH_FRAGMENT_AUTO_STARS_V1 === دکمهٔ ارسال با ولتِ فرگمنت وقتی کاملاً وصل است
     try:
         if _o and await _fg_wallet(_o.bot_id) is not None:
@@ -18916,6 +18957,8 @@ async def place_stars_order(bot: Bot, row, *, buyer_tg_id: int, buyer_name: str,
         if ((await _get_setting(row.id, "tgtools_auto", "0")) == "1"
                 and await _get_setting(row.id, "tgtools_api_key", "")):
             _tgt_spawn(bot, row, order_id)
+        elif await _fapi.auto_on(row.id):   # PATCH_FRAGAPI_V1 — بعد از TGTools، Fragment API
+            _fapi.spawn(bot, row, order_id, "stars")
         elif await _fg_auto_on(row.id):   # PATCH_FRAGMENT_AUTO_STARS_V1 — اگر TGTools خودکار نیست، ولتِ فرگمنت
             _fg_spawn(bot, row, order_id)
     except Exception:
@@ -21506,3 +21549,6 @@ async def usr_vs_orders_search_run(msg: Message, bot: Bot, state: FSMContext):
         return
     text, kb = await user_vs_orders_content(row.id, int(uid), 0, q)
     await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+_fapi.register(smm_router)   # PATCH_FRAGAPI_V1 — هندلرهایِ Fragment API
