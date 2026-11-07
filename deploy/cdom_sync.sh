@@ -8,6 +8,10 @@
 #   ۳) به map‌ِ stream اضافه شود (فایلِ جدا: /etc/nginx/botsaz-cdom-sni.map که یک‌بار include می‌شود)
 # اگر stream وجود نداشت، سرورِ https مستقیم رویِ 443 گوش می‌دهد.
 #
+# PATCH_CDOM_CLOUDFLARE_V1: دامنه‌ای که پشتِ پراکسیِ کلودفلر (ابرِ نارنجی) است هم پذیرفته می‌شود: گواهی با HTTP-01 تلاش
+# می‌شود (اگر نشد، تا ۶ ساعت دوباره تلاش نمی‌شود تا سقفِ Let's Encrypt پر نشود) و پورتِ ۸۰ برایِ آن‌ها ریدایرکت نمی‌کند
+# (حالتِ Flexible کلودفلر در حلقهٔ ریدایرکت نیفتد). حالتِ SSLِ کلودفلر «Full (strict)» توصیه می‌شود.
+#
 #   bash deploy/cdom_sync.sh            # همگام‌سازیِ همه
 #   bash deploy/cdom_sync.sh --dry-run  # فقط گزارش
 set -uo pipefail
@@ -25,6 +29,7 @@ else
     AVAIL=/etc/nginx/conf.d; ENABLED=/etc/nginx/conf.d
 fi
 WEBROOT=/var/www/botsaz-acme
+CF_STATE=/var/lib/botsaz-cdom-cf      # PATCH_CDOM_CLOUDFLARE_V1 — زمانِ آخرین شکستِ گواهی برایِ دامنه‌هایِ پشتِ کلودفلر
 log() { echo "[cdom $(date '+%F %T')] $*"; }
 
 command -v nginx >/dev/null || { log "nginx نصب نیست"; exit 1; }
@@ -64,14 +69,25 @@ PYEOF
 )
 log "دامنه‌هایِ تأییدشده: ${DOMAINS[*]:-هیچ}"
 
-render_conf() {   # $1=domain $2=with_ssl(0/1) → stdout
+is_cf() {   # همهٔ IPهایِ ورودی از رنجِ کلودفلر باشند ⇒ 0
+    [ $# -gt 0 ] || return 1
+    (cd "$APP" && "$PY" - "$@" <<'PYEOF' >/dev/null 2>&1
+import sys
+from tenant.gateways.custom_domain import _is_cloudflare
+ips = [a for a in sys.argv[1:] if a]
+sys.exit(0 if ips and all(_is_cloudflare(i) for i in ips) else 1)
+PYEOF
+    )
+}
+
+render_conf() {   # $1=domain $2=with_ssl(0/1) $3=cloudflare(0/1) → stdout
     local d="$1"
     echo "# ساختهٔ خودکارِ deploy/cdom_sync.sh — دستی ویرایش نکن"
     echo "server {"
     echo "    listen 80; listen [::]:80;"
     echo "    server_name $d;"
     echo "    location /.well-known/acme-challenge/ { root $WEBROOT; }"
-    if [ "$2" = 1 ]; then
+    if [ "$2" = 1 ] && [ "${3:-0}" != 1 ]; then
         echo "    location / { return 301 https://\$host\$request_uri; }"
     else
         echo "    location / { proxy_pass http://$UPSTREAM; include /etc/nginx/proxy_params; proxy_set_header X-Forwarded-Host \$host; }"
@@ -113,22 +129,35 @@ LIVE=()
 for d in "${DOMAINS[@]}"; do
     ips=$(getent ahosts "$d" | awk '{print $1}' | sort -u | tr '\n' ' ')
     match=0; for ip in $ips; do case " $SERVER_IPS " in *" $ip "*) match=1;; esac; done
-    if [ $match -eq 0 ]; then log "⏭ $d — DNS به این سرور نیست (${ips:-بدونِ رکورد})"; continue; fi
+    cf=0
+    if [ $match -eq 0 ] && is_cf $ips; then cf=1; fi
+    if [ $match -eq 0 ] && [ $cf -eq 0 ]; then log "⏭ $d — DNS به این سرور نیست (${ips:-بدونِ رکورد})"; continue; fi
+    [ $cf -eq 1 ] && log "☁️ $d — پشتِ پراکسیِ کلودفلر (حالتِ SSL: Full (strict) توصیه می‌شود)"
     cert="/etc/letsencrypt/live/$d/fullchain.pem"
     if [ $DRY -eq 1 ]; then
         [ -f "$cert" ] && log "✅ $d — گواهی دارد" || log "🛠 $d — گواهی باید گرفته شود"
         LIVE+=("$d"); continue
     fi
+    if [ ! -f "$cert" ] && [ $cf -eq 1 ] && [ -f "$CF_STATE/$d.fail" ] && find "$CF_STATE/$d.fail" -mmin -360 2>/dev/null | grep -q .; then
+        log "⏳ $d — گواهی (کلودفلر) اخیراً ناموفق بود؛ تا ۶ ساعتِ بعد دوباره تلاش نمی‌شود (برایِ تلاشِ فوری: rm $CF_STATE/$d.fail)"
+        continue
+    fi
     if [ ! -f "$cert" ]; then
-        render_conf "$d" 0 | put_file "$AVAIL/${PREFIX}$d.conf"; enable_conf "$d"
+        render_conf "$d" 0 "$cf" | put_file "$AVAIL/${PREFIX}$d.conf"; enable_conf "$d"
         reload_nginx || { rm -f "$AVAIL/${PREFIX}$d.conf" "$ENABLED/${PREFIX}$d.conf"; continue; }
         if ! certbot certonly --webroot -w "$WEBROOT" -d "$d" --non-interactive --agree-tos \
                 --register-unsafely-without-email --keep-until-expiring >/tmp/cdom-certbot.log 2>&1; then
-            log "❌ $d — گرفتنِ گواهی ناموفق:"; tail -5 /tmp/cdom-certbot.log; continue
+            log "❌ $d — گرفتنِ گواهی ناموفق:"; tail -5 /tmp/cdom-certbot.log
+            if [ $cf -eq 1 ]; then
+                mkdir -p "$CF_STATE" && touch "$CF_STATE/$d.fail"
+                log "ℹ️ $d پشتِ کلودفلر است؛ اگر مشتری «Always Use HTTPS» را روشن کرده یا حالتِ SSL درست نیست، ابرِ رکورد را خاکستری (DNS only) کند."
+            fi
+            continue
         fi
+        rm -f "$CF_STATE/$d.fail" 2>/dev/null
         log "🔐 $d — گواهی گرفته شد"
     fi
-    render_conf "$d" 1 | put_file "$AVAIL/${PREFIX}$d.conf"; enable_conf "$d"
+    render_conf "$d" 1 "$cf" | put_file "$AVAIL/${PREFIX}$d.conf"; enable_conf "$d"
     LIVE+=("$d")
 done
 

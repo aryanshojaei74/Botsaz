@@ -905,8 +905,10 @@ def probe_report_text(domain: str, r: dict) -> str:
     if not ips:
         lines.append("❌ <b>DNS:</b> این دامنه هیچ رکوردِ A/AAAA ندارد یا هنوز منتشر نشده.")
     elif r.get("cloudflare"):
-        lines.append("☁️ <b>DNS:</b> دامنه هنوز <b>پشتِ پراکسیِ کلودفلر</b> است (ابرِ نارنجی). در کلودفلر ابرِ رکوردِ A را "
-                     "<b>خاکستری (DNS only)</b> کن؛ وگرنه گواهیِ SSL صادر نمی‌شود. IPهایِ دیده‌شده: <code>" + "</code> <code>".join(ips[:3]) + "</code>")
+        lines.append("☁️ <b>DNS:</b> دامنه <b>پشتِ پراکسیِ کلودفلر</b> است (ابرِ نارنجی). این حالت هم پشتیبانی می‌شود: گواهی خودکار "
+                     "(هر ~۱۰ دقیقه) گرفته می‌شود و حالتِ SSLِ کلودفلر را روی <b>Full (strict)</b> بگذار. اگر بعد از ۳۰ دقیقه گواهی صادر نشد "
+                     "(مثلاً «Always Use HTTPS» یا قانونِ ریدایرکت روشن است)، ابرِ رکوردِ A را <b>خاکستری (DNS only)</b> کن. "
+                     "IPهایِ دیده‌شده: <code>" + "</code> <code>".join(ips[:3]) + "</code>")
     elif srv and not (set(ips) & set(srv)):
         lines.append("❌ <b>DNS:</b> رکوردِ دامنه به <code>" + "</code> <code>".join(ips[:3]) + "</code> اشاره دارد ولی آی‌پیِ سرور "
                      "<code>" + "</code> <code>".join(srv[:3]) + "</code> است. رکوردِ A را اصلاح کن (اگر رکوردِ AAAA هم داری، پاکش کن).")
