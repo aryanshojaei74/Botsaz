@@ -192,6 +192,6 @@ def test_notes_have_settings_and_are_shown_to_customer():
     import pathlib
     root = pathlib.Path(__file__).resolve().parent.parent / "tenant" / "bots" / "panel_seller"
     u = (root / "user.py").read_text(encoding="utf-8")
-    assert u.count("psel_note_delivery") == 2 and u.count("psel_note_invoice") == 1       # تحویلِ خرید + تحویلِ تست، و پیش‌فاکتور
+    assert u.count("psel_note_delivery") == 3 and u.count("psel_note_invoice") == 1       # تحویلِ خرید + تحویلِ تست + تأییدِ سفارشِ دستی (PATCH_PSEL_MANUAL_SALE_V1)، و پیش‌فاکتور
     from tenant.bots.panel_seller import admin as A
     assert {v[0] for v in A.NOTE_KEYS.values()} == {"psel_note_invoice", "psel_note_delivery"}
