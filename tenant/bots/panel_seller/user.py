@@ -338,14 +338,30 @@ async def disc_in(msg: Message, bot: Bot, state: FSMContext):
                                                        back_row("psel:buy")))
 
 
+ROLE_NOT_CHOSEN_MARK = "نقشِ ادمین در این پنل مشخص نیست"      # متنِ service.role_for
+
+
 async def tell_owner_failure(bot: Bot, row, buyer_tg: int, what: str, error: str | None) -> None:
     """PATCH_PSEL_OWNER_FAIL_NOTICE_V1 — وقتی ساخت/تمدیدِ پنل روی خودِ پنل خطا می‌دهد، مشتری فقط پیامِ کلی می‌بیند؛ علتِ دقیق
-    (مثلاً دسترسیِ sudo، آدرس/پورت، ورژنِ API) برایِ مالک و ادمین‌ها فرستاده می‌شود (حداکثر هر ۱۰ دقیقه یک‌بار برایِ هر ربات)."""
+    (مثلاً دسترسیِ sudo، آدرس/پورت، ورژنِ API) برایِ مالک و ادمین‌ها فرستاده می‌شود (حداکثر هر ۱۰ دقیقه یک‌بار برایِ هر ربات).
+    PATCH_PSEL_ROLE_BUTTON_V1: اگر علت «نقشِ ادمین انتخاب نشده» (پاسارگاردِ جدید) بود، به‌جایِ فهرستِ عمومیِ «بررسی کن…»، توضیحِ دقیق + دکمهٔ
+    مستقیمِ «🛡 انتخاب نقشِ ادمین» می‌آید."""
     try:
         from log_throttle import should_log
-        if not should_log(f"psel_fail:{row.id}", 600):
+        needs_role = ROLE_NOT_CHOSEN_MARK in (error or "")
+        if not should_log(f"psel_{'role' if needs_role else 'fail'}:{row.id}", 600):
             return
         from tenant import _notify_admins
+        if needs_role:
+            await _notify_admins(bot, row, (
+                f"⚠️ <b>{esc(what)} برایِ مشتری <code>{buyer_tg}</code> انجام نشد: نقشِ ادمین انتخاب نشده</b>\n\n"
+                "اتصال به پنل برقرار است؛ ولی پاسارگاردِ جدید برایِ هر ادمین یک «نقش» می‌خواهد و ربات خودش نمی‌تواند حدس بزند "
+                "کدام را بدهد.\n\n"
+                f"🔎 <code>{esc((error or '')[:300])}</code>\n\n"
+                "👇 روی دکمهٔ زیر بزن، پنلت را انتخاب کن و نقشی را بگذار که فقط کاربرانِ خودِ مشتری را مدیریت می‌کند "
+                "(معمولاً <b>Operator</b>؛ کم‌دسترسی‌تر از Administrator). بعد دوباره تست/خرید را امتحان کن."),
+                kb=kb([btn("🛡 انتخاب نقشِ ادمین", "psel:role", style=ButtonStyle.SUCCESS)]))
+            return
         await _notify_admins(bot, row, (
             f"⚠️ <b>{esc(what)} برایِ مشتری <code>{buyer_tg}</code> روی پنل ناموفق بود</b>\n\n"
             f"🔎 علتِ پنل:\n<code>{esc((error or 'پاسخی از پنل نیامد')[:300])}</code>\n\n"
