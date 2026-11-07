@@ -130,3 +130,9 @@ async def test_memo_prompt_is_deleted_after_answer():
         async def edit_reply_markup(self, **k): edited.append(1)
     await S._ton_drop_memo_prompt(Bad(), 5, {"ton_memo_prompt_id": 1}, M2())  # خطا هیچ‌وقت بالا نمی‌آید؛ دکمه‌ها برداشته می‌شوند
     assert edited == [1]
+
+
+def test_addprod_hint_wired():
+    from tenant.bots.virtual_service import smm as S
+    src = inspect.getsource(S.smm_products_addpick)
+    assert "PATCH_ADDPROD_HINT_V1" in src and "فروشِ استارزِ تلگرام" in src and "_fg_wallet" in src and "_fapi.token_of" in src

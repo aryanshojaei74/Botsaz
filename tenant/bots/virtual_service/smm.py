@@ -1374,7 +1374,18 @@ async def smm_products_addpick(cb: CallbackQuery, bot: Bot):
     for p in panels:
         rows.append([InlineKeyboardButton(text=f"🏢 {p.name}", callback_data=f"smm:panel:pick:{p.id}")])
     if not rows:
-        await cb.answer("هنوز هیچ ارائه‌دهنده‌ای وصل نکردی — اول از «ارائه‌دهندگان» یکی اضافه کن.", show_alert=True)
+        # PATCH_ADDPROD_HINT_V1 (گزارشِ سجاد): فرگمنت/TGTools/Fragment API «تحویلِ خودکار» است، نه ارائه‌دهندهٔ کاتالوگ؛ پیامِ قبلی گیج‌کننده بود
+        _deliv = False
+        try:
+            _deliv = bool(await _fg_wallet(row.id) or await _tgt_key(row.id) or await _fapi.token_of(row.id))
+        except Exception:
+            logger.exception("addpick: بررسیِ اتصال‌هایِ تحویلِ خودکار ناموفق (نادیده گرفته شد)")
+        if _deliv:
+            await cb.answer(_ql_clip(
+                "«افزودنِ محصول» برایِ سرویس‌هایِ پنلِ SMM است و ارائه‌دهنده می‌خواهد. فرگمنت فقط تحویلِ خودکارِ استارز/پرمیوم است؛ "
+                "برایِ فروشش از «دکمه‌هایِ صفحهٔ اصلی» دکمهٔ «⭐ فروشِ استارزِ تلگرام» را اضافه کن."), show_alert=True)
+        else:
+            await cb.answer("هنوز هیچ ارائه‌دهنده‌ای وصل نکردی — اول از «ارائه‌دهندگان» یکی اضافه کن.", show_alert=True)
         return
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="smm:products:menu", style=ButtonStyle.DANGER)])
     await cb.message.edit_text(
