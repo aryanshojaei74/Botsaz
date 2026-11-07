@@ -4355,6 +4355,7 @@ class AdminFSM(StatesGroup):
     vip_discount = State()
     vip_free_uses = State()
     vip_free_minutes = State()
+    vip_miniprice = State()    # PATCH_MINIAPP_DOMAIN_V1
     vip_msg = State()          # === PATCH_VIP_USERS_V1 === پیام به مالکِ اپ
     vip_custom_time = State()  # === PATCH_VIP_HOURS_V1 === روز/ساعتِ دلخواه
     vip_user_search = State()  # === PATCH_VIP_USER_SEARCH_V1 === جستجویِ کاربر/ربات
@@ -15457,6 +15458,7 @@ VIP_DEFAULTS = {
     "vip_discount": "0",         # درصد
     "vip_free_uses": "1",        # چند بار تستِ رایگان برایِ هر کاربر
     "vip_free_minutes": "60",    # مدتِ هر تستِ رایگان
+    "vip_miniapp_price": "100000",   # PATCH_MINIAPP_DOMAIN_V1 — اشتراکِ ماهانهٔ ساب‌دامینِ مینی‌اپ (تومان)
 }
 
 
@@ -15483,6 +15485,7 @@ async def _vip_screen() -> tuple[str, InlineKeyboardMarkup]:
         f"💳 پرداختیِ کاربر: <b>{final:,}</b> تومان\n\n"
         f"🎁 تستِ رایگان: <b>{c['vip_free_uses']}</b> بار برای هر کاربر\n"
         f"⏳ مدتِ هر تست: <b>{c['vip_free_minutes']}</b> دقیقه\n"
+        f"🌐 اشتراکِ ماهانهٔ مینی‌اپ (ساب‌دامین): <b>{c['vip_miniapp_price']:,}</b> تومان\n"
         f"💬 پشتیبانی: <b>{('@' + _sup) if (_sup := await get_pset('vip_support', '')) else 'غیرفعال'}</b>\n"
         f"🗑 حذفِ خودکارِ سرورِ تمام‌شده: <b>{__import__('platform_hosting_autodel').label(await __import__('platform_hosting_autodel').get_days())}</b>\n\n"
         "این مقادیر بلافاصله در مینی‌اپ اعمال می‌شوند."
@@ -15491,6 +15494,8 @@ async def _vip_screen() -> tuple[str, InlineKeyboardMarkup]:
         [hx_button("💵 تغییر قیمت ماهانه", callback_data="vip:set:price",
                    style=ButtonStyle.PRIMARY)],
         [hx_button("🏷 تغییر درصد تخفیف", callback_data="vip:set:discount",
+                   style=ButtonStyle.PRIMARY)],
+        [hx_button("🌐 قیمتِ ماهانهٔ مینی‌اپ", callback_data="vip:set:miniprice",
                    style=ButtonStyle.PRIMARY)],
         [hx_button("🎁 تعداد تستِ رایگان هر کاربر", callback_data="vip:set:uses",
                    style=ButtonStyle.PRIMARY)],
@@ -15629,6 +15634,17 @@ async def _vip_app_screen(app_id: int, cb_user_id: int = 0):
         f"🚀 اولین اجرا: {to_jalali(a.first_started_at) if a.first_started_at else '—'}\n"
         f"📦 نوع: {a.runtime}\n"
     )
+    # === PATCH_MINIAPP_DOMAIN_V1 ===
+    try:
+        import hosted_miniapp_domain as _hmd
+        if getattr(a, "miniapp_sub", None):
+            _act = _hmd.is_active(a)
+            txt += (f"🌐 مینی‌اپ: <code>{_hmd.url_of(a.miniapp_sub)}</code> — "
+                    + (f"فعال تا {to_jalali(a.miniapp_until)}" if _act else "غیرفعال (اشتراک تمام شده)") + "\n")
+        else:
+            txt += "🌐 مینی‌اپ: فعال نشده\n"
+    except Exception:
+        logger.exception("نمایشِ وضعیتِ مینی‌اپ ناموفق بود")
     if a.last_error:
         txt += ("\n⚠️ آخرین خطا: <code>"
                 + _html.escape(a.last_error[:180]) + "</code>")
@@ -15686,6 +15702,14 @@ async def _vip_app_screen(app_id: int, cb_user_id: int = 0):
     rows.append([
         hx_button("🔍 بررسیِ هوشمند", callback_data=f"vipfix:chk:{app_id}", style=ButtonStyle.PRIMARY),
         hx_button("🛠 اصلاح با هوش مصنوعی", callback_data=f"vipfix:plan:{app_id}", style=ButtonStyle.SUCCESS)])
+    # === PATCH_MINIAPP_DOMAIN_V1 === ساب‌دامینِ مینی‌اپ (اشتراکِ ماهانهٔ جدا)
+    rows.append([
+        hx_button("🌐 فعال‌سازی ۳۰ روزه (رایگان)", callback_data=f"vipmini:on:{app_id}",
+                  style=ButtonStyle.SUCCESS),
+        hx_button("⛔️ غیرفعال", callback_data=f"vipmini:off:{app_id}",
+                  style=ButtonStyle.DANGER)])
+    rows.append([hx_button("🔘 ثبت Menu Button رباتش", callback_data=f"vipmini:btn:{app_id}",
+                           style=ButtonStyle.PRIMARY)])
     rows.append([hx_button("✉️ ارسال پیام به مالک",
                            callback_data=f"vipapp:msg:{app_id}",
                            style=ButtonStyle.PRIMARY)])
@@ -16166,6 +16190,33 @@ async def vip_fix_action(cb: CallbackQuery, bot: Bot):
         _FIX_BUSY.discard(app_id)
 
 
+# === PATCH_MINIAPP_DOMAIN_V1 ===
+@router.callback_query(F.data.regexp(r"^vipmini:(on|off|btn):\d+$"))
+async def vip_miniapp_admin(cb: CallbackQuery):
+    """مدیر: فعال‌سازیِ رایگان/غیرفعال‌سازی/ثبتِ Menu Button. نگاشتِ nginx را سرویسِ botsazvip تا ~۱ دقیقه بعد تازه می‌کند."""
+    if not await has_perm(cb.from_user.id, "adm:settings"):
+        await cb.answer("دسترسی نداری", show_alert=True)
+        return
+    import hosted_miniapp_domain as _hmd
+    _, act, sid = cb.data.split(":")
+    app_id = int(sid)
+    if act == "on":
+        r = await _hmd.grant(app_id, 30)
+        await cb.answer((f"✅ فعال شد: {r.url}\n(تا حدودِ ۱ دقیقه بعد آدرس باز می‌شود)" if r.ok else f"❌ {r.message}")[:190], show_alert=True)
+    elif act == "off":
+        ok = await _hmd.disable(app_id)
+        await cb.answer("⛔️ غیرفعال شد." if ok else "اپ پیدا نشد.", show_alert=True)
+    else:
+        r = await _hmd.set_menu_button(app_id)
+        await cb.answer(("✅ " if r.ok else "❌ ") + r.message[:180], show_alert=True)
+    txt, kb = await _vip_app_screen(app_id, cb.from_user.id)
+    if txt:
+        try:
+            await cb.message.edit_text(txt, reply_markup=kb)
+        except Exception:
+            logger.debug("بازسازیِ صفحهٔ اپ پس از مینی‌اپ ممکن نشد", exc_info=True)
+
+
 @router.callback_query(F.data.startswith("vip:app:"))
 async def vip_app(cb: CallbackQuery):
     if not await has_perm(cb.from_user.id, "adm:settings"):
@@ -16515,6 +16566,8 @@ _VIP_ASK = {
     "uses": (AdminFSM.vip_free_uses, "vip_free_uses",
              "🎁 هر کاربر چند بار بتواند تستِ رایگان بگیرد؟\n\n"
              "<code>0</code> یعنی تستِ رایگان کاملاً بسته شود."),
+    "miniprice": (AdminFSM.vip_miniprice, "vip_miniapp_price",
+                  "🌐 قیمتِ ماهانهٔ مینی‌اپِ ساب‌دامین را به تومان بفرست:\n\nمثال: <code>100000</code>"),
     "minutes": (AdminFSM.vip_free_minutes, "vip_free_minutes",
                 "⏳ مدتِ هر تستِ رایگان چند دقیقه باشد؟\n\nمثال: <code>60</code>"),
     # === PATCH_SUPPORT_V1 ===
@@ -16592,6 +16645,11 @@ async def vip_save_discount(msg: Message, state: FSMContext):
 @router.message(AdminFSM.vip_free_uses)
 async def vip_save_uses(msg: Message, state: FSMContext):
     await _vip_save(msg, state, "vip_free_uses", 0, 100)
+
+
+@router.message(AdminFSM.vip_miniprice)
+async def vip_save_miniprice(msg: Message, state: FSMContext):
+    await _vip_save(msg, state, "vip_miniapp_price", 0, 100_000_000)
 
 
 @router.message(AdminFSM.vip_free_minutes)

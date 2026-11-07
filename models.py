@@ -3112,6 +3112,10 @@ class HostedApp(Base):
     cpu_percent: Mapped[int] = mapped_column(Integer, default=50)
     disk_mb: Mapped[int] = mapped_column(Integer, default=1024)
 
+    # === PATCH_MINIAPP_DOMAIN_V1 === ساب‌دامینِ مینی‌اپ (*.supraplus.ir) — اشتراکِ ماهانهٔ جدا
+    miniapp_sub: Mapped[str | None] = mapped_column(String(32), unique=True, index=True)
+    miniapp_until: Mapped[datetime | None] = mapped_column(DateTime)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(DateTime)
 
