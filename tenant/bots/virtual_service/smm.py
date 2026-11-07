@@ -17153,17 +17153,27 @@ async def ton_sell_admin_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup
     async with Session() as s:
         pending = await s.scalar(select(func.count()).select_from(GiftOrder).where(
             GiftOrder.bot_id == bot_id, GiftOrder.gift_id.like("tonsell_%"),
-            GiftOrder.status == "awaiting_admin"))
+            GiftOrder.status.in_(("awaiting_admin", "sending"))))      # PATCH_TON_AUTOSEND_V1
     rate_txt = f"{rate:,.0f}" if rate else "تنظیم‌نشده"
+    # === PATCH_TON_AUTOSEND_V1 === ارسالِ خودکار (TON Center API v2) از کیف‌پولِ حضانتیِ ربات
+    from tenant.bots.virtual_service import ton_autosend as _tas
+    _as = await _tas.settings(bot_id)
+    _w_addr, _w_bal = await _tas.wallet_info(bot_id)
+    if _as["enabled"]:
+        _mode = ("🤖 <b>ارسالِ خودکار روشن است:</b> بعد از پرداختِ مشتری، تون خودکار از کیف‌پولِ حضانتیِ ربات به آدرسِ او می‌رود "
+                 f"(سقفِ هر سفارش {_as['max']:g} TON). اگر خودکار نشد (موجودی کم، آدرسِ .ton، خطای شبکه)، سفارش به مسیرِ دستی می‌رود.")
+    else:
+        _mode = ("✋ <b>حالتِ دستی:</b> مشتری پول می‌دهد، تو با کیف‌پولِ خودت تون را می‌فرستی و اینجا تأیید می‌کنی.\n"
+                 "🤖 برایِ ارسالِ خودکار، «ارسالِ خودکار» را روشن کن (نیازمندِ کیف‌پولِ حضانتیِ ربات در «💎 Fragment» و شارژِ آن).")
+    _w_line = (f"\n👛 کیف‌پولِ ارسال: <code>{_w_addr}</code>" + (f" — موجودی: <b>{_w_bal:.3f} TON</b>" if _w_bal is not None else "")
+               if _w_addr else "\n👛 کیف‌پولِ حضانتی هنوز ساخته نشده (از «💎 Fragment» بساز).")
     text = (
         "💎 <b>فروشِ تون (TON)</b>\n\n"
-        "این ویژگی همیشه دستی است — ربات به‌صورتِ خودکار روی بلاک‌چین چیزی "
-        "نمی‌فرستد. مشتری مقدار و آدرسِ کیف‌پولش را می‌دهد و پول می‌پردازد؛ "
-        "تو با کیف‌پولِ خودت واقعاً تون را می‌فرستی و بعد در همین‌جا تأییدش "
-        "می‌کنی.\n\n"
+        + _mode + "\n\n"
         f"نرخ: هر ۱ TON = <b>{rate_txt} تومان</b>\n"
         f"محدودهٔ سفارش: <b>{qmin:g}</b> تا <b>{qmax:g}</b> TON\n"
         f"سفارش‌هایِ در انتظار: <b>{pending or 0}</b>"
+        + _w_line
     )
     if not rate:
         text += "\n\n⚠️ تا وقتی نرخ را تنظیم نکنی، این بخش برای مشتری فعال نمی‌شود."
@@ -17178,6 +17188,10 @@ async def ton_sell_admin_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup
                               callback_data="ton:setmargin")],
         [InlineKeyboardButton(text=f"🔽 حداقلِ مقدار ({qmin:g} TON)", callback_data="ton:setmin")],
         [InlineKeyboardButton(text=f"🔼 حداکثرِ مقدار ({qmax:g} TON)", callback_data="ton:setmax")],
+        [InlineKeyboardButton(text=("🤖 ارسالِ خودکارِ تون: ✅ روشن" if _as["enabled"] else "🤖 ارسالِ خودکارِ تون: ⛔️ خاموش"),
+                              callback_data="ton:asend", style=(ButtonStyle.SUCCESS if _as["enabled"] else None))],
+        *([[InlineKeyboardButton(text=f"🛡 سقفِ ارسالِ خودکار برایِ هر سفارش ({_as['max']:g} TON)", callback_data="ton:acap")]]
+          if _as["enabled"] else []),
         [InlineKeyboardButton(text="🧾 سفارش‌هایِ در انتظار", callback_data="ton:orders:0")],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="smm:manlist", style=ButtonStyle.DANGER)],
     ])
@@ -17226,6 +17240,60 @@ async def ton_auto_toggle(cb: CallbackQuery, bot: Bot):
         await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده (رفرشِ صفحهٔ فروشِ تون)")
+
+
+# === PATCH_TON_AUTOSEND_V1 === روشن/خاموش و سقفِ ارسالِ خودکار — فقط مالک (پایِ پولِ واقعی)
+async def _ton_owner_strict(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return None
+    if int(row.owner_id) != int(cb.from_user.id):
+        await cb.answer("⛔️ ارسالِ خودکارِ تون فقط توسطِ مالکِ ربات قابلِ تنظیم است.", show_alert=True)
+        return None
+    return row
+
+
+@smm_router.callback_query(F.data == "ton:asend")
+async def ton_autosend_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _ton_owner_strict(cb, bot)
+    if not row:
+        return
+    from tenant.bots.virtual_service import ton_autosend as _tas
+    cur = (await _tas.settings(row.id))["enabled"]
+    if not cur:
+        addr, bal = await _tas.wallet_info(row.id)
+        if not addr:
+            await cb.answer("اول کیف‌پولِ حضانتیِ ربات را از «💎 Fragment» بساز و شارژ کن؛ بعد این گزینه را روشن کن.", show_alert=True)
+            return
+        await _set_setting(row.id, "ton_autosend", "1")
+        await cb.answer("🤖 ارسالِ خودکار روشن شد." + ("" if (bal or 0) > 0.1 else "\n⚠️ موجودیِ کیف‌پول کم/صفر است؛ تا شارژ نشود سفارش‌ها دستی می‌شوند."),
+                        show_alert=True)
+    else:
+        await _set_setting(row.id, "ton_autosend", "0")
+        await cb.answer("ارسالِ خودکار خاموش شد؛ سفارش‌ها دستی می‌شوند.")
+    text, kb = await ton_sell_admin_content(row.id)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        logger.exception("رفرشِ صفحهٔ فروشِ تون ناموفق بود")
+
+
+@smm_router.callback_query(F.data == "ton:acap")
+async def ton_autosend_cap(cb: CallbackQuery, bot: Bot):
+    row = await _ton_owner_strict(cb, bot)
+    if not row:
+        return
+    from tenant.bots.virtual_service import ton_autosend as _tas
+    cur = (await _tas.settings(row.id))["max"]
+    caps = list(_tas.CAPS)
+    nxt = next((c for c in caps if c > cur), caps[0])
+    await _set_setting(row.id, "ton_autosend_max", str(nxt))
+    await cb.answer(f"سقفِ ارسالِ خودکار: {nxt:g} TON")
+    text, kb = await ton_sell_admin_content(row.id)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        logger.exception("رفرشِ صفحهٔ فروشِ تون ناموفق بود")
 
 
 @smm_router.callback_query(F.data == "ton:setmargin")
@@ -17543,15 +17611,36 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext, _wallet: str 
         order_id = order.id
 
     await state.clear()
+    # === PATCH_TON_AUTOSEND_V1 === اگر مالک «ارسالِ خودکار» را روشن کرده، همین‌جا تون از کیف‌پولِ حضانتیِ ربات (TON Center API v2) می‌رود
+    from tenant.bots.virtual_service import ton_autosend as _tas
+    _auto, _auto_note = await _tas.deliver_order(bot, row, order_id)
+    if _auto == "sent":
+        await _ton_sent_notify(bot, row, order_id, msg.from_user.id, amount, trk)
+        try:
+            await _notify_manual_order(
+                bot, row,
+                f"🤖 <b>تونِ سفارش #{await order_no(GiftOrder, order_id)} خودکار ارسال شد</b>\n💎 {amount:g} TON → <code>{wallet}</code>\n"
+                f"💰 {price:,} تومان · 🔖 {trk}\n{_html_escape(_auto_note)}")
+        except Exception:
+            logger.exception("اطلاعِ ارسالِ خودکارِ تون به ادمین ناموفق بود")
+        return
     await _notify_gift_order_trust_success(bot, row, order_id)
     await msg.answer(
         "✅ پرداختت ثبت شد — سفارشت برایِ ادمین فرستاده شد و به‌زودی تون‌ها به "
         f"آدرست واریز می‌شود.\n🔖 کد پیگیری: <code>{trk}</code>",
         parse_mode="HTML", reply_markup=await _gift_support_kb(trk))
+    _auto_line = ""
+    if _auto == "manual":
+        _auto_line = f"\n⚠️ ارسالِ خودکار انجام نشد: {_html_escape(_auto_note)}\n"
+    elif _auto == "unconfirmed":
+        _auto_line = ("\n⚠️ <b>ارسالِ خودکار نامشخص ماند</b> (" + _html_escape(_auto_note) + ").\n"
+                      "قبل از هر کاری روی بلاک‌چین چک کن که تون رفته یا نه؛ اگر رفته «ارسال شد» را بزن، اگر نرفته دستی بفرست و بعد تأیید کن "
+                      "(یا بازپرداخت). ارسالِ خودکارِ بعدی تا ۱۵ دقیقه متوقف است.\n")
     await _notify_manual_order(
         bot, row,
         f"💎 سفارشِ تون (TON) — #{await order_no(GiftOrder, order_id)}\n"
         f"مقدار: {amount:g} TON\n💰 {price:,} تومان\n"
+        + _auto_line +
         f"🎯 آدرسِ کیف‌پول: <code>{wallet}</code>\n"
         + (f"📝 کامنت/ممو: <code>{_html_escape(_memo)}</code>\n" if _memo else "📝 کامنت/ممو: ندارد\n")
         + _ton_buyer_block(msg.from_user)   # PATCH_TON_MEMO_V1 — مشخصاتِ خریدار
@@ -17606,10 +17695,11 @@ async def ton_orders(cb: CallbackQuery, bot: Bot):
     async with Session() as s:
         q = select(GiftOrder).where(
             GiftOrder.bot_id == row.id, GiftOrder.gift_id.like("tonsell_%"),
-            GiftOrder.status == "awaiting_admin").order_by(GiftOrder.id.desc())
+            GiftOrder.status.in_(("awaiting_admin", "sending"))).order_by(GiftOrder.id.desc())      # PATCH_TON_AUTOSEND_V1
         orders = (await s.scalars(q.limit(per).offset(page * per))).all()
         rows_data = [(o.id, o.star_count, o.price_toman, o.dest_label, o.tracking_code, o.dest_memo)   # PATCH_PENDING_LISTS_FIX_V1
                      for o in orders]
+        _sending = {o.id for o in orders if o.status == "sending"}
     if not rows_data:
         await cb.answer("سفارشِ در انتظاری نیست.", show_alert=True)
         return
@@ -17618,7 +17708,8 @@ async def ton_orders(cb: CallbackQuery, bot: Bot):
     for oid, centi, price, wallet, trk, memo in rows_data:
         amount = (centi or 0) / _TON_CENTI
         lines.append(f"#{await order_no(GiftOrder, oid)} — {amount:g} TON — {price:,} تومان\n🎯 <code>{wallet}</code>  🔖 {trk}"
-                     + (f"\n📝 ممو: <code>{_html_escape(memo)}</code>" if memo else ""))
+                     + (f"\n📝 ممو: <code>{_html_escape(memo)}</code>" if memo else "")
+                     + ("\n⚠️ ارسالِ خودکار نامشخص ماند — اول روی بلاک‌چین چک کن که رفته یا نه، بعد تأیید/بازپرداخت را بزن." if oid in _sending else ""))
         rows.append([InlineKeyboardButton(text=f"✅ تأیید ارسال #{await order_no(GiftOrder, oid)}",
                                           callback_data=f"ton:done:{oid}")])
         rows.append([InlineKeyboardButton(text=f"❌ لغو و بازپرداخت #{await order_no(GiftOrder, oid)}",
@@ -17640,27 +17731,32 @@ async def ton_order_done(cb: CallbackQuery, bot: Bot):
         if not o or o.bot_id != row.id or not (o.gift_id or "").startswith("tonsell_"):
             await cb.answer("سفارش یافت نشد.", show_alert=True)
             return
-        if o.status != "awaiting_admin":
+        if o.status not in ("awaiting_admin", "sending"):      # PATCH_TON_AUTOSEND_V1: «sending» = ارسالِ خودکارِ نامشخص؛ ادمین پس از چکِ بلاک‌چین تأیید می‌کند
             await cb.answer("این سفارش قبلاً رسیدگی شده.", show_alert=True)
             return
         o.status = "sent"
+        o.fail_reason = None
         buyer = await s.get(BotUser, o.buyer_user_id)
         amount = (o.star_count or 0) / _TON_CENTI
         buyer_tg = buyer.telegram_id if buyer else None
         trk = o.tracking_code
         await s.commit()
-    # === PATCH_TON_TRUST_REPORT_V1 === گزارشِ فدایی: خریدِ تون در کانالِ اعتمادسازی پست نمی‌شد.
-    # هنگامِ ثبت، سفارش awaiting_admin است و پست عمداً رد می‌شود؛ اینجا (بعد از تحویل) باید پست شود.
-    await _notify_gift_order_trust_success(bot, row, oid)
     await cb.answer("✅ به‌عنوان ارسال‌شده ثبت شد.")
     try:
         await cb.message.edit_reply_markup(reply_markup=None)
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+    await _ton_sent_notify(bot, row, oid, buyer_tg, amount, trk)
+
+
+async def _ton_sent_notify(bot: Bot, row, oid: int, buyer_tg: int | None, amount: float, trk: str | None) -> None:
+    """بعد از تحویلِ تون (دستی یا خودکار): پستِ کانالِ اعتمادسازی + پیام به مشتری. PATCH_TON_AUTOSEND_V1: از ton_order_done جدا شد."""
+    # === PATCH_TON_TRUST_REPORT_V1 === گزارشِ فدایی: خریدِ تون در کانالِ اعتمادسازی پست نمی‌شد.
+    # هنگامِ ثبت، سفارش awaiting_admin است و پست عمداً رد می‌شود؛ اینجا (بعد از تحویل) باید پست شود.
+    await _notify_gift_order_trust_success(bot, row, oid)
     if buyer_tg:
         try:
-            tbot = bot
-            await tbot.send_message(
+            await bot.send_message(
                 buyer_tg,
                 f"✅ سفارشِ تون تو (#{await order_no(GiftOrder, oid)}) ارسال شد!\n"
                 f"💎 {amount:g} TON به آدرست واریز شد.\n🔖 کد پیگیری: {trk}")
@@ -17679,7 +17775,7 @@ async def ton_order_refund(cb: CallbackQuery, bot: Bot):
         if not o or o.bot_id != row.id or not (o.gift_id or "").startswith("tonsell_"):
             await cb.answer("سفارش یافت نشد.", show_alert=True)
             return
-        if o.status != "awaiting_admin":
+        if o.status not in ("awaiting_admin", "sending"):      # PATCH_TON_AUTOSEND_V1
             await cb.answer("این سفارش قبلاً رسیدگی شده.", show_alert=True)
             return
         o.status = "refunded"
