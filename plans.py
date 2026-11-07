@@ -160,6 +160,8 @@ class Feature(str, Enum):
     RICKPANEL_PANEL = "rickpanel_panel"
     # === PATCH_SOLIDLAYER_PANEL_V1 === پنلِ SolidLayer فقط پلنِ حرفه‌ای.
     SOLIDLAYER_PANEL = "solidlayer_panel"
+    # === PATCH_WGRES_PANEL_V1 === پنلِ وایرگاردِ نماینده (Reseller API) فقط پلنِ حرفه‌ای.
+    WGRES_PANEL = "wgres_panel"
     # === PATCH_PLAN_TABLE_VIEW_V1 === نمایشِ جدولیِ پلن‌ها (قیمت|زمان|حجم) — فقط پلنِ حرفه‌ای.
     PLAN_TABLE_VIEW = "plan_table_view"
     # === PATCH_VPN_PANEL_MARKET_V1 ===
@@ -296,6 +298,7 @@ FEATURE_LABELS = {
     Feature.HEIMDALL_PANEL: "🛡 اتصال به پنل HEIMDALL",   # PATCH_HEIMDALL_PANEL_V1
     Feature.RICKPANEL_PANEL: "🟥 اتصال به پنل RickPanel",   # PATCH_RICKPANEL_PANEL_V1
     Feature.SOLIDLAYER_PANEL: "🧱 اتصال به پنل SolidLayer",   # PATCH_SOLIDLAYER_PANEL_V1
+    Feature.WGRES_PANEL: "🐉 اتصال به پنل وایرگارد (نماینده/API)",   # PATCH_WGRES_PANEL_V1
     Feature.PLAN_TABLE_VIEW: "📊 نمایشِ جدولیِ پلن‌ها",   # PATCH_PLAN_TABLE_VIEW_V1
     # === PATCH_VPN_PANEL_MARKET_V1 ===
     Feature.VPN_PANEL_MARKET: "🏷 ثبت و فروشِ پنل",
@@ -456,6 +459,7 @@ _PRO_EXTRA = {
     Feature.HEIMDALL_PANEL,  # PATCH_HEIMDALL_PANEL_V1
     Feature.RICKPANEL_PANEL,  # PATCH_RICKPANEL_PANEL_V1
     Feature.SOLIDLAYER_PANEL,  # PATCH_SOLIDLAYER_PANEL_V1
+    Feature.WGRES_PANEL,       # PATCH_WGRES_PANEL_V1
     Feature.PLAN_TABLE_VIEW,   # PATCH_PLAN_TABLE_VIEW_V1
     # === PATCH_VPN_PANEL_MARKET_V1 === طبقِ خواستهٔ ادمین: فقط پلنِ حرفه‌ای.
     Feature.VPN_PANEL_MARKET,

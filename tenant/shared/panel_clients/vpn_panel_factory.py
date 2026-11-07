@@ -16,6 +16,7 @@ panel_key → کلاینت:
   upanel_mizban    → UPanelMizbanClient     (یوپنل مرزبان)
   rickpanel        → RickPanelClient        (RickPanel — مرزبان‌سازگار، بدونِ انتخابِ inbound)
   solidlayer       → SolidLayerPanelClient  (SolidLayer — Management API؛ سرویس‌ها به‌جایِ inbound)
+  wgres            → WgResellerPanelClient  (پنلِ وایرگاردِ نماینده — X-API-Key؛ peer-محور)
 """
 from __future__ import annotations
 
@@ -36,6 +37,7 @@ from tenant.shared.panel_clients.eylan_panel import EylanPanelClient  # === PATC
 from tenant.shared.panel_clients.heimdall_panel import HeimdallPanelClient  # === PATCH_HEIMDALL_PANEL_V1 ===
 from tenant.shared.panel_clients.rickpanel_panel import RickPanelClient  # === PATCH_RICKPANEL_PANEL_V1 ===
 from tenant.shared.panel_clients.solidlayer_panel import SolidLayerPanelClient  # === PATCH_SOLIDLAYER_PANEL_V1 ===
+from tenant.shared.panel_clients.wgres_panel import WgResellerPanelClient  # === PATCH_WGRES_PANEL_V1 ===
 
 # پنل‌هایی که inbound_ids آن‌ها به‌صورت رشتهٔ تگ هستند (نه عدد)
 # نکته: پاسارگاد/PasarGuard واقعاً «گروه» عددی دارند نه تگ، اما چون فرم ورودی
@@ -62,6 +64,7 @@ _CLIENT_BY_PANEL_KEY = {
     "heimdall":      HeimdallPanelClient,  # HEIMDALL (نسلِ جدیدِ ۳X-UI، RBAC+CSRF) — PATCH_HEIMDALL_PANEL_V1
     "rickpanel":     RickPanelClient,      # RickPanel (مرزبان‌سازگار، بدونِ inbound) — PATCH_RICKPANEL_PANEL_V1
     "solidlayer":    SolidLayerPanelClient,  # SolidLayer (Management API، /api/subscriptions) — PATCH_SOLIDLAYER_PANEL_V1
+    "wgres":         WgResellerPanelClient,  # پنلِ وایرگاردِ نماینده (X-API-Key) — PATCH_WGRES_PANEL_V1
     "shahan":        ShahanPanelClient,    # شاهان — endpoint واحد + توکنِ ثابت (shahanpanel.com)
 }
 
