@@ -2434,6 +2434,8 @@ async def vpn_refresh_subs(cb: CallbackQuery, bot: Bot):
         old_inbound_str = panel.inbound_ids or "همه"
         if base == "eylan":
             inbound_msg = "ℹ️ در ایلان انتخاب پروتکل‌ها با خود توست و بروزرسانی آن را عوض نمی‌کند."
+        elif base == "wgres":      # PATCH_WGRES_PANEL_V1: پنلِ وایرگارد مفهومِ اینباند ندارد (اینترفیس را خودِ پنل برایِ نماینده تعیین می‌کند)
+            inbound_msg = "ℹ️ پنلِ وایرگارد مفهومِ «اینباند» ندارد (اینترفیسِ شبکه را خودِ پنل برایِ نماینده تعیین می‌کند)؛ نیازی به بروزرسانی نیست."
         elif not active_ids:
             inbound_msg = "⚠️ هیچ اینباند فعالی در پنل پیدا نشد. inbound_ids تغییر نکرد."
         else:
@@ -2462,12 +2464,15 @@ async def vpn_refresh_subs(cb: CallbackQuery, bot: Bot):
             else:
                 inbound_msg = f"ℹ️ اینباندها تغییری نداشتند: <code>{_esc_html(old_inbound_str)}</code>"
 
-        await cb.message.answer(
-            f"🔌 <b>وضعیت اینباندهای {label}:</b>\n"
-            f"{inbound_msg}\n\n"
-            f"تعداد اینباند فعال: <b>{len(active_items)}</b>\n"
-            f"اینباندهای فعال پنل: {_html_escape_mod.escape(active_names) or '—'}"
-        )
+        if base == "wgres":      # بدونِ شمارندهٔ «۰ اینباند» که گمراه‌کننده است
+            await cb.message.answer(f"🔌 <b>{label}:</b>\n{inbound_msg}")
+        else:
+            await cb.message.answer(
+                f"🔌 <b>وضعیت اینباندهای {label}:</b>\n"
+                f"{inbound_msg}\n\n"
+                f"تعداد اینباند فعال: <b>{len(active_items)}</b>\n"
+                f"اینباندهای فعال پنل: {_html_escape_mod.escape(active_names) or '—'}"
+            )
 
         # ─── ۳) بروزرسانی ساب‌لینک همهٔ کاربران این پنل ───
         await cb.message.answer("⏳ در حال بروزرسانی ساب‌لینک کاربران…")

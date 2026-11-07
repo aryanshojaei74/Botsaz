@@ -686,3 +686,14 @@ async def test_addonly_confirm_registers_the_created_panel_and_notifies_the_owne
     await st2.update_data(panel_key="marzban", pa_addonly_key="marzban", ibp=ibp)
     assert await _addonly_seen(addonly, _RealCb("tvpn:ibt:0", 50), st2) == []
     assert await st2.get_data() == {}
+
+
+@pytest.mark.asyncio
+async def test_manual_refresh_wgres_says_no_inbound_concept(env, monkeypatch):
+    """PATCH_WGRES_PANEL_V1 (مهدی): «هیچ اینباند فعالی… تعداد اینباند: ۰» برایِ پنلِ وایرگارد گمراه‌کننده بود."""
+    await _add_panel(env.maker, key="wgres", inbound_ids="")
+    monkeypatch.setattr(VA, "make_panel_client", lambda panel: FakeClient(inbounds=[]))
+    await VA.vpn_refresh_subs(FakeCb("tvpn:refresh_subs:wgres", env.msg), env.bot)
+    blob = "\n".join(t for _k, t, _kb in env.log)
+    assert "مفهومِ «اینباند» ندارد" in blob
+    assert "هیچ اینباند فعالی" not in blob and "تعداد اینباند فعال" not in blob
