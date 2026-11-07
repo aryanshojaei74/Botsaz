@@ -4177,6 +4177,7 @@ ACTION_TITLE = {
     "funstat_search": "🔎 جست‌وجویِ Fun Stat",  # PATCH_FUNSTAT_BOT_V1
     "psel_buy": "🧩 خریدِ پنل", "psel_my": "🗂 پنل‌هایِ من",  # PATCH_PANEL_SELLER_V1
     "giveaway": "🎰 قرعه‌کشی‌هایِ فعال",  # PATCH_GIVEAWAY_BOT_V1
+    "ai_assistant": "🤖 پرسش از دستیارِ هوشمند",  # PATCH_SMM_AI_BUTTON_ACTION_V1
     "giveaway_results": "🏆 نتایجِ قرعه‌کشی‌ها",  # PATCH_GIVEAWAY_BOT_V1
     "escrow": "🤝 معامله با واسطه (واسطه‌گری)",  # PATCH_ESCROW_BOT_KIND_V1
     "web_app": "🌐 مینی‌اپ (باز کردن لینک به‌صورت وب‌اپ)",

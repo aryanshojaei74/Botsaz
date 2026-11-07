@@ -1027,11 +1027,50 @@ async def smmai_ask_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if (await _get_setting(row.id, "smm_ai_enabled", "0")) != "1":
         await cb.answer("این قابلیت الان فعال نیست.", show_alert=True)
         return
+    await begin_ask(cb.message, bot, state, cancel_cb="smmu:home")
+    await cb.answer()
+
+
+# === PATCH_SMM_AI_CLEANUP_V1 === (SINA) پیامِ «سؤالت رو بپرس» و «در حالِ فکر کردن» بعدِ پاسخ پاک شوند تا پیوی شلوغ نشود
+async def begin_ask(target, bot: Bot, state: FSMContext, cancel_cb: str = "smmu:home") -> None:
+    """شروعِ پرسش از دستیار؛ هم از دکمهٔ اینلاین (smmai:ask) و هم از «عملکردِ دکمه» (ai_assistant). شناسهٔ پیامِ راهنما ذخیره می‌شود."""
     await state.set_state(SmmAiFSM.question)
-    await cb.message.answer(
+    sent = await target.answer(
         "🤖 سؤالت رو بپرس (مثلاً: چرا سفارشم انجام نشده؟ چطور سفارش بدم؟):",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="❌ لغو", callback_data="smmu:home", style=ButtonStyle.DANGER)]]))
+            InlineKeyboardButton(text="❌ لغو", callback_data=cancel_cb, style=ButtonStyle.DANGER)]]))
+    try:
+        await state.update_data(ai_prompt=(sent.chat.id, sent.message_id), ai_cancel=cancel_cb)
+    except Exception:      # noqa: BLE001
+        logger.debug("[SMM_AI] ذخیرهٔ شناسهٔ پیامِ راهنما ممکن نشد")
+
+
+async def start_ask_from_button(msg: Message, bot: Bot, state: FSMContext) -> None:
+    """عملکردِ دکمهٔ «ai_assistant» (مالک به هر دکمه‌ای وصلش می‌کند)."""
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    if not row or (await _get_setting(row.id, "smm_ai_enabled", "0")) != "1":
+        await msg.answer("این قابلیت الان فعال نیست.")
+        return
+    await begin_ask(msg, bot, state, cancel_cb="mbtn:home")
+
+
+async def _safe_delete(bot: Bot, chat_id: int, message_id: int) -> None:
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:      # noqa: BLE001
+        logger.debug("[SMM_AI] حذفِ پیامِ موقت ممکن نشد")
+
+
+@smm_ai_router.callback_query(F.data == "smmai:askb")
+async def smmai_ask_again_button(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """«🤖 سؤالِ دیگه» وقتی دستیار از یک دکمهٔ ربات (ai_assistant) باز شده؛ بازگشت به منویِ اصلیِ ربات (نه فروشگاه)."""
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    if not row or (await _get_setting(row.id, "smm_ai_enabled", "0")) != "1":
+        await cb.answer("این قابلیت الان فعال نیست.", show_alert=True)
+        return
+    await begin_ask(cb.message, bot, state, cancel_cb="mbtn:home")
     await cb.answer()
 
 
@@ -1042,13 +1081,17 @@ async def smmai_ask_answer(msg: Message, bot: Bot, state: FSMContext):
     if not row:
         await state.clear()
         return
+    _d = await state.get_data()
+    _prompt, _cancel = _d.get("ai_prompt"), _d.get("ai_cancel") or "smmu:home"
     await state.clear()
+    if _prompt:                                            # PATCH_SMM_AI_CLEANUP_V1: پیامِ «سؤالت رو بپرس» حذف شود
+        await _safe_delete(bot, int(_prompt[0]), int(_prompt[1]))
     api_key = await _get_setting(row.id, "smm_ai_api_key", "")
     if not api_key:
         await msg.answer("❌ این قابلیت الان در دسترس نیست.")
         return
     provider = await _get_provider(row.id)
-    await msg.answer("⏳ در حالِ فکر کردن...")
+    _thinking = await msg.answer("⏳ در حالِ فکر کردن...")
     # PATCH_AI_ORDERS_FIRST_V1 — سفارش‌هایِ کاربر اول می‌آید تا برشِ «سختِ» انتهایِ context (fit_context) آن را نبُرد
     context = (await _order_lookup_context(row.id, msg.from_user.id, msg.text) + "\n\n"
                + await _recent_orders_context(row.id, msg.from_user.id)
@@ -1057,17 +1100,19 @@ async def smmai_ask_answer(msg: Message, bot: Bot, state: FSMContext):
     answer = await ask_ai(provider, api_key, msg.text, context,
                           _bot_system_prompt(row), bot_id=row.id)
     if not answer:
+        await _safe_delete(bot, _thinking.chat.id, _thinking.message_id)       # PATCH_SMM_AI_CLEANUP_V1
         await msg.answer("❌ الان نتونستم جواب بدم. بعداً دوباره امتحان کن یا با پشتیبانی تماس بگیر.")
         return
     _kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🤖 سؤالِ دیگه", callback_data="smmai:ask"),
-        InlineKeyboardButton(text="⬅️ بازگشت", callback_data="smmu:home"),
+        InlineKeyboardButton(text="🤖 سؤالِ دیگه", callback_data="smmai:ask" if _cancel == "smmu:home" else "smmai:askb"),
+        InlineKeyboardButton(text="⬅️ بازگشت" if _cancel == "smmu:home" else "🏠 منوی اصلی", callback_data=_cancel),
     ]])
     try:   # PATCH_AI_GROUP_HTML_V1
         await msg.answer(f"🤖 {md_to_html(answer)}", reply_markup=_kb, parse_mode="HTML")
     except Exception:
         logger.exception("[SMM_AI] ارسالِ HTML ناموفق؛ متنِ ساده")
         await msg.answer(f"🤖 {answer.replace('**', '')}", reply_markup=_kb)
+    await _safe_delete(bot, _thinking.chat.id, _thinking.message_id)           # PATCH_SMM_AI_CLEANUP_V1: «در حالِ فکر کردن» بعد از جواب پاک شود
 
 
 # ═══════════════════ فراخوانی داخلِ گروه با اسمِ دلخواه ═══════════════════

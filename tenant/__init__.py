@@ -6857,6 +6857,10 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
         _row_ps = await get_bot_row(bot)
         if _row_ps:
             await (_ps_buy if action == "psel_buy" else _ps_my)(msg, bot, _row_ps, msg.from_user.id)
+    elif action == "ai_assistant":
+        # === PATCH_SMM_AI_BUTTON_ACTION_V1 ===
+        from tenant.bots.virtual_service.smm_ai import start_ask_from_button as _ai_start
+        await _ai_start(msg, bot, state)
     elif action in ("giveaway", "giveaway_results"):
         # === PATCH_GIVEAWAY_BOT_V1 ===
         from tenant.bots.giveaway.user import show_list as _gw_list, show_results_list as _gw_res
@@ -14082,7 +14086,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "474"
+BUILD_ID = "475"
 
 
 @tenant_router.message(Command("version"))
@@ -15321,6 +15325,9 @@ _SIMPLE_ACTIONS: dict[str, tuple[str, str, frozenset | None]] = {
                          frozenset({"panel_seller"})),
     "giveaway":         ("🎰 قرعه‌کشی‌هایِ فعال", "این دکمه حالا قرعه‌کشی‌هایِ فعال را با دکمهٔ شرکت نشان می‌دهد.",
                          frozenset({"giveaway"})),
+    # === PATCH_SMM_AI_BUTTON_ACTION_V1 === (SINA) دستیارِ هوشمندِ مشتری قابلِ وصل‌شدن به هر دکمه
+    "ai_assistant":     ("🤖 پرسش از دستیارِ هوشمند", "این دکمه حالا از مشتری سؤال می‌گیرد و دستیارِ هوشمند جواب می‌دهد (نیازمندِ روشن‌بودنِ دستیار در تنظیماتِ ربات).",
+                         frozenset({"virtual_service"})),
     "giveaway_results": ("🏆 نتایجِ قرعه‌کشی‌ها", "این دکمه حالا نتایجِ قرعه‌کشی‌هایِ پایان‌یافته را نشان می‌دهد.",
                          frozenset({"giveaway"})),
     "funstat_search": ("🔎 جست‌وجویِ Fun Stat",

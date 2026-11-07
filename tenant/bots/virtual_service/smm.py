@@ -1123,6 +1123,9 @@ async def smm_admin_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     rows.append([InlineKeyboardButton(
         text=("\U0001f522 نمایشِ تعداد: روشن" if _bn != "0" else "\U0001f522 نمایشِ تعداد: خاموش"),
         callback_data="smm:btncount")])
+    rows.append([InlineKeyboardButton(      # PATCH_SMM_BULK_TOGGLE_V1
+        text=("📦 سفارشِ انبوه (چندلینکی): ✅ روشن" if await _bulk_enabled(bot_id) else "📦 سفارشِ انبوه (چندلینکی): ⛔️ خاموش"),
+        callback_data="smm:bulktoggle")])
     rows.append([InlineKeyboardButton(
         text="\u267b\ufe0f ریستِ محصولات", callback_data="smm:reset",
         style=ButtonStyle.DANGER)])
@@ -2168,6 +2171,11 @@ def _page_slice(items: list, page: int) -> tuple[list, int, int]:
     return items[(page - 1) * _SVC_LIST_PAGE: page * _SVC_LIST_PAGE], page, pages
 
 
+async def _bulk_enabled(bot_id: int) -> bool:
+    """PATCH_SMM_BULK_TOGGLE_V1 — «ثبتِ سفارشِ انبوه (چندلینکی)» (دکمه + دستورِ /multi_<شماره>) قابلِ خاموش/روشن؛ پیش‌فرض روشن."""
+    return (await _get_setting(bot_id, "smm_bulk_enabled", "1")) != "0"
+
+
 def _page_nav(cb_prefix: str, page: int, pages: int) -> list | None:
     """ردیفِ «◀️ قبلی | n/m | بعدی ▶️»؛ None اگر فقط یک صفحه است. callback = f"{cb_prefix}:{n}"."""
     if pages <= 1:
@@ -2365,6 +2373,7 @@ async def smmu_pick_service_breadcrumb_raw(cb: CallbackQuery, bot: Bot, state: F
     # باز کرده (یا ادمین) برایِ همه می‌آمد، و در حالتِ عمقِ ۲ اصلاً ست نمی‌شد. حالا مسیر همان لحظه از رویِ
     # خودِ محصول ساخته می‌شود.
     breadcrumb = None
+    sv = None
     try:
         async with Session() as s_:
             sv = await s_.get(SmmService, vid)
@@ -2379,7 +2388,17 @@ async def smmu_pick_service_breadcrumb_raw(cb: CallbackQuery, bot: Bot, state: F
                     breadcrumb = f"{_nm} › {smm_api.service_type_label(_svc_platform_type(sv)[1])}"
     except Exception:
         logger.exception("[smm] ساختِ مسیرِ محصول ناموفق بود")
-    ok = await send_smm_product_page(cb, bot, vid, state, breadcrumb=breadcrumb)
+    # PATCH_SMM_QL_BACK_V1: بازگشت = لیستی که مشتری از آن آمده (دستهٔ دستی: عمقِ ۲ ⇒ لیستِ دسته، عمقِ ۳ ⇒ لیستِ نوع)
+    _qback = None
+    try:
+        if sv is not None and getattr(sv, "category_pk", None):
+            if (await _get_setting(row.id, "qlc_depth", "3")) == "2":
+                _qback = f"smm:qlc:{mb_id}:cat:{sv.category_pk}"
+            else:
+                _qback = f"smm:qlc:{mb_id}:typ:{sv.category_pk}:{_svc_platform_type(sv)[1]}"
+    except Exception:
+        logger.exception("[smm] ساختِ دکمهٔ بازگشتِ اتصالِ سریع ناموفق بود")
+    ok = await send_smm_product_page(cb, bot, vid, state, breadcrumb=breadcrumb, back_cb=(_qback if _qback and len(_qback.encode()) <= 64 else None))
     if not ok:
         await cb.answer("این سرویس دیگر موجود نیست", show_alert=True)
         return
@@ -2439,7 +2458,7 @@ async def smm_qlu_nav(cb: CallbackQuery, bot: Bot):
         # (پلتفرم → نوع → سرویس) اومده، صفحهٔ نهاییِ خرید هم مسیرِ کامل
         # (مثلاً «اینستاگرام › ممبر › نامِ سرویس») رو نشون بده، نه فقط
         # اسمِ سرویس تنها.
-        rows = [[InlineKeyboardButton(text=v.name[:55], callback_data=f"smmu:svcb:{v.id}:{pkey}:{tkey}")] for v in items]
+        rows = [[InlineKeyboardButton(text=v.name[:55], callback_data=f"smmu:svcb:{v.id}:{pkey}:{tkey}:{mb_id}")] for v in items]   # PATCH_SMM_QL_BACK_V1: mb_id برایِ دکمهٔ بازگشت
         _nav = _page_nav(f"smm:qlu:{mb_id}:typ:{pkey}:{tkey}", _pg, _pages)
         if _nav:
             rows.append(_nav)
@@ -5694,6 +5713,19 @@ async def smm_btn_count_toggle(cb: CallbackQuery, bot: Bot):
     new = "0" if cur != "0" else "1"
     await _set_setting(row.id, "smm_btn_count", new)
     await cb.answer("نمایشِ تعداد: " + ("خاموش" if new == "0" else "روشن"))
+    await smm_menu(cb, bot)
+
+
+# === PATCH_SMM_BULK_TOGGLE_V1 ===
+@smm_router.callback_query(F.data == "smm:bulktoggle")
+async def smm_bulk_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    new = "0" if await _bulk_enabled(row.id) else "1"
+    await _set_setting(row.id, "smm_bulk_enabled", new)
+    await cb.answer("📦 سفارشِ انبوه: " + ("روشن شد (دکمه و /multi_ فعال)" if new == "1" else "خاموش شد (دکمه و /multi_ بسته)"), show_alert=True)
     await smm_menu(cb, bot)
 
 
@@ -10128,7 +10160,9 @@ async def smmu_pick_type(cb: CallbackQuery, bot: Bot):
     # فرمت: smmu:type:<plat>:<type>[:<page>]
     parts = cb.data.split(":")
     pkey, tkey = parts[2], parts[3]
-    _pg = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 1   # PATCH_SMM_LIST_PAGINATION_V1
+    _home = len(parts) > 4 and parts[4].endswith("h")      # PATCH_SMM_BACK_HOME_FLAG_V1
+    _p4 = parts[4].rstrip("h") if len(parts) > 4 else ""
+    _pg = int(_p4) if _p4.isdigit() else 1   # PATCH_SMM_LIST_PAGINATION_V1
     tree, sid_map = await _user_active_tree(row.id)   # PATCH_SMM_CUSTOMER_TREE_CLASSIFY_V1: نگاشت با pk
     items = tree.get(pkey, {}).get(tkey, [])
     if not items:
@@ -10154,13 +10188,20 @@ async def smmu_pick_type(cb: CallbackQuery, bot: Bot):
     entries.sort(key=lambda x: _ord[x[1].id])
     entries, _pg, _pages = _page_slice(entries, _pg)
     for it, v in entries:
-        _cbd = f"smmu:svc:{v.id}:{pkey}:{tkey}:{_pg}"          # PATCH_SMM_PRODUCT_BACK_TO_LIST_V1: صفحهٔ محصول بداند از کدام لیست آمده
+        _cbd = f"smmu:svc:{v.id}:{pkey}:{tkey}:{_pg}{'h' if _home else ''}"          # PATCH_SMM_PRODUCT_BACK_TO_LIST_V1: صفحهٔ محصول بداند از کدام لیست آمده
         rows.append([InlineKeyboardButton(
             text=it["name"][:55], callback_data=_cbd if len(_cbd.encode()) <= 64 else f"smmu:svc:{v.id}")])
     _nav = _page_nav(f"smmu:type:{pkey}:{tkey}", _pg, _pages)
     if _nav:
+        if _home:       # فلگِ «h» در صفحه‌بندی هم حفظ شود
+            for _b in _nav:
+                if (_b.callback_data or "").startswith("smmu:type:"):
+                    _b.callback_data += "h"
         rows.append(_nav)
-    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"smmu:plat:{pkey}")])
+    if _home:           # PATCH_SMM_BACK_HOME_FLAG_V1: از میانبر آمده؛ «بازگشت» به منویِ ربات، نه منوهایِ سراسریِ فروشگاه (که شاید در این ربات نباشند)
+        rows.append([InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="mbtn:home", style=ButtonStyle.DANGER)])
+    else:
+        rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"smmu:plat:{pkey}")])
     # === PATCH_SMM_PLATFORM_RENAME_V1 ===
     header = f"{await platform_label_for_bot(row.id, pkey)} — {smm_api.service_type_label(tkey)}"
     try:
@@ -10195,8 +10236,8 @@ async def smmu_pick_service(cb: CallbackQuery, bot: Bot, state: FSMContext):
     _p = cb.data.split(":")
     vid = int(_p[2])
     _back = None                                            # PATCH_SMM_PRODUCT_BACK_TO_LIST_V1
-    if len(_p) >= 6 and _p[5].isdigit():
-        _back = f"smmu:type:{_p[3]}:{_p[4]}:{_p[5]}"
+    if len(_p) >= 6 and _p[5].rstrip("h").isdigit():
+        _back = f"smmu:type:{_p[3]}:{_p[4]}:{_p[5]}"         # «h» (در صورت وجود) حفظ می‌شود
     ok = await send_smm_product_page(cb, bot, vid, state, back_cb=_back)
     if not ok:
         await cb.answer("این سرویس دیگر موجود نیست", show_alert=True)
@@ -10218,7 +10259,10 @@ async def smmu_pick_service_breadcrumb(cb: CallbackQuery, bot: Bot, state: FSMCo
     parts = cb.data.split(":")
     vid, pkey, tkey = int(parts[2]), parts[3], parts[4]
     breadcrumb = f"{smm_api.platform_label(pkey)} › {smm_api.service_type_label(tkey)}"
-    ok = await send_smm_product_page(cb, bot, vid, state, breadcrumb=breadcrumb)
+    # PATCH_SMM_QL_BACK_V1: بازگشت = همان لیستِ سرویس‌هایِ اتصالِ سریع (نه خروج از مسیر)
+    _mb = parts[5] if len(parts) > 5 and parts[5].isdigit() else None
+    _qback = f"smm:qlu:{_mb}:typ:{pkey}:{tkey}" if _mb else None
+    ok = await send_smm_product_page(cb, bot, vid, state, breadcrumb=breadcrumb, back_cb=_qback)
     if not ok:
         await cb.answer("این سرویس دیگر موجود نیست", show_alert=True)
         return
@@ -10392,7 +10436,7 @@ async def send_smm_product_page(msg_or_cb, bot: Bot, vid: int, state: FSMContext
             for _pk, _types in _tree.items():
                 for _tk, _its in _types.items():
                     if any(i.get("pk") == vid for i in _its):
-                        back_cb = f"smmu:type:{_pk}:{_tk}:1"
+                        back_cb = f"smmu:type:{_pk}:{_tk}:1h"      # PATCH_SMM_BACK_HOME_FLAG_V1: «h» = از میانبر/بدونِ مسیر آمده؛ بازگشتِ لیست به منویِ اصلیِ ربات
                         raise StopIteration
         except StopIteration:
             pass
@@ -10412,9 +10456,10 @@ async def send_smm_product_page(msg_or_cb, bot: Bot, vid: int, state: FSMContext
     await state.set_state(SmmFSM.user_link)
     await state.update_data(smmu_svc_id=vid)
     _ik = _input_kind(v)       # PATCH_SMM_INPUT_KIND_V1 — سفارشِ انبوه فقط برایِ ورودیِ لینک
+    _bulk_on = _ik == "link" and await _bulk_enabled(row.id)      # PATCH_SMM_BULK_TOGGLE_V1
     cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
         *([[InlineKeyboardButton(text="📦 ثبتِ سفارشِ انبوه (چندلینکی)", callback_data=f"smmu:bulk:{vid}",
-                                 style=ButtonStyle.PRIMARY)]] if _ik == "link" else []),
+                                 style=ButtonStyle.PRIMARY)]] if _bulk_on else []),
         ([InlineKeyboardButton(text="⬅️ بازگشت به لیست", callback_data=back_cb, style=ButtonStyle.DANGER),
           InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="mbtn:home", style=ButtonStyle.DANGER)]
          if back_cb else
@@ -10475,7 +10520,7 @@ async def send_smm_product_page(msg_or_cb, bot: Bot, vid: int, state: FSMContext
         f"🔢 حداقل: {v.min_qty} | حداکثر: {v.max_qty}\n"
         # === PATCH_SMM_PRODUCT_SHORTCUT_ROUTING_V1 === دستورهایِ میانبر (تپ‌شدنی)
         f"⌨️ میانبر: /{v.id}\n"
-        + (f"📦 ثبت سفارش انبوه: /multi_{v.id}" if _ik == "link" else "")
+        + (f"📦 ثبت سفارش انبوه: /multi_{v.id}" if _bulk_on else "")
         + f"{_rate}"
         f"{desc_line}\n\n"
         f"۱/۲ — {_input_prompt(_ik, _link_prompt)}"
@@ -10663,6 +10708,9 @@ async def _bulk_start_prompt(target, state: FSMContext, v: "SmmService") -> None
     """شروعِ سفارشِ انبوه برایِ سرویسِ v — هم از دکمه (smmu:bulk:) و هم از دستورِ /multi_<شماره>."""
     if _input_kind(v) != "link":      # PATCH_SMM_INPUT_KIND_V1
         await target.answer("برایِ این محصول سفارشِ انبوه وجود ندارد؛ همان صفحهٔ محصول را باز کن و آیدی/شماره را بفرست.")
+        return
+    if not await _bulk_enabled(v.bot_id):      # PATCH_SMM_BULK_TOGGLE_V1: دکمه و دستورِ /multi_ هر دو بسته می‌شوند
+        await target.answer("ثبتِ سفارشِ انبوه فعلاً غیرفعال است. همان صفحهٔ محصول را باز کن و سفارشِ تکی بده.")
         return
     await state.set_state(SmmFSM.bulk_links)
     await state.update_data(smmu_svc_id=v.id)
