@@ -58,11 +58,18 @@ async def _get_setting(bot_id: int, key: str, default: str = "") -> str:
 
 
 async def settings(bot_id: int) -> dict:
+    """هر خطایِ خواندنِ تنظیمات ⇒ «خاموش» (ارسالِ پول هرگز به‌خاطرِ خطا روشن نمی‌ماند)."""
     try:
-        cap = float(await _get_setting(bot_id, "ton_autosend_max", str(DEFAULT_MAX_TON)) or DEFAULT_MAX_TON)
-    except (TypeError, ValueError):
-        cap = DEFAULT_MAX_TON
-    return {"enabled": (await _get_setting(bot_id, "ton_autosend", "0")) == "1", "max": cap}
+        if (await _get_setting(bot_id, "ton_autosend", "0")) != "1":
+            return {"enabled": False, "max": DEFAULT_MAX_TON}
+        try:
+            cap = float(await _get_setting(bot_id, "ton_autosend_max", str(DEFAULT_MAX_TON)) or DEFAULT_MAX_TON)
+        except (TypeError, ValueError):
+            cap = DEFAULT_MAX_TON
+        return {"enabled": True, "max": cap}
+    except Exception:      # noqa: BLE001
+        logger.exception("ton_autosend: خواندنِ تنظیمات ناموفق بود (bot=%s)", bot_id)
+        return {"enabled": False, "max": DEFAULT_MAX_TON}
 
 
 def valid_address(addr: str | None) -> bool:
@@ -185,7 +192,11 @@ async def deliver_order(bot, row, order_id: int) -> tuple[str, str]:
     except Exception as e:      # noqa: BLE001
         logger.exception("ton_autosend: خطایِ غیرمنتظره (bot=%s order=%s)", getattr(row, "id", None), order_id)
         # اگر خطا بعد از قفلِ ردیف رخ داده باشد، وضعیتِ سفارش را نامشخص نگه می‌داریم (امن‌تر از بازگرداندن)
-        async with Session() as s:
-            o = await s.get(GiftOrder, order_id)
-            sending = bool(o and o.status == "sending")
+        sending = False
+        try:
+            async with Session() as s:
+                o = await s.get(GiftOrder, order_id)
+                sending = bool(o and o.status == "sending")
+        except Exception:      # noqa: BLE001
+            logger.exception("ton_autosend: خواندنِ وضعیتِ سفارش پس از خطا ناموفق بود")
         return ("unconfirmed" if sending else "manual"), f"خطایِ غیرمنتظره: {type(e).__name__}"

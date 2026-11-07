@@ -121,8 +121,10 @@ def test_ton_done_posts_trust_report():
     """PATCH_TON_TRUST_REPORT_V1 — مثلِ بقیهٔ تأییدهایِ دستی، تأییدِ تون هم گزارشِ کانال را می‌فرستد."""
     import inspect
     src = inspect.getsource(SM.ton_order_done)
-    assert "_notify_gift_order_trust_success(bot, row, oid)" in src
-    assert src.index('o.status = "sent"') < src.index("_notify_gift_order_trust_success")
+    # PATCH_TON_AUTOSEND_V1: پیامِ تحویل/گزارش به _ton_sent_notify منتقل شد (هم دستی هم خودکار از آن استفاده می‌کنند)
+    assert "_ton_sent_notify(bot, row, oid" in src
+    assert src.index('o.status = "sent"') < src.index("_ton_sent_notify(bot, row, oid")
+    assert "_notify_gift_order_trust_success(bot, row, oid)" in inspect.getsource(SM._ton_sent_notify)
 
 
 @pytest.mark.asyncio
