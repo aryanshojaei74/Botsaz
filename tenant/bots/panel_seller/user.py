@@ -18,7 +18,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 
 from config import Session
-from models import PanelSellerAccount, PanelSellerPackage, VpnPanel
+from models import PanelSellerAccount, PanelSellerOrder, PanelSellerPackage, VpnPanel
 
 from tenant.bots.panel_seller import adapter as AD
 from tenant.bots.panel_seller import service as SV
@@ -62,7 +62,8 @@ async def show_buy(event, bot: Bot, row, uid: int) -> None:
             PanelSellerPackage.bot_id == row.id, PanelSellerPackage.active == True)   # noqa: E712
             .order_by(PanelSellerPackage.price_toman))).all()
         panels = {p.id: p for p in (await s.scalars(select(VpnPanel).where(VpnPanel.bot_id == row.id))).all()}
-    pks = [p for p in pks if panels.get(p.panel_id) and panels[p.panel_id].enabled and AD.supports(panels[p.panel_id].panel_key)]
+    pks = [p for p in pks if getattr(p, "manual", False)      # PATCH_PSEL_MANUAL_SALE_V1: بستهٔ دستی به پنل وصل نیست
+           or (panels.get(p.panel_id) and panels[p.panel_id].enabled and AD.supports(panels[p.panel_id].panel_key))]
     rows = [[btn(f"{p.title[:28]} — {n(p.price_toman)} تومان", f"psel:b:{p.id}", style=ButtonStyle.SUCCESS)] for p in pks]
     if (await SV.custom_settings(row.id))["price"] > 0:      # PATCH_PSEL_CUSTOM_VOLUME_V1
         rows.insert(0, [btn("📦 خریدِ حجمِ دلخواه", "psel:cvb", style=ButtonStyle.SUCCESS)])
@@ -192,6 +193,14 @@ async def buy_do(cb: CallbackQuery, bot: Bot, state: FSMContext):
     uid = cb.from_user.id
     await get_or_create_user(row.id, uid, cb.from_user.full_name or "", cb.from_user.username or "")
     code = await _disc_code(state, _ctx(pid=pid))                 # PATCH_PSEL_DISCOUNT_V1
+    async with Session() as s:                                    # PATCH_PSEL_MANUAL_SALE_V1
+        _pk = await s.get(PanelSellerPackage, pid)
+    if _pk is not None and _pk.bot_id == row.id and getattr(_pk, "manual", False):
+        await cb.answer("در حالِ ثبتِ سفارش…")
+        r = await _manual_buy(cb, bot, row, uid, pid, code)
+        if r["status"] in ("ok", "bad_discount"):
+            await _clear_disc(state)
+        return
     if await SV.pick_username_enabled(row.id):                    # PATCH_PSEL_PICK_USERNAME_V1
         await state.clear()
         await state.set_state(PselBuyFSM.username)
@@ -202,6 +211,43 @@ async def buy_do(cb: CallbackQuery, bot: Bot, state: FSMContext):
     r = await _provision(cb, bot, row, uid, pid=pid, retry_cb=cb.data, discount_code=code)
     if r["status"] in ("ok", "bad_discount"):
         await _clear_disc(state)
+
+
+async def _manual_buy(cb: CallbackQuery, bot: Bot, row, uid: int, pid: int, code: str | None) -> dict:
+    """PATCH_PSEL_MANUAL_SALE_V1 — خریدِ بستهٔ دستی: کیف‌پول کم می‌شود، سفارشِ «در انتظار» ساخته و به مالک/ادمین‌ها اطلاع داده می‌شود."""
+    r = await SV.buy_manual(row.id, uid, pid, bot=bot, row=row, discount_code=code)
+    st = r["status"]
+    if st == "insufficient":
+        from tenant.shared import vs_pay
+        await vs_pay.insufficient_notice(cb.message, row.id, uid, int(r["need"]), cb.data or "psel:buy")
+    elif st == "bad_discount":
+        await edit_or_send(cb, "❌ " + (r.get("reason") or "کد تخفیف معتبر نیست.") + "\nبدونِ کد هم می‌توانی بخری.", kb(back_row("psel:buy")))
+    elif st != "ok":
+        await edit_or_send(cb, "❌ " + _ERR_FA.get(st, "خرید انجام نشد."), kb(back_row("psel:buy")))
+    else:
+        note = (await get_setting(row.id, "psel_note_delivery", "")).strip()
+        await edit_or_send(
+            cb, "✅ <b>سفارشت ثبت شد!</b>\n\n"
+                f"📦 {esc(r['title'])}\n💰 پرداخت‌شده: <b>{n(r['paid'])}</b> تومان\n🔖 کدِ پیگیری: <code>{esc(r['tracking'])}</code>\n\n"
+                "⏳ مشخصاتِ پنل (آدرس، نام‌کاربری و رمز) به‌زودی توسطِ فروشنده برایت ارسال می‌شود و همین‌جا هم در «🗂 پنل‌هایِ من» می‌بینی."
+                + (f"\n\n📝 {esc(note)}" if note else ""),
+            kb([btn("🗂 پنل‌هایِ من", "psel:my", style=ButtonStyle.PRIMARY)], HOME_ROW))
+        try:
+            from tenant import _notify_admins
+            who = cb.from_user.full_name or cb.from_user.username or str(uid)
+            await _notify_admins(bot, row, (
+                f"🛒 <b>سفارشِ جدیدِ پنل (دستی)</b>\n\n👤 {esc(who)} (<code>{uid}</code>)\n📦 {esc(r['title'])}\n"
+                f"💰 {n(r['paid'])} تومان · 🔖 <code>{esc(r['tracking'])}</code>\n\n"
+                "مشخصاتِ پنل (آدرس، نام‌کاربری، رمز) را برایش بفرست:"),
+                kb=kb([btn("📨 ارسالِ مشخصات", f"psel:mod:{r['order_id']}", style=ButtonStyle.SUCCESS)]))
+        except Exception:      # noqa: BLE001
+            logger.exception("panel_seller: اطلاعِ سفارشِ دستی به مالک ناموفق بود")
+        if r.get("discount"):
+            try:
+                await cb.message.answer(f"🏷 تخفیفِ این خرید: <b>{n(r['discount'])}</b> تومان", parse_mode="HTML")
+            except Exception:      # noqa: BLE001
+                logger.info("panel_seller: پیامِ تخفیفِ سفارشِ دستی ارسال نشد")
+    return r
 
 
 @psel_user_router.message(PselBuyFSM.username, F.text)
@@ -419,11 +465,34 @@ async def show_my(event, bot: Bot, row, uid: int) -> None:
         accs = (await s.scalars(select(PanelSellerAccount).where(
             PanelSellerAccount.bot_id == row.id, PanelSellerAccount.buyer_tg == uid,
             PanelSellerAccount.status != "deleted").order_by(PanelSellerAccount.id.desc()))).all()
-    if not accs:
+    async with Session() as s:                                    # PATCH_PSEL_MANUAL_SALE_V1
+        orders = (await s.scalars(select(PanelSellerOrder).where(
+            PanelSellerOrder.bot_id == row.id, PanelSellerOrder.buyer_tg == uid,
+            PanelSellerOrder.status != "refunded").order_by(PanelSellerOrder.id.desc()).limit(10))).all()
+    if not accs and not orders:
         return await edit_or_send(event, "🗂 هنوز پنلی نخریده‌ای.", kb([btn("🧩 خریدِ پنل", "psel:buy", style=ButtonStyle.SUCCESS)], HOME_ROW))
     rows = [[btn(f"{STATUS_FA.get(a.status, '')[:1]} {a.title[:24]} · {a.admin_username}", f"psel:a:{a.id}")] for a in accs[:20]]
+    rows += [[btn(("⏳ " if o.status == "pending" else "✅ ") + o.title[:24] + (" · در انتظارِ مشخصات" if o.status == "pending" else " · مشخصات"),
+                  f"psel:myo:{o.id}")] for o in orders]
     rows.append(HOME_ROW)
     await edit_or_send(event, "🗂 <b>پنل‌هایِ من</b>", kb(*rows))
+
+
+@psel_user_router.callback_query(F.data.regexp(r"^psel:myo:\d+$"))
+async def my_order(cb: CallbackQuery, bot: Bot):
+    """PATCH_PSEL_MANUAL_SALE_V1 — جزئیاتِ سفارشِ دستیِ خودِ مشتری (مشخصاتی که فروشنده فرستاده)."""
+    row = await _row(bot)
+    if not row:
+        return await cb.answer()
+    async with Session() as s:
+        o = await s.get(PanelSellerOrder, int(cb.data.split(":")[2]))
+    if not o or o.bot_id != row.id or o.buyer_tg != cb.from_user.id:
+        return await cb.answer("پیدا نشد.", show_alert=True)
+    head = f"📦 <b>{esc(o.title)}</b>\n🔖 کدِ پیگیری: <code>{esc(o.tracking_code or '')}</code>\n💰 {n(o.price_toman)} تومان\n\n"
+    body = (f"✅ <b>مشخصاتِ پنل:</b>\n{esc(o.delivered_text or '')}" if o.status == "delivered"
+            else "⏳ در انتظارِ ارسالِ مشخصات توسطِ فروشنده است." if o.status == "pending" else "↩️ این سفارش لغو و وجه برگشت داده شد.")
+    await edit_or_send(cb, head + body, kb(back_row("psel:my")))
+    await cb.answer()
 
 
 @psel_user_router.callback_query(F.data == "psel:my")

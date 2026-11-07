@@ -4054,6 +4054,8 @@ class PanelSellerPackage(Base):
     price_toman: Mapped[int] = mapped_column(Integer, default=0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    # === PATCH_PSEL_MANUAL_SALE_V1 === فروشِ دستی: بدونِ اتصال به پنل (panel_id=0)؛ مالک مشخصات را خودش می‌فرستد
+    manual: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
 
 class PanelSellerAccount(Base):
@@ -4077,7 +4079,25 @@ class PanelSellerAccount(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
-TENANT_OWNED_MODELS += [PanelSellerAccount, PanelSellerPackage]
+# === PATCH_PSEL_MANUAL_SALE_V1 === سفارشِ فروشِ دستی: کیف‌پولِ مشتری کم می‌شود، مالک مشخصات (یوزر/رمز/آدرسِ پنل) را دستی می‌فرستد
+class PanelSellerOrder(Base):
+    __tablename__ = "panel_seller_orders"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    buyer_tg: Mapped[int] = mapped_column(BigInteger, index=True)
+    package_id: Mapped[int | None] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(120), default="")
+    price_toman: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(12), default="pending", index=True)      # pending | delivered | refunded
+    tracking_code: Mapped[str | None] = mapped_column(String(20))
+    delivered_text: Mapped[str | None] = mapped_column(Text)
+    discount_code_id: Mapped[int | None] = mapped_column(Integer)
+    discount_amount: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+TENANT_OWNED_MODELS += [PanelSellerAccount, PanelSellerPackage, PanelSellerOrder]
 
 
 # === PATCH_PSEL_PASSWORD_VAULT_V1 === (Whale Support) رمزِ پنلِ مشتری — همیشه رمزنگاری‌شده (Fernet)، جدولِ جدا (بدونِ ستونِ تازه رویِ جدولِ موجود)

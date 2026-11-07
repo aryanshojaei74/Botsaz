@@ -17,7 +17,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy import func, select
 
 from config import Session
-from models import PanelSellerAccount, PanelSellerPackage, VpnPanel
+from models import PanelSellerAccount, PanelSellerOrder, PanelSellerPackage, VpnPanel
 
 from tenant.bots.panel_seller import adapter as AD
 from tenant.bots.panel_seller import service as SV
@@ -55,6 +55,7 @@ class PselFSM(StatesGroup):
     lookup = State()           # PATCH_PSEL_ADMIN_LOOKUP_V1
     vol_delta = State()        # PATCH_PSEL_ADMIN_LOOKUP_V1
     note = State()             # PATCH_PSEL_NOTES_V1
+    deliver = State()          # PATCH_PSEL_MANUAL_SALE_V1: متنِ مشخصاتِ سفارشِ دستی
     extra_range = State()      # PATCH_PSEL_XG_RANGE_V1
     extra_picks = State()      # PATCH_PSEL_XG_RANGE_V1
 
@@ -90,14 +91,21 @@ async def menu_content(row):
             PanelSellerAccount.bot_id == row.id, PanelSellerAccount.status == "active")) or 0)
         sus = int(await s.scalar(select(func.count(PanelSellerAccount.id)).where(
             PanelSellerAccount.bot_id == row.id, PanelSellerAccount.status == "suspended")) or 0)
+        pend = int(await s.scalar(select(func.count(PanelSellerOrder.id)).where(                       # PATCH_PSEL_MANUAL_SALE_V1
+            PanelSellerOrder.bot_id == row.id, PanelSellerOrder.status == "pending")) or 0)
+        manual_pk = int(await s.scalar(select(func.count(PanelSellerPackage.id)).where(
+            PanelSellerPackage.bot_id == row.id, PanelSellerPackage.manual == True)) or 0)           # noqa: E712
     text = (f"🧩 <b>مدیریتِ پنل‌فروشی</b>\n\n{await status_line(row)}\n\n"
             f"🗂 پنل‌هایِ متصل: <b>{fa(len(panels))}</b> (قابلِ فروش: {fa(len(sup))})\n"
             f"📦 بسته‌هایِ فعال: <b>{fa(pk)}</b>\n"
             f"👤 ادمین‌هایِ فروخته‌شده: 🟢 {fa(act)} · 🔴 {fa(sus)}")
-    if panels and not sup:
+    if pend:
+        text += f"\n\n📨 <b>{fa(pend)}</b> سفارشِ دستی منتظرِ ارسالِ مشخصات است."
+    if panels and not sup and not manual_pk:
         text += "\n\n⚠️ هیچ‌کدام از پنل‌هایِ متصل «ادمین» ندارند؛ فقط خانوادهٔ مرزبان (مرزبان/ربکا/پاسارگادِ قدیمی/ریک‌پنل) قابلِ فروش است."
     return text, kb(
         [btn("🗂 پنل‌هایِ متصل (اتصال/حذف)", "pyar:menu", style=ButtonStyle.PRIMARY)],
+        [btn("📨 سفارش‌هایِ دستی" + (f" ({fa(pend)})" if pend else ""), "psel:mo", style=ButtonStyle.SUCCESS)],
         [btn("📦 بسته‌هایِ فروش", "psel:pk", style=ButtonStyle.SUCCESS),
          btn("👤 ادمین‌هایِ فروخته‌شده", "psel:ac:0", style=ButtonStyle.PRIMARY)],
         [btn("🛠 مدیریتِ کاملِ پنل (کاربران، ساخت، گزارش، ادمین‌ها)", "psel:mg", style=ButtonStyle.SUCCESS)],     # PATCH_PSEL_MANAGE_V1
@@ -142,7 +150,8 @@ async def pk_list(cb: CallbackQuery, bot: Bot, state: FSMContext):
     rows.append([btn("➕ بستهٔ جدید", "psel:pk:new", style=ButtonStyle.SUCCESS)])
     rows.append(back_row(MENU))
     await edit_or_send(cb, "📦 <b>بسته‌هایِ فروش</b>\n\n"
-                           "هر بسته = یک ادمینِ بدونِ sudo روی یکی از پنل‌هایِ متصل، با سقفِ حجم/کاربر و مدتِ مشخص."
+                           "هر بسته = یک ادمینِ بدونِ sudo روی یکی از پنل‌هایِ متصل، با سقفِ حجم/کاربر و مدتِ مشخص.\n"
+                           "📝 «فروشِ دستی» هم داری: بسته به پنل وصل نیست؛ مشتری می‌خرد و تو مشخصات را خودت می‌فرستی."
                        + ("" if pks else "\n\nهنوز بسته‌ای نساخته‌ای."), kb(*rows))
     await cb.answer()
 
@@ -159,7 +168,8 @@ async def pk_detail(cb: CallbackQuery, bot: Bot):
     if not p or p.bot_id != row.id:
         return await cb.answer("پیدا نشد.", show_alert=True)
     from tenant.bots.vpn.vpn_admin import PANEL_LABELS
-    plabel = PANEL_LABELS.get(panel.panel_key, panel.panel_key) if panel else "— حذف‌شده —"
+    plabel = ("📝 فروشِ دستی (بدونِ پنل)" if getattr(p, "manual", False)
+              else PANEL_LABELS.get(panel.panel_key, panel.panel_key) if panel else "— حذف‌شده —")
     await edit_or_send(cb, f"{pk_line(p)}\n🗂 پنل: {esc(plabel)}\nوضعیت: {'🟢 فعال' if p.active else '⚪️ غیرفعال'}",
                        kb([btn("⚪️ غیرفعال‌کردن" if p.active else "🟢 فعال‌کردن", f"psel:pkt:{pid}", style=ButtonStyle.PRIMARY)],
                           [btn("🗑 حذف", f"psel:pkd:{pid}", style=ButtonStyle.DANGER)], back_row("psel:pk")))
@@ -201,12 +211,25 @@ async def pk_new(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return
     from tenant.bots.vpn.vpn_admin import PANEL_LABELS
     panels = [p for p in await _panels(row.id) if AD.supports(p.panel_key)]
-    if not panels:
-        return await cb.answer("اول از «🗂 پنل‌هایِ متصل» یک پنلِ مرزبان‌خانواده وصل کن.", show_alert=True)
     rows = [[btn(PANEL_LABELS.get(p.panel_key, p.panel_key), f"psel:pkp:{p.id}", style=ButtonStyle.PRIMARY)] for p in panels]
+    rows.append([btn("📝 فروشِ دستی (بدونِ اتصال به پنل)", "psel:pkm", style=ButtonStyle.SUCCESS)])      # PATCH_PSEL_MANUAL_SALE_V1
     rows.append(back_row("psel:pk"))
     await state.clear()
-    await edit_or_send(cb, "🗂 این بسته روی کدام پنل ساخته شود؟", kb(*rows))
+    await edit_or_send(cb, "🗂 این بسته روی کدام پنل ساخته شود؟\n\n"
+                           "📝 «فروشِ دستی»: بسته به پنلِ خودکار وصل نیست؛ مشتری با کیف‌پول می‌خرد، سفارش برایِ تو می‌آید و "
+                           "آدرس/نام‌کاربری/رمزِ پنل را خودت برایش می‌فرستی.", kb(*rows))
+    await cb.answer()
+
+
+@psel_admin_router.callback_query(F.data == "psel:pkm")
+async def pk_manual(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """PATCH_PSEL_MANUAL_SALE_V1 — بستهٔ فروشِ دستی (panel_id=0)."""
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.set_state(PselFSM.title)
+    await state.update_data(psel_panel=0, psel_manual=1, psel_msg=(cb.message.chat.id, cb.message.message_id))
+    await edit_or_send(cb, "✏️ نامِ بسته را بفرست (مثلاً «پنل ۱۰۰ گیگ ماهانه»):", kb(back_row("psel:pk")))
     await cb.answer()
 
 
@@ -297,11 +320,125 @@ async def pk_price(msg: Message, bot: Bot, state: FSMContext):
     await state.clear()
     async with Session() as s:
         p = PanelSellerPackage(bot_id=row.id, panel_id=int(d["psel_panel"]), title=d["psel_title"], data_gb=int(d["psel_gb"]),
-                               max_users=int(d["psel_users"]), days=int(d["psel_days"]), price_toman=v, active=True)
+                               max_users=int(d["psel_users"]), days=int(d["psel_days"]), price_toman=v, active=True,
+                               manual=bool(d.get("psel_manual")))
         s.add(p)
         await s.commit()
     await msg.answer("✅ بسته ساخته شد:\n" + pk_line(p), reply_markup=kb(
         [btn("📦 بسته‌ها", "psel:pk", style=ButtonStyle.PRIMARY)], back_row(MENU)), parse_mode="HTML")
+
+
+# ═══════════════════════ سفارش‌هایِ دستی (PATCH_PSEL_MANUAL_SALE_V1) ═══════════════════════
+
+@psel_admin_router.callback_query(F.data == "psel:mo")
+async def mo_list(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    orders = await SV.manual_orders(row.id, "pending")
+    rows = [[btn(f"⏳ #{o.tracking_code} · {o.title[:20]} · {n(o.price_toman)}", f"psel:mod:{o.id}", style=ButtonStyle.PRIMARY)] for o in orders]
+    rows.append(back_row(MENU))
+    await edit_or_send(cb, "📨 <b>سفارش‌هایِ دستیِ در انتظار</b>\n\nروی هر سفارش بزن تا مشخصاتِ پنل را برایِ مشتری بفرستی."
+                       + ("" if orders else "\n\n✅ سفارشِ در انتظاری نیست."), kb(*rows))
+    await cb.answer()
+
+
+@psel_admin_router.callback_query(F.data.regexp(r"^psel:mod:\d+$"))
+async def mo_detail(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    async with Session() as s:
+        o = await s.get(PanelSellerOrder, int(cb.data.split(":")[2]))
+    if not o or o.bot_id != row.id:
+        return await cb.answer("پیدا نشد.", show_alert=True)
+    st = {"pending": "⏳ در انتظارِ ارسالِ مشخصات", "delivered": "✅ تحویل شد", "refunded": "↩️ لغو و برگشتِ وجه"}.get(o.status, o.status)
+    text = (f"📨 <b>سفارشِ دستی #{esc(o.tracking_code or str(o.id))}</b>\n\n👤 مشتری: <code>{o.buyer_tg}</code>\n📦 {esc(o.title)}\n"
+            f"💰 {n(o.price_toman)} تومان\nوضعیت: {st}")
+    if o.status == "delivered" and o.delivered_text:
+        text += f"\n\n📝 مشخصاتِ ارسال‌شده:\n<code>{esc(o.delivered_text)}</code>"
+    rows = []
+    if o.status == "pending":
+        rows += [[btn("📨 ارسالِ مشخصات به مشتری", f"psel:mdl:{o.id}", style=ButtonStyle.SUCCESS)],
+                 [btn("↩️ لغو و برگشتِ وجه", f"psel:mrf:{o.id}", style=ButtonStyle.DANGER)]]
+    rows.append(back_row("psel:mo"))
+    await edit_or_send(cb, text, kb(*rows))
+    await cb.answer()
+
+
+@psel_admin_router.callback_query(F.data.regexp(r"^psel:mdl:\d+$"))
+async def mo_deliver_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    oid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        o = await s.get(PanelSellerOrder, oid)
+    if not o or o.bot_id != row.id or o.status != "pending":
+        return await cb.answer("این سفارش دیگر در انتظار نیست.", show_alert=True)
+    await state.set_state(PselFSM.deliver)
+    await state.update_data(mo_id=oid)
+    await edit_or_send(cb, "📝 <b>مشخصاتِ پنل را بفرست</b> (هر متنی؛ مثلاً):\n\n<code>آدرس: https://panel.example.com:8000\n"
+                           "نام‌کاربری: user1\nرمز: Pass@123</code>\n\nهمان متن عیناً برایِ مشتری ارسال می‌شود.",
+                       kb(back_row(f"psel:mod:{oid}", "✖️ لغو")))
+    await cb.answer()
+
+
+@psel_admin_router.message(PselFSM.deliver, F.text)
+async def mo_deliver_in(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard(msg, bot)
+    if not row:
+        return
+    oid = int((await state.get_data()).get("mo_id") or 0)
+    text = (msg.text or "").strip()
+    if len(text) < 3:
+        return await msg.answer("متنِ مشخصات خیلی کوتاه است؛ دوباره بفرست.")
+    o = await SV.deliver_manual(row.id, oid, text)
+    await state.clear()
+    if o is None:
+        return await msg.answer("این سفارش دیگر در انتظار نیست (قبلاً تحویل یا لغو شده).", reply_markup=kb(back_row("psel:mo")))
+    sent = True
+    try:
+        await bot.send_message(o.buyer_tg, f"✅ <b>مشخصاتِ پنلِ تو آماده شد!</b>\n\n📦 {esc(o.title)}\n🔖 کدِ پیگیری: <code>{esc(o.tracking_code or '')}</code>\n\n"
+                                           f"<code>{esc(text)}</code>\n\nرمز را جایی امن نگه دار. همین مشخصات از «🗂 پنل‌هایِ من» هم قابلِ مشاهده است.",
+                               parse_mode="HTML")
+    except Exception:      # noqa: BLE001
+        sent = False
+        logger.exception("panel_seller: ارسالِ مشخصاتِ سفارشِ دستی به مشتری ناموفق بود")
+    await msg.answer(("✅ مشخصات برایِ مشتری ارسال شد و سفارش «تحویل‌شده» ثبت شد." if sent else
+                      "⚠️ سفارش «تحویل‌شده» ثبت شد ولی ارسالِ پیام به مشتری نشد (شاید ربات را بلاک کرده)؛ مشخصات در «🗂 پنل‌هایِ من»ِ او هست. "
+                      "می‌توانی دستی هم برایش بفرستی."),
+                     reply_markup=kb(back_row("psel:mo", "⬅️ سفارش‌ها")))
+
+
+@psel_admin_router.callback_query(F.data.regexp(r"^psel:mrf:\d+$"))
+async def mo_refund_ask(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    oid = int(cb.data.split(":")[2])
+    await edit_or_send(cb, "↩️ این سفارش لغو و مبلغ به کیف‌پولِ مشتری برگردانده شود؟",
+                       kb([btn("✅ بله، لغو و برگردان", f"psel:mrfy:{oid}", style=ButtonStyle.DANGER), btn("⬅️ نه", f"psel:mod:{oid}")]))
+    await cb.answer()
+
+
+@psel_admin_router.callback_query(F.data.regexp(r"^psel:mrfy:\d+$"))
+async def mo_refund_do(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    o = await SV.refund_manual(row.id, int(cb.data.split(":")[2]))
+    if o is None:
+        return await cb.answer("این سفارش دیگر در انتظار نیست.", show_alert=True)
+    try:
+        await bot.send_message(o.buyer_tg, f"↩️ سفارشِ «{esc(o.title)}» (کد <code>{esc(o.tracking_code or '')}</code>) لغو شد و "
+                                           f"<b>{n(o.price_toman)}</b> تومان به کیف‌پولت برگشت.", parse_mode="HTML")
+    except Exception:      # noqa: BLE001
+        logger.info("panel_seller: خبرِ لغوِ سفارش به مشتری نرفت")
+    await cb.answer("لغو شد و وجه برگشت ✅")
+    await mo_list(cb, bot, _NullState())
 
 
 # ═══════════════════════ ادمین‌هایِ فروخته‌شده ═══════════════════════

@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 
 from config import Session
-from models import BotUser, PanelSellerAccount, PanelSellerPackage, PanelSellerSecret, VpnPanel, WalletTxn
+from models import BotUser, PanelSellerAccount, PanelSellerOrder, PanelSellerPackage, PanelSellerSecret, VpnPanel, WalletTxn
 
 from tenant.bots.panel_seller import adapter as AD
 from tenant.shared.panel_clients.vpn_panel import PanelError
@@ -350,6 +350,82 @@ async def buy(bot_id: int, buyer_tg: int, package_id: int, api_factory=None, bot
             logger.exception("panel_seller: اعلانِ خرید ناموفق بود")
     return {"status": "ok", "account_id": acc_id, "username": username, "password": password,
             "panel_url": panel.base_url, "tracking": trk, "discount": int(disc.discount) if disc is not None else 0, "paid": price}
+
+
+# ═══════════════════════ فروشِ دستی (PATCH_PSEL_MANUAL_SALE_V1) ═══════════════════════
+# بسته‌یِ manual به پنل وصل نیست: خرید ⇒ کیف‌پولِ مشتری کم می‌شود و یک «سفارشِ در انتظار» ساخته می‌شود؛ مالک یوزر/رمز/آدرسِ پنل را
+# خودش می‌فرستد (deliver_manual) یا سفارش را لغو و وجه را برمی‌گرداند (refund_manual).
+
+async def buy_manual(bot_id: int, buyer_tg: int, package_id: int, bot=None, row=None, discount_code: str | None = None) -> dict:
+    """status: ok | no_package | not_manual | insufficient | bad_discount (+ order_id/tracking/paid/discount/title)."""
+    async with Session() as s:
+        pk = await s.get(PanelSellerPackage, package_id)
+    if not pk or pk.bot_id != bot_id or not pk.active:
+        return {"status": "no_package"}
+    if not getattr(pk, "manual", False):
+        return {"status": "not_manual"}
+    price = int(pk.price_toman or 0)
+    disc = None
+    from models import alloc_tracking_in
+    async with Session() as s:
+        if discount_code:
+            from tenant.gateways.discount_engine import record_usage, validate_discount
+            disc = await validate_discount(bot_id=bot_id, code=discount_code, telegram_id=buyer_tg, price=price, panel_key=None, session=s)
+            if not disc.ok:
+                return {"status": "bad_discount", "reason": disc.reason}
+            price = int(disc.final_price)
+        if price > 0:
+            u, bal = await _wallet_debit(s, bot_id, buyer_tg, price, f"خریدِ پنل (دستی): {pk.title}")
+            if u is None:
+                return {"status": "insufficient", "need": price, "balance": bal}
+        if disc is not None:
+            await record_usage(s, code_id=disc.code_id, bot_id=bot_id, telegram_id=buyer_tg, saved_amount=int(disc.discount))
+        trk = await alloc_tracking_in(s, bot_id)
+        o = PanelSellerOrder(bot_id=bot_id, buyer_tg=buyer_tg, package_id=pk.id, title=pk.title, price_toman=price, status="pending",
+                             tracking_code=trk, discount_code_id=(int(disc.code_id) if disc is not None else None),
+                             discount_amount=(int(disc.discount) if disc is not None else None))
+        s.add(o)
+        await s.commit()
+        oid = o.id
+    return {"status": "ok", "order_id": oid, "tracking": trk, "paid": price, "title": pk.title,
+            "discount": int(disc.discount) if disc is not None else 0}
+
+
+async def manual_orders(bot_id: int, status: str = "pending", limit: int = 30) -> list:
+    async with Session() as s:
+        return list((await s.scalars(select(PanelSellerOrder).where(
+            PanelSellerOrder.bot_id == bot_id, PanelSellerOrder.status == status)
+            .order_by(PanelSellerOrder.id.desc()).limit(limit))).all())
+
+
+async def deliver_manual(bot_id: int, order_id: int, text: str) -> "PanelSellerOrder | None":
+    """علامت‌گذاریِ «تحویل شد» + نگهداریِ متنِ مشخصات. فقط سفارشِ pending؛ دوباره‌کاری ⇒ None."""
+    async with Session() as s:
+        o = await s.get(PanelSellerOrder, order_id, with_for_update=True)
+        if not o or o.bot_id != bot_id or o.status != "pending":
+            return None
+        o.status = "delivered"
+        o.delivered_text = (text or "")[:3500]
+        o.decided_at = datetime.utcnow()
+        await s.commit()
+        return o
+
+
+async def refund_manual(bot_id: int, order_id: int) -> "PanelSellerOrder | None":
+    """لغوِ سفارشِ pending: وجه (و مصرفِ کدِ تخفیف) برمی‌گردد."""
+    async with Session() as s:
+        o = await s.get(PanelSellerOrder, order_id, with_for_update=True)
+        if not o or o.bot_id != bot_id or o.status != "pending":
+            return None
+        o.status = "refunded"
+        o.decided_at = datetime.utcnow()
+        if o.discount_code_id:
+            from tenant.gateways.discount_engine import revert_usage
+            await revert_usage(s, code_id=int(o.discount_code_id), telegram_id=o.buyer_tg)
+        await s.commit()
+    if int(o.price_toman or 0) > 0:
+        await _refund(bot_id, o.buyer_tg, int(o.price_toman), "بازگشتِ وجهِ خریدِ پنل (لغوِ سفارشِ دستی)")
+    return o
 
 
 async def renew(bot_id: int, account_id: int, buyer_tg: int, api_factory=None) -> dict:
