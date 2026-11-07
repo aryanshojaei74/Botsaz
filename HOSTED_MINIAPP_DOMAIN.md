@@ -83,3 +83,18 @@ async def api_miniapp_menu(app_id: int, body: dict, x_init_data: str | None = He
 * پورتِ برنامه خودکار تشخیص داده می‌شود (مثلِ مسیرِ `/u/<name>/`)؛ کاربر لازم نیست `PORT` بگیرد.
 * `MINIAPP_URL` به متغیرهایِ اپ اضافه می‌شود (بعد از ری‌استارتِ اپ در کدِ کاربر در دسترس است).
 * سوءاستفاده: مدیر با «⛔️ غیرفعال» در صفحهٔ اپ همان لحظه آدرس را می‌بندد.
+
+
+## ۴) نصبِ خودکارِ سمتِ سرویسِ botsazvip (بیلد ۴۸۶)
+به‌جایِ ویرایشِ دستیِ `main.py`/`api.py`، فقط این را اجرا کن (پشتیبان `*.bak_miniapp` می‌سازد و idempotent است):
+```bash
+python3 /opt/botsaz/deploy/miniapp_vip_patch.py && systemctl restart botsazvip
+```
+افزوده‌ها: حلقهٔ همگام‌سازی، middlewareِ سرو کردنِ مینی‌اپ‌هایِ استاتیک، و endpointهایِ
+`GET /miniapp` · `POST /miniapp/buy` · `POST /miniapp/menu-button` · `POST /miniapp/upload` (zip) · `DELETE /miniapp/static`.
+
+### دو حالتِ مینی‌اپ
+* **داخلِ پروژه:** وب‌سرورِ خودِ کاربر در کانتینرش؛ پورت خودکار تشخیص داده می‌شود.
+* **استاتیک:** zipِ HTML/JS (`index.html` در ریشه یا داخلِ یک پوشهٔ ریشه). بدونِ کانتینر از `/opt/botsazvip/miniapps/<اپ>/` سرو می‌شود؛
+  سقفِ zip ۲۰MB، بازشده ۶۰MB، ۲۰۰۰ فایل؛ فایل‌هایِ مخفی (`.env`, `.git`)، `node_modules`، مسیرِ `..` و symlink رد می‌شوند.
+  مسیرهایِ بدونِ پسوند به `index.html` می‌روند (SPA).

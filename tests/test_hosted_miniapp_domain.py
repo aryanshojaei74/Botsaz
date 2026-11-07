@@ -192,3 +192,110 @@ async def test_set_menu_button_needs_active_sub_and_uses_url(env, monkeypatch):
         return HM.Result(True, "ok")
     monkeypatch.setattr(HM, "set_for_app", fake)
     assert (await D.set_menu_button(1, "🛍 فروشگاه")).ok and got["url"] == D.url_of((await app(env, 1)).miniapp_sub) and got["text"] == "🛍 فروشگاه"
+
+
+# ───────────── حالتِ استاتیک ─────────────
+import io
+import zipfile
+
+
+def _zip(tmp_path, files: dict, name="m.zip", symlink=None):
+    p = tmp_path / name
+    with zipfile.ZipFile(p, "w") as z:
+        for k, v in files.items():
+            z.writestr(k, v)
+        if symlink:
+            zi = zipfile.ZipInfo(symlink)
+            zi.external_attr = (0o120777 << 16)
+            z.writestr(zi, "/etc/passwd")
+    return p
+
+
+@pytest.fixture
+def static_root(monkeypatch, tmp_path):
+    monkeypatch.setattr(D, "STATIC_ROOT", tmp_path / "ma")
+    D._HOST_CACHE.clear()
+    return tmp_path / "ma"
+
+
+def test_install_static_ok_flat_and_nested_and_replace(static_root, tmp_path):
+    r = D.install_static("shop1", _zip(tmp_path, {"index.html": "<h1>a</h1>", "assets/app.js": "1"}))
+    assert r.ok and D.has_static("shop1") and (static_root / "shop1" / "assets" / "app.js").read_text() == "1"
+    r = D.install_static("shop1", _zip(tmp_path, {"dist/index.html": "<h1>b</h1>", "dist/x.css": "c"}, "n.zip"))   # پوشهٔ ریشه برداشته می‌شود
+    assert r.ok and (static_root / "shop1" / "index.html").read_text() == "<h1>b</h1>"
+    assert not (static_root / "shop1" / "assets").exists()                                                    # نسخهٔ قبلی کاملاً جایگزین شد
+    assert [p.name for p in static_root.iterdir()] == ["shop1"]                                               # فایلِ موقت/قدیمی نمانده
+
+
+def test_install_static_rejects_bad_zips(static_root, tmp_path):
+    assert not D.install_static("shop1", _zip(tmp_path, {"a.txt": "x"})).ok                                   # بدونِ index.html
+    assert not D.install_static("shop1", tmp_path / "nope.zip").ok
+    bad = tmp_path / "bad.zip"
+    bad.write_bytes(b"not a zip")
+    assert not D.install_static("shop1", bad).ok
+    r = D.install_static("shop1", _zip(tmp_path, {"index.html": "x"}, "s.zip", symlink="link"))
+    assert not r.ok and "symlink" in r.message
+    assert not D.has_static("shop1")
+
+
+def test_install_static_ignores_hidden_and_traversal(static_root, tmp_path):
+    r = D.install_static("shop1", _zip(tmp_path, {"index.html": "ok", ".env": "SECRET", ".git/config": "x",
+                                                  "../evil.txt": "e", "/abs.txt": "a", "node_modules/x.js": "n"}))
+    assert r.ok
+    root = static_root / "shop1"
+    assert sorted(p.name for p in root.iterdir()) == ["index.html"]
+    assert not (static_root / "evil.txt").exists() and not (tmp_path / "evil.txt").exists()
+
+
+def test_install_static_limits(static_root, tmp_path, monkeypatch):
+    monkeypatch.setattr(D, "MAX_FILES", 3)
+    assert not D.install_static("shop1", _zip(tmp_path, {f"f{i}.txt": "x" for i in range(5)} | {"index.html": "x"})).ok
+    monkeypatch.setattr(D, "MAX_FILES", 100)
+    monkeypatch.setattr(D, "MAX_UNZIPPED_BYTES", 10)
+    assert not D.install_static("shop1", _zip(tmp_path, {"index.html": "x" * 50}, "big.zip")).ok
+    monkeypatch.setattr(D, "MAX_UNZIPPED_BYTES", 10_000)
+    monkeypatch.setattr(D, "MAX_ZIP_BYTES", 10)
+    assert not D.install_static("shop1", _zip(tmp_path, {"index.html": "x" * 500}, "z.zip")).ok
+
+
+def test_resolve_static_traversal_and_spa(static_root, tmp_path):
+    D.install_static("shop1", _zip(tmp_path, {"index.html": "idx", "a/b.js": "js", "a/index.html": "sub"}))
+    root = static_root / "shop1"
+    assert D.resolve_static("shop1", "/").read_text() == "idx"
+    assert D.resolve_static("shop1", "/a/b.js").read_text() == "js"
+    assert D.resolve_static("shop1", "/a/").read_text() == "sub"
+    assert D.resolve_static("shop1", "/profile/7").read_text() == "idx"            # مسیرِ SPA
+    assert D.resolve_static("shop1", "/missing.js") is None                        # فایلِ نبوده ⇒ ۴۰۴ (نه index)
+    for evil in ("/../x", "/..%2f", "/a/../../x", "/.env", "/a/../.git/config"):
+        f = D.resolve_static("shop1", evil)
+        assert f is None or root.resolve() in f.resolve().parents
+
+
+@pytest.mark.asyncio
+async def test_serve_static_by_host(env, static_root, tmp_path):
+    await D.grant(1, 30)
+    sub = (await app(env, 1)).miniapp_sub
+    D.install_static("shop1", _zip(tmp_path, {"index.html": "<h1>hi</h1>", "app.js": "x"}))
+    r = await D.serve_static(f"{sub}.supraplus.ir", "/")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache" and r.headers["x-content-type-options"] == "nosniff"
+    r = await D.serve_static(f"{sub}.supraplus.ir:443", "/app.js")
+    assert r.status_code == 200 and "max-age" in r.headers["cache-control"]
+    assert (await D.serve_static(f"{sub}.supraplus.ir", "/nope.png")).status_code == 404
+    assert await D.serve_static("botsaz.mobitek.shop", "/") is None                  # host مالِ ما نیست ⇒ middleware ردش می‌کند
+    assert (await D.serve_static("mzzzzzzzz.supraplus.ir", "/")).status_code == 404  # ساب‌دامینِ ناشناخته
+    await D.disable(1)
+    D._HOST_CACHE.clear()
+    assert (await D.serve_static(f"{sub}.supraplus.ir", "/")).status_code == 404     # اشتراکِ تمام‌شده ⇒ ۴۰۴
+
+
+@pytest.mark.asyncio
+async def test_sync_maps_static_apps_to_vip_service_without_container(env, static_root, tmp_path, monkeypatch):
+    monkeypatch.setattr(D, "STATIC_UPSTREAM", "127.0.0.1:8002")
+    await D.grant(1, 30)
+    D.install_static("shop1", _zip(tmp_path, {"index.html": "x"}))
+    async with env.mk() as s:
+        (await s.get(models.HostedApp, 1)).status = "stopped"                         # کانتینر خاموش است، ولی استاتیک نیازی ندارد
+        await s.commit()
+    res = await D.sync(FakeDM(), run=env.run)
+    s1 = (await app(env, 1)).miniapp_sub
+    assert res["changed"] == 1 and (env.dir / "shop1.map").read_text() == f"{s1}.supraplus.ir 127.0.0.1:8002;\n"

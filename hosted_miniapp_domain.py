@@ -16,8 +16,14 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import os
+import posixpath
 import re
 import secrets
+import shutil
+import stat
+import tempfile
+import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +37,14 @@ logger = _get_logger(__name__)
 
 DOMAIN = os.getenv("MINIAPP_DOMAIN", "supraplus.ir").strip().lower()
 MAP_DIR = Path(os.getenv("MINIAPP_MAP_DIR", "/etc/nginx/miniapp-hosts.d"))
+# === حالتِ «فقط فایلِ استاتیک» ===
+# کاربر zipِ HTML/JS (خروجیِ build) را آپلود می‌کند؛ بدونِ کانتینر. nginx این ساب‌دامین‌ها را به خودِ سرویسِ botsazvip
+# (STATIC_UPSTREAM) می‌فرستد و middleware (serve_static) فایل را از STATIC_ROOT/<نامِ اپ>/ سرو می‌کند.
+STATIC_ROOT = Path(os.getenv("MINIAPP_STATIC_DIR", "/opt/botsazvip/miniapps"))
+STATIC_UPSTREAM = os.getenv("MINIAPP_STATIC_UPSTREAM", "127.0.0.1:8002")
+MAX_ZIP_BYTES = 20 * 1024 * 1024
+MAX_UNZIPPED_BYTES = 60 * 1024 * 1024
+MAX_FILES = 2000
 PRICE_KEY = "vip_miniapp_price"
 DEFAULT_PRICE = 100_000
 PERIOD_DAYS = 30
@@ -221,7 +235,9 @@ async def sync(dm, *, run=None, now: dt.datetime | None = None) -> dict:
     known = {a.name for a in apps}
     for a in apps:
         try:
-            if is_active(a, now) and a.status == "running":
+            if is_active(a, now) and has_static(a.name):
+                changed += int(write_map(a.name, a.miniapp_sub, STATIC_UPSTREAM))     # استاتیک: کانتینر لازم نیست
+            elif is_active(a, now) and a.status == "running":
                 port = await dm.detect_listen_port(a.name) or dm.guess_internal_port(await _env_dict(a.id))
                 ip = await dm.container_ip(a.name)
                 if ip and port:
@@ -243,3 +259,169 @@ async def sync(dm, *, run=None, now: dt.datetime | None = None) -> dict:
         if err:
             logger.error("miniapp sync: %s", err)
     return {"changed": changed, "removed": removed, "error": err}
+
+
+# ───────────────────────── حالتِ استاتیک: آپلود و سرو ─────────────────────────
+def static_dir(app_name: str) -> Path:
+    if not re.fullmatch(r"[a-z][a-z0-9-]{2,29}", app_name or ""):
+        raise ValueError("نامِ اپ نامعتبر")
+    return STATIC_ROOT / app_name
+
+
+def has_static(app_name: str) -> bool:
+    try:
+        return (static_dir(app_name) / "index.html").is_file()
+    except ValueError:
+        return False
+
+
+def _safe_member(name: str) -> str | None:
+    """نامِ امنِ نسبیِ داخلِ zip یا None (مسیرِ مطلق، .. ، بک‌اسلش، فایلِ مخفی)."""
+    if not name or "\\" in name or name.startswith("/") or "\x00" in name:
+        return None
+    norm = posixpath.normpath(name)
+    parts = norm.split("/")
+    if norm.startswith("..") or ".." in parts:
+        return None
+    if any(p.startswith(".") and p != ".well-known" for p in parts):      # .git, .env و ... هرگز
+        return None
+    if any(p.lower() in ("__macosx", "node_modules") for p in parts):
+        return None
+    return norm
+
+
+def install_static(app_name: str, zip_path: str | os.PathLike) -> Result:
+    """zip را امن باز می‌کند و جایگزینِ نسخهٔ قبلی می‌کند. باید index.html (در ریشه یا داخلِ یک پوشهٔ ریشه) داشته باشد."""
+    zp = Path(zip_path)
+    try:
+        if zp.stat().st_size > MAX_ZIP_BYTES:
+            return Result(False, f"حجمِ zip بیشتر از {MAX_ZIP_BYTES // (1024 * 1024)} مگابایت است.")
+        zf = zipfile.ZipFile(zp)
+    except (OSError, zipfile.BadZipFile):
+        return Result(False, "فایل zip معتبر نیست.")
+    with zf:
+        infos = [i for i in zf.infolist() if not i.is_dir()]
+        if not infos:
+            return Result(False, "zip خالی است.")
+        if len(infos) > MAX_FILES:
+            return Result(False, f"تعدادِ فایل‌ها بیشتر از {MAX_FILES} است.")
+        if sum(i.file_size for i in infos) > MAX_UNZIPPED_BYTES:
+            return Result(False, f"حجمِ بازشده بیشتر از {MAX_UNZIPPED_BYTES // (1024 * 1024)} مگابایت است.")
+        names = {}
+        for i in infos:
+            mode = (i.external_attr >> 16) & 0xFFFF
+            if stat.S_ISLNK(mode):
+                return Result(False, "zip نباید لینکِ نمادین (symlink) داشته باشد.")
+            n = _safe_member(i.filename)
+            if n is None:
+                continue                                   # فایل‌هایِ مخفی/خطرناک بی‌صدا رد می‌شوند؛ مسیرِ مخرب (..) هم
+            if ".." in i.filename.replace("\\", "/").split("/"):
+                return Result(False, "zip مسیرِ نامعتبر (..) دارد.")
+            names[i] = n
+        if not names:
+            return Result(False, "فایلِ قابل‌استفاده‌ای در zip نیست.")
+        # اگر همهٔ فایل‌ها داخلِ یک پوشهٔ ریشه‌اند، همان پوشه برداشته می‌شود
+        tops = {n.split("/")[0] for n in names.values() if "/" in n}
+        flat = [n for n in names.values() if "/" not in n]
+        strip = ""
+        if not flat and len(tops) == 1:
+            strip = next(iter(tops)) + "/"
+        rel = {i: (n[len(strip):] if strip and n.startswith(strip) else n) for i, n in names.items()}
+        if "index.html" not in rel.values():
+            return Result(False, "فایلِ index.html در ریشهٔ zip (یا داخلِ پوشهٔ اصلی) پیدا نشد.")
+        dest = static_dir(app_name)
+        STATIC_ROOT.mkdir(parents=True, exist_ok=True)
+        tmp = Path(tempfile.mkdtemp(prefix=f".{app_name}-", dir=STATIC_ROOT))
+        try:
+            for i, r in rel.items():
+                target = (tmp / r).resolve()
+                if tmp.resolve() not in target.parents:
+                    return Result(False, "zip مسیرِ نامعتبر دارد.")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(i) as src, open(target, "wb") as out:
+                    shutil.copyfileobj(src, out)
+            old = None
+            if dest.exists():
+                old = STATIC_ROOT / f".{app_name}.old-{int(time.time())}"
+                os.replace(dest, old)
+            os.replace(tmp, dest)
+            if old:
+                shutil.rmtree(old, ignore_errors=True)
+        except OSError as e:
+            shutil.rmtree(tmp, ignore_errors=True)
+            return Result(False, f"نوشتنِ فایل‌ها ناموفق بود: {e}")
+        finally:
+            if tmp.exists():
+                shutil.rmtree(tmp, ignore_errors=True)
+    _HOST_CACHE.clear()
+    return Result(True, f"{len(rel)} فایل بارگذاری شد.")
+
+
+def remove_static(app_name: str) -> bool:
+    d = static_dir(app_name)
+    existed = d.exists()
+    shutil.rmtree(d, ignore_errors=True)
+    _HOST_CACHE.clear()
+    return existed
+
+
+def resolve_static(app_name: str, rel_path: str) -> Path | None:
+    """مسیرِ فایل (ضدِ path-traversal). مسیرِ بدونِ پسوند (روتِ SPA) → index.html."""
+    root = static_dir(app_name).resolve()
+    p = posixpath.normpath("/" + (rel_path or "").lstrip("/")).lstrip("/")
+    if any(seg.startswith(".") and seg != ".well-known" for seg in p.split("/") if seg):
+        return None
+    cand = (root / p).resolve() if p else root
+    if root != cand and root not in cand.parents:
+        return None
+    if cand.is_dir():
+        cand = cand / "index.html"
+    if cand.is_file():
+        return cand
+    if "." not in posixpath.basename(p):                       # مسیرِ SPA (/profile) → index.html
+        idx = root / "index.html"
+        return idx if idx.is_file() else None
+    return None
+
+
+_HOST_CACHE: dict[str, tuple[float, str | None]] = {}       # host -> (زمان، نامِ اپ فعال یا None)
+_HOST_TTL = 20.0
+
+
+async def _app_for_host(host: str) -> str | None:
+    suffix = "." + DOMAIN
+    host = (host or "").split(":")[0].lower()
+    if not host.endswith(suffix):
+        return None
+    sub = host[: -len(suffix)]
+    if not _SUB_RE.match(sub):
+        return None
+    now = time.monotonic()
+    hit = _HOST_CACHE.get(host)
+    if hit and now - hit[0] < _HOST_TTL:
+        return hit[1]
+    async with Session() as s:
+        a = await s.scalar(select(HostedApp).where(HostedApp.miniapp_sub == sub))
+    name = a.name if (a is not None and is_active(a) and has_static(a.name)) else None
+    _HOST_CACHE[host] = (now, name)
+    return name
+
+
+async def serve_static(host: str, path: str):
+    """پاسخِ FastAPI برایِ درخواستِ یک ساب‌دامینِ مینی‌اپِ استاتیک؛ None اگر این host مالِ ما نیست."""
+    from fastapi.responses import FileResponse, PlainTextResponse
+    suffix = "." + DOMAIN
+    if not (host or "").split(":")[0].lower().endswith(suffix):
+        return None
+    name = await _app_for_host(host)
+    if not name:
+        return PlainTextResponse("Not found", status_code=404)
+    f = resolve_static(name, path)
+    if f is None:
+        return PlainTextResponse("Not found", status_code=404)
+    html = f.suffix.lower() in (".html", ".htm")
+    return FileResponse(str(f), headers={
+        "Cache-Control": "no-cache" if html else "public, max-age=3600",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+    })
