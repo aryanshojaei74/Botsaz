@@ -2892,6 +2892,9 @@ class PartnerCardOrder(Base):
     sold_bot_id: Mapped[int | None] = mapped_column(Integer)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    # === PATCH_PARTNER_DISCOUNT_CODE_V1 === کدِ تخفیفِ اعمال‌شده؛ مصرفش فقط وقتی ثبت می‌شود که سفارش تأیید شود
+    discount_code_id: Mapped[int | None] = mapped_column(Integer)
+    discount_amount: Mapped[float | None] = mapped_column(Numeric(14, 0))
 
 
 class PartnerStockOrder(Base):

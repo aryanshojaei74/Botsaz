@@ -261,6 +261,9 @@ async def pp_settings(cb: CallbackQuery, bot: Bot):
         # === PATCH_PARTNER_SALE_FIELDS_V1 ===
         [_b("🤖 انتخاب ربات‌ها جهت فروش", "pp:salefields", S)],
 
+        # === PATCH_PARTNER_DISCOUNT_CODE_V1 === کدهایی که اینجا ساخته می‌شود در «ساخت ربات» خریدارانِ همکار هم اعمال می‌شود
+        [_b("🏷 کدهای تخفیف (فروش ربات)", "tadm:discounts", S)],
+
         # === PATCH_TENANT_PREMIUM_EMOJI_V1 ===
         [_b("⭐ افزودن ایموجی پرمیوم", "pemj:menu:0", P)],
 

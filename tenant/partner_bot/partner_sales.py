@@ -54,6 +54,7 @@ _PLAN_TITLE = {"growth": "🚀 رشد", "pro": "💎 حرفه‌ای"}
 class PartnerSaleFSM(StatesGroup):
     token = State()
     receipt = State()   # === PATCH_PARTNER_V20 === رسیدِ کارت‌به‌کارت
+    code = State()      # === PATCH_PARTNER_DISCOUNT_CODE_V1 === ورودِ کدِ تخفیف
 
 
 # ────────── کمکی‌ها ──────────
@@ -386,25 +387,20 @@ async def ps_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
         # قبلاً فقط همین رباتِ همکار بررسی می‌شد، پس کاربر می‌توانست از
         # هر همکارِ دیگری یک تستِ تازه بگیرد و عملاً همیشه رایگان بماند.
         # هم تست‌هایِ همکاری شمرده می‌شوند هم تست‌هایِ بات‌سازِ اصلی.
-        async with Session() as s:
-            used = await s.scalar(
-                select(func.count(PartnerSale.id)).where(
-                    PartnerSale.buyer_telegram_id == uid,
-                    PartnerSale.kind == "trial")) or 0
-            if not used:
-                try:
-                    from plan_trials import PlanTrialRequest
-                    used = await s.scalar(
-                        select(func.count(PlanTrialRequest.id)).where(
-                            PlanTrialRequest.user_telegram_id == uid,
-                            PlanTrialRequest.status.in_(
-                                ("approved", "used", "expired")))) or 0
-                except Exception:
-                    logger.exception("بررسیِ تستِ بات‌سازِ اصلی ناموفق بود")
+        # === PATCH_PARTNER_TRIAL_PER_TYPE_V1 === (Nexivo) تست برایِ هر *نوعِ ربات* یک‌بار؛ تستِ قرعه‌کشی جلویِ تستِ واسطه‌گری/پنل‌فروشی را نمی‌گیرد.
+        _field = (await state.get_data()).get("ps_field")
+        if _field:
+            used = await trial_used_for_field(uid, _field)
+        else:      # نوع معلوم نیست (نشستِ قدیمی): همان قاعدهٔ سراسریِ قبلی
+            async with Session() as s:
+                used = await s.scalar(
+                    select(func.count(PartnerSale.id)).where(
+                        PartnerSale.buyer_telegram_id == uid,
+                        PartnerSale.kind == "trial")) or 0
         if used:
             await cb.answer(
-                "شما قبلاً از تست رایگان استفاده کرده‌اید. "
-                "تست فقط یک‌بار برای هر کاربر است.", show_alert=True)
+                "تستِ این نوعِ ربات را قبلاً گرفته‌ای. از نوعِ دیگرِ ربات‌ها می‌توانی یک‌بار دیگر تست بگیری.",
+                show_alert=True)
             return
 
         # === PATCH_PARTNER_TRIAL_PLAN_PICK_V1 ===
@@ -448,6 +444,13 @@ async def ps_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if price <= 0:
         await cb.answer("قیمت این پلن هنوز تنظیم نشده است.", show_alert=True)
         return
+    # === PATCH_PARTNER_DISCOUNT_CODE_V1 === کدِ تخفیفِ واردشده هر بار دوباره اعتبارسنجی می‌شود (قیمت/پلن ممکن است عوض شده باشد)
+    base_price, disc_amt, disc_id, disc_code = price, 0, None, None
+    _code = (await state.get_data()).get("ps_code")
+    if _code:
+        dr = await _validate_code(row.id, uid, _code, base_price)
+        if dr is not None and dr.ok:
+            price, disc_amt, disc_id, disc_code = int(dr.final_price), int(dr.discount), dr.code_id, dr.code
 
     async with Session() as s:
         bu = await s.scalar(select(BotUser).where(
@@ -464,7 +467,8 @@ async def ps_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
     card_ok = bool(card) and card_on
 
     await state.update_data(ps_plan=kind, ps_kind="sold", ps_price=price,
-                            ps_pb=pb.id, ps_bot=row.id)
+                            ps_pb=pb.id, ps_bot=row.id, ps_base_price=base_price,
+                            ps_discount=disc_amt, ps_code_id=disc_id, ps_code=disc_code)
 
     # === PATCH_WALLET_TOPUP_ROWS_V1 ===
     # فقط روش‌هایِ شارژی که واقعاً فعال‌اند پیشنهاد می‌شوند؛ قبلاً دکمهٔ
@@ -488,12 +492,17 @@ async def ps_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
         for _btn in _row:
             b.button(text=_btn.text, callback_data=_btn.callback_data,
                      style=ButtonStyle.PRIMARY)
+    if await get_setting(row.id, "discount_purchase_enabled", "1") != "0":     # PATCH_PARTNER_DISCOUNT_CODE_V1
+        b.button(text=("🏷 تغییر کد تخفیف" if disc_code else "🏷 کد تخفیف دارم"), callback_data=f"ps:code:{kind}",
+                 style=ButtonStyle.PRIMARY)
     b.button(text="🔙 بازگشت", callback_data="ps:menu",
              style=ButtonStyle.DANGER)
     b.adjust(1)
+    disc_line = (f"🏷 کد <code>{disc_code}</code>: <b>−{disc_amt:,}</b> تومان (قیمتِ اصلی {base_price:,})\n\n" if disc_code else "")
 
     if bal < price:
         head = (f"❌ <b>موجودی کافی نیست</b>\n\n"
+                + disc_line +
                 f"قیمت: {price:,} تومان\n"
                 f"موجودی شما: {bal:,} تومان\n\n"
                 + ("اول کیف پولت را شارژ کن، بعد دوباره همین پلن را بزن."
@@ -501,6 +510,7 @@ async def ps_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
                    "برای شارژِ کیف پول با پشتیبانی تماس بگیر."))
     else:
         head = (f"🧾 <b>{_PLAN_TITLE[kind]}</b> — {price:,} تومان\n\n"
+                + disc_line +
                 f"👛 موجودی شما: {bal:,} تومان\n\n"
                 "روش پرداخت را انتخاب کن:")
 
@@ -554,6 +564,88 @@ async def ps_trialplan_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
         + f"\n\n⏳ این ربات بعد از {PARTNER_TRIAL_DAYS} روز غیرفعال می‌شود.",
         reply_markup=bk.as_markup())
     await cb.answer()
+
+
+# ────────── تست برایِ هر نوعِ ربات (PATCH_PARTNER_TRIAL_PER_TYPE_V1) ──────────
+
+async def trial_used_for_field(uid: int, field: str) -> bool:
+    """آیا این کاربر قبلاً یک ربات *تستیِ همین نوع* (field) گرفته؟ تستِ همکاری (PartnerSale.kind=trial) و تستِ پلنِ بات‌سازِ اصلی
+    (PlanTrialRequest با bot_id) هر دو شمرده می‌شوند، ولی فقط وقتی رباتِ ساخته‌شده از همین نوع باشد."""
+    from models import Bot as _B
+    async with Session() as s:
+        n = await s.scalar(select(func.count(PartnerSale.id)).join(_B, _B.id == PartnerSale.sold_bot_id).where(
+            PartnerSale.buyer_telegram_id == uid, PartnerSale.kind == "trial", _B.field == field)) or 0
+        if n:
+            return True
+        try:
+            from plan_trials import PlanTrialRequest as _P
+            m = await s.scalar(select(func.count(_P.id)).join(_B, _B.id == _P.bot_id).where(
+                _P.user_telegram_id == uid, _P.status.in_(("approved", "used", "expired")), _B.field == field)) or 0
+            return bool(m)
+        except Exception:      # noqa: BLE001
+            logger.exception("بررسیِ تستِ بات‌سازِ اصلی ناموفق بود")
+            return False
+
+
+# ────────── کدِ تخفیف (PATCH_PARTNER_DISCOUNT_CODE_V1) ──────────
+
+async def _validate_code(bot_id: int, uid: int, code: str, price: int, session=None):
+    """همان موتورِ کدِ تخفیفِ بقیهٔ ربات‌ها؛ خطا ⇒ None (خرید بدونِ تخفیف ادامه می‌یابد)."""
+    try:
+        from tenant.gateways.discount_engine import validate_discount
+        return await validate_discount(bot_id=bot_id, code=code, telegram_id=uid, price=int(price),
+                                       product_key="partner_bot", session=session)
+    except Exception:      # noqa: BLE001
+        logger.exception("partner: اعتبارسنجیِ کدِ تخفیف ناموفق بود")
+        return None
+
+
+@partner_sales_router.callback_query(F.data.startswith("ps:code:"))
+async def ps_code_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    ok = await _partner_of(bot)
+    if not ok:
+        await cb.answer()
+        return
+    kind = cb.data.split(":")[2]
+    if kind not in ("growth", "pro"):
+        await cb.answer()
+        return
+    await state.update_data(ps_code_kind=kind)
+    await state.set_state(PartnerSaleFSM.code)
+    bk = InlineKeyboardBuilder()
+    bk.button(text="🔙 بازگشت", callback_data=f"ps:pick:{kind}", style=ButtonStyle.DANGER)
+    bk.adjust(1)
+    await cb.message.edit_text("🏷 <b>کد تخفیف</b>\n\nکدِ تخفیفت را بفرست:", reply_markup=bk.as_markup())
+    await cb.answer()
+
+
+@partner_sales_router.message(PartnerSaleFSM.code, F.text)
+async def ps_code_in(msg: Message, bot: Bot, state: FSMContext):
+    ok = await _partner_of(bot)
+    if not ok:
+        return
+    row, pb = ok
+    data = await state.get_data()
+    kind = data.get("ps_code_kind") or data.get("ps_plan")
+    code = (msg.text or "").strip()
+    if kind not in ("growth", "pro") or not code or len(code) > 64:
+        await msg.answer("کد نامعتبر است. دوباره بفرست.")
+        return
+    base = await sale_price(row.id, kind, msg.from_user.id)
+    dr = await _validate_code(row.id, msg.from_user.id, code, base)
+    bk = InlineKeyboardBuilder()
+    if dr is None or not dr.ok:
+        bk.button(text="🔙 بازگشت", callback_data=f"ps:pick:{kind}", style=ButtonStyle.DANGER)
+        bk.adjust(1)
+        await msg.answer("❌ " + (dr.reason if dr is not None else "بررسیِ کد ممکن نشد؛ کمی بعد دوباره امتحان کن."),
+                         reply_markup=bk.as_markup())
+        return
+    await state.update_data(ps_code=dr.code)
+    await state.set_state(None)
+    bk.button(text="🧾 ادامه به پرداخت", callback_data=f"ps:pick:{kind}", style=ButtonStyle.SUCCESS)
+    bk.adjust(1)
+    await msg.answer(f"✅ کد <b>{dr.code}</b> اعمال شد.\n💰 تخفیف: <b>{int(dr.discount):,}</b> تومان\n"
+                     f"🧾 قیمتِ نهایی: <b>{int(dr.final_price):,}</b> تومان", reply_markup=bk.as_markup())
 
 
 @partner_sales_router.callback_query(F.data == "ps:pay:wallet")
@@ -613,14 +705,27 @@ async def ps_pay_wallet(cb: CallbackQuery, bot: Bot, state: FSMContext):
             await cb.answer("متأسفانه موجودی این پلن تمام شد.", show_alert=True)
             return
 
+        # === PATCH_PARTNER_DISCOUNT_CODE_V1 === مصرفِ کد در همان تراکنشِ کسرِ کیف پول؛ اگر دیگر معتبر نیست خرید متوقف می‌شود
+        _cid = data.get("ps_code_id")
+        _saved = int(data.get("ps_discount") or 0)
+        if _cid:
+            _dr = await _validate_code(row.id, cb.from_user.id, data.get("ps_code") or "",
+                                       int(data.get("ps_base_price") or price), session=s)
+            if _dr is None or not _dr.ok or int(_dr.final_price) != price:
+                await cb.answer("کدِ تخفیف دیگر معتبر نیست؛ دوباره پلن را انتخاب کن.", show_alert=True)
+                return
+            from tenant.gateways.discount_engine import record_usage as _rec_usage
+            await _rec_usage(s, code_id=int(_cid), bot_id=row.id, telegram_id=cb.from_user.id, saved_amount=_saved)
         bu.balance = float(bu.balance) - price
         s.add(WalletTxn(bot_id=row.id, user_id=bu.id, amount=-price,
                         kind="purchase",
-                        note=f"خرید ربات {kind} (پرداخت پیش از ارسال توکن)"))
+                        note=f"خرید ربات {kind} (پرداخت پیش از ارسال توکن)"
+                             + (f" — کد تخفیف {data.get('ps_code')}" if _cid else "")))
         order = PartnerCardOrder(
             partner_bot_id=pb.id, buyer_telegram_id=cb.from_user.id,
             plan=kind, price=price, receipt_file_id=None,
-            status="approved", decided_at=datetime.datetime.now())
+            status="approved", decided_at=datetime.datetime.now(),
+            discount_code_id=(int(_cid) if _cid else None), discount_amount=(_saved if _cid else None))
         s.add(order)
         await s.commit()
         order_id = order.id
@@ -980,6 +1085,7 @@ async def ps_receipt(msg: Message, bot: Bot, state: FSMContext):
     data = await state.get_data()
     kind = data.get("ps_plan")
     price = int(data.get("ps_price") or 0)
+    _dcid, _dsaved, _dcode = data.get("ps_code_id"), int(data.get("ps_discount") or 0), data.get("ps_code")   # PATCH_PARTNER_DISCOUNT_CODE_V1
     await state.clear()
     if not kind:
         await msg.answer("این مرحله منقضی شده. دوباره از منو شروع کن.",
@@ -990,7 +1096,8 @@ async def ps_receipt(msg: Message, bot: Bot, state: FSMContext):
     async with Session() as s:
         o = PartnerCardOrder(
             partner_bot_id=pb.id, buyer_telegram_id=msg.from_user.id,
-            plan=kind, price=price, receipt_file_id=file_id, status="pending")
+            plan=kind, price=price, receipt_file_id=file_id, status="pending",
+            discount_code_id=(int(_dcid) if _dcid else None), discount_amount=(_dsaved if _dcid else None))
         s.add(o)
         await s.commit()
         order_id = o.id
@@ -1014,7 +1121,8 @@ async def ps_receipt(msg: Message, bot: Bot, state: FSMContext):
                      f"👤 خریدار: <code>{msg.from_user.id}</code>\n"
                      f"💼 پلن: {_PLAN_TITLE[kind]}\n"
                      f"💰 مبلغ: {price:,} تومان\n"
-                     f"🧾 سفارش #{order_id}"),
+                     + (f"🏷 کد تخفیف: <code>{_dcode}</code> (−{_dsaved:,} تومان)\n" if _dcid else "")
+                     + f"🧾 سفارش #{order_id}"),
             reply_markup=kb)
     except Exception:
         logger.exception("ارسالِ رسیدِ خریدِ ربات به همکار ناموفق بود")
@@ -1068,6 +1176,10 @@ async def ps_order_decide(cb: CallbackQuery, bot: Bot):
         o.status = "approved" if verdict == "y" else "rejected"
         o.decided_at = datetime.datetime.now()
         buyer, plan, price = o.buyer_telegram_id, o.plan, int(o.price or 0)
+        if verdict == "y" and o.discount_code_id:      # PATCH_PARTNER_DISCOUNT_CODE_V1: مصرفِ کد فقط با تأییدِ سفارش
+            from tenant.gateways.discount_engine import record_usage as _rec_usage
+            await _rec_usage(s, code_id=int(o.discount_code_id), bot_id=row.id, telegram_id=buyer,
+                             saved_amount=int(o.discount_amount or 0))
         await s.commit()
 
     if verdict == "y":
