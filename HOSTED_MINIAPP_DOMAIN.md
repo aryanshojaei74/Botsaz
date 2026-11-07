@@ -98,3 +98,10 @@ python3 /opt/botsaz/deploy/miniapp_vip_patch.py && systemctl restart botsazvip
 * **استاتیک:** zipِ HTML/JS (`index.html` در ریشه یا داخلِ یک پوشهٔ ریشه). بدونِ کانتینر از `/opt/botsazvip/miniapps/<اپ>/` سرو می‌شود؛
   سقفِ zip ۲۰MB، بازشده ۶۰MB، ۲۰۰۰ فایل؛ فایل‌هایِ مخفی (`.env`, `.git`)، `node_modules`، مسیرِ `..` و symlink رد می‌شوند.
   مسیرهایِ بدونِ پسوند به `index.html` می‌روند (SPA).
+
+## ۵) کارتِ «🌐 مینی‌اپ» در صفحهٔ هر اپ (بیلد ۴۸۷)
+```bash
+python3 /opt/botsaz/deploy/miniapp_ui_patch.py && systemctl restart botsazvip
+```
+کارت: وضعیت/آدرس، «فعال‌سازی/تمدید ۳۰ روزه» با قیمتِ ماهانه (کسر از کیف‌پول)، «آپلودِ zip مینی‌اپ»، «🔘 ثبت در Menu Button» و «حذفِ فایل‌هایِ مینی‌اپ».
+پشتیبان: `ui.py.bak_miniapp` (برگشت: `cp ui.py.bak_miniapp ui.py && systemctl restart botsazvip`).
