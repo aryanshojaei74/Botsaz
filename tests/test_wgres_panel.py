@@ -33,7 +33,7 @@ class FakePanel:
             days = int(json["expiryDays"])
             self.peers[n] = {"peer_name": n, "peer_ip": "10.0.0.2", "config": "wg0.conf", "limit": json["dataLimit"], "used": 0,
                              "used_human": "0 MiB", "remaining_time": days * 1440 if days else None,
-                             "first_usage": json["firstUsage"], "short_link": f"https://p.example/s/{n}",
+                             "first_usage": json["firstUsage"], "short_link": f"/s/{n}",
                              "monitor_blocked": False, "expiry_blocked": False, "status": "active"}
             return {"message": "ok"}
         if n not in self.peers:
@@ -143,3 +143,17 @@ def test_registered_everywhere():
         panel_key, base_url, username, password, sub_base, inbound_ids, api_key = "wgres", "https://p.example.com:2096", "-", "K", "", "", None
     c = F.make_panel_client(P())
     assert isinstance(c, WgResellerPanelClient) and c.api_key == "K"
+
+
+# === PATCH_WGRES_SUBLINK_V1 === (مهدی) پنل short_link را نسبی می‌دهد (/s/AbC…)؛ به مشتری باید لینکِ کامل برسد
+@pytest.mark.asyncio
+async def test_sub_link_is_absolute_url(cl):
+    r = await cl.create_account("longname_bot123_user", 30, 30)
+    assert r["sub_link"].startswith("https://panel.example.com:2096/")
+    cl.fp.peers[_short_name("longname_bot123_user")]["short_link"] = "/s/zWUXrmu-vGBbfaRSjVCGhw"
+    u = await cl.get_client("longname_bot123_user")
+    assert u["sub_link"] == "https://panel.example.com:2096/s/zWUXrmu-vGBbfaRSjVCGhw"
+    cl.fp.peers[_short_name("longname_bot123_user")]["short_link"] = "https://x.example.com/s/abc"
+    assert (await cl.get_client("longname_bot123_user"))["sub_link"] == "https://x.example.com/s/abc"       # کامل بود ⇒ دست‌نخورده
+    cl.fp.peers[_short_name("longname_bot123_user")]["short_link"] = ""
+    assert (await cl.get_client("longname_bot123_user"))["sub_link"] == ""

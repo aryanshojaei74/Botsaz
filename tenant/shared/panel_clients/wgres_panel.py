@@ -239,6 +239,15 @@ class WgResellerPanelClient:
     def _blocked(p: dict) -> bool:
         return bool(p.get("monitor_blocked") in (1, True, "1", "true") or p.get("expiry_blocked") in (1, True, "1", "true"))
 
+    def _abs_link(self, link) -> str:
+        """PATCH_WGRES_SUBLINK_V1 — پنل short_link را «نسبی» برمی‌گرداند (/s/AbC…)؛ به مشتری باید آدرسِ کامل برسد (https://دامنه:پورت/s/AbC…)."""
+        s = str(link or "").strip()
+        if not s:
+            return ""
+        if s.startswith(("http://", "https://")):
+            return s
+        return self.base_url + "/" + s.lstrip("/")
+
     def _norm(self, p: dict, email) -> dict:
         u = dict(p)
         name = str(p.get("peer_name") or _short_name(email))
@@ -247,7 +256,7 @@ class WgResellerPanelClient:
         u["data_limit"] = parse_size_bytes(p.get("limit") or p.get("limit_human"))
         u["expire"] = self._expire_epoch(p)
         u["used_traffic"] = self._used_bytes(p)
-        u["sub_link"] = p.get("short_link") or ""
+        u["sub_link"] = self._abs_link(p.get("short_link"))
         u["status"] = "disabled" if self._blocked(p) or p.get("status") == "inactive" else "active"
         return u
 
@@ -322,6 +331,7 @@ class WgResellerPanelClient:
         sub = (p or {}).get("short_link") or ""
         if not sub and isinstance(res, dict):
             sub = res.get("short_link") or (res.get("peer") or {}).get("short_link") or ""
+        sub = self._abs_link(sub)          # PATCH_WGRES_SUBLINK_V1
         exp = int(time.time()) + total_days * 86400 if total_days and not on_hold else 0
         return {"uuid": uuid_str or name, "sub_id": sub_id or name, "email": name, "gb": gb, "days": days,
                 "inbounds": [], "sub_link": sub, "expiry_ms": exp * 1000}
