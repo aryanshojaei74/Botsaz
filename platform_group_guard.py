@@ -2502,6 +2502,30 @@ async def _ask_ai(question: str) -> str:
 
 _ai_question_times: dict[int, deque] = {}
 _ai_awaiting: dict[tuple[int, int], float] = {}  # (chat_id, user_id) -> انقضا (monotonic)
+# PATCH_AI_FOLLOWUP_V1 (SINA): پیام‌هایِ «جوابِ هوش مصنوعی» که ربات فرستاده؛ ریپلای رویِ آن‌ها = سوالِ ادامه‌دار (بدونِ نیاز به کلمهٔ فعال‌سازی)
+_ai_answer_ids: dict[tuple[int, int], float] = {}
+_AI_ANSWER_TTL_SEC = 6 * 3600
+_AI_ANSWER_MAX = 2000
+
+
+def _remember_ai_answer(chat_id: int, message_id: int | None) -> None:
+    if not message_id:
+        return
+    now = time.monotonic()
+    if len(_ai_answer_ids) >= _AI_ANSWER_MAX:
+        for k in [k for k, t in _ai_answer_ids.items() if now - t > _AI_ANSWER_TTL_SEC] or list(_ai_answer_ids)[:200]:
+            _ai_answer_ids.pop(k, None)
+    _ai_answer_ids[(int(chat_id), int(message_id))] = now
+
+
+def _is_ai_answer_reply(msg: Message, bot_id: int) -> bool:
+    rt = getattr(msg, "reply_to_message", None)
+    if not rt or not rt.from_user or rt.from_user.id != bot_id:
+        return False
+    t = _ai_answer_ids.get((msg.chat.id, rt.message_id))
+    return t is not None and time.monotonic() - t <= _AI_ANSWER_TTL_SEC
+
+
 _AI_AWAIT_TIMEOUT_SEC = 300  # ۵ دقیقه مهلت برایِ نوشتنِ سوال بعدِ گفتنِ کلمهٔ فعال‌سازی
 
 
@@ -2601,11 +2625,14 @@ async def _answer_ai_question(msg: Message, question: str) -> None:
     try:
         if wait_msg:
             await wait_msg.edit_text(f"🤖 {answer}")
+            _remember_ai_answer(msg.chat.id, getattr(wait_msg, "message_id", None))
         else:
-            await msg.reply(f"🤖 {answer}")
+            _sent = await msg.reply(f"🤖 {answer}")
+            _remember_ai_answer(msg.chat.id, getattr(_sent, "message_id", None))
     except Exception:
         try:
-            await msg.reply(f"🤖 {answer}")
+            _sent = await msg.reply(f"🤖 {answer}")
+            _remember_ai_answer(msg.chat.id, getattr(_sent, "message_id", None))
         except Exception:
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
 
@@ -2745,6 +2772,11 @@ async def _check_ai_trigger(msg: Message, bot: Bot) -> bool:
     replying_to_prompt = False
     _rt = getattr(msg, "reply_to_message", None)
     if _rt and _rt.from_user and _rt.from_user.id == bot.id and "جانم" in (_rt.text or ""):
+        replying_to_prompt = True
+
+    # PATCH_AI_FOLLOWUP_V1: ریپلای رویِ جوابِ هوش مصنوعی = ادامهٔ همان گفتگو (متنِ جوابِ قبلی به مدل داده می‌شود)
+    replying_to_answer = (not has_trigger) and _is_ai_answer_reply(msg, bot.id)
+    if replying_to_answer:
         replying_to_prompt = True
 
     if not has_trigger and not was_awaiting and not replying_to_prompt:

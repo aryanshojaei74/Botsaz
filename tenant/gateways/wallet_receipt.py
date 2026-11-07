@@ -10,8 +10,12 @@ wallet_receipt.py — پیامِ یکدست و حرفه‌ایِ «کیف پول
 """
 from __future__ import annotations
 
+import logging as _logging
+_log = _logging.getLogger(__name__)
+
 import datetime as _dt
 
+from aiogram.enums import ButtonStyle
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 try:
@@ -112,8 +116,7 @@ def build_wallet_charge_message(amount, new_balance, method: str,
             f"💰 مبلغ: <b>{_rial(amount)}</b> به موجودی شما اضافه شد.\n"
             f"📅 تاریخ و ساعت: {date_str} – {time_str}\n\n"
             "🙏 از اعتماد شما سپاسگزاریم!\n\n"
-            "🚀 همین حالا از موجودی خود برای خرید استارز، پرمیوم، بوست تلگرام، گیفت استارزی یا ارز TON استفاده کنید.\n\n"
-            "🎉 برای شروع خرید، روی دکمهٔ «🛍 خرید محصول» کلیک کنید 👇"
+            "🚀 همین حالا از موجودی خود برای خرید استارز، پرمیوم، بوست تلگرام، گیفت استارزی یا ارز TON استفاده کنید 👇"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="🛍 خرید محصول", callback_data="w:buy_products"),
@@ -156,4 +159,13 @@ async def build_wallet_charge_message_for_bot(bot_id, amount, new_balance, metho
         selected = await wallet_receipt_keyboard(int(bot_id))
         if selected is not None:
             keyboard = selected
+    # PATCH_WALLET_RECEIPT_HOME_V1 (SINA): دکمهٔ اختیاریِ «🏠 منوی اصلی» زیرِ پیامِ واریزِ موفق (مالک روشن/خاموش می‌کند)
+    try:
+        from tenant import get_setting
+        if str(await get_setting(int(bot_id), "wallet_receipt_home_btn", "0")) == "1":
+            rows = [list(r) for r in (keyboard.inline_keyboard if keyboard else [])]
+            rows.append([InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="mbtn:home", style=ButtonStyle.DANGER)])
+            keyboard = InlineKeyboardMarkup(inline_keyboard=rows)
+    except Exception:
+        _log.exception("wallet_receipt: افزودنِ دکمهٔ منوی اصلی ناموفق بود (نادیده گرفته شد)")
     return text, keyboard

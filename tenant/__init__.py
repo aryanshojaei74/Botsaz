@@ -8480,8 +8480,8 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
             options.append((_kyc_lbl, "kycu:menu", prim))
             # === PATCH_KYC_CARD_CHANGE_V1 === میان‌بُرِ «تغییر کارت» برایِ کاربرِ دارایِ کارتِ ثبت‌شده
             if getattr(u, "kyc_card", None) and not _blk:
-                from tenant.shared.kyc import card_change_status as _cc_st
-                if (await _cc_st(bot_id, u.id))[0]:
+                from tenant.shared.kyc import card_change_status as _cc_st, card_change_btn_enabled as _cc_btn
+                if (await _cc_st(bot_id, u.id))[0] and await _cc_btn(bot_id):
                     options.append(("🔄 تغییر کارت", "kycu:cc", prim))
     except Exception:
         logger.exception("افزودنِ دکمهٔ احرازِ هویت به کیف پول ناموفق بود")
@@ -14086,7 +14086,7 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "479"
+BUILD_ID = "480"
 
 
 @tenant_router.message(Command("version"))

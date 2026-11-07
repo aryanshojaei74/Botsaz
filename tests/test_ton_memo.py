@@ -1,4 +1,4 @@
-"""فروشِ تون: گرفتنِ کامنت/ممو + مشخصاتِ خریدار در پیامِ ادمین (PATCH_TON_MEMO_V1)."""
+"""فروشِ تون: گرفتنِ کامنت/ممو + فاکتور + مشخصاتِ خریدار در پیامِ ادمین (PATCH_TON_MEMO_V1 / PATCH_TON_INVOICE_V1)."""
 from types import SimpleNamespace
 
 import pytest
@@ -56,6 +56,27 @@ async def env(monkeypatch):
     async def notify(bot, row, text, kb=None, **kw):
         notices.append(text)
 
+    # PATCH_TON_INVOICE_V1: فاکتور (روشِ پرداخت/کد تخفیف) و ارسالِ خودکار در این تست‌ها نقشی ندارند
+    from aiogram.types import InlineKeyboardButton
+    import tenant.shared.vs_pay as VP
+    import tenant.bots.virtual_service.ton_autosend as TAS
+
+    async def pay_rows(bot_id, tg_id, price, pay_cb, *a, **k):
+        return [[InlineKeyboardButton(text="pay", callback_data=pay_cb)]]
+
+    async def wallet_ok(bot_id):
+        return True
+
+    async def no_rows(*a, **k):
+        return []
+
+    async def no_auto(bot, row, oid, force=False):
+        return "disabled", ""
+    monkeypatch.setattr(VP, "pay_rows", pay_rows)
+    monkeypatch.setattr(VP, "wallet_pay_allowed", wallet_ok)
+    monkeypatch.setattr(S, "_vsd_rows_lazy", no_rows)
+    monkeypatch.setattr(TAS, "deliver_order", no_auto)
+
     import tenant.gateways.discount_engine as DE
     monkeypatch.setattr(S, "Session", maker)
     monkeypatch.setattr(tenant, "get_bot_row", get_bot_row)
@@ -84,7 +105,19 @@ async def env(monkeypatch):
         return SimpleNamespace(text=text, from_user=SimpleNamespace(id=777, full_name="علی <b>", username="ali"),
                                answer=answer)
 
-    yield SimpleNamespace(maker=maker, state=state, notices=notices, answers=answers, settings=settings, msg=msg)
+    def cb(data="ton:pay"):
+        async def answer(t, **kw):
+            answers.append(t)
+
+        async def edit_rm(**kw):
+            return None
+
+        async def cb_answer(*a, **k):
+            return None
+        return SimpleNamespace(data=data, from_user=SimpleNamespace(id=777, full_name="علی <b>", username="ali"),
+                               message=SimpleNamespace(message_id=55, answer=answer, edit_reply_markup=edit_rm), answer=cb_answer)
+
+    yield SimpleNamespace(maker=maker, state=state, notices=notices, answers=answers, settings=settings, msg=msg, cb=cb)
     await engine.dispose()
 
 
@@ -103,23 +136,41 @@ async def test_wallet_step_asks_for_memo_and_creates_no_order(env):
 
 
 @pytest.mark.asyncio
-async def test_memo_is_saved_and_shown_to_admin_with_buyer_details(env):
+async def test_memo_then_invoice_then_pay_creates_order_with_memo(env):
     await S.ton_wallet_in(env.msg(WALLET), object(), env.state)
     await S.ton_memo_in(env.msg("MEMO-998877"), object(), env.state)
+    inv = env.answers[-1]
+    assert "فاکتورِ خرید" in inv and "MEMO-998877" in inv and WALLET in inv and "120,000" in inv
+    assert await orders(env) == [] and await env.state.get_state() is None                 # هنوز پرداخت نشده
+    d = await env.state.get_data()
+    assert d["ton_wallet_final"] == WALLET and d["ton_memo_final"] == "MEMO-998877"
+    await S.ton_pay(env.cb(), object(), env.state)
     (o,) = await orders(env)
     assert o.dest_memo == "MEMO-998877" and o.dest_label == WALLET and o.status == "awaiting_admin"
     notice = env.notices[-1]
     assert "MEMO-998877" in notice and WALLET in notice
     assert "777" in notice and "@ali" in notice and "علی &lt;b&gt;" in notice      # مشخصاتِ خریدار + escape
+    reg = [a for a in env.answers if "سفارشت ثبت شد" in a][-1]                    # پیامِ ثبتِ سفارش به مشتری (آدرس + ممو + کد)
+    assert "MEMO-998877" in reg and "T123" in reg and WALLET in reg
     assert await env.state.get_state() is None
 
 
 @pytest.mark.asyncio
-async def test_no_memo_keyword_leaves_memo_empty(env):
+async def test_no_memo_keyword_or_button_leaves_memo_empty(env):
     await S.ton_wallet_in(env.msg(WALLET), object(), env.state)
     await S.ton_memo_in(env.msg("ندارم"), object(), env.state)
+    await S.ton_pay(env.cb(), object(), env.state)
     (o,) = await orders(env)
     assert o.dest_memo is None and "کامنت/ممو: ندارد" in env.notices[-1]
+
+
+@pytest.mark.asyncio
+async def test_no_memo_glass_button(env):
+    await S.ton_wallet_in(env.msg(WALLET), object(), env.state)
+    # در پیامِ آدرس، دکمهٔ شیشه‌ای «🚫 ممو ندارم» هست
+    await S.ton_nomemo(env.cb("ton:nomemo"), object(), env.state)
+    assert "فاکتورِ خرید" in env.answers[-1] and "کامنت/ممو: ندارد" in env.answers[-1]
+    assert (await env.state.get_data())["ton_memo_final"] == ""
 
 
 @pytest.mark.asyncio
@@ -134,5 +185,26 @@ async def test_too_long_memo_rejected_and_state_kept(env):
 async def test_memo_step_can_be_disabled(env):
     env.settings["ton_memo_ask"] = "0"
     await S.ton_wallet_in(env.msg(WALLET), object(), env.state)
+    assert "فاکتورِ خرید" in env.answers[-1] and await orders(env) == []
+    await S.ton_pay(env.cb(), object(), env.state)
     (o,) = await orders(env)
     assert o.dest_memo is None and "👤 خریدار" in env.notices[-1]
+
+
+@pytest.mark.asyncio
+async def test_discount_code_no_longer_accepted_instead_of_address_and_prompt_has_no_hint(env):
+    await S.ton_wallet_in(env.msg("OFF20"), object(), env.state)               # کد تخفیف به‌جایِ آدرس: دیگر پذیرفته نمی‌شود
+    assert "معتبر به‌نظر نمی‌رسد" in env.answers[-1] and await env.state.get_state() == S.SmmFSM.ton_wallet_in.state
+    got = []
+
+    async def answer(t, **k):
+        got.append(t)
+    await S._ton_amount_chosen(answer, object(), env.state, SimpleNamespace(id=5), 1.0, 400_000.0)
+    assert "قبل از آدرس" not in got[-1] and "کد تخفیف" not in got[-1]
+
+
+@pytest.mark.asyncio
+async def test_pay_is_refused_without_invoice_data_and_insufficient_balance(env):
+    await env.state.clear()
+    await S.ton_pay(env.cb(), object(), env.state)                              # فاکتوری نیست
+    assert await orders(env) == []

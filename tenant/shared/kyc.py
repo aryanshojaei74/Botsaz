@@ -294,6 +294,15 @@ async def card_change_policy(bot_id: int) -> tuple[int, int]:
             max(1, _i(await get_setting(bot_id, "kyc_card_change_days", "15"), 15)))
 
 
+async def card_change_btn_enabled(bot_id: int) -> bool:
+    """PATCH_KYC_CC_BTN_V1 (SINA): نمایش/پنهان‌کردنِ دکمه‌هایِ «تغییر کارت» برایِ کاربر (پیش‌فرض: نمایش)."""
+    try:
+        from tenant import get_setting
+        return str(await get_setting(bot_id, "kyc_card_change_btn", "1")) != "0"
+    except Exception:
+        return True
+
+
 async def card_change_status(bot_id: int, user_id: int) -> tuple[bool, str]:
     """(مجاز؟, توضیح). درخواست‌هایِ تأییدشده و در انتظار در بازهٔ مجاز شمرده می‌شوند."""
     from models import KycRequest

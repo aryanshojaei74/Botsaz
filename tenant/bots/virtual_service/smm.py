@@ -17442,19 +17442,16 @@ async def show_ton_shop_to_user(bot: Bot, target: Message, bot_id: int,
 
 
 async def _ton_amount_chosen(answer, bot: Bot, state: FSMContext, row, amount: float, rate: float) -> None:
-    await state.update_data(ton_amount=amount, ton_disc=None)   # PATCH_VS_DISCOUNT_V1
+    await state.update_data(ton_amount=amount)
     await state.set_state(SmmFSM.ton_wallet_in)
     from tenant import smart_cancel_kb
     price = round(amount * rate)
-    from tenant.bots.virtual_service.vs_discount import vsd_enabled   # PATCH_VS_DISCOUNT_V1
-    _disc_hint = ("\n\n🏷 کد تخفیف داری؟ <b>قبل از آدرس</b>، همان کد را بفرست."
-                  if await vsd_enabled(row.id) else "")
+    # PATCH_TON_INVOICE_V1 (SINA): کدِ تخفیف دیگر «قبل از آدرس» نیست؛ مثلِ بقیهٔ محصولات در فاکتورِ آخر (دکمهٔ «🏷 کد تخفیف») است.
     await answer(
         f"💎 {amount:g} TON — {price:,} تومان\n\n"
         "حالا <b>آدرسِ کیف‌پولِ TON</b> مقصد را بفرست (همان‌جایی که می‌خواهی تون‌ها "
         "واریز شود).\n\n"
-        "⚠️ آدرس را با دقت بفرست؛ واریزِ اشتباه روی بلاک‌چین قابلِ برگشت نیست."
-        + _disc_hint,
+        "⚠️ آدرس را با دقت بفرست؛ واریزِ اشتباه روی بلاک‌چین قابلِ برگشت نیست.",
         parse_mode="HTML", reply_markup=await smart_cancel_kb(bot))
 
 
@@ -17493,35 +17490,14 @@ async def ton_amount_custom(cb: CallbackQuery, state: FSMContext):
 
 
 @smm_router.message(SmmFSM.ton_wallet_in, F.text)
-async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext, _wallet: str | None = None,
-                        _memo: str | None = None):
-    from tenant import get_bot_row, get_or_create_user, _gen_tracking, _notify_admins
+async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext):
+    """آدرسِ کیف‌پولِ TON ← (کامنت/ممو) ← فاکتور (PATCH_TON_INVOICE_V1: مثلِ بقیهٔ محصولات؛ کد تخفیف و روشِ پرداخت در فاکتورِ آخر)."""
+    from tenant import get_bot_row
     row = await get_bot_row(bot)
     if not row:
         return
-    wallet = _wallet or (msg.text or "").strip()
-    # === PATCH_VS_DISCOUNT_V1 === متنی که آدرسِ TON نیست ولی کدِ تخفیفِ معتبر است ⇒ کد اعمال می‌شود
+    wallet = (msg.text or "").strip()
     if not _looks_like_ton_address(wallet):
-        from tenant.bots.virtual_service.vs_discount import vsd_enabled
-        if await vsd_enabled(row.id):
-            _d = await state.get_data()
-            _amt = _d.get("ton_amount")
-            if _amt:
-                from tenant.gateways.discount_engine import validate_discount
-                _rate, _, _ = await _ton_sell_settings(row.id)
-                _res = await validate_discount(bot_id=row.id, code=wallet, telegram_id=msg.from_user.id,
-                                               price=round(_amt * _rate), product_key="ton")
-                if _res.ok:
-                    await state.update_data(ton_disc=_res.code or wallet.upper())
-                    await msg.answer(
-                        f"✅ کد تخفیف اعمال شد (−{_res.discount:,} تومان)\n"
-                        f"💰 مبلغِ نهایی: <b>{_res.final_price:,} تومان</b>\n\n"
-                        "حالا <b>آدرسِ کیف‌پولِ TON</b> را بفرست:", parse_mode="HTML")
-                    return
-                if len(wallet) <= 40 and " " not in wallet and not wallet.lower().endswith(".ton"):
-                    await msg.answer(f"❌ {_res.reason or 'کد تخفیف نامعتبر است.'}\n"
-                                     "کدِ دیگری بفرست یا آدرسِ کیف‌پولِ TON را بفرست:")
-                    return
         await msg.answer(
             "❌ این آدرس معتبر به‌نظر نمی‌رسد. آدرسِ کیف‌پولِ TON معمولاً با "
             "<code>UQ</code> یا <code>EQ</code> شروع می‌شود (۴۸ کاراکتر) یا یک "
@@ -17538,61 +17514,139 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext, _wallet: str 
         await state.clear()
         await msg.answer("این سفارش دیگر معتبر نیست؛ دوباره از فروشگاه شروع کن.")
         return
-    price = round(amount * rate)
-
     # === PATCH_TON_MEMO_V1 === آدرس‌هایِ صرافی/کیف‌پولِ امانی برایِ واریز «کامنت/ممو» می‌خواهند؛ بدونِ آن تون گم می‌شود
-    if _memo is None and (await _get_setting(row.id, "ton_memo_ask", "1")) == "1":
+    if (await _get_setting(row.id, "ton_memo_ask", "1")) == "1":
         await state.update_data(ton_wallet_pending=wallet)
         await state.set_state(SmmFSM.ton_memo_in)
         from tenant import smart_cancel_kb
+        base = await smart_cancel_kb(bot)
+        rows = [[InlineKeyboardButton(text="🚫 ممو ندارم", callback_data="ton:nomemo", style=ButtonStyle.PRIMARY)]]   # PATCH_TON_INVOICE_V1: دکمهٔ شیشه‌ای به‌جایِ تایپِ «ندارم»
+        if isinstance(base, InlineKeyboardMarkup):
+            rows += [list(r) for r in base.inline_keyboard]
         await msg.answer(
             f"✅ آدرس ثبت شد:\n<code>{_html_escape(wallet)}</code>\n\n"
             "📝 اگر این آدرس (مثلاً صرافی) برایِ واریز <b>کامنت / ممو (Memo/Tag)</b> می‌خواهد، همین‌جا بفرست.\n"
-            "اگر لازم نیست، بنویس: <b>ندارم</b>",
-            parse_mode="HTML", reply_markup=await smart_cancel_kb(bot))
+            "اگر لازم نیست، روی «🚫 ممو ندارم» بزن.",
+            parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
         return
+    await _ton_show_invoice(msg, bot, state, row, msg.from_user.id, wallet, "")
 
+
+async def _ton_show_invoice(target: Message, bot: Bot, state: FSMContext, row, uid: int, wallet: str, memo: str) -> None:
+    """فاکتورِ خریدِ تون: کالا/مقصد/ممو/قیمت + «از کیف‌پول / شارژ حساب / 🏷 کد تخفیف / بازگشت» (هم‌شکلِ فاکتورِ استارز/پرمیوم)."""
+    data = await state.get_data()
+    amount = data.get("ton_amount")
+    rate, qmin, qmax = await _ton_sell_settings(row.id)
+    if not amount or not rate or amount < qmin or amount > qmax:
+        await state.clear()
+        await target.answer("این سفارش دیگر معتبر نیست؛ دوباره از فروشگاه شروع کن.")
+        return
+    price = round(amount * rate)
+    await state.update_data(ton_wallet_final=wallet, ton_memo_final=memo or "", ton_wallet_pending=None, vsd=None)
+    await state.set_state(None)                 # دادهٔ سفارش می‌ماند؛ فقط منتظرِ متن نیستیم
+    from tenant.shared import vs_pay as _vp
+    _pay_rows = await _vp.pay_rows(row.id, uid, int(price), "ton:pay")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        *_pay_rows,
+        *await _vsd_rows_lazy(row.id, "ton", price),
+        [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="ton:back", style=ButtonStyle.DANGER)],
+    ])
+    await target.answer(
+        "🧾 <b>فاکتورِ خرید</b>\n\n"
+        f"کالا: 💎 {amount:g} TON\n"
+        f"مقصد: <code>{_html_escape(wallet)}</code>\n"
+        + (f"کامنت/ممو: <code>{_html_escape(memo)}</code>\n" if memo else "کامنت/ممو: ندارد\n")
+        + f"قیمت: {price:,} تومان\n\n"
+        f"مبلغِ قابل‌پرداخت: {price:,} تومان" + ("" if _pay_rows else _vp.NO_METHOD_NOTE),
+        reply_markup=kb, parse_mode="HTML")
+
+
+@smm_router.callback_query(F.data == "ton:back")
+async def ton_invoice_back(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    await cb.answer()
+    if row:
+        await state.clear()
+        await show_ton_shop_to_user(bot, cb.message, row.id, state)
+
+
+@smm_router.callback_query(F.data == "ton:nomemo")
+async def ton_nomemo(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """PATCH_TON_INVOICE_V1 — دکمهٔ «🚫 ممو ندارم»."""
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    data = await state.get_data()
+    wallet = data.get("ton_wallet_pending")
+    if not row or not wallet:
+        await cb.answer("جلسه منقضی شد؛ دوباره از فروشگاهِ تون شروع کن.", show_alert=True)
+        return
+    await cb.answer()
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        logger.debug("ton: حذفِ دکمهٔ ممو ممکن نشد")
+    await _ton_show_invoice(cb.message, bot, state, row, cb.from_user.id, wallet, "")
+
+
+@smm_router.callback_query(F.data == "ton:pay")
+async def ton_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """پرداختِ فاکتورِ تون از کیف‌پول → ساخت سفارش (awaiting_admin) → ارسالِ خودکار (اگر روشن) یا اطلاع به ادمین."""
+    from tenant import get_bot_row, get_or_create_user
+    from tenant.shared import vs_pay as _vp
+    row = await get_bot_row(bot)
+    if not row:
+        await cb.answer()
+        return
+    if not await _vp.wallet_pay_allowed(row.id):
+        await cb.answer("❌ پرداخت از کیف‌پول در این ربات غیرفعال است.", show_alert=True)
+        return
+    data = await state.get_data()
+    amount, wallet, _memo = data.get("ton_amount"), data.get("ton_wallet_final"), (data.get("ton_memo_final") or None)
+    if not amount or not wallet:
+        await cb.answer("این فاکتور منقضی شده؛ دوباره از فروشگاهِ تون شروع کن.", show_alert=True)
+        return
+    rate, qmin, qmax = await _ton_sell_settings(row.id)
+    if not rate or amount < qmin or amount > qmax:
+        await state.clear()
+        await cb.answer("این سفارش دیگر معتبر نیست؛ دوباره از فروشگاه شروع کن.", show_alert=True)
+        return
+    price = round(amount * rate)
     buyer, _ = await get_or_create_user(
-        row.id, msg.from_user.id, msg.from_user.full_name, msg.from_user.username or "",
+        row.id, cb.from_user.id, cb.from_user.full_name, cb.from_user.username or "",
         return_created=True)
     async with Session() as s:
         b = await s.get(BotUser, buyer.id, with_for_update=True)  # قفلِ ردیف: دابل‌کلیک = دو خرید با یک پول
         # === PATCH_FIRST_PURCHASE_DISCOUNT_V1 ===
-        # *قبل* از بررسیِ موجودی، وگرنه کاربری که با تخفیف پولش می‌رسید
-        # اشتباهاً «موجودی ناکافی» می‌گیرد.
+        # *قبل* از بررسیِ موجودی، وگرنه کاربری که با تخفیف پولش می‌رسد اشتباهاً «موجودی ناکافی» می‌گیرد.
         _note_extra = ""
-        # === PATCH_VS_DISCOUNT_V1 === کدِ واردشده بر تخفیفِ اولین خرید اولویت دارد
+        # === PATCH_VS_DISCOUNT_V1 === کدِ واردشده روی همین پیامِ فاکتور بر تخفیفِ اولین خرید اولویت دارد
+        from tenant.bots.virtual_service.vs_discount import vsd_pick, vsd_charge, vsd_record, vsd_clear, VsdError
         _dc_id, _dc_amt = None, 0
-        _dc_code = data.get("ton_disc")
+        _dc_code = vsd_pick(data, cb.message.message_id, "ton")
         if _dc_code:
-            from tenant.bots.virtual_service.vs_discount import vsd_charge, vsd_record, VsdError
             try:
                 price, _dc_id, _dc_amt = await vsd_charge(
-                    s, bot_id=row.id, tg_id=msg.from_user.id, code=_dc_code, kind="ton", price=int(price))
+                    s, bot_id=row.id, tg_id=cb.from_user.id, code=_dc_code, kind="ton", price=int(price))
             except VsdError as _e:
-                await state.update_data(ton_disc=None)
-                await msg.answer(f"❌ {_e}\nدوباره آدرس را بفرست تا بدونِ کد ادامه بدهیم.")
+                await cb.answer(f"❌ {_e}", show_alert=True)
                 return
-            await vsd_record(s, bot_id=row.id, tg_id=msg.from_user.id, code_id=_dc_id, discount=_dc_amt)
+            await vsd_record(s, bot_id=row.id, tg_id=cb.from_user.id, code_id=_dc_id, discount=_dc_amt)
             _note_extra = f" (کد تخفیف −{_dc_amt:,})"
         else:
             from tenant.gateways.discount_engine import first_purchase_discount
             _fd = await first_purchase_discount(
-                bot_id=row.id, telegram_id=msg.from_user.id, price=int(price), session=s)
+                bot_id=row.id, telegram_id=cb.from_user.id, price=int(price), session=s)
             if _fd.ok and _fd.discount > 0:
                 _note_extra = f" (تخفیف اولین خرید −{_fd.discount:,})"
                 price = _fd.final_price
         if float(b.balance) < price:      # PATCH_VS_GRACE_V1
             from tenant.shared import vs_grace as _vsg
-            price, _ = await _vsg.apply(row.id, msg.from_user.id, b.balance, price)
+            price, _ = await _vsg.apply(row.id, cb.from_user.id, b.balance, price)
         if float(b.balance) < price:
-            await state.clear()
-            from tenant.shared import vs_pay as _vp   # PATCH_VS_PAY_V1 — دکمهٔ «شارژ حساب»
-            await msg.answer(
-                f"❌ موجودیِ کیف‌پول کافی نیست. کمبود: {price - int(b.balance):,} تومان\n"
-                "اول کیف‌پولت را شارژ کن و دوباره اقدام کن.",
-                reply_markup=InlineKeyboardMarkup(
-                    inline_keyboard=await _vp.charge_row(row.id, msg.from_user.id, int(price))))
+            await s.rollback()        # قفلِ ردیف آزاد شود، بعد پیام برود
+            await cb.answer("❌ موجودی کافی نیست.")
+            await _vp.insufficient_notice(cb.message, row.id, cb.from_user.id, int(price), cb.data)
             return
         b.balance = float(b.balance) - price
         s.add(WalletTxn(bot_id=row.id, user_id=b.id, amount=-price, kind="purchase",
@@ -17602,7 +17656,7 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext, _wallet: str 
         centi = int(round(amount * _TON_CENTI))  # مقدارِ تون به‌صورتِ صدم‌تون
         order = GiftOrder(bot_id=row.id, buyer_user_id=b.id, gift_id=f"tonsell_{centi}",
                           gift_emoji="💎", star_count=centi, price_toman=price,
-                          dest_telegram_id=msg.from_user.id, dest_label=wallet[:120],
+                          dest_telegram_id=cb.from_user.id, dest_label=wallet[:120],
                           dest_memo=(_memo or None),   # PATCH_TON_MEMO_V1
                           status="awaiting_admin", pay_method="wallet", tracking_code=trk,
                           discount_code_id=_dc_id, discount_amount=int(_dc_amt or 0))   # PATCH_VS_DISCOUNT_V1
@@ -17610,48 +17664,98 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext, _wallet: str 
         await s.commit()
         order_id = order.id
 
+    await vsd_clear(state)
     await state.clear()
+    await cb.answer("✅ پرداخت شد")
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)      # فاکتور دیگر قابلِ پرداخت نیست
+    except Exception:
+        logger.debug("ton: حذفِ دکمه‌هایِ فاکتور ممکن نشد")
     # === PATCH_TON_AUTOSEND_V1 === اگر مالک «ارسالِ خودکار» را روشن کرده، همین‌جا تون از کیف‌پولِ حضانتیِ ربات (TON Center API v2) می‌رود
     from tenant.bots.virtual_service import ton_autosend as _tas
+    # PATCH_TON_INVOICE_V1: «پیامِ ثبتِ سفارش» همیشه می‌رود (هم دستی هم خودکار)، بعدش در صورتِ ارسالِ خودکار «پیامِ تکمیل»
+    await cb.message.answer(
+        "✅ <b>سفارشت ثبت شد</b>\n\n"
+        f"💎 مقدار: {amount:g} TON\n🎯 آدرس: <code>{_html_escape(wallet)}</code>\n"
+        + (f"📝 کامنت/ممو: <code>{_html_escape(_memo)}</code>\n" if _memo else "")
+        + f"💰 پرداخت‌شده: {price:,} تومان\n🔖 کد پیگیری: <code>{trk}</code>\n\n"
+        "به‌محضِ ارسال، پیامِ تکمیل می‌آید.",
+        parse_mode="HTML", reply_markup=await _gift_support_kb(trk))
     _auto, _auto_note = await _tas.deliver_order(bot, row, order_id)
     if _auto == "sent":
-        await _ton_sent_notify(bot, row, order_id, msg.from_user.id, amount, trk)
+        await _ton_sent_notify(bot, row, order_id, cb.from_user.id, amount, trk)
         try:
             await _notify_manual_order(
                 bot, row,
-                f"🤖 <b>تونِ سفارش #{await order_no(GiftOrder, order_id)} خودکار ارسال شد</b>\n💎 {amount:g} TON → <code>{wallet}</code>\n"
+                f"🤖 <b>تونِ سفارش #{await order_no(GiftOrder, order_id)} خودکار ارسال شد</b>\n💎 {amount:g} TON → <code>{_html_escape(wallet)}</code>\n"
                 f"💰 {price:,} تومان · 🔖 {trk}\n{_html_escape(_auto_note)}")
         except Exception:
             logger.exception("اطلاعِ ارسالِ خودکارِ تون به ادمین ناموفق بود")
         return
     await _notify_gift_order_trust_success(bot, row, order_id)
-    await msg.answer(
-        "✅ پرداختت ثبت شد — سفارشت برایِ ادمین فرستاده شد و به‌زودی تون‌ها به "
-        f"آدرست واریز می‌شود.\n🔖 کد پیگیری: <code>{trk}</code>",
-        parse_mode="HTML", reply_markup=await _gift_support_kb(trk))
+    await _ton_admin_notice(bot, row, order_id, amount, price, wallet, _memo, trk, cb.from_user, _auto, _auto_note)
+
+
+async def _ton_admin_notice(bot: Bot, row, order_id: int, amount: float, price: int, wallet: str, memo: str | None,
+                            trk: str, user, auto: str, auto_note: str) -> None:
+    """پیامِ سفارشِ تون برایِ ادمین/مالک با «ارسال شد / رد و بازگشتِ وجه»؛ اگر ارسالِ خودکار انجام نشد، «🤖 ارسالِ خودکارِ مجدد» هم دارد."""
     _auto_line = ""
-    if _auto == "manual":
-        _auto_line = f"\n⚠️ ارسالِ خودکار انجام نشد: {_html_escape(_auto_note)}\n"
-    elif _auto == "unconfirmed":
-        _auto_line = ("\n⚠️ <b>ارسالِ خودکار نامشخص ماند</b> (" + _html_escape(_auto_note) + ").\n"
+    if auto == "manual":
+        _auto_line = f"\n⚠️ ارسالِ خودکار انجام نشد: {_html_escape(auto_note)}\n"
+    elif auto == "unconfirmed":
+        _auto_line = ("\n⚠️ <b>ارسالِ خودکار نامشخص ماند</b> (" + _html_escape(auto_note) + ").\n"
                       "قبل از هر کاری روی بلاک‌چین چک کن که تون رفته یا نه؛ اگر رفته «ارسال شد» را بزن، اگر نرفته دستی بفرست و بعد تأیید کن "
                       "(یا بازپرداخت). ارسالِ خودکارِ بعدی تا ۱۵ دقیقه متوقف است.\n")
+    rows = [[
+        InlineKeyboardButton(text="✅ ارسال شد", callback_data=f"ton:done:{order_id}", style=ButtonStyle.SUCCESS),
+        InlineKeyboardButton(text="↩️ رد و بازگشتِ وجه", callback_data=f"ton:refund:{order_id}", style=ButtonStyle.DANGER)]]
+    if auto == "manual":      # فقط وقتی قطعاً ارسال نشده؛ «نامشخص» عمداً دکمهٔ تکرار ندارد (خطرِ ارسالِ دوباره)
+        rows.append([InlineKeyboardButton(text="🤖 ارسالِ خودکارِ مجدد", callback_data=f"ton:retry:{order_id}", style=ButtonStyle.PRIMARY)])
     await _notify_manual_order(
         bot, row,
         f"💎 سفارشِ تون (TON) — #{await order_no(GiftOrder, order_id)}\n"
         f"مقدار: {amount:g} TON\n💰 {price:,} تومان\n"
         + _auto_line +
-        f"🎯 آدرسِ کیف‌پول: <code>{wallet}</code>\n"
-        + (f"📝 کامنت/ممو: <code>{_html_escape(_memo)}</code>\n" if _memo else "📝 کامنت/ممو: ندارد\n")
-        + _ton_buyer_block(msg.from_user)   # PATCH_TON_MEMO_V1 — مشخصاتِ خریدار
+        f"🎯 آدرسِ کیف‌پول: <code>{_html_escape(wallet)}</code>\n"
+        + (f"📝 کامنت/ممو: <code>{_html_escape(memo)}</code>\n" if memo else "📝 کامنت/ممو: ندارد\n")
+        + _ton_buyer_block(user)   # PATCH_TON_MEMO_V1 — مشخصاتِ خریدار
         + f"🔖 کد: {trk}\n\n"
         "این تون را باید خودت واقعاً به آدرسِ بالا بفرستی، بعد در «💎 فروشِ تون ← "
         "سفارش‌هایِ در انتظار» (یا با دکمه‌هایِ زیر) تأییدش کنی.",
-        InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="✅ ارسال شد", callback_data=f"ton:done:{order_id}",
-                                 style=ButtonStyle.SUCCESS),
-            InlineKeyboardButton(text="↩️ رد و بازگشتِ وجه", callback_data=f"ton:refund:{order_id}",
-                                 style=ButtonStyle.DANGER)]]))
+        InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@smm_router.callback_query(F.data.startswith("ton:retry:"))
+async def ton_retry_autosend(cb: CallbackQuery, bot: Bot):
+    """PATCH_TON_INVOICE_V1 — «🤖 ارسالِ خودکارِ مجدد» (فقط مالک؛ فقط سفارشی که قطعاً ارسال نشده، awaiting_admin)."""
+    row = await _ton_owner_strict(cb, bot)
+    if not row:
+        return
+    oid = int(cb.data.split(":")[2])
+    from tenant.bots.virtual_service import ton_autosend as _tas
+    async with Session() as s:
+        o = await s.get(GiftOrder, oid)
+        if not o or o.bot_id != row.id or not (o.gift_id or "").startswith("tonsell_"):
+            await cb.answer("سفارش یافت نشد.", show_alert=True)
+            return
+        if o.status != "awaiting_admin":
+            await cb.answer("این سفارش دیگر در انتظارِ ارسال نیست.", show_alert=True)
+            return
+        buyer = await s.get(BotUser, o.buyer_user_id)
+        buyer_tg, amount, trk = (buyer.telegram_id if buyer else None), (o.star_count or 0) / _TON_CENTI, o.tracking_code
+    await cb.answer("⏳ در حالِ ارسال…")
+    res, note = await _tas.deliver_order(bot, row, oid, force=True)
+    if res == "sent":
+        try:
+            await cb.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            logger.debug("ton: حذفِ دکمه‌هایِ سفارش ممکن نشد")
+        await cb.message.answer(f"🤖 ✅ ارسالِ خودکارِ سفارشِ #{await order_no(GiftOrder, oid)} انجام شد.\n{_html_escape(note)}", parse_mode="HTML")
+        await _ton_sent_notify(bot, row, oid, buyer_tg, amount, trk)
+    elif res == "unconfirmed":
+        await cb.message.answer("⚠️ <b>ارسالِ خودکار نامشخص ماند</b>: " + _html_escape(note) + "\nقبل از هر کاری روی بلاک‌چین چک کن؛ سپس «ارسال شد» یا «بازگشتِ وجه» را بزن.", parse_mode="HTML")
+    else:
+        await cb.message.answer("⚠️ ارسالِ خودکارِ مجدد انجام نشد: " + _html_escape(note or "دلیلِ نامشخص"), parse_mode="HTML")
 
 
 def _ton_buyer_block(user) -> str:
@@ -17664,20 +17768,21 @@ def _ton_buyer_block(user) -> str:
 
 @smm_router.message(SmmFSM.ton_memo_in, F.text)
 async def ton_memo_in(msg: Message, bot: Bot, state: FSMContext):
-    """=== PATCH_TON_MEMO_V1 === کامنت/ممو را می‌گیرد و سفارش را نهایی می‌کند."""
+    """=== PATCH_TON_MEMO_V1 === کامنت/ممو را می‌گیرد و فاکتور را نشان می‌دهد (PATCH_TON_INVOICE_V1)."""
+    from tenant import get_bot_row
     data = await state.get_data()
     wallet = data.get("ton_wallet_pending")
-    if not wallet:
+    row = await get_bot_row(bot)
+    if not wallet or not row:
         await state.clear()
         await msg.answer("جلسه منقضی شد؛ دوباره از فروشگاهِ تون شروع کن.")
         return
     raw = (msg.text or "").strip()
     memo = "" if raw in ("ندارم", "ندارد", "نه", "-", "ندارم.") else raw
     if len(memo) > 120:
-        await msg.answer("❌ کامنت/ممو خیلی بلند است (حداکثر ۱۲۰ کاراکتر). دوباره بفرست یا بنویس «ندارم».")
+        await msg.answer("❌ کامنت/ممو خیلی بلند است (حداکثر ۱۲۰ کاراکتر). دوباره بفرست یا روی «🚫 ممو ندارم» بزن.")
         return
-    await state.set_state(SmmFSM.ton_wallet_in)
-    await ton_wallet_in(msg, bot, state, _wallet=wallet, _memo=memo)
+    await _ton_show_invoice(msg, bot, state, row, msg.from_user.id, wallet, memo)
 
 
 # ───────── سفارش‌هایِ در انتظارِ تون (ادمین) ─────────
@@ -17756,10 +17861,20 @@ async def _ton_sent_notify(bot: Bot, row, oid: int, buyer_tg: int | None, amount
     await _notify_gift_order_trust_success(bot, row, oid)
     if buyer_tg:
         try:
+            async with Session() as s:
+                _o = await s.get(GiftOrder, oid)
+                _addr, _memo, _hash = (_o.dest_label, _o.dest_memo, getattr(_o, "tx_hash", None)) if _o else ("", None, None)
+            # PATCH_TON_INVOICE_V1 (SINA): پیامِ تکمیل آدرس و ممو را هم نشان می‌دهد؛ اگر هشِ تراکنش داریم دکمهٔ «هشِ تراکنش» زیرش است
+            _kb = (InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                text="هـش تـراکـنـش 👌", url=f"https://tonviewer.com/transaction/{_hash}")]]) if _hash else None)
             await bot.send_message(
                 buyer_tg,
-                f"✅ سفارشِ تون تو (#{await order_no(GiftOrder, oid)}) ارسال شد!\n"
-                f"💎 {amount:g} TON به آدرست واریز شد.\n🔖 کد پیگیری: {trk}")
+                f"✅ <b>سفارشِ تونِ تو (#{await order_no(GiftOrder, oid)}) ارسال شد!</b>\n\n"
+                f"💎 مقدار: {amount:g} TON\n"
+                + (f"🎯 آدرس: <code>{_html_escape(_addr)}</code>\n" if _addr else "")
+                + (f"📝 کامنت/ممو: <code>{_html_escape(_memo)}</code>\n" if _memo else "")
+                + f"🔖 کد پیگیری: {trk}",
+                parse_mode="HTML", reply_markup=_kb)
         except Exception:
             logger.exception("اطلاع‌رسانیِ تأییدِ تون به کاربر ناموفق بود")
 

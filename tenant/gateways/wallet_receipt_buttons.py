@@ -67,6 +67,11 @@ async def _render(cb: CallbackQuery, bot: Bot, bot_id: int):
             style=ButtonStyle.SUCCESS if on else ButtonStyle.DANGER)])
     if not buttons:
         lines.append("⚠️ هنوز هیچ دکمه‌ای در صفحهٔ اصلی این ربات ثبت نشده است.")
+    from tenant import get_setting as _gs
+    home_on = str(await _gs(bot_id, "wallet_receipt_home_btn", "0")) == "1"
+    lines += ["", f"🏠 دکمهٔ «منوی اصلی» زیرِ پیام: {'✅ روشن' if home_on else '❌ خاموش'}"]
+    rows.append([InlineKeyboardButton(text=f"🏠 دکمهٔ منوی اصلی: {'✅' if home_on else '❌'}", callback_data="wrb:home",
+                                      style=ButtonStyle.SUCCESS if home_on else ButtonStyle.DANGER)])
     rows.append([
         InlineKeyboardButton(text="✅ ذخیره", callback_data="wrb:save", style=ButtonStyle.SUCCESS),
         InlineKeyboardButton(text="🔄 پیش‌فرض", callback_data="wrb:reset", style=ButtonStyle.PRIMARY)])
@@ -142,3 +147,16 @@ async def run_wallet_receipt_button(cb: CallbackQuery, bot: Bot, state: FSMConte
     user, _ = await get_or_create_user(row.id, cb.from_user.id,
         cb.from_user.full_name, cb.from_user.username or "", return_created=True)
     await _exec_main_button(button, cb.message, bot, state, row, user, row.id, cb=cb)
+
+
+@wallet_receipt_buttons_router.callback_query(F.data == "wrb:home")
+async def toggle_wallet_receipt_home(cb: CallbackQuery, bot: Bot):
+    """PATCH_WALLET_RECEIPT_HOME_V1: روشن/خاموش‌کردنِ دکمهٔ «🏠 منوی اصلی» زیرِ پیامِ واریزِ موفق."""
+    from tenant import _owner_ok, get_setting, set_setting
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cur = str(await get_setting(row.id, "wallet_receipt_home_btn", "0")) == "1"
+    await set_setting(row.id, "wallet_receipt_home_btn", "0" if cur else "1")
+    await _render(cb, bot, row.id)
+    await cb.answer("دکمهٔ منوی اصلی خاموش شد." if cur else "دکمهٔ منوی اصلی روشن شد.")

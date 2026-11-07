@@ -48,6 +48,7 @@ async def _content(bot_id: int):
     media = await get_setting(bot_id, "kyc_l2_media", "video_note")
     win = await get_setting(bot_id, "kyc_window", "rolling")
     cc_max, cc_days = await K.card_change_policy(bot_id)
+    cc_btn = await K.card_change_btn_enabled(bot_id)
 
     txt = ("🛡 <b>احرازِ هویتِ کاربران</b>\n\n"
            f"وضعیت: {'✅ فعال' if on else '❌ غیرفعال'}\n\n"
@@ -77,6 +78,8 @@ async def _content(bot_id: int):
                               callback_data="kyc:window", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text=f"🔄 محدودیتِ تغییرِ کارت ({cc_max} بار / {cc_days} روز)",
                               callback_data="kyc:ccpol", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text=f"👁 دکمهٔ «تغییر کارت» برایِ کاربر: {'✅ نمایش' if cc_btn else '❌ پنهان'}",
+                              callback_data="kyc:ccbtn", style=(ButtonStyle.SUCCESS if cc_btn else ButtonStyle.DANGER))],
         [InlineKeyboardButton(text="👥 مدیریتِ کاربران و کارت‌هایِ احراز‌شده",
                               callback_data="kyc:users", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text=f"🎬 نوعِ فایلِ سطح ۲ ({K.media_label(media)})",
@@ -496,6 +499,19 @@ async def kyc_window_toggle(cb: CallbackQuery, bot: Bot):
     cur = await get_setting(row.id, "kyc_window", "rolling")
     await set_setting(row.id, "kyc_window", "rolling" if cur == "calendar" else "calendar")
     await cb.answer("✅ تغییر کرد")
+    await _show(cb, row.id)
+
+
+@kyc_admin_router.callback_query(F.data == "kyc:ccbtn")
+async def kyc_ccbtn_toggle(cb: CallbackQuery, bot: Bot):
+    """PATCH_KYC_CC_BTN_V1: دکمهٔ «تغییر کارت» را برایِ کاربران نشان بده/پنهان کن (محدودیتِ دفعات سرِ جایش می‌ماند)."""
+    from tenant import _owner_ok, set_setting
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cur = await K.card_change_btn_enabled(row.id)
+    await set_setting(row.id, "kyc_card_change_btn", "0" if cur else "1")
+    await cb.answer("دکمهٔ تغییر کارت پنهان شد." if cur else "دکمهٔ تغییر کارت نمایش داده می‌شود.")
     await _show(cb, row.id)
 
 

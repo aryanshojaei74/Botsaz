@@ -95,8 +95,33 @@ async def wallet_info(bot_id: int) -> tuple[str | None, float | None]:
     return w.address, await FS.fetch_balance_ton(w.address)
 
 
-async def send_ton(bot_id: int, to_addr: str, amount_ton: float, comment: str | None = None) -> tuple[str, str]:
-    """ارسالِ TON از کیف‌پولِ حضانتی. خروجی: ("ok"|"fail"|"unconfirmed", پیام).
+async def find_tx_hash(wallet_addr: str, to_addr: str, amount_ton: float) -> str | None:
+    """هشِ تراکنشِ خروجیِ همین ارسال را از TON Center (getTransactions) پیدا می‌کند: آخرین تراکنشِ کیف‌پول که پیامِ خروجی‌اش به همان مقصد و همان مبلغ است.
+    نیافتن/خطا ⇒ None (فقط دکمهٔ «هشِ تراکنش» نمایش داده نمی‌شود؛ ارسال تأثیر نمی‌پذیرد)."""
+    try:
+        from tonsdk.utils import Address, to_nano
+        from tenant.bots.virtual_service import fragment_stars as FS
+        data, err = await FS._toncenter_call("GET", f"{FS.TONCENTER_BASE}/getTransactions",
+                                             params={"address": wallet_addr, "limit": 10})
+        if not isinstance(data, dict) or not data.get("ok"):
+            return None
+        want_dest = Address(to_addr).to_string(False)
+        want_val = int(to_nano(float(amount_ton), "ton"))
+        for tx in data.get("result") or []:
+            for m in tx.get("out_msgs") or []:
+                try:
+                    if Address(m.get("destination") or "").to_string(False) == want_dest and int(m.get("value") or 0) == want_val:
+                        h = (tx.get("transaction_id") or {}).get("hash")
+                        return base64.b64decode(h).hex() if h else None
+                except Exception:      # noqa: BLE001
+                    continue
+    except Exception:      # noqa: BLE001
+        logger.exception("ton_autosend: یافتنِ هشِ تراکنش ناموفق بود")
+    return None
+
+
+async def send_ton(bot_id: int, to_addr: str, amount_ton: float, comment: str | None = None) -> tuple[str, str, str | None]:
+    """ارسالِ TON از کیف‌پولِ حضانتی. خروجی: ("ok"|"fail"|"unconfirmed", پیام, هشِ تراکنش|None).
     fail = قطعاً ارسال نشده (امن برایِ بازگشت به دستی)؛ unconfirmed = ممکن است رفته باشد — خودکار تکرار نمی‌شود."""
     from tenant.bots.virtual_service import fragment_stars as FS
     try:
@@ -104,26 +129,26 @@ async def send_ton(bot_id: int, to_addr: str, amount_ton: float, comment: str | 
         from tonsdk.utils import to_nano
         from wallet_crypto import decrypt_secret
     except Exception as e:      # noqa: BLE001
-        return "fail", f"کتابخانهٔ TON در دسترس نیست ({type(e).__name__})."
+        return "fail", f"کتابخانهٔ TON در دسترس نیست ({type(e).__name__}).", None
     if amount_ton <= 0:
-        return "fail", "مقدارِ نامعتبر."
+        return "fail", "مقدارِ نامعتبر.", None
     async with Session() as s:
         w = await s.scalar(select(FragmentWallet).where(FragmentWallet.bot_id == bot_id))
     if not w or not w.enabled:
-        return "fail", "کیف‌پولِ حضانتیِ ربات ساخته/فعال نشده (از «💎 Fragment» بساز و شارژ کن)."
+        return "fail", "کیف‌پولِ حضانتیِ ربات ساخته/فعال نشده (از «💎 Fragment» بساز و شارژ کن).", None
     bal = await FS.fetch_balance_ton(w.address)
     if bal is None:
-        return "fail", "موجودیِ کیف‌پول از شبکه خوانده نشد."
+        return "fail", "موجودیِ کیف‌پول از شبکه خوانده نشد.", None
     if bal < amount_ton + FEE_RESERVE_TON:
-        return "fail", f"موجودیِ کیف‌پولِ ربات کافی نیست ({bal:.3f} TON؛ لازم: {amount_ton + FEE_RESERVE_TON:.3f})."
+        return "fail", f"موجودیِ کیف‌پولِ ربات کافی نیست ({bal:.3f} TON؛ لازم: {amount_ton + FEE_RESERVE_TON:.3f}).", None
     try:
         mnemonic = decrypt_secret(w.encrypted_mnemonic)
     except Exception:      # noqa: BLE001
         logger.exception("ton_autosend: رمزگشاییِ seed نشد (bot=%s)", bot_id)
-        return "fail", "کلیدِ کیف‌پول قابلِ بازگشایی نبود."
+        return "fail", "کلیدِ کیف‌پول قابلِ بازگشایی نبود.", None
     seqno = await FS._get_seqno(w.address)
     if seqno is None:
-        return "fail", "وضعیتِ کیف‌پول (seqno) از شبکه خوانده نشد."
+        return "fail", "وضعیتِ کیف‌پول (seqno) از شبکه خوانده نشد.", None
     try:
         _m, _pub, _priv, wc = Wallets.from_mnemonics(mnemonic.split(), version=WalletVersionEnum.v4r2, workchain=0)
         q = wc.create_transfer_message(to_addr=to_addr, amount=to_nano(float(amount_ton), "ton"), seqno=seqno,
@@ -131,28 +156,37 @@ async def send_ton(bot_id: int, to_addr: str, amount_ton: float, comment: str | 
         boc = base64.b64encode(q["message"].to_boc(False)).decode()
     except Exception as e:      # noqa: BLE001
         logger.exception("ton_autosend: ساختِ تراکنش نشد (bot=%s)", bot_id)
-        return "fail", f"ساختِ تراکنش نشد ({type(e).__name__})."
+        return "fail", f"ساختِ تراکنش نشد ({type(e).__name__}).", None
     ok, note = await FS._send_boc(boc)
     if not ok:
         # شکستِ sendBoc می‌تواند «تایم‌اوتِ پس از ارسال» هم باشد ⇒ نامشخص، نه قطعاً-نرفته
-        return "unconfirmed", f"پاسخِ شبکه به ارسال: {note}"
+        return "unconfirmed", f"پاسخِ شبکه به ارسال: {note}", None
     deadline = time.monotonic() + CONFIRM_WAIT_S
     while time.monotonic() < deadline:
         await asyncio.sleep(CONFIRM_POLL_S)
         nxt = await FS._get_seqno(w.address)
         if nxt is not None and nxt > seqno:
-            return "ok", "تراکنش در شبکه ثبت شد."
-    return "unconfirmed", "تراکنش ارسال شد ولی تأییدِ ثبت در شبکه (seqno) نیامد."
+            return "ok", "تراکنش در شبکه ثبت شد.", await find_tx_hash(w.address, to_addr, amount_ton)
+    return "unconfirmed", "تراکنش ارسال شد ولی تأییدِ ثبت در شبکه (seqno) نیامد.", None
 
 
-async def deliver_order(bot, row, order_id: int) -> tuple[str, str]:
-    """تلاش برایِ تحویلِ خودکارِ یک سفارشِ تون. هرگز استثنا نمی‌دهد.
+async def _forced_cap(bot_id: int) -> float:
+    try:
+        return float(await _get_setting(bot_id, "ton_autosend_max", str(DEFAULT_MAX_TON)) or DEFAULT_MAX_TON)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_TON
+
+
+async def deliver_order(bot, row, order_id: int, force: bool = False) -> tuple[str, str]:
+    """تلاش برایِ تحویلِ خودکارِ یک سفارشِ تون. هرگز استثنا نمی‌دهد. force=True: «🤖 ارسالِ خودکارِ مجدد» توسطِ مالک (خاموش‌بودنِ تنظیم/توقفِ موقت را نادیده می‌گیرد؛ سقف و بقیهٔ شرط‌ها می‌مانند).
     خروجی: ("disabled"|"manual"|"sent"|"unconfirmed", پیام). manual/unconfirmed ⇒ فراخوان باید ادمین را خبر کند."""
     try:
         cfg = await settings(row.id)
-        if not cfg["enabled"]:
+        if not cfg["enabled"] and not force:
             return "disabled", ""
-        if paused(row.id):
+        if cfg["enabled"] is False:                  # force روی رباتی که سقف ندارد ⇒ سقفِ پیش‌فرض
+            cfg = {**cfg, "max": (await _forced_cap(row.id))}
+        if paused(row.id) and not force:
             return "manual", "ارسالِ خودکار به‌خاطرِ یک خطایِ نامشخصِ اخیر موقتاً متوقف است؛ دستی بفرست."
         async with _lock(row.id):
             async with Session() as s:
@@ -170,13 +204,14 @@ async def deliver_order(bot, row, order_id: int) -> tuple[str, str]:
                 o.status = "sending"          # قفلِ ردیف: از این لحظه هیچ مسیرِ دیگری ارسال نمی‌کند
                 o.deliver_via = "auto"
                 await s.commit()
-            res, note = await send_ton(row.id, addr, amount, memo)
+            res, note, txh = await send_ton(row.id, addr, amount, memo)
             async with Session() as s:
                 o = await s.get(GiftOrder, order_id, with_for_update=True)
                 if o is not None and o.status == "sending":
                     if res == "ok":
                         o.status = "sent"
                         o.fail_reason = None
+                        o.tx_hash = txh
                     elif res == "fail":
                         o.status = "awaiting_admin"        # قطعاً نرفته ⇒ مسیرِ دستی
                         o.deliver_via = ""

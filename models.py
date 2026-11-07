@@ -2098,6 +2098,8 @@ class GiftOrder(Base):
     # sent_qty: چند عددش تا حالا واقعاً فرستاده شده (برایِ سفارش‌هایِ منتظرِ موجودیِ استارزِ ربات).
     deliver_via: Mapped[str] = mapped_column(String(10), default="", server_default="")
     sent_qty: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # === PATCH_TON_TXHASH_V1 === هشِ تراکنشِ بلاک‌چین (ارسالِ خودکارِ تون)؛ دکمهٔ «هشِ تراکنش» زیرِ پیامِ تکمیل
+    tx_hash: Mapped[str | None] = mapped_column(String(80))
     # === PATCH_GIFT_COMMENT_V1 === کامنتِ اختیاریِ خریدار که همراهِ گیفت فرستاده می‌شود (حداکثر ۱۲۸ حرف)
     comment: Mapped[str | None] = mapped_column(String(255))
     # === PATCH_GIFT_ANON_SCOPE_V1 ===

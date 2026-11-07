@@ -36,6 +36,7 @@ async def _menu_content(bot_id: int):
     show_wallet = await BP._get(bot_id, "blupal_show_wallet", "1") == "1"
     show_purchase = await BP._get(bot_id, "blupal_show_purchase", "1") == "1"
     repl = await BP._get(bot_id, "blupal_replace_card", "0") == "1"
+    pay_btn = await BP._get(bot_id, "blupal_show_pay_btn", "1") == "1"      # PATCH_BLUPAL_PAYBTN_V1
     mn, mx = await BP.get_min_amount(bot_id), await BP.get_max_amount(bot_id)
     masked = (key[:9] + "…" + key[-4:]) if key and len(key) > 16 else (key or "—")
     mode = {"sandbox": " (حالتِ تست)", "live": " (اصلی)"}.get(BP.key_mode(key), "") if key else ""
@@ -47,7 +48,8 @@ async def _menu_content(bot_id: int):
            f"🔼 حداکثرِ مبلغ: <b>{(f'{mx:,}' if mx else f'{BP.CEIL_AMOUNT:,} (سقفِ درگاه)')}</b> تومان\n"
            f"👛 نمایش در کیف پول: {'✅' if show_wallet else '❌'}\n"
            f"🛒 نمایش موقعِ پرداختِ محصول: {'✅' if show_purchase else '❌'}\n"
-           f"🔁 جایگزینِ کارت‌به‌کارتِ دستی: {'✅' if repl else '❌'}\n\n"
+           f"🔁 جایگزینِ کارت‌به‌کارتِ دستی: {'✅' if repl else '❌'}\n"
+           f"🔗 دکمهٔ «صفحهٔ پرداخت» زیرِ فاکتور: {'✅' if pay_btn else '❌'}\n\n"
            "ℹ️ بازهٔ درگاه ۱۰٬۰۰۰ تا ۵۰٬۰۰۰٬۰۰۰ تومان است. مبلغِ فاکتور تا ۹۹۹ ریال (کمتر از ۱۰۰ تومان) با عددِ تصادفی "
            "تفاوت دارد تا واریزها از هم تشخیص داده شوند؛ کیفِ پولِ مشتری <b>کامل</b> به‌اندازهٔ مبلغِ شارژ پر می‌شود. "
            "کلیدِ API را از داشبوردِ بلوپال ← «مدیریت API Key» بردار (کلیدِ <code>blu_live_…</code> برایِ اصلی، "
@@ -66,6 +68,8 @@ async def _menu_content(bot_id: int):
                               style=(ButtonStyle.SUCCESS if show_purchase else ButtonStyle.DANGER))],
         [InlineKeyboardButton(text=f"🔁 جایگزینِ کارت‌به‌کارتِ دستی: {'✅' if repl else '❌'}", callback_data="bpl:replace",
                               style=(ButtonStyle.SUCCESS if repl else ButtonStyle.DANGER))],
+        [InlineKeyboardButton(text=f"🔗 دکمهٔ صفحهٔ پرداخت: {'✅' if pay_btn else '❌'}", callback_data="bpl:pay_btn",
+                              style=(ButtonStyle.SUCCESS if pay_btn else ButtonStyle.DANGER))],
         [InlineKeyboardButton(text="🧪 تستِ اتصال", callback_data="bpl:test", style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:finance", style=ButtonStyle.DANGER)],
     ]
@@ -135,6 +139,12 @@ async def bp_replace(cb: CallbackQuery, bot: Bot):
     await BP._set(row.id, "blupal_replace_card", "0" if cur else "1")
     await cb.answer("کارت‌به‌کارتِ دستی دوباره نمایش داده می‌شود." if cur else "بلوپال جایگزینِ کارت‌به‌کارتِ دستی شد.", show_alert=not cur)
     await _show(cb, row.id)
+
+
+@blupal_router.callback_query(F.data == "bpl:pay_btn")
+async def bp_pay_btn(cb: CallbackQuery, bot: Bot):
+    """PATCH_BLUPAL_PAYBTN_V1 (SINA): نمایش/پنهان‌کردنِ دکمهٔ لینکِ «صفحهٔ پرداخت» زیرِ فاکتور."""
+    await _flip(cb, bot, "blupal_show_pay_btn", "دکمهٔ صفحهٔ پرداخت")
 
 
 @blupal_router.callback_query(F.data == "bpl:show_purchase")
@@ -368,11 +378,12 @@ async def _issue(message: Message, bot: Bot, amount: int, payer, from_text: bool
         cid = ch.id
     from tenant.shared.kyc_user import invoice_card_block as _icb      # PATCH_INVOICE_KYC_CARD_V1
     _kyc_txt, _kyc_rows = await _icb(row.id, payer.id)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 صفحهٔ پرداخت", url=str(res["payment_link"]))],
+    _show_pay = await BP._get(row.id, "blupal_show_pay_btn", "1") == "1"      # PATCH_BLUPAL_PAYBTN_V1
+    kb = InlineKeyboardMarkup(inline_keyboard=(
+        ([[InlineKeyboardButton(text="💳 صفحهٔ پرداخت", url=str(res["payment_link"]))]] if _show_pay else []) + [
         [InlineKeyboardButton(text="🔍 بررسیِ پرداخت", callback_data=f"bpu:check:{oid}", style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="❌ لغو و بازگشت", callback_data=f"bpu:cancel:{oid}", style=ButtonStyle.DANGER)],
-    ])
+    ]))
     card_line = f"🏦 شمارهٔ کارتِ مقصد: <code>{card}</code>\n" if card else ""
     text = (
         "🧾 <b>فاکتورِ شارژِ کیف پول</b>\n➖➖➖➖➖➖➖➖➖➖\n\n"
@@ -381,11 +392,16 @@ async def _issue(message: Message, bot: Bot, amount: int, payer, from_text: bool
         f"{card_line}"
         f"🔑 کدِ پیگیری: <code>{seq}</code>\n\n"
         "⚠️ <b>دقیقاً همین مبلغ (به ریال، با همین رقم‌های آخر)</b> را کارت‌به‌کارت کن؛ کم‌وزیاد یا رند، خودکار تأیید نمی‌شود. "
-        "مبلغ را در اپِ بانک به‌صورت ریال وارد کن و اگر شک داشتی، از «صفحهٔ پرداخت» مبلغِ دقیق را کپی کن.\n\n"
-        "📋 <b>مراحل:</b>\n"
-        "۱. روی «💳 صفحهٔ پرداخت» بزن و مبلغ/کارت را ببین.\n"
-        "۲. واریز کن، بعد «🔍 بررسیِ پرداخت» را بزن (خودکار هم بررسی می‌شود).\n"
-        "۳. کیفِ پولت شارژ می‌شود. ✅\n\n"
+        + ("مبلغ را در اپِ بانک به‌صورت ریال وارد کن و اگر شک داشتی، از «صفحهٔ پرداخت» مبلغِ دقیق را کپی کن.\n\n"
+           "📋 <b>مراحل:</b>\n"
+           "۱. روی «💳 صفحهٔ پرداخت» بزن و مبلغ/کارت را ببین.\n"
+           "۲. واریز کن، بعد «🔍 بررسیِ پرداخت» را بزن (خودکار هم بررسی می‌شود).\n"
+           "۳. کیفِ پولت شارژ می‌شود. ✅\n\n" if _show_pay else
+           "مبلغ را در اپِ بانک به‌صورت ریال وارد کن.\n\n"
+           "📋 <b>مراحل:</b>\n"
+           "۱. مبلغِ دقیق را به کارتِ بالا واریز کن.\n"
+           "۲. بعد «🔍 بررسیِ پرداخت» را بزن (خودکار هم بررسی می‌شود).\n"
+           "۳. کیفِ پولت شارژ می‌شود. ✅\n\n") +
         "⏳ اگر منصرف شدی، «❌ لغو و بازگشت» را بزن." + _kyc_txt)
     try:                                                    # «در حال ساخت» همان پیامِ فاکتور می‌شود (نه پیامِ اضافه)
         await wait.edit_text(text, reply_markup=kb, parse_mode="HTML")
