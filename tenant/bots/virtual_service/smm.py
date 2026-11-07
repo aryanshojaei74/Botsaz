@@ -17557,11 +17557,12 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext):
         rows = [[InlineKeyboardButton(text="🚫 ممو ندارم", callback_data="ton:nomemo", style=ButtonStyle.PRIMARY)]]   # PATCH_TON_INVOICE_V1: دکمهٔ شیشه‌ای به‌جایِ تایپِ «ندارم»
         if isinstance(base, InlineKeyboardMarkup):
             rows += [list(r) for r in base.inline_keyboard]
-        await msg.answer(
+        _pm = await msg.answer(
             f"✅ آدرس ثبت شد:\n<code>{_html_escape(wallet)}</code>\n\n"
             "📝 اگر این آدرس (مثلاً صرافی) برایِ واریز <b>کامنت / ممو (Memo/Tag)</b> می‌خواهد، همین‌جا بفرست.\n"
             "اگر لازم نیست، روی «🚫 ممو ندارم» بزن.",
             parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+        await state.update_data(ton_memo_prompt_id=getattr(_pm, "message_id", None))   # PATCH_TON_MEMO_CLEAN_V1: بعدِ جواب پاک می‌شود
         return
     await _ton_show_invoice(msg, bot, state, row, msg.from_user.id, wallet, "")
 
@@ -17589,7 +17590,7 @@ async def _ton_show_invoice(target: Message, bot: Bot, state: FSMContext, row, u
         "🧾 <b>فاکتورِ خرید</b>\n\n"
         f"کالا: 💎 {amount:g} TON\n"
         f"مقصد: <code>{_html_escape(wallet)}</code>\n"
-        + (f"کامنت/ممو: <code>{_html_escape(memo)}</code>\n" if memo else "کامنت/ممو: ندارد\n")
+        + (f"📝 کامنت/ممو: ✅ <code>{_html_escape(memo)}</code>\n" if memo else "📝 کامنت/ممو: ندارد ❌\n")   # PATCH_TON_MEMO_CLEAN_V1
         + f"قیمت: {price:,} تومان\n\n"
         f"مبلغِ قابل‌پرداخت: {price:,} تومان" + ("" if _pay_rows else _vp.NO_METHOD_NOTE),
         reply_markup=kb, parse_mode="HTML")
@@ -17616,10 +17617,7 @@ async def ton_nomemo(cb: CallbackQuery, bot: Bot, state: FSMContext):
         await cb.answer("جلسه منقضی شد؛ دوباره از فروشگاهِ تون شروع کن.", show_alert=True)
         return
     await cb.answer()
-    try:
-        await cb.message.edit_reply_markup(reply_markup=None)
-    except Exception:
-        logger.debug("ton: حذفِ دکمهٔ ممو ممکن نشد")
+    await _ton_drop_memo_prompt(bot, cb.message.chat.id, data, cb.message)          # PATCH_TON_MEMO_CLEAN_V1
     await _ton_show_invoice(cb.message, bot, state, row, cb.from_user.id, wallet, "")
 
 
@@ -17792,6 +17790,23 @@ async def ton_retry_autosend(cb: CallbackQuery, bot: Bot):
         await cb.message.answer("⚠️ ارسالِ خودکارِ مجدد انجام نشد: " + _html_escape(note or "دلیلِ نامشخص"), parse_mode="HTML")
 
 
+async def _ton_drop_memo_prompt(bot: Bot, chat_id: int, data: dict, fallback_msg=None) -> None:
+    """PATCH_TON_MEMO_CLEAN_V1 (SINA): پیامِ «ممو را بفرست» بعد از جواب (ممو یا «ممو ندارم») پاک می‌شود؛ فاکتور وضعیتِ ممو را نشان می‌دهد."""
+    mid = data.get("ton_memo_prompt_id")
+    try:
+        if mid:
+            await bot.delete_message(chat_id, int(mid))
+        elif fallback_msg is not None:
+            await fallback_msg.delete()
+    except Exception:
+        logger.debug("ton: حذفِ پیامِ درخواستِ ممو ممکن نشد", exc_info=True)
+        if fallback_msg is not None:
+            try:
+                await fallback_msg.edit_reply_markup(reply_markup=None)
+            except Exception:
+                logger.debug("ton: حذفِ دکمهٔ ممو ممکن نشد", exc_info=True)
+
+
 def _ton_buyer_block(user) -> str:
     """=== PATCH_TON_MEMO_V1 === مشخصاتِ خریدار در پیامِ ادمین (قبلاً اصلاً نبود)."""
     name = _html_escape((getattr(user, "full_name", "") or "—")[:60])
@@ -17816,6 +17831,7 @@ async def ton_memo_in(msg: Message, bot: Bot, state: FSMContext):
     if len(memo) > 120:
         await msg.answer("❌ کامنت/ممو خیلی بلند است (حداکثر ۱۲۰ کاراکتر). دوباره بفرست یا روی «🚫 ممو ندارم» بزن.")
         return
+    await _ton_drop_memo_prompt(bot, msg.chat.id, data)                              # PATCH_TON_MEMO_CLEAN_V1
     await _ton_show_invoice(msg, bot, state, row, msg.from_user.id, wallet, memo)
 
 

@@ -78,7 +78,7 @@ async def _content(bot_id: int):
                               callback_data="kyc:window", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text=f"🔄 محدودیتِ تغییرِ کارت ({cc_max} بار / {cc_days} روز)",
                               callback_data="kyc:ccpol", style=ButtonStyle.PRIMARY)],
-        [InlineKeyboardButton(text=f"👁 دکمهٔ «تغییر کارت» برایِ کاربر: {'✅ نمایش' if cc_btn else '❌ پنهان'}",
+        [InlineKeyboardButton(text=f"👁 دکمهٔ «تغییر کارت» در کیف‌پول: {'✅ نمایش' if cc_btn else '❌ پنهان'}",
                               callback_data="kyc:ccbtn", style=(ButtonStyle.SUCCESS if cc_btn else ButtonStyle.DANGER))],
         [InlineKeyboardButton(text="👥 مدیریتِ کاربران و کارت‌هایِ احراز‌شده",
                               callback_data="kyc:users", style=ButtonStyle.PRIMARY)],
@@ -511,7 +511,7 @@ async def kyc_ccbtn_toggle(cb: CallbackQuery, bot: Bot):
         return
     cur = await K.card_change_btn_enabled(row.id)
     await set_setting(row.id, "kyc_card_change_btn", "0" if cur else "1")
-    await cb.answer("دکمهٔ تغییر کارت پنهان شد." if cur else "دکمهٔ تغییر کارت نمایش داده می‌شود.")
+    await cb.answer("در کیف‌پول پنهان شد؛ هنگامِ انتخابِ کارتِ پرداخت هنوز دیده می‌شود." if cur else "دکمهٔ تغییر کارت نمایش داده می‌شود.")
     await _show(cb, row.id)
 
 

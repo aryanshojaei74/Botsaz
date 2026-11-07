@@ -220,7 +220,7 @@ async def card_select_gate(message, bot_id: int, telegram_id: int, gw: str, amou
                                       style=ButtonStyle.SUCCESS)]]
         if await _pending_of(bot_id, u.id) is None:
             can_change, _why = await K.card_change_status(bot_id, u.id)
-            if can_change and await K.card_change_btn_enabled(bot_id):
+            if can_change:      # PATCH_KYC_CC_BTN_V2 (SINA): در مرحلهٔ انتخابِ کارتِ پرداخت همیشه هست؛ تاگل فقط ورودی‌هایِ کیف‌پول را پنهان می‌کند
                 rows.append([InlineKeyboardButton(text="🔄 تغییر کارت بانکی", callback_data="kycu:cc",
                                                   style=ButtonStyle.PRIMARY)])
         rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="w:back", style=ButtonStyle.DANGER)])

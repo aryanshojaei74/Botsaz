@@ -101,9 +101,10 @@ async def env(monkeypatch):
     def msg(text):
         async def answer(t, **kw):
             answers.append(t)
+            return SimpleNamespace(message_id=500 + len(answers))
 
         return SimpleNamespace(text=text, from_user=SimpleNamespace(id=777, full_name="علی <b>", username="ali"),
-                               answer=answer)
+                               chat=SimpleNamespace(id=1), answer=answer)
 
     def cb(data="ton:pay"):
         async def answer(t, **kw):
@@ -115,7 +116,8 @@ async def env(monkeypatch):
         async def cb_answer(*a, **k):
             return None
         return SimpleNamespace(data=data, from_user=SimpleNamespace(id=777, full_name="علی <b>", username="ali"),
-                               message=SimpleNamespace(message_id=55, answer=answer, edit_reply_markup=edit_rm), answer=cb_answer)
+                               message=SimpleNamespace(message_id=55, chat=SimpleNamespace(id=1), answer=answer,
+                                                       edit_reply_markup=edit_rm), answer=cb_answer)
 
     yield SimpleNamespace(maker=maker, state=state, notices=notices, answers=answers, settings=settings, msg=msg, cb=cb)
     await engine.dispose()
@@ -208,3 +210,23 @@ async def test_pay_is_refused_without_invoice_data_and_insufficient_balance(env)
     await env.state.clear()
     await S.ton_pay(env.cb(), object(), env.state)                              # فاکتوری نیست
     assert await orders(env) == []
+
+
+@pytest.mark.asyncio
+async def test_memo_prompt_message_is_deleted_and_invoice_shows_memo_state(env):
+    deleted = []
+
+    class B:
+        async def delete_message(self, chat, mid):
+            deleted.append((chat, mid))
+    await S.ton_wallet_in(env.msg(WALLET), B(), env.state)
+    pid = (await env.state.get_data())["ton_memo_prompt_id"]
+    assert pid                                                              # شناسهٔ پیامِ «ممو را بفرست» ذخیره شد
+    await S.ton_memo_in(env.msg("MEMO-1"), B(), env.state)
+    assert deleted == [(1, pid)]                                            # بعدِ فرستادنِ ممو پاک شد
+    assert "کامنت/ممو: ✅" in env.answers[-1] and "MEMO-1" in env.answers[-1]
+    await S.ton_wallet_in(env.msg(WALLET), B(), env.state)
+    deleted.clear()
+    await S.ton_nomemo(env.cb("ton:nomemo"), B(), env.state)                # «ممو ندارم» هم پیامِ درخواست را پاک می‌کند
+    assert len(deleted) == 1
+    assert "کامنت/ممو: ندارد" in env.answers[-1]

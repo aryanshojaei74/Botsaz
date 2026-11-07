@@ -1162,6 +1162,41 @@ async def smmai_disconnect_group(cb: CallbackQuery, bot: Bot):
         await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
+# === PATCH_SMM_AI_REPLY_V1 === (SINA)
+#  ۱) «اسمِ دستیار» را رویِ یک پیام ریپلای کنند ⇒ همان پیام (سؤالِ آن کاربر) جواب داده می‌شود، نه «جانم، سؤالت رو بپرس».
+#  ۲) اسم + چند کلمه + ریپلای ⇒ متنِ پیامِ ریپلای‌شده هم به مدل داده می‌شود.
+#  ۳) ریپلای رویِ جوابِ خودِ دستیار (بدونِ گفتنِ اسم) ⇒ ادامهٔ همان گفتگو.
+_REPLY_CTX_MAX = 1500
+_ANSWER_TTL_SEC = 6 * 3600
+_ANSWER_MAX = 2000
+_answer_ids: dict[tuple[int, int], float] = {}
+
+
+def _replied_text(msg: Message) -> str:
+    r = getattr(msg, "reply_to_message", None)
+    return ((getattr(r, "text", None) or getattr(r, "caption", None) or "").strip()[:_REPLY_CTX_MAX]) if r else ""
+
+
+def _remember_answer(chat_id: int, message_id) -> None:
+    import time as _t
+    if not message_id:
+        return
+    now = _t.monotonic()
+    if len(_answer_ids) >= _ANSWER_MAX:
+        for k in [k for k, t in _answer_ids.items() if now - t > _ANSWER_TTL_SEC] or list(_answer_ids)[:200]:
+            _answer_ids.pop(k, None)
+    _answer_ids[(int(chat_id), int(message_id))] = now
+
+
+def _is_answer_reply(msg: Message, bot_id: int) -> bool:
+    import time as _t
+    rt = getattr(msg, "reply_to_message", None)
+    if not rt or not getattr(rt, "from_user", None) or rt.from_user.id != bot_id:
+        return False
+    t = _answer_ids.get((msg.chat.id, rt.message_id))
+    return t is not None and _t.monotonic() - t <= _ANSWER_TTL_SEC
+
+
 async def _smm_ai_group_match(msg: Message, bot: Bot) -> bool | dict:
     """فیلترِ async — عمداً همه‌ی چک‌ها (نوعِ ربات، فعال‌بودنِ دستیار، تنظیم‌بودنِ
     اسم، تطبیقِ متن) این‌جاست، نه تویِ بدنه‌ی هندلر. چون اگه فیلتر False
@@ -1202,6 +1237,8 @@ async def _smm_ai_group_match(msg: Message, bot: Bot) -> bool | dict:
     text = msg.text.strip()
     logger.info(f"[SMM_AI_GROUP] bot_id={row.id} name={group_name!r} incoming={text!r}")
     if not text.lower().startswith(group_name.lower()):
+        if _is_answer_reply(msg, bot.id):          # PATCH_SMM_AI_REPLY_V1 — ریپلای رویِ جوابِ دستیار = سؤالِ ادامه‌دار
+            return {"smm_ai_question": text, "smm_ai_row": row}
         logger.info(f"[SMM_AI_GROUP] تطبیق نخورد — پیام با اسمِ تنظیم‌شده شروع نمی‌شه")
         return False
     remainder = text[len(group_name):]
@@ -1214,9 +1251,15 @@ async def _smm_ai_group_match(msg: Message, bot: Bot) -> bool | dict:
 
 
 async def _smm_ai_answer_in_group(msg: Message, question: str, row) -> None:
+    # === PATCH_SMM_AI_REPLY_V1 ===
+    _rtxt = _replied_text(msg)
     if not question.strip():
-        await msg.reply("جانم، سؤالت رو بپرس.")
-        return
+        if not _rtxt:
+            await msg.reply("جانم، سؤالت رو بپرس.")
+            return
+        question = _rtxt                           # اسم تنها + ریپلای ⇒ خودِ پیامِ ریپلای‌شده سؤال است
+    elif _rtxt and _rtxt not in question:
+        question = f"{question}\n\n(پیامی که روی آن ریپلای شده: «{_rtxt}»)"
     api_key = (await _get_setting(row.id, "smm_ai_api_key", "")).strip()
     if not api_key:
         logger.info(f"[SMM_AI_GROUP] bot_id={row.id} — کلیدِ API تنظیم نشده")
@@ -1242,17 +1285,18 @@ async def _smm_ai_answer_in_group(msg: Message, question: str, row) -> None:
         return
     logger.info(f"[SMM_AI_GROUP] bot_id={row.id} — جواب دریافت شد، در حالِ ارسال")
     try:
-        await msg.reply(f"🤖 {md_to_html(answer)}", parse_mode="HTML")
+        _sent = await msg.reply(f"🤖 {md_to_html(answer)}", parse_mode="HTML")
     except Exception:
         logger.exception("[SMM_AI_GROUP] ارسالِ HTML ناموفق؛ متنِ ساده")
-        await msg.reply(f"🤖 {answer.replace('**', '')}")
+        _sent = await msg.reply(f"🤖 {answer.replace('**', '')}")
+    _remember_answer(msg.chat.id, getattr(_sent, "message_id", None))      # PATCH_SMM_AI_REPLY_V1
 
 
 @smm_ai_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), _smm_ai_group_match)
 async def smmai_group_trigger(msg: Message, bot: Bot, state: FSMContext,
                               smm_ai_question: str, smm_ai_row) -> None:
     """نام تنها، مکالمهٔ دومرحله‌ای را برای همان کاربر و گروه باز می‌کند."""
-    if not smm_ai_question.strip():
+    if not smm_ai_question.strip() and not _replied_text(msg):           # PATCH_SMM_AI_REPLY_V1: با ریپلای نیازی به «سؤالت رو بپرس» نیست
         await state.set_state(SmmAiFSM.group_question)
         await state.update_data(group_ai_bot_id=smm_ai_row.id,
                                 group_ai_chat_id=str(msg.chat.id))
