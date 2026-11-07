@@ -4746,8 +4746,9 @@ async def trial_request_start(msg: Message, state: FSMContext, bot: Bot):
     await msg.answer(
         "🎁 <b>درخواست تست پلن‌های رشد و حرفه‌ای</b>\n\n"
         "می‌تونی به‌صورت آزمایشی یکی از پلن‌های رشد یا حرفه‌ای رو درخواست بدی. "
-        "بعد از <b>تایید مدیر</b>، برای مدت مشخصی این پلن در بخش «🤖 ساخت ربات» برات "
-        "رایگان فعال می‌شه و می‌تونی باهاش ربات بسازی. بعد از پایان مهلت، ربات به‌صورت "
+        "تست برای <b>هر نوعِ ربات یک‌بار</b> فعاله (مثلاً یک‌بار قرعه‌کشی، یک‌بار واسطه‌گری، یک‌بار پنل‌فروشی …) "
+        "— اگه یه نوع رو تست کردی، هنوز می‌تونی برای نوع‌هایِ دیگه تست بگیری.\n"
+        "تست در بخش «🤖 ساخت ربات» برات رایگان فعال می‌شه و می‌تونی باهاش ربات بسازی. بعد از پایان مهلت، ربات به‌صورت "
         "خودکار به پلن پایه برمی‌گرده.\n\n"
         "کدوم پلن رو می‌خوای تست کنی؟",
         reply_markup=trial_plan_pick_kb(),
@@ -4798,8 +4799,7 @@ async def _submit_trial(tg_id: int, name: str, note: str, state: FSMContext, bot
     # === PATCH_TRIAL_STRICT_ONE_PER_USER_V1 ===
     if status == "already_used":
         await reply_to.answer(
-            "🚫 شما قبلاً یک‌بار از تستِ رایگان استفاده کرده‌اید و این امکان "
-            "برای هر کاربر فقط <b>یک‌بار</b> در دسترس است.\n"
+            "🚫 شما از تستِ رایگانِ <b>همهٔ نوع‌هایِ ربات</b> استفاده کرده‌اید.\n"
             "برای استفادهٔ دائمی می‌تونی پلن رو از «🤖 ساخت ربات» تهیه کنی.",
             reply_markup=await smart_home_kb(tg_id))
         return
@@ -4811,7 +4811,7 @@ async def _submit_trial(tg_id: int, name: str, note: str, state: FSMContext, bot
     # می‌کنیم — کاربر منتظرِ بررسیِ دستی نمی‌مونه. ادمین همچنان یه پیامِ
     # اطلاع (بدونِ دکمه‌هایِ تایید/رد، چون دیگه لازم نیست) دریافت می‌کنه تا
     # بدونه چه کسی تست گرفته و در صورتِ نیاز بتونه بعداً لغوش کنه.
-    if (await get_pset("trial_auto_approve", "off")) == "on":
+    if (await get_pset("trial_auto_approve", "on")) == "on":
         _auto_days = fa_to_int(await get_pset("trial_auto_approve_days", "2")) or 2
         _res = await plan_trials.approve_request(int(req_id), _auto_days)
         if _res:
@@ -4894,7 +4894,7 @@ async def trial_pending_kb() -> InlineKeyboardMarkup:
     rows.append([hx_button("🎁 اهدای تست به کاربر", callback_data="trq:gift",
                                       style=ButtonStyle.PRIMARY)])
     # === PATCH_TRIAL_AUTO_APPROVE_V1 ===
-    _auto_on = (await get_pset("trial_auto_approve", "off")) == "on"
+    _auto_on = (await get_pset("trial_auto_approve", "on")) == "on"
     _auto_days = await get_pset("trial_auto_approve_days", "2")
     rows.append([hx_button(
         (f"🤖 تاییدِ خودکار: ✅ روشن ({_auto_days} روزه)" if _auto_on else "🤖 تاییدِ خودکار: ❌ خاموش"),
@@ -5173,7 +5173,7 @@ async def adm_trial_auto_toggle(cb: CallbackQuery, bot: Bot):
     if not _trial_can_manage(cb.from_user.id):
         await cb.answer("فقط مدیر اصلی", show_alert=True)
         return
-    cur = await get_pset("trial_auto_approve", "off")
+    cur = await get_pset("trial_auto_approve", "on")
     new = "off" if cur == "on" else "on"
     await set_pset("trial_auto_approve", new)
     if new == "on":
@@ -5589,6 +5589,8 @@ async def show_pitch(cb: CallbackQuery, state: FSMContext):
                      callback_data=f"newplan:{plan.value}", style=ButtonStyle.SUCCESS)
         else:
             trial = await plan_trials.active_trial_for(cb.from_user.id, plan.value)
+            if trial and await plan_trials.trial_blocked_for_field(cb.from_user.id, data.get("field")):
+                trial = None     # PATCH_MAIN_TRIAL_PER_TYPE_V1: تستِ این نوعِ ربات قبلاً گرفته شده؛ قیمتِ عادی نشان داده شود
             if trial:
                 b.button(
                     text=f"🎁 {PLAN_INFO[plan]['title']} — تست رایگان ({trial['days_left']} روز مانده)",
@@ -5795,6 +5797,11 @@ async def choose_plan(cb: CallbackQuery, state: FSMContext):
     else:
         # اگر کاربر تستِ تاییدشدهٔ فعال برای این پلن دارد، رایگان و بدون نیاز به موجودی
         trial = await plan_trials.active_trial_for(cb.from_user.id, plan)
+        if trial and await plan_trials.trial_blocked_for_field(cb.from_user.id, _fd):
+            # PATCH_MAIN_TRIAL_PER_TYPE_V1: هر نوعِ ربات فقط یک‌بار با تست ساخته می‌شود (callbackِ دست‌ساز هم نتواند دورش بزند)
+            await cb.answer("تستِ این نوعِ ربات را قبلاً گرفته‌ای. این تست را برایِ نوعِ دیگری از ربات استفاده کن یا پلن را بخر.",
+                            show_alert=True)
+            return
         if trial:
             trial_req_id = trial["id"]
             trial_expires = trial["expires_at"]

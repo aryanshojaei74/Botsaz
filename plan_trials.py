@@ -60,6 +60,58 @@ async def ensure_trials_table() -> None:
     _table_ready = True
 
 
+# === PATCH_MAIN_TRIAL_PER_TYPE_V1 ===
+# تست برایِ هر *نوعِ ربات* یک‌بار (قبلاً: یک تست در کلِ عمر). نوعِ تست از رویِ رباتی که با آن ساخته می‌شود (Bot.field) معلوم می‌شود؛
+# تستِ همکار (PartnerSale.kind=trial) هم حساب می‌شود.
+def trial_types() -> tuple[str, ...]:
+    """نوع‌هایِ رباتی که الان قابلِ ساختن‌اند (همان ACTIVE_FIELDS ربات اصلی)."""
+    try:
+        from platform_bot import ACTIVE_FIELDS
+        return tuple(sorted(ACTIVE_FIELDS))
+    except Exception:      # noqa: BLE001
+        logger.exception("plan_trials: ACTIVE_FIELDS در دسترس نبود")
+        return ("vpn_sales", "virtual_service", "ad_bot", "giveaway", "escrow_bot", "panel_seller", "booking")
+
+
+async def tried_fields(tg_id: int) -> set[str]:
+    """نوع‌هایِ رباتی که این کاربر قبلاً با تست ساخته (تستِ بات‌سازِ اصلی + تستِ همکار)."""
+    from sqlalchemy import select as _sel
+    from models import Bot as BotRow, PartnerSale
+    await ensure_trials_table()
+    out: set[str] = set()
+    async with Session() as s:
+        rows = (await s.scalars(
+            _sel(BotRow.field).join(PlanTrialRequest, PlanTrialRequest.bot_id == BotRow.id).where(
+                PlanTrialRequest.user_telegram_id == tg_id,
+                PlanTrialRequest.status.in_(("approved", "used", "expired")),
+                PlanTrialRequest.bot_id.isnot(None)))).all()
+        out |= {r for r in rows if r}
+        rows = (await s.scalars(
+            _sel(BotRow.field).join(PartnerSale, PartnerSale.sold_bot_id == BotRow.id).where(
+                PartnerSale.buyer_telegram_id == tg_id, PartnerSale.kind == "trial"))).all()
+        out |= {r for r in rows if r}
+    return out
+
+
+async def trial_count(tg_id: int) -> int:
+    """تعدادِ تست‌هایی که این کاربر مصرف کرده (حتی اگر رباتی نساخته باشد) — سقفِ سوءاستفاده: حداکثر به تعدادِ نوع‌هایِ ربات."""
+    from sqlalchemy import func as _fn, select as _sel
+    from models import PartnerSale
+    await ensure_trials_table()
+    async with Session() as s:
+        a = int(await s.scalar(_sel(_fn.count(PlanTrialRequest.id)).where(
+            PlanTrialRequest.user_telegram_id == tg_id,
+            PlanTrialRequest.status.in_(("approved", "used", "expired")))) or 0)
+        b = int(await s.scalar(_sel(_fn.count(PartnerSale.id)).where(
+            PartnerSale.buyer_telegram_id == tg_id, PartnerSale.kind == "trial")) or 0)
+    return a + b
+
+
+async def trial_blocked_for_field(tg_id: int, field: str | None) -> bool:
+    """True اگر برایِ ساختِ رباتی از این نوع قبلاً تست گرفته شده."""
+    return bool(field) and field in await tried_fields(tg_id)
+
+
 async def create_request(tg_id: int, name: str, plan: str, note: str = "") -> tuple[str, int | None]:
     """ثبت درخواست تست جدید.
 
@@ -83,10 +135,13 @@ async def create_request(tg_id: int, name: str, plan: str, note: str = "") -> tu
         )
         if pend:
             return ("exists_pending", pend.id)
+        # === PATCH_MAIN_TRIAL_PER_TYPE_V1 === فقط تستِ تاییدشدهٔ «هنوز مصرف‌نشده» مانع است؛ تستی که با آن ربات ساخته شده (used)
+        # نباید جلویِ تستِ نوعِ دیگر را بگیرد.
         act = await s.scalar(
             select(PlanTrialRequest).where(
                 PlanTrialRequest.user_telegram_id == tg_id,
-                PlanTrialRequest.status.in_(("approved", "used")),
+                PlanTrialRequest.status == "approved",
+                PlanTrialRequest.bot_id.is_(None),
                 PlanTrialRequest.expires_at > now,
             )
         )
@@ -102,30 +157,11 @@ async def create_request(tg_id: int, name: str, plan: str, note: str = "") -> tu
         # طبقِ خواستِ ادمین، الان سخت‌گیرانه‌ست: هر کاربر در کلِ عمرِ حسابش
         # فقط و فقط یک‌بار می‌تونه تست بگیره — فارغ از اینکه کدوم پلن بوده
         # و فارغ از اینکه ازش استفاده کرده یا نه.
-        used_before = await s.scalar(
-            select(PlanTrialRequest).where(
-                PlanTrialRequest.user_telegram_id == tg_id,
-                PlanTrialRequest.status.in_(("approved", "used", "expired")),
-            )
-        )
-        if used_before:
-            return ("already_used", used_before.id)
-        # === PATCH_TRIAL_NO_RENEW_V1 ===
-        # تستِ ۲ روزه‌ای که کاربر از یک *رباتِ همکار* گرفته هم حساب
-        # می‌شود. بدونِ این، کاربر می‌توانست یک تست از همکار بگیرد و یک
-        # تستِ دیگر از بات‌سازِ اصلی — دو رباتِ رایگان.
-        try:
-            from models import PartnerSale
-            partner_trial = await s.scalar(
-                select(PartnerSale.id).where(
-                    PartnerSale.buyer_telegram_id == tg_id,
-                    PartnerSale.kind == "trial",
-                )
-            )
-            if partner_trial:
-                return ("already_used", None)
-        except Exception:
-            logger.exception("بررسیِ سابقهٔ تستِ همکار ناموفق بود")
+        # === PATCH_MAIN_TRIAL_PER_TYPE_V1 ===
+        # قاعدهٔ قبلی: «یک تست در کلِ عمرِ حساب». حالا: برایِ هر نوعِ ربات یک تست. این‌جا فقط سقفِ کل (به تعدادِ نوع‌ها) را
+        # می‌گیریم تا کسی با درخواستِ پشتِ‌هم و نساختنِ ربات بی‌نهایت تست نگیرد؛ قفلِ «هر نوع یک‌بار» موقعِ ساختِ ربات اعمال می‌شود.
+        if await trial_count(tg_id) >= len(trial_types()):
+            return ("already_used", None)
         req = PlanTrialRequest(
             user_telegram_id=tg_id, user_name=(name or "")[:120],
             plan=plan, status="pending", note=(note or "")[:400],
