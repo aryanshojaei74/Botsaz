@@ -16047,6 +16047,13 @@ async def vip_ctl_action(cb: CallbackQuery, bot: Bot):
             await cb.answer(str(data)[:180], show_alert=True)
             return
         uname = data.get("username")
+        if uname:
+            from models import HostedApp as _HA
+            async with Session() as s:
+                _a = await s.get(_HA, app_id)
+                if _a is not None and _a.bot_username != uname:
+                    _a.bot_username = str(uname)[:64]
+                    await s.commit()
         await cb.message.answer(
             f"🔗 رباتِ کاربر: @{uname}\nhttps://t.me/{uname}" if uname else
             "🔗 یوزرنیمِ ربات پیدا نشد (توکن ثبت نشده یا نامعتبر است).")
@@ -16384,22 +16391,34 @@ async def vip_user_search_result(msg: Message, state: FSMContext):
     if not term:
         await msg.answer("ورودی خالی بود.", reply_markup=home)
         return
+    term = _re_mod.sub(r"^(?:https?://)?(?:www\.)?(?:t|telegram)\.me/", "", term, flags=_re_mod.I).lstrip("@").strip() or term
     like = f"%{term}%"
-    async with Session() as s:
-        owners = []
-        if term.isdigit():
-            owners = [int(term)]
-        else:
-            users = (await s.scalars(select(PlatformUser).where(
-                or_(PlatformUser.full_name.ilike(like),
-                    PlatformUser.username.ilike(like))).limit(20))).all()
-            owners = [u.telegram_id for u in users]
-        cond = [HostedApp.name.ilike(like)]
-        if owners:
-            cond.append(HostedApp.owner_id.in_(owners))
-        apps = (await s.scalars(select(HostedApp).where(or_(*cond))
-                                .order_by(HostedApp.id.desc()).limit(40))).all()
-        names = await _owner_names(s, [a.owner_id for a in apps])
+
+    async def _lookup():
+        async with Session() as s:
+            owners = []
+            if term.isdigit():
+                owners = [int(term)]
+            else:
+                users = (await s.scalars(select(PlatformUser).where(
+                    or_(PlatformUser.full_name.ilike(like),
+                        PlatformUser.username.ilike(like))).limit(20))).all()
+                owners = [u.telegram_id for u in users]
+            cond = [HostedApp.name.ilike(like), HostedApp.bot_username.ilike(like)]
+            if owners:
+                cond.append(HostedApp.owner_id.in_(owners))
+            found = (await s.scalars(select(HostedApp).where(or_(*cond))
+                                     .order_by(HostedApp.id.desc()).limit(40))).all()
+            return found, await _owner_names(s, [a.owner_id for a in found])
+
+    apps, names = await _lookup()
+    if not apps and not term.isdigit():
+        try:
+            import hosted_miniapp as _hm
+            if await _hm.fill_bot_usernames():
+                apps, names = await _lookup()
+        except Exception:
+            logger.exception("vip search: یافتنِ یوزرنیمِ رباتِ اپ‌ها ناموفق بود")
     if not apps:
         await msg.answer(f"❌ چیزی با «{term}» پیدا نشد.", reply_markup=home)
         return

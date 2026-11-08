@@ -3116,6 +3116,9 @@ class HostedApp(Base):
     miniapp_sub: Mapped[str | None] = mapped_column(String(32), unique=True, index=True)
     miniapp_until: Mapped[datetime | None] = mapped_column(DateTime)
 
+    # یوزرنیمِ رباتِ تلگرامیِ این اپ (از getMe با توکنِ همان اپ؛ برایِ جستجویِ مدیر)
+    bot_username: Mapped[str | None] = mapped_column(String(64), index=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(DateTime)
 

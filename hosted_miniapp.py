@@ -101,6 +101,45 @@ async def set_for_app(envs, url: str, text: str = "🌐 باز کردن", *, cal
     return await set_menu_button(token, url, text, call=call)
 
 
+async def fill_bot_usernames(limit: int = 60, *, call=_call) -> int:
+    """یوزرنیمِ رباتِ اپ‌هایی که هنوز ثبت نشده را با getMe (توکنِ همان اپ از envها) پیدا و ذخیره می‌کند. تعدادِ ثبت‌شده‌ها را برمی‌گرداند."""
+    import asyncio
+    from sqlalchemy import select
+    from config import Session
+    from models import HostedApp, HostedAppEnv
+    async with Session() as s:
+        apps = (await s.scalars(select(HostedApp).where(HostedApp.bot_username.is_(None))
+                                .order_by(HostedApp.id.desc()).limit(limit))).all()
+        envs: dict[int, dict[str, str]] = {}
+        if apps:
+            rows = (await s.scalars(select(HostedAppEnv).where(HostedAppEnv.app_id.in_([a.id for a in apps])))).all()
+            for r in rows:
+                envs.setdefault(r.app_id, {})[r.key] = r.value
+    jobs = [(a.id, find_bot_token(envs.get(a.id, {}))) for a in apps]
+    jobs = [(i, t) for i, t in jobs if t]
+    if not jobs:
+        return 0
+    sem = asyncio.Semaphore(8)
+
+    async def one(app_id: int, token: str):
+        async with sem:
+            try:
+                me = await call(token, "getMe")
+            except Exception:
+                logger.exception("fill_bot_usernames: getMe ناموفق (app=%s)", app_id)
+                return app_id, ""
+            return app_id, ((me.get("result") or {}).get("username") or "") if me.get("ok") else ""
+    found = [r for r in await asyncio.gather(*(one(i, t) for i, t in jobs)) if r[1]]
+    if found:
+        async with Session() as s:
+            for app_id, uname in found:
+                a = await s.get(HostedApp, app_id)
+                if a is not None:
+                    a.bot_username = uname[:64]
+            await s.commit()
+    return len(found)
+
+
 def guide_text() -> str:
     return (
         "🌐 <b>ثبتِ مینی‌اپ برایِ رباتِ خودت</b>\n\n"
