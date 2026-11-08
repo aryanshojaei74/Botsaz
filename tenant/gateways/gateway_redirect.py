@@ -114,12 +114,44 @@ async def startpay_for(bot_id: int, gw: str, ref: str) -> str:
     tpl = tpl.replace("{authority}", "{ref}")
     if tpl == "auto":
         base = await _callback_base(bot_id, gw)
-        if base:
+        # PATCH_GW_AUTO_RUNTIME_FALLBACK_V1 (Nexivo): اگر دامنهٔ callback به سرورِ ربات نمی‌رسد (مثلاً دامنه به سایتِ فروشگاهِ
+        # خودِ مالک اشاره می‌کند و /gw/... همان صفحهٔ اصلیِ سایت را برمی‌گرداند)، کاربر به‌جای درگاه به سایتِ مالک می‌رفت.
+        # حالا لینکِ «خودکار» قبل از دادن به کاربر یک‌بار (با کش) سنجیده می‌شود؛ اگر صفحهٔ ریدایرکتِ ما نبود، مستقیم به درگاه می‌رود.
+        if base and await _auto_page_ok(base, gw):
             return f"{base.rstrip('/')}/gw/{gw}/start/{ref}"
         return direct_startpay(gw, ref)
     if "{ref}" in tpl:
         return tpl.replace("{ref}", ref)
     return direct_startpay(gw, ref)
+
+
+_AUTO_OK_CACHE: dict = {}
+_AUTO_OK_TTL_OK = 600
+_AUTO_OK_TTL_BAD = 120
+
+
+async def _auto_page_ok(base: str, gw: str) -> bool:
+    """آیا <base>/gw/<gw>/start/<ref> واقعاً صفحهٔ ریدایرکتِ همین سرور است؟ (نتیجه کش می‌شود)"""
+    import time as _t
+    key = (base.rstrip("/"), gw)
+    hit = _AUTO_OK_CACHE.get(key)
+    now = _t.monotonic()
+    if hit and hit[1] > now:
+        return hit[0]
+    ok = False
+    try:
+        import aiohttp
+        url = f"{base.rstrip('/')}/gw/{gw}/start/{_PROBE_REF}"
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as sess:
+            async with sess.get(url, allow_redirects=False) as r:
+                body = (await r.text(errors="ignore"))[:20000] if r.status == 200 else ""
+        ok = _PROBE_REF in body and ("StartPay" in body or "zarinpal" in body.lower() or "zibal" in body.lower())
+    except Exception as e:
+        logger.warning("gateway_redirect: بررسیِ دامنهٔ callback ناموفق (%s): %s", base, type(e).__name__)
+    if not ok:
+        logger.warning("gateway_redirect: دامنهٔ callback (%s) صفحهٔ ریدایرکت را سرو نمی‌کند؛ مستقیم به درگاه می‌رود", base)
+    _AUTO_OK_CACHE[key] = (ok, now + (_AUTO_OK_TTL_OK if ok else _AUTO_OK_TTL_BAD))
+    return ok
 
 
 async def status_line(bot_id: int, gw: str) -> str:
