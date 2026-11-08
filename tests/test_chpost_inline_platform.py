@@ -18,10 +18,10 @@ ADMIN = 424242
 def test_admin_menu_support_section_has_both_buttons_for_super_admin_only():
     sec = AM._SECTION_BY_KEY["support"]
     cbs = [it[1] for it in sec["items"]]
-    assert "chpost:menu" in cbs and "chpost:inline_start" in cbs
+    assert "chpost:menu" in cbs and "chpost:ua_menu" in cbs                  # PATCH_CHPOST_USERBOT_V1: ارسال با اکانتِ پرمیوم
     items_super = [it[1] for it in AM._section_items(sec, True)]
     items_sub = [it[1] for it in AM._section_items(sec, False)]
-    assert "chpost:inline_start" in items_super and "chpost:inline_start" not in items_sub and "chpost:menu" not in items_sub
+    assert "chpost:ua_menu" in items_super and "chpost:ua_menu" not in items_sub and "chpost:menu" not in items_sub
 
 
 def test_old_settings_entry_moved_not_duplicated():
@@ -94,7 +94,7 @@ class Q:
 
 
 @pytest.mark.asyncio
-async def test_inline_start_sets_inline_mode_without_needing_a_channel(env):
+async def test_inline_start_still_works_as_hidden_path(env):
     st, cb = St(), Cb()
     await PC.chpost_inline_start(cb, st)
     assert st.d["chpost_mode"] == "inline" and st.state is not None and cb.message.sent
@@ -104,18 +104,20 @@ async def test_inline_start_sets_inline_mode_without_needing_a_channel(env):
 
 
 @pytest.mark.asyncio
-async def test_preview_in_inline_mode_only_offers_inline_send(env, monkeypatch):
+async def test_preview_offers_account_send_only_when_account_connected(env, monkeypatch):
+    store = {"chpost_chat_id": "-100", "chpost_group_id": "-200"}
+
     async def gp(k, d=""):
-        return {"chpost_chat_id": "-100", "chpost_group_id": "-200"}.get(k, d)
+        return store.get(k, d)
     monkeypatch.setattr(PC, "get_pset", gp)
-    for mode, expect_send in (("inline", False), ("new", True)):
-        st = St({"chpost_text": "x", "chpost_mode": mode})
+    for connected in (False, True):
+        store["chpost_ua_session"] = "enc" if connected else ""
+        st = St({"chpost_text": "x", "chpost_mode": "new"})
         m = Msg()
         await PC._chpost_preview(m, st, NS(copy_message=_noop))
         kb = m.sent[-1][1]["reply_markup"]
         datas = [b.callback_data for r in kb.inline_keyboard for b in r]
-        assert "chpost:inline" in datas
-        assert ("chpost:send" in datas) is expect_send
+        assert ("chpost:ua_send" in datas) is connected and "chpost:send" in datas
 
 
 @pytest.mark.asyncio

@@ -46,6 +46,10 @@ class ChpostFSM(StatesGroup):
     attach_idle = State()  # حالتِ «در حالِ چیدنِ دکمه برای پستِ موجود» (معادلِ content ولی بدونِ محتوای جدید)
     # === PATCH_CHPOST_DETACH_EXISTING_V1 ===
     detach_target = State()  # دریافت فوروارد/لینکِ پستی که می‌خواهیم دکمه‌های شیشه‌ایِ زیرش برداشته شود
+    # === PATCH_CHPOST_USERBOT_V1 === اتصالِ اکانتِ پرمیومِ مدیر (api_id ← api_hash ← StringSession)
+    ua_api_id = State()
+    ua_api_hash = State()
+    ua_session = State()
 
 
 # ────────── lazy-import wrappers از platform_bot ──────────
@@ -288,9 +292,10 @@ async def _chpost_menu() -> tuple[str, InlineKeyboardMarkup]:
         f"{ch_line}\n{gr_line}\n\n"
     )
     rows = []
-    # === PATCH_CHPOST_INLINE_V1 === ارسالِ اینلاین (بدونِ نیاز به اتصالِ کانال)
-    rows.append([hx_button("✨ ارسال اینلاین (ایموجیِ پرمیوم سالم)", callback_data="chpost:inline_start",
-                           style=ButtonStyle.SUCCESS)])
+    # === PATCH_CHPOST_USERBOT_V1 === ارسال با اکانتِ پرمیومِ خودِ مدیر (تنها راهِ مطمئنِ حفظِ ایموجیِ پرمیوم)
+    _ua_on = bool(await get_pset("chpost_ua_session", ""))
+    rows.append([hx_button(("👤 اکانتِ پرمیوم: متصل ✅ (مدیریت)" if _ua_on else "👤 اتصالِ اکانتِ پرمیوم (ارسال با ایموجیِ پرمیوم)"),
+                           callback_data="chpost:ua_menu", style=ButtonStyle.SUCCESS)])
     if chat_id or grp_id:
         txt += (
             "با «ساخت پست جدید» یک پیامِ متنی یا عکس‌دار — با همون قالب‌بندیِ تلگرامِ خودت "
@@ -560,6 +565,246 @@ async def _chpost_home_link_buttons(bot: Bot, selected_keys: list[str],
         rows.append([InlineKeyboardButton(
             text=label, url=f"https://t.me/{me.username}?start=hcb-{url_key}", **kw)])
     return rows
+
+
+# ═══════════ PATCH_CHPOST_USERBOT_V1 — ارسال با اکانتِ پرمیومِ مدیر ═══════════
+async def _ua_creds():
+    """(api_id, api_hash, session) رمزگشایی‌شده یا None."""
+    from wallet_crypto import decrypt_secret
+    api_id = (await get_pset("chpost_ua_api_id", "")).strip()
+    enc_h = await get_pset("chpost_ua_api_hash", "")
+    enc_s = await get_pset("chpost_ua_session", "")
+    if not (api_id.isdigit() and enc_h and enc_s):
+        return None
+    try:
+        return int(api_id), decrypt_secret(enc_h), decrypt_secret(enc_s)
+    except Exception:
+        logger.exception("chpost userbot: رمزگشاییِ نشست ناموفق")
+        return None
+
+
+def _ua_menu_kb(connected: bool) -> InlineKeyboardMarkup:
+    rows = [[hx_button("🔁 تعویضِ اکانت" if connected else "🔗 اتصالِ اکانت", callback_data="chpost:ua_connect",
+                       style=ButtonStyle.SUCCESS)]]
+    if connected:
+        rows.append([hx_button("🗑 قطعِ اکانت", callback_data="chpost:ua_off", style=ButtonStyle.DANGER)])
+    rows.append([hx_button("⬅️ بازگشت", callback_data="chpost:menu", style=ButtonStyle.DANGER)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+_UA_INTRO = (
+    "👤 <b>ارسال با اکانتِ پرمیوم</b>\n\n"
+    "تلگرام ایموجیِ پرمیوم را فقط از یک اکانتِ پرمیوم می‌پذیرد؛ رباتِ معمولی (حتی با کپی/اینلاین) آن‌ها را ساده می‌کند. "
+    "با اتصالِ اکانتِ خودت، پست با <b>همان اکانت</b> در کانال گذاشته می‌شود (در کانال با نامِ کانال دیده می‌شود، نه یوزرنیمِ تو؛ "
+    "مگر «Sign messages» روشن باشد) و بعد ربات دکمه‌ها را زیرش می‌چسباند.\n\n"
+    "⚠️ <b>امنیت:</b> نشستِ اکانت رمزنگاری‌شده روی سرور می‌ماند و یعنی ربات به آن اکانت دسترسی دارد. "
+    "پیشنهاد: یک اکانتِ پرمیومِ جدا که فقط ادمینِ کانال باشد. هر وقت خواستی «قطعِ اکانت» را بزن "
+    "(برایِ امنیتِ کامل در تلگرام ← Settings ← Devices آن نشست را هم ببند).\n\n"
+    "<b>شرط‌ها:</b> اکانت باید در کانال/گروه ادمین (با حقِ ارسال) باشد؛ ربات هم ادمین با دسترسیِ ویرایشِ پیام تا دکمه بچسباند."
+)
+
+
+@chpost_router.callback_query(F.data == "chpost:ua_menu")
+async def chpost_ua_menu(cb: CallbackQuery):
+    if cb.from_user.id != PLATFORM_ADMIN_ID:
+        await cb.answer("فقط مدیر اصلی", show_alert=True)
+        return
+    creds = await _ua_creds()
+    status = "🟢 متصل" if creds else "🔴 متصل نیست"
+    txt = _UA_INTRO + f"\n\nوضعیت: <b>{status}</b>"
+    try:
+        await cb.message.edit_text(txt, reply_markup=_ua_menu_kb(bool(creds)), parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(txt, reply_markup=_ua_menu_kb(bool(creds)), parse_mode="HTML")
+    await cb.answer()
+
+
+@chpost_router.callback_query(F.data == "chpost:ua_connect")
+async def chpost_ua_connect(cb: CallbackQuery, state: FSMContext):
+    if cb.from_user.id != PLATFORM_ADMIN_ID:
+        await cb.answer("فقط مدیر اصلی", show_alert=True)
+        return
+    import chpost_userbot as _ub
+    di, dh = _ub.default_api()
+    if di:
+        await state.update_data(ua_api_id=di, ua_api_hash=dh)
+        await state.set_state(ChpostFSM.ua_session)
+        txt = ("🔗 <b>اتصالِ اکانت — مرحلهٔ آخر</b>\n\n"
+               "رشتهٔ <b>StringSession</b> را بفرست. برایِ ساختنش روی کامپیوترِ خودت:\n"
+               "<code>pip install telethon</code>\n<code>python3 tools/make_telethon_session.py</code>\n"
+               "(کدِ ورود را در تلگرام فوروارد نکن؛ فقط در همان ترمینال بزن.) پیامت بعد از دریافت پاک می‌شود.")
+    else:
+        await state.set_state(ChpostFSM.ua_api_id)
+        txt = ("🔗 <b>اتصالِ اکانت — مرحلهٔ ۱ از ۳</b>\n\n"
+               "از my.telegram.org ← API development tools مقدارِ <b>api_id</b> (یک عدد) را بفرست.")
+    await cb.message.answer(txt, reply_markup=await smart_cancel_kb(), parse_mode="HTML")
+    await cb.answer()
+
+
+@chpost_router.message(ChpostFSM.ua_api_id, F.text)
+async def chpost_ua_api_id(msg: Message, state: FSMContext):
+    if msg.from_user.id != PLATFORM_ADMIN_ID:
+        await state.clear()
+        return
+    t = (msg.text or "").strip()
+    if t == BTN_CANCEL:
+        await state.clear()
+        await msg.answer("لغو شد.", reply_markup=await smart_home_kb(msg.from_user.id, show_admin=True))
+        return
+    if not t.isdigit():
+        await msg.answer("api_id یک عدد است. دوباره بفرست:")
+        return
+    await state.update_data(ua_api_id=t)
+    await state.set_state(ChpostFSM.ua_api_hash)
+    await msg.answer("مرحلهٔ ۲ از ۳: مقدارِ <b>api_hash</b> را بفرست (رشتهٔ ۳۲ حرفی).", parse_mode="HTML")
+
+
+@chpost_router.message(ChpostFSM.ua_api_hash, F.text)
+async def chpost_ua_api_hash(msg: Message, state: FSMContext):
+    if msg.from_user.id != PLATFORM_ADMIN_ID:
+        await state.clear()
+        return
+    t = (msg.text or "").strip()
+    if t == BTN_CANCEL:
+        await state.clear()
+        await msg.answer("لغو شد.", reply_markup=await smart_home_kb(msg.from_user.id, show_admin=True))
+        return
+    try:
+        await msg.delete()
+    except Exception:
+        logger.debug("chpost ua: حذفِ پیامِ api_hash ممکن نشد", exc_info=True)
+    if not (16 <= len(t) <= 64) or " " in t:
+        await msg.answer("api_hash معتبر نیست. دوباره بفرست:")
+        return
+    await state.update_data(ua_api_hash=t)
+    await state.set_state(ChpostFSM.ua_session)
+    await msg.answer(
+        "مرحلهٔ ۳ از ۳: رشتهٔ <b>StringSession</b> را بفرست.\nبرایِ ساختنش روی کامپیوترِ خودت:\n"
+        "<code>pip install telethon</code>\n<code>python3 tools/make_telethon_session.py</code>\n"
+        "(کدِ ورود را در تلگرام فوروارد نکن.) پیامت بعد از دریافت پاک می‌شود.", parse_mode="HTML")
+
+
+@chpost_router.message(ChpostFSM.ua_session, F.text)
+async def chpost_ua_session(msg: Message, state: FSMContext):
+    if msg.from_user.id != PLATFORM_ADMIN_ID:
+        await state.clear()
+        return
+    t = (msg.text or "").strip()
+    if t == BTN_CANCEL:
+        await state.clear()
+        await msg.answer("لغو شد.", reply_markup=await smart_home_kb(msg.from_user.id, show_admin=True))
+        return
+    try:
+        await msg.delete()
+    except Exception:
+        logger.debug("chpost ua: حذفِ پیامِ نشست ممکن نشد", exc_info=True)
+    data = await state.get_data()
+    import chpost_userbot as _ub
+    try:
+        who = await _ub.validate_session(int(data["ua_api_id"]), data["ua_api_hash"], t)
+    except _ub.UserbotError as e:
+        await msg.answer(f"❌ {e}\nدوباره رشتهٔ نشست را بفرست یا لغو کن.")
+        return
+    from wallet_crypto import encrypt_secret
+    try:
+        await set_pset("chpost_ua_api_id", str(data["ua_api_id"]))
+        await set_pset("chpost_ua_api_hash", encrypt_secret(data["ua_api_hash"]))
+        await set_pset("chpost_ua_session", encrypt_secret(t))
+    except Exception:
+        logger.exception("chpost ua: ذخیرهٔ نشست ناموفق")
+        await msg.answer("⛔️ ذخیرهٔ رمزنگاری‌شده ممکن نشد (WALLET_ENC_KEY در .env تنظیم است؟).")
+        return
+    await state.clear()
+    await msg.answer(f"✅ اکانت متصل شد: <b>{_html.escape(who)}</b>\nحالا هنگامِ ساختِ پست دکمهٔ «👤 ارسال با اکانتِ من» را می‌بینی.",
+                     reply_markup=await smart_home_kb(msg.from_user.id, show_admin=True), parse_mode="HTML")
+    txt, kb = await _chpost_menu()
+    await msg.answer(txt, reply_markup=kb)
+
+
+@chpost_router.callback_query(F.data == "chpost:ua_off")
+async def chpost_ua_off(cb: CallbackQuery):
+    if cb.from_user.id != PLATFORM_ADMIN_ID:
+        await cb.answer("فقط مدیر اصلی", show_alert=True)
+        return
+    for k in ("chpost_ua_api_id", "chpost_ua_api_hash", "chpost_ua_session"):
+        await set_pset(k, "")
+    await cb.answer("اکانت قطع شد؛ نشست از سرور پاک شد.", show_alert=True)
+    txt, kb = await _chpost_menu()
+    try:
+        await cb.message.edit_text(txt, reply_markup=kb)
+    except Exception:
+        await cb.message.answer(txt, reply_markup=kb)
+
+
+@chpost_router.callback_query(F.data == "chpost:ua_send")
+async def chpost_ua_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """پست را با اکانتِ مدیر در کانال/گروهِ متصل می‌فرستد و بعد ربات دکمه‌ها را می‌چسباند."""
+    if cb.from_user.id != PLATFORM_ADMIN_ID:
+        await cb.answer("فقط مدیر اصلی", show_alert=True)
+        return
+    creds = await _ua_creds()
+    if not creds:
+        await cb.answer("اول اکانت را وصل کن.", show_alert=True)
+        return
+    data = await state.get_data()
+    plain = data.get("chpost_plain")
+    if plain is None:                         # پستی که قبل از این قابلیت ساخته شده
+        await cb.answer("متنِ اصلیِ پست ذخیره نشده؛ پست را دوباره بفرست.", show_alert=True)
+        return
+    photo = data.get("chpost_photo")
+    if not photo and not plain.strip():
+        await cb.answer("متن پست خالی است.", show_alert=True)
+        return
+    targets = [(c, w) for c, w in ((await get_pset("chpost_chat_id", ""), "کانال"),
+                                   (await get_pset("chpost_group_id", ""), "گروه")) if c]
+    if not targets:
+        await cb.answer("مقصدی وصل نیست.", show_alert=True)
+        return
+    await cb.answer("⏳ در حالِ ارسال با اکانتِ تو…")
+    buttons = data.get("chpost_buttons") or []
+    home_keys = data.get("chpost_home_keys") or []
+    kb_rows = list(_chpost_kb(buttons, for_channel=True).inline_keyboard) if buttons else []
+    kb_rows += await _chpost_home_link_buttons(bot, home_keys, for_channel=True)
+    kb = InlineKeyboardMarkup(inline_keyboard=kb_rows) if kb_rows else None
+    import os
+    import tempfile
+    import chpost_userbot as _ub
+    photo_path = None
+    if photo:
+        try:
+            fd, photo_path = tempfile.mkstemp(suffix=".jpg")
+            os.close(fd)
+            await bot.download(photo, destination=photo_path)
+        except Exception as e:
+            logger.exception("chpost ua: دانلودِ عکس ناموفق")
+            await cb.message.answer(f"❌ دریافتِ عکس از تلگرام ناموفق بود: {e}")
+            return
+    lines = []
+    try:
+        for cid, word in targets:
+            try:
+                mid = await _ub.send_post(*creds, cid, plain, data.get("chpost_entities") or [], photo_path)
+            except _ub.UserbotError as e:
+                lines.append(f"❌ {word}: {e}")
+                continue
+            note = ""
+            if kb is not None:
+                try:
+                    await bot.edit_message_reply_markup(chat_id=cid, message_id=mid, reply_markup=kb)
+                except Exception as e:
+                    logger.warning("chpost ua: چسباندنِ دکمه ناموفق: %s", e)
+                    note = " (پست ارسال شد ولی دکمه‌ها نچسبید؛ ربات باید ادمین با دسترسیِ «ویرایشِ پیام‌ها» باشد)"
+            lines.append(f"✅ {word}: ارسال شد با اکانتِ تو" + note)
+    finally:
+        if photo_path:
+            try:
+                os.unlink(photo_path)
+            except OSError:
+                pass
+    await state.clear()
+    await cb.message.answer("\n".join(lines), reply_markup=await smart_home_kb(cb.from_user.id, show_admin=True))
+    txt, kbm = await _chpost_menu()
+    await cb.message.answer(txt, reply_markup=kbm)
 
 
 # ═══════════ PATCH_CHPOST_INLINE_V1 — ارسالِ اینلاین ═══════════
@@ -983,11 +1228,7 @@ async def _chpost_preview(msg_target: Message, state: FSMContext, bot: Bot):
     if buttons:
         kb_rows.append([hx_button("🗑 حذف آخرین دکمهٔ لینک", callback_data="chpost:delbtn")])
     kb_rows.append([hx_button("🏠 دکمه‌های صفحهٔ اصلی", callback_data="chpost:pickhome")])
-    if mode == "inline":
-        # === PATCH_CHPOST_INLINE_V1 === فقط ارسالِ اینلاین؛ مقصد را خودِ ادمین در تلگرام انتخاب می‌کند
-        kb_rows.append([hx_button("✨ ارسال اینلاین (ایموجیِ پرمیوم سالم می‌ماند)", callback_data="chpost:inline",
-                                  style=ButtonStyle.SUCCESS)])
-    elif mode == "attach":
+    if mode == "attach":
         # === PATCH_CHPOST_ATTACH_TEST_SEND_V1 ===
         kb_rows.append([hx_button("📨 پیش‌نمایش/تستِ دکمه‌ها برایِ خودم",
                                              callback_data="chpost:attach_testsend")])
@@ -997,8 +1238,9 @@ async def _chpost_preview(msg_target: Message, state: FSMContext, bot: Bot):
         # === PATCH_CHPOST_GROUP_SUPPORT_V1 ===
         _ch = await get_pset("chpost_chat_id", "")
         _gr = await get_pset("chpost_group_id", "")
-        kb_rows.append([hx_button("✨ ارسال اینلاین (ایموجیِ پرمیوم سالم می‌ماند)", callback_data="chpost:inline",
-                                  style=ButtonStyle.PRIMARY)])      # PATCH_CHPOST_INLINE_V1
+        if await get_pset("chpost_ua_session", ""):          # PATCH_CHPOST_USERBOT_V1
+            kb_rows.append([hx_button("👤 ارسال با اکانتِ من (ایموجیِ پرمیوم سالم)", callback_data="chpost:ua_send",
+                                      style=ButtonStyle.SUCCESS)])
         if _ch:
             kb_rows.append([hx_button("✅ ارسال به کانال", callback_data="chpost:send",
                                                  style=ButtonStyle.SUCCESS)])
@@ -1047,7 +1289,8 @@ async def chpost_content_recv(msg: Message, state: FSMContext, bot: Bot):
         return
     if msg.checklist:
         await state.update_data(chpost_text=_checklist_to_text(msg.checklist), chpost_photo=None,
-                                chpost_src_chat=None, chpost_src_msg=None)
+                                chpost_src_chat=None, chpost_src_msg=None,
+                                chpost_plain=_checklist_to_text(msg.checklist), chpost_entities=[])
         await msg.answer(
             "ℹ️ تلگرام فعلاً اجازه نمی‌دهد بات‌های معمولی (غیرِ متصل به Business) چک‌لیستِ "
             "تعاملی به کانال بفرستند؛ این یک محدودیتِ خودِ تلگرامه، نه چیزی که از داخل ربات "
@@ -1060,8 +1303,10 @@ async def chpost_content_recv(msg: Message, state: FSMContext, bot: Bot):
                 f"❌ کپشنِ عکس {plain_len} کاراکتره؛ تلگرام حداکثر ۱۰۲۴ کاراکتر برای کپشنِ عکس "
                 "اجازه می‌ده. کوتاه‌ترش کن و دوباره بفرست:")
             return
+        import chpost_userbot as _ub
         await state.update_data(chpost_photo=msg.photo[-1].file_id, chpost_text=msg.html_text,
-                                chpost_src_chat=msg.chat.id, chpost_src_msg=msg.message_id)   # PATCH_CHPOST_COPY_V1
+                                chpost_src_chat=msg.chat.id, chpost_src_msg=msg.message_id,   # PATCH_CHPOST_COPY_V1
+                                chpost_plain=msg.caption or "", chpost_entities=_ub.serialize_entities(msg.caption_entities))
     elif msg.text:
         plain_len = len(msg.text or "")
         if plain_len > 4096:
@@ -1069,8 +1314,10 @@ async def chpost_content_recv(msg: Message, state: FSMContext, bot: Bot):
                 f"❌ متنِ پست {plain_len} کاراکتره؛ تلگرام حداکثر ۴۰۹۶ کاراکتر برای یک پیامِ متنی "
                 "اجازه می‌ده. کوتاه‌ترش کن و دوباره بفرست:")
             return
+        import chpost_userbot as _ub
         await state.update_data(chpost_text=msg.html_text, chpost_photo=None,
-                                chpost_src_chat=msg.chat.id, chpost_src_msg=msg.message_id)   # PATCH_CHPOST_COPY_V1
+                                chpost_src_chat=msg.chat.id, chpost_src_msg=msg.message_id,   # PATCH_CHPOST_COPY_V1
+                                chpost_plain=msg.text or "", chpost_entities=_ub.serialize_entities(msg.entities))
     else:
         await msg.answer(
             "فقط متن، عکس یا چک‌لیستِ تلگرام پشتیبانی می‌شود (ویدیو/فایل/صدا هنوز نه). "

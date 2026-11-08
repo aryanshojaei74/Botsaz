@@ -83,7 +83,7 @@ ADMIN_SECTIONS: list[dict] = [
             ("📢 پیام همگانی",       "adm:broadcast", ButtonStyle.PRIMARY, True),
             # === PATCH_CHPOST_INLINE_V1 === ارسال به کانال/گروهِ بات‌ساز + ارسالِ اینلاین (ایموجیِ پرمیومِ سالم)
             ("📢 ارسال پیام به کانال و گروه", "chpost:menu", ButtonStyle.PRIMARY, True),
-            ("✨ ارسال اینلاین (ایموجیِ پرمیوم)", "chpost:inline_start", ButtonStyle.SUCCESS, True),
+            ("👤 ارسال با اکانتِ پرمیوم (ایموجیِ سالم)", "chpost:ua_menu", ButtonStyle.SUCCESS, True),
             ("📣 تبلیغ در ربات‌های رایگان", "adm:ad_free", ButtonStyle.PRIMARY, True),
             ("📢 اطلاع به صاحبانِ ربات‌هایِ «تبدیلِ فایل»",
              "adm:notify_filelink", ButtonStyle.PRIMARY, True),

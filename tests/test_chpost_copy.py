@@ -39,6 +39,7 @@ class Msg:
         self.text, self.photo, self.caption = text, photo, None
         self.html_text = f"<b>{text}</b>"
         self.checklist = None
+        self.entities = self.caption_entities = None
         self.chat, self.message_id, self.from_user = NS(id=ADMIN), 321, NS(id=ADMIN)
         self.answers = []
 
@@ -74,6 +75,7 @@ async def test_platform_content_recv_remembers_source_message(monkeypatch):
     st = St()
     await PC.chpost_content_recv(Msg(text="سلام"), st, Bot())
     assert st.d["chpost_src_chat"] == ADMIN and st.d["chpost_src_msg"] == 321 and st.d["chpost_text"] == "<b>سلام</b>"
+    assert st.d["chpost_plain"] == "سلام" and st.d["chpost_entities"] == []                   # PATCH_CHPOST_USERBOT_V1
     st2 = St()
     m = Msg()
     m.text, m.photo = None, [NS(file_id="F1")]
