@@ -146,3 +146,118 @@ def default_api() -> tuple[str, str]:
     """api_id/api_hashِ مشترکِ سرور (اختیاری، همان ESCROW_API_*)."""
     i, h = (os.getenv("ESCROW_API_ID") or "").strip(), (os.getenv("ESCROW_API_HASH") or "").strip()
     return (i, h) if i.isdigit() and h else ("", "")
+
+
+# ═══════════ ورود با شماره و کد (بدونِ نیاز به ساختِ StringSession) ═══════════
+def friendly_error(e: Exception) -> str:
+    """خطایِ Telethon → پیامِ فارسیِ روشن (بر اساسِ نامِ کلاس؛ بدونِ import از telethon.errors)."""
+    n = type(e).__name__
+    if n == "PhoneNumberInvalidError":
+        return "شمارهٔ تلفن نامعتبر است. با کدِ کشور بفرست (مثلاً +98912…)."
+    if n == "PhoneNumberBannedError":
+        return "این شماره در تلگرام مسدود است."
+    if n in ("PhoneCodeInvalidError", "PhoneCodeEmptyError"):
+        return "کد اشتباه است. دوباره بفرست."
+    if n == "PhoneCodeExpiredError":
+        return "کد منقضی شده؛ از «اتصالِ اکانت» دوباره شروع کن تا کدِ تازه بیاید."
+    if n in ("PasswordHashInvalidError",):
+        return "رمزِ دومرحله‌ای اشتباه است. دوباره بفرست."
+    if n in ("ApiIdInvalidError", "ApiIdPublishedFloodError"):
+        return "api_id/api_hash معتبر نیست (از my.telegram.org بگیر)."
+    if n == "FloodWaitError":
+        return f"تلگرام موقتاً محدود کرد؛ {getattr(e, 'seconds', '؟')} ثانیه بعد دوباره امتحان کن."
+    if n == "SendCodeUnavailableError":
+        return "ارسالِ کد فعلاً ممکن نیست؛ کمی بعد دوباره امتحان کن."
+    return f"خطایِ تلگرام ({n})."
+
+
+class Login:
+    """ورودِ مرحله‌ای: شماره ← کد ← (رمزِ دومرحله‌ای). خروجی: StringSession. تست‌ها make_login را جایگزین می‌کنند."""
+
+    def __init__(self, api_id: int, api_hash: str):
+        _t, TelegramClient, StringSession, _T = _telethon()
+        self.api_id, self.api_hash = int(api_id), api_hash
+        self.client = TelegramClient(StringSession(), self.api_id, api_hash)
+        self.phone = ""
+        self.hash = None
+
+    async def send_code(self, phone: str) -> None:
+        try:
+            await self.client.connect()
+            self.phone = phone
+            sent = await self.client.send_code_request(phone)
+            self.hash = sent.phone_code_hash
+        except UserbotError:
+            raise
+        except Exception as e:      # noqa: BLE001
+            raise UserbotError(friendly_error(e)) from e
+
+    async def sign_in_code(self, code: str) -> str | None:
+        """رشتهٔ نشست، یا None اگر رمزِ دومرحله‌ای لازم است."""
+        try:
+            await self.client.sign_in(self.phone, code, phone_code_hash=self.hash)
+        except Exception as e:      # noqa: BLE001
+            if type(e).__name__ == "SessionPasswordNeededError":
+                return None
+            raise UserbotError(friendly_error(e)) from e
+        return self.client.session.save()
+
+    async def sign_in_password(self, password: str) -> str:
+        try:
+            await self.client.sign_in(password=password)
+        except Exception as e:      # noqa: BLE001
+            raise UserbotError(friendly_error(e)) from e
+        return self.client.session.save()
+
+    async def close(self) -> None:
+        try:
+            await self.client.disconnect()
+        except Exception:      # noqa: BLE001
+            logger.debug("chpost userbot: بستنِ اتصالِ ورود ممکن نشد", exc_info=True)
+
+
+def make_login(api_id: int, api_hash: str):
+    return Login(api_id, api_hash)
+
+
+import time as _time
+
+_LOGINS: dict[int, tuple[object, float]] = {}       # مدیر → (login, زمان)
+_LOGIN_TTL = 600
+
+
+def parse_code(text: str) -> str:
+    """کدِ ورود: فقط رقم‌ها. مدیر می‌تواند با فاصله/خط بفرستد (۱-۲-۳-۴-۵) تا تلگرام «کدِ فاش‌شده» حسابش نکند."""
+    t = (text or "").translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    return "".join(ch for ch in t if ch.isdigit())
+
+
+def parse_phone(text: str) -> str:
+    t = (text or "").translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
+    digits = "".join(ch for ch in t if ch.isdigit())
+    if t.strip().startswith("00"):
+        digits = digits[2:]
+    elif digits.startswith("09") and len(digits) == 11:      # ۰۹۱۲… ⇒ +۹۸۹۱۲…
+        digits = "98" + digits[1:]
+    return ("+" + digits) if digits else ""
+
+
+async def put_login(uid: int, login) -> None:
+    await drop_login(uid)
+    _LOGINS[uid] = (login, _time.monotonic())
+
+
+def get_login(uid: int):
+    ent = _LOGINS.get(uid)
+    if ent and _time.monotonic() - ent[1] <= _LOGIN_TTL:
+        return ent[0]
+    return None
+
+
+async def drop_login(uid: int) -> None:
+    ent = _LOGINS.pop(uid, None)
+    if ent:
+        try:
+            await ent[0].close()
+        except Exception:      # noqa: BLE001
+            logger.debug("chpost userbot: بستنِ ورود ممکن نشد", exc_info=True)

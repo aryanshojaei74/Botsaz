@@ -315,5 +315,6 @@ async def test_connect_flow_stores_encrypted_secrets_and_deletes_messages(monkey
 
 def test_account_never_leaks_in_menu_text():
     import inspect
-    src = inspect.getsource(PC.chpost_ua_menu) + inspect.getsource(PC._ua_menu_kb)
-    assert "session" not in src.lower().replace("نشست", "")
+    src = inspect.getsource(PC.chpost_ua_menu)
+    assert "decrypt_secret" not in src and "chpost_ua_session\", \"\"))" not in src.replace(" ", "")      # فقط «متصل/نیست»؛ هرگز مقدارِ نشست
+    assert "_ua_creds()" in src and "creds else" in src

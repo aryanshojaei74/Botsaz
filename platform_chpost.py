@@ -50,6 +50,9 @@ class ChpostFSM(StatesGroup):
     ua_api_id = State()
     ua_api_hash = State()
     ua_session = State()
+    ua_phone = State()      # ورود با شماره
+    ua_code = State()
+    ua_pw = State()
 
 
 # ────────── lazy-import wrappers از platform_bot ──────────
@@ -584,8 +587,10 @@ async def _ua_creds():
 
 
 def _ua_menu_kb(connected: bool) -> InlineKeyboardMarkup:
-    rows = [[hx_button("🔁 تعویضِ اکانت" if connected else "🔗 اتصالِ اکانت", callback_data="chpost:ua_connect",
-                       style=ButtonStyle.SUCCESS)]]
+    rows = [[hx_button("📱 " + ("تعویضِ اکانت (ورود با شماره و کد)" if connected else "اتصال با شماره و کد (پیشنهادی)"),
+                       callback_data="chpost:ua_login", style=ButtonStyle.SUCCESS)],
+            [hx_button("🔑 اتصال با StringSession (پیشرفته)", callback_data="chpost:ua_connect",
+                       style=ButtonStyle.PRIMARY)]]
     if connected:
         rows.append([hx_button("🗑 قطعِ اکانت", callback_data="chpost:ua_off", style=ButtonStyle.DANGER)])
     rows.append([hx_button("⬅️ بازگشت", callback_data="chpost:menu", style=ButtonStyle.DANGER)])
@@ -626,6 +631,7 @@ async def chpost_ua_connect(cb: CallbackQuery, state: FSMContext):
         return
     import chpost_userbot as _ub
     di, dh = _ub.default_api()
+    await state.update_data(ua_flow="session")
     if di:
         await state.update_data(ua_api_id=di, ua_api_hash=dh)
         await state.set_state(ChpostFSM.ua_session)
@@ -635,7 +641,7 @@ async def chpost_ua_connect(cb: CallbackQuery, state: FSMContext):
                "(کدِ ورود را در تلگرام فوروارد نکن؛ فقط در همان ترمینال بزن.) پیامت بعد از دریافت پاک می‌شود.")
     else:
         await state.set_state(ChpostFSM.ua_api_id)
-        txt = ("🔗 <b>اتصالِ اکانت — مرحلهٔ ۱ از ۳</b>\n\n"
+        txt = ("🔗 <b>اتصالِ اکانت با StringSession</b>\n\n"
                "از my.telegram.org ← API development tools مقدارِ <b>api_id</b> (یک عدد) را بفرست.")
     await cb.message.answer(txt, reply_markup=await smart_cancel_kb(), parse_mode="HTML")
     await cb.answer()
@@ -656,7 +662,7 @@ async def chpost_ua_api_id(msg: Message, state: FSMContext):
         return
     await state.update_data(ua_api_id=t)
     await state.set_state(ChpostFSM.ua_api_hash)
-    await msg.answer("مرحلهٔ ۲ از ۳: مقدارِ <b>api_hash</b> را بفرست (رشتهٔ ۳۲ حرفی).", parse_mode="HTML")
+    await msg.answer("مقدارِ <b>api_hash</b> را بفرست (رشتهٔ ۳۲ حرفی).", parse_mode="HTML")
 
 
 @chpost_router.message(ChpostFSM.ua_api_hash, F.text)
@@ -677,9 +683,13 @@ async def chpost_ua_api_hash(msg: Message, state: FSMContext):
         await msg.answer("api_hash معتبر نیست. دوباره بفرست:")
         return
     await state.update_data(ua_api_hash=t)
+    if (await state.get_data()).get("ua_flow") == "login":      # ورود با شماره: بعد از api_hash شماره می‌پرسیم
+        await state.set_state(ChpostFSM.ua_phone)
+        await msg.answer(_UA_ASK_PHONE, parse_mode="HTML")
+        return
     await state.set_state(ChpostFSM.ua_session)
     await msg.answer(
-        "مرحلهٔ ۳ از ۳: رشتهٔ <b>StringSession</b> را بفرست.\nبرایِ ساختنش روی کامپیوترِ خودت:\n"
+        "رشتهٔ <b>StringSession</b> را بفرست.\nبرایِ ساختنش روی کامپیوترِ خودت:\n"
         "<code>pip install telethon</code>\n<code>python3 tools/make_telethon_session.py</code>\n"
         "(کدِ ورود را در تلگرام فوروارد نکن.) پیامت بعد از دریافت پاک می‌شود.", parse_mode="HTML")
 
@@ -712,6 +722,181 @@ async def chpost_ua_session(msg: Message, state: FSMContext):
         await set_pset("chpost_ua_session", encrypt_secret(t))
     except Exception:
         logger.exception("chpost ua: ذخیرهٔ نشست ناموفق")
+        await msg.answer("⛔️ ذخیرهٔ رمزنگاری‌شده ممکن نشد (WALLET_ENC_KEY در .env تنظیم است؟).")
+        return
+    await state.clear()
+    await msg.answer(f"✅ اکانت متصل شد: <b>{_html.escape(who)}</b>\nحالا هنگامِ ساختِ پست دکمهٔ «👤 ارسال با اکانتِ من» را می‌بینی.",
+                     reply_markup=await smart_home_kb(msg.from_user.id, show_admin=True), parse_mode="HTML")
+    txt, kb = await _chpost_menu()
+    await msg.answer(txt, reply_markup=kb)
+
+
+_UA_ASK_PHONE = ("📱 <b>شمارهٔ اکانتِ پرمیوم</b> را با کدِ کشور بفرست (مثلاً <code>+989121234567</code>).\n"
+                 "کدِ ورود در تلگرامِ همان اکانت می‌آید (چتِ «Telegram»).")
+
+
+async def _ua_cancel(msg: Message, state: FSMContext):
+    import chpost_userbot as _ub
+    await _ub.drop_login(msg.from_user.id)
+    await state.clear()
+    await msg.answer("لغو شد.", reply_markup=await smart_home_kb(msg.from_user.id, show_admin=True))
+
+
+@chpost_router.callback_query(F.data == "chpost:ua_login")
+async def chpost_ua_login(cb: CallbackQuery, state: FSMContext):
+    """اتصال با شماره ← کد ← (رمزِ دومرحله‌ای). api_id/api_hash: از env یا از دفعهٔ قبل، وگرنه یک‌بار پرسیده می‌شود."""
+    if cb.from_user.id != PLATFORM_ADMIN_ID:
+        await cb.answer("فقط مدیر اصلی", show_alert=True)
+        return
+    import chpost_userbot as _ub
+    di, dh = _ub.default_api()
+    if not di:
+        saved = await _ua_creds_api()
+        if saved:
+            di, dh = saved
+    await state.update_data(ua_flow="login")
+    if di:
+        await state.update_data(ua_api_id=di, ua_api_hash=dh)
+        await state.set_state(ChpostFSM.ua_phone)
+        await cb.message.answer(_UA_ASK_PHONE, reply_markup=await smart_cancel_kb(), parse_mode="HTML")
+    else:
+        await state.set_state(ChpostFSM.ua_api_id)
+        await cb.message.answer(
+            "📱 <b>اتصال با شماره و کد</b>\n\nیک‌بار از my.telegram.org ← API development tools مقدارِ <b>api_id</b> (عدد) "
+            "و بعد <b>api_hash</b> را بگیر (برایِ دفعه‌هایِ بعد ذخیره می‌شود).\n\nاول <b>api_id</b> را بفرست:",
+            reply_markup=await smart_cancel_kb(), parse_mode="HTML")
+    await cb.answer()
+
+
+async def _ua_creds_api():
+    """api_id/api_hashِ ذخیره‌شده از اتصالِ قبلی (بدونِ نشست) یا None."""
+    from wallet_crypto import decrypt_secret
+    api_id = (await get_pset("chpost_ua_api_id", "")).strip()
+    enc_h = await get_pset("chpost_ua_api_hash", "")
+    if not (api_id.isdigit() and enc_h):
+        return None
+    try:
+        return api_id, decrypt_secret(enc_h)
+    except Exception:
+        logger.exception("chpost ua: رمزگشاییِ api_hash ناموفق")
+        return None
+
+
+@chpost_router.message(ChpostFSM.ua_phone, F.text)
+async def chpost_ua_phone(msg: Message, state: FSMContext):
+    if msg.from_user.id != PLATFORM_ADMIN_ID:
+        await state.clear()
+        return
+    if (msg.text or "").strip() == BTN_CANCEL:
+        await _ua_cancel(msg, state)
+        return
+    import chpost_userbot as _ub
+    phone = _ub.parse_phone(msg.text)
+    try:
+        await msg.delete()
+    except Exception:
+        logger.debug("chpost ua: حذفِ پیامِ شماره ممکن نشد", exc_info=True)
+    if len(phone) < 8:
+        await msg.answer("شماره نامعتبر است. با کدِ کشور بفرست (مثلاً +989121234567):")
+        return
+    data = await state.get_data()
+    try:
+        login = _ub.make_login(int(data["ua_api_id"]), data["ua_api_hash"])
+        await login.send_code(phone)
+    except _ub.UserbotError as e:
+        await msg.answer(f"❌ {e}")
+        return
+    await _ub.put_login(msg.from_user.id, login)
+    await state.set_state(ChpostFSM.ua_code)
+    await msg.answer(
+        "✅ کد به تلگرامِ آن اکانت فرستاده شد.\n\n"
+        "کد را بفرست <b>با خط یا فاصله بینِ رقم‌ها</b> (مثلاً <code>1-2-3-4-5</code>)؛ اگر کد را عیناً بفرستی تلگرام آن را "
+        "«فاش‌شده» حساب می‌کند و ورود را می‌بندد. پیامت بعد از دریافت پاک می‌شود.", parse_mode="HTML")
+
+
+@chpost_router.message(ChpostFSM.ua_code, F.text)
+async def chpost_ua_code(msg: Message, state: FSMContext):
+    if msg.from_user.id != PLATFORM_ADMIN_ID:
+        await state.clear()
+        return
+    if (msg.text or "").strip() == BTN_CANCEL:
+        await _ua_cancel(msg, state)
+        return
+    import chpost_userbot as _ub
+    code = _ub.parse_code(msg.text)
+    try:
+        await msg.delete()
+    except Exception:
+        logger.debug("chpost ua: حذفِ پیامِ کد ممکن نشد", exc_info=True)
+    login = _ub.get_login(msg.from_user.id)
+    if login is None:
+        await state.clear()
+        await msg.answer("⏳ مهلتِ ورود تمام شد؛ از «اتصالِ اکانت» دوباره شروع کن.")
+        return
+    if not code:
+        await msg.answer("کد فقط رقم است. دوباره بفرست (مثلاً 1-2-3-4-5):")
+        return
+    try:
+        session = await login.sign_in_code(code)
+    except _ub.UserbotError as e:
+        await msg.answer(f"❌ {e}")
+        if "منقضی" in str(e):
+            await _ub.drop_login(msg.from_user.id)
+            await state.clear()
+        return
+    if session is None:                       # رمزِ دومرحله‌ای
+        await state.set_state(ChpostFSM.ua_pw)
+        await msg.answer("🔐 این اکانت رمزِ دومرحله‌ای (Two-Step) دارد؛ رمز را بفرست (پیامت پاک می‌شود).")
+        return
+    await _ua_finish(msg, state, session)
+
+
+@chpost_router.message(ChpostFSM.ua_pw, F.text)
+async def chpost_ua_pw(msg: Message, state: FSMContext):
+    if msg.from_user.id != PLATFORM_ADMIN_ID:
+        await state.clear()
+        return
+    if (msg.text or "").strip() == BTN_CANCEL:
+        await _ua_cancel(msg, state)
+        return
+    import chpost_userbot as _ub
+    pw = msg.text or ""
+    try:
+        await msg.delete()
+    except Exception:
+        logger.debug("chpost ua: حذفِ پیامِ رمز ممکن نشد", exc_info=True)
+    login = _ub.get_login(msg.from_user.id)
+    if login is None:
+        await state.clear()
+        await msg.answer("⏳ مهلتِ ورود تمام شد؛ از «اتصالِ اکانت» دوباره شروع کن.")
+        return
+    try:
+        session = await login.sign_in_password(pw)
+    except _ub.UserbotError as e:
+        await msg.answer(f"❌ {e}")
+        return
+    await _ua_finish(msg, state, session)
+
+
+async def _ua_finish(msg: Message, state: FSMContext, session: str):
+    """نشستِ ساخته‌شده را امتحان و رمزنگاری‌شده ذخیره می‌کند."""
+    import chpost_userbot as _ub
+    data = await state.get_data()
+    await _ub.drop_login(msg.from_user.id)
+    try:
+        who = await _ub.validate_session(int(data["ua_api_id"]), data["ua_api_hash"], session)
+    except _ub.UserbotError as e:
+        await state.clear()
+        await msg.answer(f"❌ {e}")
+        return
+    from wallet_crypto import encrypt_secret
+    try:
+        await set_pset("chpost_ua_api_id", str(data["ua_api_id"]))
+        await set_pset("chpost_ua_api_hash", encrypt_secret(data["ua_api_hash"]))
+        await set_pset("chpost_ua_session", encrypt_secret(session))
+    except Exception:
+        logger.exception("chpost ua: ذخیرهٔ نشست ناموفق")
+        await state.clear()
         await msg.answer("⛔️ ذخیرهٔ رمزنگاری‌شده ممکن نشد (WALLET_ENC_KEY در .env تنظیم است؟).")
         return
     await state.clear()
