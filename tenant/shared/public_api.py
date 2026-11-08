@@ -884,7 +884,13 @@ td,th{{border:1px solid #d0d7de;padding:6px 10px;text-align:right}} .note{{backg
 <tr><td><code>delete</code></td><td>حذفِ سرویس از پنل و ربات: <code>service</code> (بدونِ برگشتِ پول)</td></tr>
 <tr><td><code>charge</code></td><td>شارژِ کیف‌پول با آپی: <code>amount</code> (تومان) ← <code>pay_url</code> و <code>order_id</code>؛ بعد از پرداخت موجودی خودکار زیاد می‌شود</td></tr>
 <tr><td><code>charge_status</code></td><td>وضعیتِ فاکتورِ شارژ: <code>order_id</code> ← waiting / paid / ...</td></tr>
-<tr><td><code>trial</code></td><td>دریافتِ تستِ رایگان (طبقِ تنظیماتِ تستِ ربات؛ هر کاربر یک‌بار). خطاها: <code>trial_disabled</code>، <code>trial_already_used</code>، <code>trial_out_of_stock</code></td></tr>
+<tr><td><code>trial</code></td><td>دریافتِ تستِ رایگان (طبقِ تنظیماتِ تستِ ربات؛ هر کاربر یک‌بار). اختیاری: <code>panel</code> = کلید یا شناسهٔ پنل (از <code>panels</code>)؛ بدونِ آن اولین پنلِ فعال. خطاها: <code>trial_disabled</code>، <code>trial_already_used</code>، <code>trial_out_of_stock</code>، <code>panel_not_found</code></td></tr>
+<tr><td><code>panels</code></td><td>پنل‌هایِ فعال: <code>id</code>، <code>panel</code> (کلید)، <code>name</code>، <code>custom_enabled</code> + <code>trial_enabled</code></td></tr>
+<tr><td><code>profile</code></td><td>پروفایلِ کاربر: موجودی، تعدادِ سرویس‌ها، <code>referral</code> (لینک/دعوت‌شدگان/پاداش) و وضعیتِ کلیدِ API</td></tr>
+<tr><td><code>referral</code></td><td>لینکِ دعوت، کلیک‌ها، دعوت‌شدگان، پاداشِ دریافتی (و امتیاز اگر فعال باشد)</td></tr>
+<tr><td><code>apikey</code></td><td>کلیدِ APIِ شخصیِ کاربر (<code>api_key</code>، <code>has_key</code>، <code>allowed</code>)</td></tr>
+<tr><td><code>transactions</code></td><td>تراکنش‌هایِ کیف‌پول (جدید به قدیم): <code>limit</code> (حداکثر ۱۰۰)، <code>offset</code>، <code>kind</code> اختیاری</td></tr>
+<tr><td><code>payments</code></td><td>تاریخچهٔ شارژها/واریزهایِ موفق (همان پارامترهایِ <code>transactions</code>)</td></tr>
 <tr><td><code>ticket</code></td><td>ثبتِ تیکت: <code>text</code> و اختیاری <code>subject</code> ← <code>ticket.id</code></td></tr>
 <tr><td><code>tickets</code></td><td>فهرستِ تیکت‌ها؛ با <code>ticket_id</code> ← جزئیاتِ تیکت + پاسخ‌ها (<code>replies</code>)</td></tr>
 <tr><td><code>ticket_reply</code></td><td>پاسخ به تیکتِ خودتان: <code>ticket_id</code> و <code>text</code></td></tr>

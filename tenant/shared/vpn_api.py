@@ -36,11 +36,11 @@ import time
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from config import Session
 from models import (
-    Bot as BotRow, BotUser, Order, PanelAccount, VpnPanel, VpnPlan, WalletTxn,
+    Bot as BotRow, BotUser, Order, PanelAccount, ReferralJoin, VpnPanel, VpnPlan, WalletTxn,
 )
 from tenant.shared.public_api import (
     AuthCtx, _authed, _v2_params, public_api_router,
@@ -496,6 +496,20 @@ async def _do_trial(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
     except (ValueError, TypeError):
         hours = 0
     source = await T.get_setting(ctx.bot_id, "trial_source", "panel")
+    # === PATCH_API_TRIAL_PANEL_V1 === (Weirdnet) انتخابِ پنلِ تست: panel = کلید یا شناسهٔ پنل (action=panels فهرست می‌دهد)؛
+    # قبل از ثبتِ مصرف بررسی می‌شود تا پنلِ اشتباه، حقِ تستِ کاربر را نسوزاند. بدونِ panel ⇒ همان رفتارِ قبل (اولین پنلِ فعال).
+    want = (p.get("panel") or p.get("panel_key") or p.get("panel_id") or "").strip()
+    trial_panel = bot_row = None
+    if source != "stock":
+        async with Session() as s:
+            q = select(VpnPanel).where(VpnPanel.bot_id == ctx.bot_id, VpnPanel.enabled == True)   # noqa: E712
+            if want:
+                q = q.where(or_(VpnPanel.panel_key == want, VpnPanel.id == int(want)) if want.isdigit()
+                            else VpnPanel.panel_key == want)
+            trial_panel = await s.scalar(q.order_by(VpnPanel.id).limit(1))
+            bot_row = await s.get(BotRow, ctx.bot_id)
+        if not trial_panel:
+            return _err("panel_not_found" if want else "no_panel")
     # ثبتِ مصرف پیش از تحویل (جلوگیریِ از دوبار گرفتن)؛ شکست ⇒ برگشت
     if not exempt:
         async with Session() as s:
@@ -533,12 +547,7 @@ async def _do_trial(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
             await s.commit()
         return JSONResponse({"ok": True, "trial": {"source": "stock", "config": payload, "volume_gb": vol, "days": d}})
 
-    async with Session() as s:
-        panel = await s.scalar(select(VpnPanel).where(VpnPanel.bot_id == ctx.bot_id, VpnPanel.enabled == True))   # noqa: E712
-        bot_row = await s.get(BotRow, ctx.bot_id)
-    if not panel:
-        await _rollback()
-        return _err("no_panel")
+    panel = trial_panel
     client = T._trial_panel_client(panel)
     try:
         email = await _make_config_email(ctx.bot_id, panel.panel_key, bot_row.username if bot_row else None,
@@ -575,6 +584,95 @@ async def _do_trial(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
             await client.close()
         except Exception:      # noqa: BLE001
             pass
+
+
+# === PATCH_API_PROFILE_V1 === (Weirdnet) پنل‌ها، پروفایل، رفرال، کلیدِ API، تراکنش‌ها و تاریخچهٔ پرداخت
+async def _panels_info(ctx: AuthCtx) -> JSONResponse:
+    """action=panels: پنل‌هایِ فعال (برایِ انتخابِ پنلِ تست/خرید)."""
+    from tenant.bots.vpn.vpn_admin import panel_label
+    from tenant.bots.vpn.vpn_user import _vc
+    import tenant as T
+    async with Session() as s:
+        panels = (await s.scalars(select(VpnPanel).where(
+            VpnPanel.bot_id == ctx.bot_id, VpnPanel.enabled == True).order_by(VpnPanel.id))).all()   # noqa: E712
+    items = []
+    for pn in panels:
+        try:
+            name = await panel_label(ctx.bot_id, pn.panel_key)
+        except Exception:      # noqa: BLE001
+            name = pn.panel_key
+        items.append({"id": pn.id, "panel": pn.panel_key, "name": name,
+                      "custom_enabled": (await _vc(ctx.bot_id, "vc_enabled", pn.panel_key)) == "1"})
+    return JSONResponse({"ok": True, "count": len(items), "items": items,
+                         "trial_enabled": await T.get_setting(ctx.bot_id, "trial_enabled", "0") == "1"})
+
+
+async def _referral_payload(ctx: AuthCtx, user: BotUser) -> dict:
+    from tenant.shared.extras import _get_referral_reward, get_or_create_referral
+    async with Session() as s:
+        brow = await s.get(BotRow, ctx.bot_id)
+    uname = (brow.username if brow else "") or ""
+    ref = await get_or_create_referral(ctx.bot_id, user, uname, await _get_referral_reward(ctx.bot_id))
+    async with Session() as s:
+        joins = int(await s.scalar(select(func.count()).select_from(ReferralJoin).where(
+            ReferralJoin.bot_id == ctx.bot_id, ReferralJoin.inviter_user_id == user.id)) or 0)
+        earned = int(await s.scalar(select(func.coalesce(func.sum(ReferralJoin.reward_paid), 0)).where(
+            ReferralJoin.bot_id == ctx.bot_id, ReferralJoin.inviter_user_id == user.id)) or 0)
+    out = {"code": ref.code, "link": f"https://t.me/{uname}?start=ref_{ref.code}" if uname else None,
+           "clicks": int(ref.click_count or 0), "joins": max(joins, int(ref.join_count or 0)), "reward_earned": earned}
+    try:
+        from tenant.shared import ref_points as RP
+        if await RP.points_enabled(ctx.bot_id):
+            out["points"] = int(await RP.get_points(ctx.bot_id, user.id))
+    except Exception:      # noqa: BLE001
+        logger.debug("vpn_api referral: امتیاز خوانده نشد", exc_info=True)
+    return out
+
+
+async def _do_profile(ctx: AuthCtx, user: BotUser) -> JSONResponse:
+    from tenant.shared.public_api import user_api_allowed
+    async with Session() as s:
+        total = int(await s.scalar(select(func.count()).select_from(PanelAccount).where(
+            PanelAccount.bot_id == ctx.bot_id, PanelAccount.user_telegram_id == user.telegram_id,
+            PanelAccount.status != "deleted")) or 0)
+        active = int(await s.scalar(select(func.count()).select_from(PanelAccount).where(
+            PanelAccount.bot_id == ctx.bot_id, PanelAccount.user_telegram_id == user.telegram_id,
+            PanelAccount.status == "active")) or 0)
+    return JSONResponse({"ok": True, "profile": {
+        "telegram_id": user.telegram_id, "full_name": user.full_name, "username": user.username,
+        "balance": float(user.balance), "currency": "TOMAN", "services_total": total, "services_active": active,
+        "referral": await _referral_payload(ctx, user),
+        "api": {"has_key": bool(user.api_key), "allowed": await user_api_allowed(user),
+                "discount_pct": float(user.api_discount_pct or 0)}}})
+
+
+async def _do_apikey(ctx: AuthCtx, user: BotUser) -> JSONResponse:
+    """action=apikey: کلیدِ APIِ شخصیِ همین کاربر (برایِ نمایش در وب‌سایت/پروفایل)."""
+    from tenant.shared.public_api import user_api_allowed
+    return JSONResponse({"ok": True, "has_key": bool(user.api_key), "api_key": user.api_key or None,
+                         "allowed": await user_api_allowed(user)})
+
+
+_PAYMENT_KINDS = ("charge", "apay_charge", "swap_charge", "hooshpay_charge", "blupal_charge")
+
+
+async def _do_history(ctx: AuthCtx, user: BotUser, action: str, p: dict) -> JSONResponse:
+    """action=transactions: همهٔ تراکنش‌هایِ کیف‌پول | action=payments: فقط شارژهایِ موفق (واریز). پارامترها: limit (۱–۱۰۰)، offset، kind."""
+    limit = min(max(_int_or_none(p.get("limit")) or 20, 1), 100)
+    offset = max(_int_or_none(p.get("offset")) or 0, 0)
+    conds = [WalletTxn.bot_id == ctx.bot_id, WalletTxn.user_id == user.id]
+    if action == "payments":
+        conds += [WalletTxn.amount > 0, WalletTxn.kind.in_(_PAYMENT_KINDS)]
+    kind = (p.get("kind") or "").strip()
+    if kind:
+        conds.append(WalletTxn.kind == kind)
+    async with Session() as s:
+        total = int(await s.scalar(select(func.count()).select_from(WalletTxn).where(*conds)) or 0)
+        rows = (await s.scalars(select(WalletTxn).where(*conds).order_by(WalletTxn.id.desc())
+                                .offset(offset).limit(limit))).all()
+    return JSONResponse({"ok": True, "total": total, "limit": limit, "offset": offset,
+                         "items": [{"id": t.id, "amount": float(t.amount), "kind": t.kind, "note": t.note,
+                                    "created_at": _fmt_dt(t.created_at)} for t in rows]})
 
 
 def _tk_payload(t, replies=None) -> dict:
@@ -674,7 +772,20 @@ async def dispatch(ctx: AuthCtx, action: str, p: dict) -> JSONResponse:
         items = await _plans(ctx, user)
         return JSONResponse({"ok": True, "count": len(items), "items": items})
 
+    if action == "panels":         # PATCH_API_TRIAL_PANEL_V1
+        return await _panels_info(ctx)
+
     user = await _target_user(ctx, p)
+    if action in ("profile", "referral", "apikey", "transactions", "payments"):   # PATCH_API_PROFILE_V1
+        if user is None:
+            return _err("telegram_id_required" if ctx.full_access else "user_not_found")
+        if action == "profile":
+            return await _do_profile(ctx, user)
+        if action == "referral":
+            return JSONResponse({"ok": True, "referral": await _referral_payload(ctx, user)})
+        if action == "apikey":
+            return await _do_apikey(ctx, user)
+        return await _do_history(ctx, user, action, p)
     if action == "balance":
         if user is None:
             return _err("telegram_id_required" if ctx.full_access else "user_not_found")

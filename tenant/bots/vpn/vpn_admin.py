@@ -3654,26 +3654,52 @@ async def vpn_note_delivery_save(msg: Message, bot: Bot, state: FSMContext):
 
 
 # ─────────────── تنظیمات تمدید (مخصوص هر پنل) ───────────────
+async def _renew_cfg(bot_id: int, key: str) -> dict:
+    """PATCH_RENEW_SAME_AS_BUY_V1: تنظیماتِ تمدید برایِ نمایش؛ اگر «تمدید = تنظیماتِ خرید» روشن باشد مقدارهایِ خریدِ دلخواه نشان داده می‌شود."""
+    cfg = await _vc_all(bot_id, key)
+    from tenant.bots.vpn.vpn_user import renew_same_as_buy, _RENEW_MIRROR
+    same = await renew_same_as_buy(bot_id, key)
+    if same:
+        for rk, vk in _RENEW_MIRROR.items():
+            cfg[rk] = await _vc_get(bot_id, vk, key)
+    cfg["_same"] = "1" if same else "0"
+    return cfg
+
+
 async def _renew_kb(cfg: dict, key: str, bot_id: int = 0) -> InlineKeyboardMarkup:
     from tenant import ibtn_style as _ibs
     enabled = cfg.get("renew_enabled", "1") == "1"
+    same = cfg.get("_same") == "1"
     toggle = "🟢 دکمه‌های تمدید: فعال" if enabled else "🔴 دکمه‌های تمدید: غیرفعال"
-    return InlineKeyboardMarkup(inline_keyboard=[
+    rows = [
         [InlineKeyboardButton(text=toggle, callback_data=f"tvpn:renew_toggle:{key}",
                               style=await _ibs(bot_id, "ibtn:vpn_toggle"))],
-        [InlineKeyboardButton(text="📦 بازهٔ افزایش حجم (گیگ)", callback_data=f"tvpn:renew_gb:{key}", style=ButtonStyle.PRIMARY)],
-        [InlineKeyboardButton(text="📅 بازهٔ تمدید (روز)", callback_data=f"tvpn:renew_days:{key}", style=ButtonStyle.PRIMARY)],
-        [InlineKeyboardButton(text="💵 قیمت هر گیگ/روز تمدید", callback_data=f"tvpn:renew_price:{key}", style=ButtonStyle.PRIMARY)],
-        [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"tvpn:panel:{key}",
-                              style=await _ibs(bot_id, "ibtn:back") or ButtonStyle.DANGER)],
-    ])
+        [InlineKeyboardButton(text=("🔗 تمدید = همان تنظیماتِ خرید: ✅ روشن" if same else "🔗 تمدید = همان تنظیماتِ خرید: ⬜️ خاموش"),
+                              callback_data=f"tvpn:renew_same:{key}",
+                              style=(ButtonStyle.SUCCESS if same else ButtonStyle.PRIMARY))],
+    ]
+    if not same:                                      # وقتی تنظیماتِ خرید ملاک است، ویرایشِ جداگانه بی‌اثر است
+        rows += [
+            [InlineKeyboardButton(text="📦 بازهٔ افزایش حجم (گیگ)", callback_data=f"tvpn:renew_gb:{key}", style=ButtonStyle.PRIMARY)],
+            [InlineKeyboardButton(text="📅 بازهٔ تمدید (روز)", callback_data=f"tvpn:renew_days:{key}", style=ButtonStyle.PRIMARY)],
+            [InlineKeyboardButton(text="💵 قیمت هر گیگ/روز تمدید", callback_data=f"tvpn:renew_price:{key}", style=ButtonStyle.PRIMARY)],
+        ]
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"tvpn:panel:{key}",
+                                      style=await _ibs(bot_id, "ibtn:back") or ButtonStyle.DANGER)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _renew_text(cfg: dict, label: str = "") -> str:
     en = "✅ فعال" if cfg.get("renew_enabled", "1") == "1" else "❌ غیرفعال"
+    _same_note = ""
+    if cfg.get("_same") == "1":
+        _same_note = ("🔗 <b>تمدید = همان تنظیماتِ خرید</b> روشن است: قیمت‌ها و بازه‌هایِ زیر از «خریدِ حجم/روزِ دلخواه» همین پنل می‌آید "
+                      "و پلن‌هایِ تمدید همان پلن‌هایِ خرید است.\n"
+                      + ("⚠️ حالتِ فروشِ این پنل «تعرفه‌هایِ مدت‌دار» است؛ تمدیدِ دلخواه از قیمت/بازهٔ <b>عمومی</b> می‌خواند، نه از تعرفه‌ها.\n"
+                         if cfg.get("vc_pricing_mode") == "tiers" else "") + "\n")
     title = f"♻️ <b>تنظیمات تمدید / افزایش حجم — {label}</b>\n\n" if label else "♻️ <b>تنظیمات تمدید / افزایش حجم</b>\n\n"
     return (
-        title +
+        title + _same_note +
         f"وضعیت دکمه‌های تمدید: {en}\n"
         "┈┅━━⊷⊰✨⊱⊶━━┅┈\n"
         f"📦 افزایش حجم: از {cfg['renew_min_gb']} تا {cfg['renew_max_gb']} گیگ (گام {cfg['renew_step_gb']})\n"
@@ -3712,13 +3738,34 @@ async def vpn_renew(cb: CallbackQuery, bot: Bot):
     if not row:
         return
     key = cb.data.split(":")[2]
-    cfg = await _vc_all(row.id, key)
+    cfg = await _renew_cfg(row.id, key)
     label = PANEL_LABELS.get(key, key)
     try:
         await cb.message.edit_text(_renew_text(cfg, label), reply_markup=await _renew_kb(cfg, key, row.id))
     except Exception:
         await cb.message.answer(_renew_text(cfg, label), reply_markup=await _renew_kb(cfg, key, row.id))
     await cb.answer()
+
+
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:renew_same:"))
+async def vpn_renew_same_toggle(cb: CallbackQuery, bot: Bot):
+    """PATCH_RENEW_SAME_AS_BUY_V1 (Weirdnet): تمدید از همان قیمت/بازه/گامِ «خریدِ دلخواه» این پنل استفاده کند."""
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    key = cb.data.split(":")[2]
+    from tenant import set_setting
+    from tenant.bots.vpn.vpn_user import renew_same_as_buy, renew_same_key, _VC_CACHE
+    cur = await renew_same_as_buy(row.id, key)
+    await set_setting(row.id, renew_same_key(key), "0" if cur else "1")
+    _VC_CACHE.clear()
+    cfg = await _renew_cfg(row.id, key)
+    label = PANEL_LABELS.get(key, key)
+    try:
+        await cb.message.edit_text(_renew_text(cfg, label), reply_markup=await _renew_kb(cfg, key, row.id))
+    except Exception:
+        logger.debug("vpn: بازسازیِ صفحهٔ تمدید ممکن نشد", exc_info=True)
+    await cb.answer("تمدید از تنظیماتِ خرید می‌آید." if not cur else "تنظیماتِ تمدید دوباره جداست.")
 
 
 @vpn_admin_router.callback_query(F.data.startswith("tvpn:renew_toggle:"))
@@ -3729,7 +3776,7 @@ async def vpn_renew_toggle(cb: CallbackQuery, bot: Bot):
     key = cb.data.split(":")[2]
     cur = await _vc_get(row.id, "renew_enabled", key)
     await _vc_set(row.id, "renew_enabled", "0" if cur == "1" else "1", key)
-    cfg = await _vc_all(row.id, key)
+    cfg = await _renew_cfg(row.id, key)
     label = PANEL_LABELS.get(key, key)
     try:
         await cb.message.edit_text(_renew_text(cfg, label), reply_markup=await _renew_kb(cfg, key, row.id))

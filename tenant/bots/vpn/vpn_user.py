@@ -397,10 +397,31 @@ async def _vc_row(bot_id: int, db_key: str):
     return ex, val
 
 
+# === PATCH_RENEW_SAME_AS_BUY_V1 === (Weirdnet) «تمدید = همان تنظیماتِ خرید»: قیمت/بازه/گام‌هایِ تمدید از تنظیماتِ «خریدِ دلخواه» همان پنل خوانده می‌شود
+_RENEW_MIRROR = {
+    "renew_price_gb": "vc_price_gb", "renew_price_day": "vc_price_day",
+    "renew_min_gb": "vc_min_gb", "renew_max_gb": "vc_max_gb", "renew_step_gb": "vc_step_gb",
+    "renew_min_days": "vc_min_days", "renew_max_days": "vc_max_days", "renew_step_days": "vc_step_days",
+}
+
+
+def renew_same_key(panel_key: str) -> str:
+    return f"renew_same_{panel_key}"
+
+
+async def renew_same_as_buy(bot_id: int, panel_key: str) -> bool:
+    if not panel_key:
+        return False
+    ex, val = await _vc_row(bot_id, renew_same_key(panel_key))
+    return bool(ex and val == "1")
+
+
 async def _vc(bot_id: int, key: str, panel_key: str = "") -> str:
     """مقدار یک تنظیم — اگر panel_key داده شود per-panel می‌خواند؛ اگر هنوز
     برای آن پنل خاص ذخیره نشده بود (سازگاری با قبل)، به مقدارِ عمومیِ
     قدیمیِ همان کلید (بدون پسوند پنل) برمی‌گردد، نه مستقیم مقدار پیش‌فرض."""
+    if panel_key and key in _RENEW_MIRROR and await renew_same_as_buy(bot_id, panel_key):
+        return await _vc(bot_id, _RENEW_MIRROR[key], panel_key)        # PATCH_RENEW_SAME_AS_BUY_V1
     db_key = _pvc_key_u(panel_key, key) if (panel_key and key in _VC_PANEL_KEYS_U) else key
     ex, val = await _vc_row(bot_id, db_key)
     if ex:
