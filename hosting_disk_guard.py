@@ -6,7 +6,11 @@
   ۲) سقفِ فضا برایِ هر اپ (پیش‌فرض ۵ گیگ): بعد از پاکسازی اگر هنوز بیشتر بود ⇒ هشدارِ مالک و (طبقِ تنظیم) خاموش‌کردنِ کانتینر.
      هشدارِ زودهنگام در ۸۰٪ سقف. گزارش در تنظیماتِ پلتفرم (hosting_disk_report) می‌نشیند و در پنلِ مدیر نمایش داده می‌شود.
 
+  ۳) کشِ build و ایمیج‌هایِ بی‌صاحبِ داکر (علتِ اصلیِ پُرشدنِ دیسک در عمل: هر build چند صد مگ کش می‌گذارد): هر ساعت
+     `docker builder prune --filter until=48h` و `docker image prune` (فقط dangling). کانتینر/volumeهایِ در حالِ‌استفاده دست‌نخورده.
+
 تنظیمات (Setting با bot_id=0): hdg_enabled=1 · hdg_cap_mb=5120 · hdg_days=7 · hdg_clean=1 · hdg_action=stop|warn · hdg_dirs=…
+  · hdg_docker=1 · hdg_docker_hours=48
 اجرای دستی:  python -m hosting_disk_guard [--dry-run]
 """
 from __future__ import annotations
@@ -32,7 +36,8 @@ logger = _get_logger(__name__)
 APPS_ROOT = Path(os.getenv("HOSTING_APPS_DIR", "/opt/botsazvip/apps"))
 CONTAINER_PREFIX = "bsapp-"
 DEFAULTS = {"hdg_enabled": "1", "hdg_cap_mb": "5120", "hdg_days": "7", "hdg_clean": "1", "hdg_action": "stop",
-            "hdg_dirs": "downloads,download,uploads,upload,tmp,temp,cache,.cache,temporary"}
+            "hdg_dirs": "downloads,download,uploads,upload,tmp,temp,cache,.cache,temporary",
+            "hdg_docker": "1", "hdg_docker_hours": "48"}
 PROTECTED = {"venv", ".venv", "node_modules", ".git", "site-packages", "__pycache__"}
 WARN_AT = 0.8
 WARN_EVERY_SEC = 24 * 3600
@@ -57,7 +62,11 @@ async def get_cfg() -> dict:
     except (TypeError, ValueError):
         days = 7
     names = {x.strip().lower() for x in str(out["hdg_dirs"]).split(",") if x.strip()}
-    return {"enabled": out["hdg_enabled"] != "0", "cap_bytes": cap * 1024 * 1024, "cap_mb": cap, "days": days,
+    try:
+        dh = max(1, int(float(out["hdg_docker_hours"])))
+    except (TypeError, ValueError):
+        dh = 48
+    return {"docker": out["hdg_docker"] != "0", "docker_hours": dh, "enabled": out["hdg_enabled"] != "0", "cap_bytes": cap * 1024 * 1024, "cap_mb": cap, "days": days,
             "clean": out["hdg_clean"] != "0", "action": "warn" if out["hdg_action"] == "warn" else "stop", "dirs": names}
 
 
@@ -145,7 +154,7 @@ def clean_old(app_dir: Path, days: int, names: set[str], *, dry_run: bool = Fals
 async def _run(*cmd: str) -> tuple[int, str]:
     p = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     out, err = await asyncio.wait_for(p.communicate(), timeout=60)
-    return p.returncode or 0, (err or out or b"").decode(errors="replace")
+    return p.returncode or 0, ((out or b"") + (err or b"")).decode(errors="replace")
 
 
 def fmt_bytes(n: float) -> str:
@@ -155,6 +164,26 @@ def fmt_bytes(n: float) -> str:
             return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024
     return f"{n:.1f} TB"
+
+
+# ───────────────────────── کشِ داکر ─────────────────────────
+_RECLAIMED_RE = re.compile(r"Total reclaimed space:\s*([\d.]+\s*[KMGT]?i?B)", re.I)
+
+
+async def docker_prune(run, hours: int = 48) -> dict:
+    """کشِ build (قدیمیِ‌تر از hours ساعت) و ایمیج‌هایِ dangling را پاک می‌کند. خروجی: {'builder': '25.2GB', 'images': '0B'} (خطا ⇒ 'خطا')."""
+    out = {}
+    for key, cmd in (("builder", ("docker", "builder", "prune", "-f", "--filter", f"until={int(hours)}h")),
+                     ("images", ("docker", "image", "prune", "-f"))):
+        try:
+            code, text = await run(*cmd)
+        except Exception:      # noqa: BLE001
+            logger.exception("hdg: docker prune (%s) ناموفق", key)
+            out[key] = "خطا"
+            continue
+        m = _RECLAIMED_RE.search(text or "")
+        out[key] = m.group(1).replace(" ", "") if m else ("خطا" if code else "0B")
+    return out
 
 
 # ───────────────────────── اسکن و اعمال ─────────────────────────
@@ -225,6 +254,9 @@ async def run_once(*, dry_run: bool = False, bot=None, run=None, now: float | No
                 row["warned_at"] = now
         rows.append(row)
     rows.sort(key=lambda r: -r["bytes"])
+    docker_res = None
+    if cfg["enabled"] and cfg["docker"] and not dry_run:
+        docker_res = await docker_prune(run, cfg["docker_hours"])
     try:
         du = shutil.disk_usage("/")
         disk = {"total": du.total, "used": du.used, "free": du.free}
@@ -232,7 +264,7 @@ async def run_once(*, dry_run: bool = False, bot=None, run=None, now: float | No
         disk = {}
     rep = {"at": dt.datetime.fromtimestamp(now).isoformat(timespec="seconds"), "dry_run": dry_run, "cap_bytes": cfg["cap_bytes"],
            "days": cfg["days"], "action": cfg["action"], "clean": cfg["clean"], "enabled": cfg["enabled"], "disk": disk,
-           "apps": rows, "orphans": orphans,
+           "apps": rows, "orphans": orphans, "docker": docker_res,
            "freed_bytes": sum(r["cleaned_bytes"] for r in rows) if not dry_run else 0,
            "reclaimable_bytes": sum(r["cleaned_bytes"] for r in rows) if dry_run else 0}
     if not dry_run:
@@ -253,6 +285,9 @@ def report_text(rep: dict | None, limit: int = 12) -> str:
     apps = rep.get("apps", [])
     tot = sum(a["bytes"] for a in apps)
     lines.append(f"📦 جمعِ اپ‌هایِ میزبانی: {fmt_bytes(tot)} در {len(apps)} اپ · سقفِ هر اپ: {fmt_bytes(rep.get('cap_bytes', 0))}")
+    dk = rep.get("docker")
+    if dk:
+        lines.append(f"🐳 آخرین پاکسازیِ داکر — کشِ build: {dk.get('builder', '—')} · ایمیج‌هایِ بی‌صاحب: {dk.get('images', '—')}")
     if rep.get("dry_run"):
         lines.append(f"🔍 (فقط اسکن) قابلِ آزادسازی با پاکسازی: {fmt_bytes(rep.get('reclaimable_bytes', 0))}")
     elif rep.get("freed_bytes"):

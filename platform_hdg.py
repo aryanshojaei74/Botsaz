@@ -25,12 +25,16 @@ async def hdg_screen() -> tuple[str, InlineKeyboardMarkup]:
            f"⚙️ سقفِ هر اپ: <b>{G.fmt_bytes(cfg['cap_bytes'])}</b> · نگهداریِ فایلِ دانلودی/آپلودی: <b>{cfg['days']} روز</b>\n"
            f"🧹 پاکسازیِ خودکار: <b>{'روشن' if cfg['clean'] else 'خاموش'}</b> · بعد از سقف: "
            f"<b>{'خاموش‌کردنِ ربات' if cfg['action'] == 'stop' else 'فقط هشدار'}</b>\n"
+           f"🐳 پاکسازیِ کشِ build داکر (قدیمی‌تر از {cfg['docker_hours']} ساعت): <b>{'روشن' if cfg['docker'] else 'خاموش'}</b>\n"
            f"📁 پوشه‌هایِ موقت: <code>{', '.join(sorted(cfg['dirs']))}</code>\n\n"
            "فقط فایل‌هایِ <b>داخلِ این پوشه‌ها</b> که بیش از مدتِ بالا دست‌نخورده‌اند پاک می‌شوند؛ کد/.env/venv هرگز. "
            "اجرایِ خودکار: هر ساعت (باید تایمرِ botsaz-disk-guard فعال باشد).")
     rows = [
         [hx_button("🧹 اسکن و پاکسازی همین حالا", callback_data="hdg:run", style=ButtonStyle.SUCCESS)],
         [hx_button("🔍 فقط اسکن (بدونِ پاک‌کردن)", callback_data="hdg:dry", style=ButtonStyle.PRIMARY)],
+        [hx_button("🐳 پاک‌کردنِ کشِ داکر همین حالا", callback_data="hdg:docker", style=ButtonStyle.SUCCESS)],
+        [hx_button("🐳 پاکسازیِ خودکارِ کشِ داکر: " + ("✅ روشن" if cfg["docker"] else "❌ خاموش"), callback_data="hdg:dockeron",
+                   style=(ButtonStyle.SUCCESS if cfg["docker"] else ButtonStyle.DANGER))],
         [hx_button(f"💾 سقفِ هر اپ: {G.fmt_bytes(cfg['cap_bytes'])} (تغییر)", callback_data="hdg:cap", style=ButtonStyle.PRIMARY)],
         [hx_button(f"🗓 نگهداری: {cfg['days']} روز (تغییر)", callback_data="hdg:days", style=ButtonStyle.PRIMARY)],
         [hx_button("🧹 پاکسازیِ خودکار: " + ("✅ روشن" if cfg["clean"] else "❌ خاموش"), callback_data="hdg:clean",
@@ -111,7 +115,20 @@ async def hdg_days(cb: CallbackQuery):
     await cb.answer()
 
 
-@hdg_router.callback_query(F.data.in_({"hdg:clean", "hdg:action"}))
+@hdg_router.callback_query(F.data == "hdg:docker")
+async def hdg_docker_now(cb: CallbackQuery):
+    if not _guard(cb):
+        await cb.answer("فقط مدیر اصلی", show_alert=True)
+        return
+    import hosting_disk_guard as G
+    await cb.answer("⏳ در حالِ پاک‌کردنِ کشِ داکر…")
+    cfg = await G.get_cfg()
+    res = await G.docker_prune(G._run, cfg["docker_hours"])
+    await cb.message.answer(f"🐳 کشِ build: <b>{res['builder']}</b> آزاد شد · ایمیج‌هایِ بی‌صاحب: <b>{res['images']}</b>", parse_mode="HTML")
+    await _show(cb)
+
+
+@hdg_router.callback_query(F.data.in_({"hdg:clean", "hdg:action", "hdg:dockeron"}))
 async def hdg_toggle(cb: CallbackQuery):
     if not _guard(cb):
         await cb.answer("فقط مدیر اصلی", show_alert=True)
@@ -120,6 +137,8 @@ async def hdg_toggle(cb: CallbackQuery):
     cfg = await G.get_cfg()
     if cb.data == "hdg:clean":
         await G.set_cfg("hdg_clean", "0" if cfg["clean"] else "1")
+    elif cb.data == "hdg:dockeron":
+        await G.set_cfg("hdg_docker", "0" if cfg["docker"] else "1")
     else:
         await G.set_cfg("hdg_action", "warn" if cfg["action"] == "stop" else "stop")
     await _show(cb)

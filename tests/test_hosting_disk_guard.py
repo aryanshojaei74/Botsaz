@@ -91,6 +91,7 @@ async def env(monkeypatch, tmp_path):
         s.add(models.HostedApp(id=3, owner_id=333, name="nearbot", status="running"))
         await s.commit()
     await G.set_cfg("hdg_cap_mb", "1")                                    # سقفِ ۱ مگابایت برایِ تست
+    await G.set_cfg("hdg_docker", "0")                                    # پاکسازیِ داکر در تست‌هایِ قبلی نقشی ندارد
     MB = 1024 * 1024
     _file(tmp_path / "apps" / "bigbot" / "data" / "blob.bin", int(1.5 * MB), 0)           # بالایِ سقف و جدید (پاک نمی‌شود)
     _file(tmp_path / "apps" / "smallbot" / "main.py", 1000, 0)
@@ -200,3 +201,60 @@ async def test_admin_screen_and_menu_entry(env):
     txt, kb = await H.hdg_screen()
     datas = [b.callback_data for r in kb.inline_keyboard for b in r]
     assert {"hdg:run", "hdg:dry", "hdg:cap", "hdg:days", "hdg:clean", "hdg:action"} <= set(datas) and "bigbot" in txt
+
+
+OUT_BUILDER = "ID  RECLAIMABLE\nabc  1GB\nTotal:\t25.2GB\nTotal reclaimed space: 25.2GB\n"
+OUT_IMAGES = "Total reclaimed space: 611.2MB\n"
+
+
+@pytest.mark.asyncio
+async def test_docker_prune_parses_reclaimed_space_and_errors():
+    calls = []
+
+    async def run(*cmd):
+        calls.append(cmd)
+        return (0, OUT_BUILDER) if cmd[:3] == ("docker", "builder", "prune") else (0, OUT_IMAGES)
+    res = await G.docker_prune(run, 48)
+    assert res == {"builder": "25.2GB", "images": "611.2MB"}
+    assert calls[0] == ("docker", "builder", "prune", "-f", "--filter", "until=48h") and calls[1] == ("docker", "image", "prune", "-f")
+    assert not any("volume" in c or "system" in c for c in calls[0] + calls[1])                  # volume/system prune هرگز
+
+    async def bad(*cmd):
+        return 1, "Cannot connect to the Docker daemon"
+
+    async def boom(*cmd):
+        raise RuntimeError("x")
+    assert await G.docker_prune(bad, 24) == {"builder": "خطا", "images": "خطا"}
+    assert await G.docker_prune(boom, 24) == {"builder": "خطا", "images": "خطا"}
+
+    async def none_freed(*cmd):
+        return 0, "Total reclaimed space: 0B"
+    assert (await G.docker_prune(none_freed, 1))["builder"] == "0B"
+
+
+@pytest.mark.asyncio
+async def test_run_once_prunes_docker_by_default_hours_and_not_in_dry_run_or_when_off(env):
+    await G.set_cfg("hdg_docker", "1")
+    await G.set_cfg("hdg_docker_hours", "24")
+
+    async def run(*cmd):
+        env.calls.append(cmd)
+        return (0, OUT_BUILDER if cmd[:3] == ("docker", "builder", "prune") else OUT_IMAGES)
+    rep = await G.run_once(bot=env.bot, run=run)
+    assert ("docker", "builder", "prune", "-f", "--filter", "until=24h") in env.calls
+    assert rep["docker"]["builder"] == "25.2GB" and "25.2GB" in G.report_text(rep)
+    env.calls.clear()
+    await G.run_once(dry_run=True, bot=env.bot, run=run)
+    assert not any(c[:2] == ("docker", "builder") for c in env.calls)                           # dry-run: چیزی پاک نمی‌شود
+    await G.set_cfg("hdg_docker", "0")
+    env.calls.clear()
+    rep2 = await G.run_once(bot=env.bot, run=run)
+    assert not any(c[:2] == ("docker", "builder") for c in env.calls) and rep2["docker"] is None
+
+
+@pytest.mark.asyncio
+async def test_docker_ui_buttons(env):
+    import platform_hdg as H
+    txt, kb = await H.hdg_screen()
+    datas = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert "hdg:docker" in datas and "hdg:dockeron" in datas and "کشِ build داکر" in txt
