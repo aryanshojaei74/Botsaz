@@ -183,3 +183,26 @@ async def test_admin_renew_screen_shows_mirror_and_hides_separate_editors(env):
     cfg2 = await AD._renew_cfg(bid, "sanai")
     datas2 = [b.callback_data for r in (await AD._renew_kb(cfg2, "sanai", bid)).inline_keyboard for b in r]
     assert "tvpn:renew_price:sanai" in datas2
+
+
+@pytest.mark.asyncio
+async def test_renew_mirror_uses_tier_pricing_when_base_day_price_is_zero(env):
+    """باگِ Weirdnet: پنل‌هایِ حجمی با «تعرفه‌هایِ مدت‌دار» قیمتِ پایهٔ روز = ۰ دارند؛ تمدیدِ هم‌ردیفِ خرید «فعال نیست» می‌داد."""
+    import tenant
+    from tenant.bots.vpn import vpn_user as V
+    from tenant.bots.vpn import vpn_admin as AD
+    bid = env["bid"]
+    for k, v in {"vc_price_day": "0", "vc_price_gb": "0", "vc_pricing_mode": "tiers"}.items():
+        await tenant.set_setting(bid, V._pvc_key_u("sanai", k) if k in V._VC_PANEL_KEYS_U else k, v)
+    await AD.vc_tiers_set(bid, "sanai", [
+        {"days_min": 30, "days_max": 30, "gb_min": 10, "gb_max": 100, "gb_step": 10, "price_gb": 2000, "price_day": 100},
+        {"days_min": 60, "days_max": 60, "gb_min": 10, "gb_max": 100, "gb_step": 10, "price_gb": 1500, "price_day": 80},
+    ])
+    await tenant.set_setting(bid, V.renew_same_key("sanai"), "1")
+    tenant._SETTING_CACHE.clear()
+    V._VC_CACHE.clear()
+    rc = await V._renew_cfg(bid, TG, "sanai")
+    assert rc.mirror and rc.mn_d == 30 and rc.mx_d == 60
+    assert await V._renew_quote(bid, TG, "sanai", rc, 30) == 30 * 100
+    assert await V._renew_quote(bid, TG, "sanai", rc, 60, 20) == 60 * 80 + 20 * 1500
+    assert V._renew_day_options(rc) == [30, 60]
