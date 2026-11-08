@@ -123,6 +123,7 @@ ADMIN_SECTIONS: list[dict] = [
         "items": [
             ("🩺 بروزرسانی و سلامت ربات‌ها", "adm:health",      ButtonStyle.PRIMARY, True),
             ("🛡 محافظ گروه",               "adm:group_guard", ButtonStyle.PRIMARY, True),
+            ("💽 مصرفِ دیسک و پاکسازیِ ربات‌ها", "hdg:menu", ButtonStyle.PRIMARY, True),   # PATCH_HOSTING_DISK_GUARD_V1
             # «حالت آپدیت» برچسب/رنگش پویاست؛ در _section_items ساخته می‌شود.
         ],
     },
