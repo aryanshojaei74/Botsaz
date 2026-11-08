@@ -17224,7 +17224,7 @@ async def ton_sell_admin_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup
         f"سفارش‌هایِ در انتظار: <b>{pending or 0}</b>"
         + _w_line
         + "\n\n🧩 <b>روش‌هایِ دریافتِ مشتری</b> (هر کدام را روشن/خاموش کن؛ اگر بیش از یکی روشن باشد، مشتری اول نوع را انتخاب می‌کند):\n"
-          "• «ولت شخصی» ارسالِ خودکارِ آنچین دارد (اگر روشن کرده‌ای).\n"
+          "• «ولت شخصی» و «ولت تلگرام» ارسالِ خودکارِ آنچین دارند (اگر روشن کرده‌ای)؛ در هر دو مشتری آدرسِ واریز را می‌فرستد.\n"
           "• «تون بالانس» و «ولت تلگرام» را خودت روی اکانتِ مشتری انجام می‌دهی و «✅ ارسال شد» را می‌زنی."
     )
     if not rate:
@@ -17246,7 +17246,7 @@ async def ton_sell_admin_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup
           if _as["enabled"] else []),
         *[[InlineKeyboardButton(
             text=f"{'✅' if _k in _types_on else '⛔️'} {_TON_TYPES[_k][0]}", callback_data=f"ton:tt:{_k}",
-            style=(ButtonStyle.SUCCESS if _k in _types_on else None))] for _k in ("wallet", "balance", "tgwallet")],
+            style=(ButtonStyle.SUCCESS if _k in _types_on else None))] for _k in ("wallet", "tgdeposit", "balance", "tgwallet")],
         [InlineKeyboardButton(text="🧾 سفارش‌هایِ در انتظار", callback_data="ton:orders:0")],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="smm:manlist", style=ButtonStyle.DANGER)],
     ])
@@ -17521,23 +17521,26 @@ async def _ton_show_amount(bot: Bot, target: Message, bot_id: int, state, rate, 
 _TON_TYPES: dict[str, tuple[str, str]] = {
     "wallet": ("💎 واریز به ولت شخصی",
                "ارسال مستقیم ارز TON به کیف پول (ولت) شخصی شما (مانند Tonkeeper)"),
+    "tgdeposit": ("👛 واریز به ولت تلگرام",
+                  "ارسال مستقیم ارز TON به کیف پول داخلِ تلگرامِ شما (Wallet)؛ فقط آدرسِ واریزِ ولتِ تلگرامت را می‌فرستی."),
     "balance": ("⚡️ شارژ مستقیم اکانت تلگرام (تون بالانس)",
                 "افزایش موجودی TON حساب تلگرام؛ مخصوص خرید گیفت از مارکت تلگرام و استفاده از امکانات تلگرام، غیرِ قابل انتقال به دیگران!"),
     "tgwallet": ("💼 فعال‌سازی ولت تلگرام",
                  "راه‌اندازی کیف پول اختصاصی تلگرام از طریق آیدیِ اکانتِ شما؛ با قابلیتِ برداشت، انتقال به دیگران و مدیریتِ دارایی!"),
 }
-_TON_TYPE_SHORT = {"wallet": "ولت", "balance": "تون بالانس", "tgwallet": "ولت تلگرام"}
+_TON_TYPE_SHORT = {"wallet": "ولت", "tgdeposit": "ولت تلگرام", "balance": "تون بالانس", "tgwallet": "ولت تلگرام"}
+_TON_ONCHAIN_TYPES = ("wallet", "tgdeposit")
 
 
 async def _ton_types_enabled(bot_id: int) -> list[str]:
     on = []
-    for k, d in (("wallet", "1"), ("balance", "0"), ("tgwallet", "0")):
+    for k, d in (("wallet", "1"), ("tgdeposit", "0"), ("balance", "0"), ("tgwallet", "0")):
         if (await _get_setting(bot_id, f"ton_type_{k}", d)) == "1":
             on.append(k)
     return on or ["wallet"]
 
 
-@smm_router.callback_query(F.data.regexp(r"^ton:t:(wallet|balance|tgwallet)$"))
+@smm_router.callback_query(F.data.regexp(r"^ton:t:(wallet|tgdeposit|balance|tgwallet)$"))
 async def ton_type_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from tenant import get_bot_row
     row = await get_bot_row(bot)
@@ -17558,7 +17561,7 @@ async def ton_type_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await _ton_show_amount(bot, cb.message, row.id, state, rate, qmin, qmax)
 
 
-@smm_router.callback_query(F.data.regexp(r"^ton:tt:(wallet|balance|tgwallet)$"))
+@smm_router.callback_query(F.data.regexp(r"^ton:tt:(wallet|tgdeposit|balance|tgwallet)$"))
 async def ton_type_toggle(cb: CallbackQuery, bot: Bot):
     row = await _owner(cb, bot)
     if not row:
@@ -17593,7 +17596,7 @@ async def ton_acct_self(cb: CallbackQuery, bot: Bot, state: FSMContext):
     row = await get_bot_row(bot)
     data = await state.get_data()
     kind = data.get("ton_type") or "wallet"
-    if not row or kind == "wallet" or not data.get("ton_amount"):
+    if not row or kind in _TON_ONCHAIN_TYPES or not data.get("ton_amount"):
         return await cb.answer("جلسه منقضی شد؛ دوباره از فروشگاهِ تون شروع کن.", show_alert=True)
     u = cb.from_user
     label = _ton_acct_label(kind, f"@{u.username}" if u.username else str(u.id))
@@ -17609,6 +17612,14 @@ async def _ton_amount_chosen(answer, bot: Bot, state: FSMContext, row, amount: f
     from tenant import smart_cancel_kb
     price = round(amount * rate)
     _kind = (await state.get_data()).get("ton_type") or "wallet"
+    if _kind == "tgdeposit":
+        await answer(
+            f"{_TON_TYPES[_kind][0]}\n💎 {amount:g} TON — {price:,} تومان\n\n"
+            "حالا <b>آدرسِ واریزِ ولتِ تلگرامت</b> را بفرست.\n"
+            "در تلگرام: <b>Wallet ← TON ← دریافت (Receive/Deposit)</b> و آدرس را کپی کن (معمولاً با <code>UQ</code> یا <code>EQ</code> شروع می‌شود).\n\n"
+            "⚠️ آدرس را با دقت بفرست؛ واریزِ اشتباه روی بلاک‌چین قابلِ برگشت نیست.",
+            parse_mode="HTML", reply_markup=await smart_cancel_kb(bot))
+        return
     if _kind != "wallet":
         _base = await smart_cancel_kb(bot)
         _rows = [[InlineKeyboardButton(text="👤 همین اکانتِ خودم", callback_data="ton:self", style=ButtonStyle.SUCCESS)]]
@@ -17675,7 +17686,7 @@ async def ton_wallet_in(msg: Message, bot: Bot, state: FSMContext):
     # === PATCH_TON_TYPES_V1 === نوع‌هایِ «تون بالانس / ولت تلگرام»: مقصد یک اکانتِ تلگرام است (نه آدرسِ آنچین؛ بدونِ ممو)
     _kd = await state.get_data()
     _kind = _kd.get("ton_type") or "wallet"
-    if _kind != "wallet":
+    if _kind not in _TON_ONCHAIN_TYPES:
         _lbl = _ton_acct_label(_kind, wallet)
         if not _lbl or not _kd.get("ton_amount"):
             await msg.answer("❌ یوزرنیم یا آیدیِ عددیِ معتبر بفرست (مثلاً <code>@name</code>)، یا «👤 همین اکانتِ خودم» را بزن.",
@@ -17741,7 +17752,8 @@ async def _ton_show_invoice(target: Message, bot: Bot, state: FSMContext, row, u
     await target.answer(
         "🧾 <b>فاکتورِ خرید</b>\n\n"
         f"کالا: 💎 {amount:g} TON\n"
-        f"مقصد: <code>{_html_escape(wallet)}</code>\n"
+        + ("روش: 👛 واریز به ولت تلگرام\n" if data.get("ton_type") == "tgdeposit" else "")
+        + f"مقصد: <code>{_html_escape(wallet)}</code>\n"
         + (f"📝 کامنت/ممو: ✅ <code>{_html_escape(memo)}</code>\n" if memo else "📝 کامنت/ممو: ندارد ❌\n")   # PATCH_TON_MEMO_CLEAN_V1
         + f"قیمت: {price:,} تومان\n\n"
         f"مبلغِ قابل‌پرداخت: {price:,} تومان" + ("" if _pay_rows else _vp.NO_METHOD_NOTE),
@@ -17880,13 +17892,14 @@ async def ton_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
             logger.exception("اطلاعِ ارسالِ خودکارِ تون به ادمین ناموفق بود")
         return
     await _notify_gift_order_trust_success(bot, row, order_id)
-    await _ton_admin_notice(bot, row, order_id, amount, price, wallet, _memo, trk, cb.from_user, _auto, _auto_note)
+    await _ton_admin_notice(bot, row, order_id, amount, price, wallet, _memo, trk, cb.from_user, _auto, _auto_note,
+                            kind=data.get("ton_type") or "wallet")
 
 
 async def _ton_admin_notice(bot: Bot, row, order_id: int, amount: float, price: int, wallet: str, memo: str | None,
-                            trk: str, user, auto: str, auto_note: str) -> None:
+                            trk: str, user, auto: str, auto_note: str, kind: str = "wallet") -> None:
     """پیامِ سفارشِ تون برایِ ادمین/مالک با «ارسال شد / رد و بازگشتِ وجه»؛ اگر ارسالِ خودکار انجام نشد، «🤖 ارسالِ خودکارِ مجدد» هم دارد."""
-    _auto_line = ""
+    _auto_line = "\n👛 <b>روشِ دریافت: ولت تلگرام</b>\n" if kind == "tgdeposit" else ""
     if auto == "typed":
         _auto_line = f"\n🏷 <b>نوعِ تحویل: {_html_escape(str(wallet).split(']')[0].lstrip('['))}</b> — این سفارش را خودت روی اکانتِ مشتری انجام بده، بعد «✅ ارسال شد» را بزن.\n"
     elif auto == "manual":

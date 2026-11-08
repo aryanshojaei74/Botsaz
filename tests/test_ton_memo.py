@@ -292,3 +292,36 @@ def test_account_label_parsing():
     assert S._ton_acct_label("tgwallet", "https://t.me/someone") == "[ولت تلگرام] @someone"
     assert S._ton_acct_label("balance", "123456789") == "[تون بالانس] ID 123456789"
     assert S._ton_acct_label("balance", "no spaces allowed") is None and S._ton_acct_label("balance", "@ab") is None
+
+
+# ───── PATCH_TON_TGDEPOSIT_V1: «واریز به ولت تلگرام» (آنچین؛ مثلِ ولت شخصی؛ قابلِ ارسالِ خودکار) ─────
+@pytest.mark.asyncio
+async def test_tgdeposit_type_listed_and_uses_address_flow(env):
+    shown = []
+
+    async def answer(t, **kw):
+        shown.append((t, kw.get("reply_markup")))
+    target = SimpleNamespace(answer=answer)
+    env.settings["ton_type_tgdeposit"] = "1"
+    await S.show_ton_shop_to_user(object(), target, 5, env.state)
+    txt, kb = shown[-1]
+    assert "واریز به ولت تلگرام" in txt and "واریز به ولت شخصی" in txt
+    assert "ton:t:tgdeposit" in [b.callback_data for r in kb.inline_keyboard for b in r]
+    await env.state.update_data(ton_type="tgdeposit")
+    await S._ton_amount_chosen(target.answer, object(), env.state, SimpleNamespace(id=5), 0.3, 400_000.0)
+    assert "Wallet" in shown[-1][0] and "آدرسِ واریز" in shown[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_tgdeposit_takes_a_real_ton_address_and_orders_like_wallet(env):
+    env.settings["ton_type_tgdeposit"] = "1"
+    await env.state.update_data(ton_type="tgdeposit")
+    await S.ton_wallet_in(env.msg("@someone"), object(), env.state)
+    assert "معتبر" in env.answers[-1] and await orders(env) == []
+    await S.ton_wallet_in(env.msg(WALLET), object(), env.state)
+    await S.ton_memo_in(env.msg("ندارم"), object(), env.state)
+    assert "روش: 👛 واریز به ولت تلگرام" in env.answers[-1] and WALLET in env.answers[-1]
+    await S.ton_pay(env.cb(), object(), env.state)
+    (o,) = await orders(env)
+    assert o.dest_label == WALLET and not str(o.dest_label).startswith("[")
+    assert "ولت تلگرام" in env.notices[-1] and WALLET in env.notices[-1]
