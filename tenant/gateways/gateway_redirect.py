@@ -207,15 +207,39 @@ def _menu_text(gw: str, current: str, base: str) -> str:
 import os as _os
 from pathlib import Path as _Path
 
-PAY_HTML_PATH = _Path(_os.getenv("PAY_HTML_PATH", "")
-                      or (_Path(__file__).resolve().parent.parent / "assets" / "pay.html"))
+def _payhtml_candidates() -> list:
+    here = _Path(__file__).resolve()
+    cands = []
+    if _os.getenv("PAY_HTML_PATH"):
+        cands.append(_Path(_os.getenv("PAY_HTML_PATH")))
+    # PATCH_PAYHTML_PATH_FIX_V1: قبلاً فقط tenant/assets/pay.html بررسی می‌شد ولی فایل در ریشهٔ پروژه (assets/pay.html) بود
+    # ⇒ دکمهٔ «فرستادنِ فایلِ pay.html» روی سرور هرگز نشان داده نمی‌شد.
+    cands += [here.parent.parent / "assets" / "pay.html",            # tenant/assets/pay.html
+              here.parent.parent.parent / "assets" / "pay.html",     # <root>/assets/pay.html
+              _Path.cwd() / "assets" / "pay.html"]
+    return cands
+
+
+def _find_payhtml():
+    for c in _payhtml_candidates():
+        try:
+            if c.is_file() and c.stat().st_size > 0:
+                return c
+        except OSError:
+            continue
+    return None
+
+
+PAY_HTML_PATH = _find_payhtml() or (_Path(__file__).resolve().parent.parent / "assets" / "pay.html")
 
 
 def payhtml_available() -> bool:
-    try:
-        return PAY_HTML_PATH.is_file() and PAY_HTML_PATH.stat().st_size > 0
-    except Exception:
-        return False
+    global PAY_HTML_PATH
+    found = _find_payhtml()
+    if found is not None:
+        PAY_HTML_PATH = found
+        return True
+    return False
 
 
 def _menu_kb(gw: str, has_base: bool, current: str) -> InlineKeyboardMarkup:

@@ -77,3 +77,10 @@ async def test_status_line_warns_when_auto_domain_is_not_ours(monkeypatch):
         return True
     monkeypatch.setattr(GR, "_auto_page_ok", good)
     assert "✅ خودکار" in await GR.status_line(1, "zarinpal")
+
+
+def test_payhtml_is_found_and_button_shown():
+    assert GR.payhtml_available()
+    assert GR.PAY_HTML_PATH.name == "pay.html" and GR.PAY_HTML_PATH.stat().st_size > 1000
+    kb = GR._menu_kb("zarinpal", True, "")
+    assert "gwr:sendfile" in [b.callback_data for r in kb.inline_keyboard for b in r]
