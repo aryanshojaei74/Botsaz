@@ -92,6 +92,8 @@ async def env(monkeypatch, tmp_path):
         await s.commit()
     await G.set_cfg("hdg_cap_mb", "1")                                    # سقفِ ۱ مگابایت برایِ تست
     await G.set_cfg("hdg_docker", "0")                                    # پاکسازیِ داکر در تست‌هایِ قبلی نقشی ندارد
+    await G.set_cfg("hdg_backups", "0")                                   # و پشتیبان‌ها هم (برایِ آن‌ها تستِ جدا هست)
+    monkeypatch.setattr(G, "BACKUPS_ROOT", tmp_path / "root")
     MB = 1024 * 1024
     _file(tmp_path / "apps" / "bigbot" / "data" / "blob.bin", int(1.5 * MB), 0)           # بالایِ سقف و جدید (پاک نمی‌شود)
     _file(tmp_path / "apps" / "smallbot" / "main.py", 1000, 0)
@@ -257,4 +259,39 @@ async def test_docker_ui_buttons(env):
     import platform_hdg as H
     txt, kb = await H.hdg_screen()
     datas = [b.callback_data for r in kb.inline_keyboard for b in r]
-    assert "hdg:docker" in datas and "hdg:dockeron" in datas and "کشِ build داکر" in txt
+    assert "hdg:docker" in datas and "hdg:dockeron" in datas and "hdg:backups" in datas and "کشِ build داکر" in txt and "botsaz-backup" in txt
+
+
+def test_prune_backups_keeps_newest_n_and_touches_only_exact_pattern(tmp_path):
+    root = tmp_path / "r"
+    for n in (9, 10, 11, 100, 488):                                       # ترتیب عددی (۹ < ۱۰ < ۱۰۰)، نه رشته‌ای
+        _file(root / f"botsaz-backup-{n}" / "venv" / "big.bin", 1000)
+    keep_me = [_file(root / "botsaz-code-backup-20261108.tgz", 10), _file(root / "notes.txt", 5),
+               _file(root / "botsaz-backup-x" / "f", 5), _file(root / "botsaz-backup-12-old" / "f", 5), _file(root / "my-botsaz-backup-7" / "f", 5)]
+    dry = G.prune_backups(root, 2, dry_run=True)
+    assert dry["removed"] == ["botsaz-backup-9", "botsaz-backup-10", "botsaz-backup-11"] and dry["bytes"] == 3000
+    assert (root / "botsaz-backup-9").exists()                              # dry-run: چیزی پاک نشد
+    res = G.prune_backups(root, 2)
+    assert res["removed"] == ["botsaz-backup-9", "botsaz-backup-10", "botsaz-backup-11"] and res["kept"] == ["botsaz-backup-100", "botsaz-backup-488"]
+    assert not (root / "botsaz-backup-9").exists() and (root / "botsaz-backup-100").exists() and (root / "botsaz-backup-488").exists()
+    for k in keep_me:
+        assert k.exists(), k                                                # الگوهایِ نزدیک ولی غیرِ دقیق، و پشتیبانِ tar دست‌نخورده
+    assert G.prune_backups(tmp_path / "missing", 2) == {"removed": [], "kept": [], "bytes": 0}
+    assert G.prune_backups(root, 5)["removed"] == []                        # کمتر از keep ⇒ هیچ
+
+
+@pytest.mark.asyncio
+async def test_run_once_prunes_backups_when_enabled(env, tmp_path):
+    for n in (1, 2, 3, 4):
+        _file(tmp_path / "root" / f"botsaz-backup-{n}" / "f", 50)
+    await G.set_cfg("hdg_backups", "1")
+    rep = await G.run_once(bot=env.bot, run=env.run)
+    assert rep["backups"]["removed"] == ["botsaz-backup-1", "botsaz-backup-2"] and "پشتیبان‌هایِ قدیمیِ نصب پاک شد" in G.report_text(rep)
+    assert (tmp_path / "root" / "botsaz-backup-4").exists() and not (tmp_path / "root" / "botsaz-backup-1").exists()
+    for n in (5, 6):
+        _file(tmp_path / "root" / f"botsaz-backup-{n}" / "f", 50)
+    dry = await G.run_once(dry_run=True, bot=env.bot, run=env.run)
+    assert (tmp_path / "root" / "botsaz-backup-3").exists() and dry["backups"]["removed"] == ["botsaz-backup-3", "botsaz-backup-4"]
+    await G.set_cfg("hdg_backups", "0")
+    rep2 = await G.run_once(bot=env.bot, run=env.run)
+    assert rep2["backups"] is None and (tmp_path / "root" / "botsaz-backup-3").exists()

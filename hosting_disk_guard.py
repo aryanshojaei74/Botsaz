@@ -9,8 +9,11 @@
   ۳) کشِ build و ایمیج‌هایِ بی‌صاحبِ داکر (علتِ اصلیِ پُرشدنِ دیسک در عمل: هر build چند صد مگ کش می‌گذارد): هر ساعت
      `docker builder prune --filter until=48h` و `docker image prune` (فقط dangling). کانتینر/volumeهایِ در حالِ‌استفاده دست‌نخورده.
 
+  ۴) پشتیبان‌هایِ قدیمیِ نصب (/root/botsaz-backup-<شماره>، هرکدام ~۱٫۳ گیگ چون venv را هم دارند): فقط N تایِ آخر (پیش‌فرض ۲) می‌ماند.
+     فقط پوشه‌هایی با همین الگوی دقیق پاک می‌شوند؛ پشتیبان‌هایِ سبکِ tar دست‌نخورده.
+
 تنظیمات (Setting با bot_id=0): hdg_enabled=1 · hdg_cap_mb=5120 · hdg_days=7 · hdg_clean=1 · hdg_action=stop|warn · hdg_dirs=…
-  · hdg_docker=1 · hdg_docker_hours=48
+  · hdg_docker=1 · hdg_docker_hours=48 · hdg_backups=1 · hdg_backups_keep=2
 اجرای دستی:  python -m hosting_disk_guard [--dry-run]
 """
 from __future__ import annotations
@@ -34,10 +37,12 @@ from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
 
 APPS_ROOT = Path(os.getenv("HOSTING_APPS_DIR", "/opt/botsazvip/apps"))
+BACKUPS_ROOT = Path(os.getenv("HDG_BACKUPS_DIR", "/root"))
+_BACKUP_RE = re.compile(r"^botsaz-backup-(\d+)$")
 CONTAINER_PREFIX = "bsapp-"
 DEFAULTS = {"hdg_enabled": "1", "hdg_cap_mb": "5120", "hdg_days": "7", "hdg_clean": "1", "hdg_action": "stop",
             "hdg_dirs": "downloads,download,uploads,upload,tmp,temp,cache,.cache,temporary",
-            "hdg_docker": "1", "hdg_docker_hours": "48"}
+            "hdg_docker": "1", "hdg_docker_hours": "48", "hdg_backups": "1", "hdg_backups_keep": "2"}
 PROTECTED = {"venv", ".venv", "node_modules", ".git", "site-packages", "__pycache__"}
 WARN_AT = 0.8
 WARN_EVERY_SEC = 24 * 3600
@@ -66,7 +71,12 @@ async def get_cfg() -> dict:
         dh = max(1, int(float(out["hdg_docker_hours"])))
     except (TypeError, ValueError):
         dh = 48
-    return {"docker": out["hdg_docker"] != "0", "docker_hours": dh, "enabled": out["hdg_enabled"] != "0", "cap_bytes": cap * 1024 * 1024, "cap_mb": cap, "days": days,
+    try:
+        keep = max(1, int(float(out["hdg_backups_keep"])))
+    except (TypeError, ValueError):
+        keep = 2
+    return {"backups": out["hdg_backups"] != "0", "backups_keep": keep,
+            "docker": out["hdg_docker"] != "0", "docker_hours": dh, "enabled": out["hdg_enabled"] != "0", "cap_bytes": cap * 1024 * 1024, "cap_mb": cap, "days": days,
             "clean": out["hdg_clean"] != "0", "action": "warn" if out["hdg_action"] == "warn" else "stop", "dirs": names}
 
 
@@ -166,6 +176,32 @@ def fmt_bytes(n: float) -> str:
     return f"{n:.1f} TB"
 
 
+# ───────────────────────── پشتیبان‌هایِ قدیمیِ نصب ─────────────────────────
+def prune_backups(root: Path, keep: int, *, dry_run: bool = False) -> dict:
+    """پوشه‌هایِ دقیقاً به شکلِ botsaz-backup-<شماره> را مرتب می‌کند و همه جز `keep` تایِ آخر را پاک می‌کند. فایل/پوشهٔ دیگر هرگز."""
+    found = []
+    try:
+        for p in root.iterdir():
+            m = _BACKUP_RE.match(p.name)
+            if m and p.is_dir() and not p.is_symlink():
+                found.append((int(m.group(1)), p))
+    except OSError:
+        return {"removed": [], "kept": [], "bytes": 0}
+    found.sort(key=lambda t: t[0])
+    old = found[:-keep] if keep > 0 else found
+    removed, total = [], 0
+    for _n, p in old:
+        total += dir_size(p)
+        if not dry_run:
+            try:
+                shutil.rmtree(p)
+            except OSError:
+                logger.warning("hdg: پاک‌کردنِ پشتیبانِ %s ممکن نشد", p, exc_info=True)
+                continue
+        removed.append(p.name)
+    return {"removed": removed, "kept": [p.name for _n, p in found[-keep:]] if keep > 0 else [], "bytes": total}
+
+
 # ───────────────────────── کشِ داکر ─────────────────────────
 _RECLAIMED_RE = re.compile(r"Total reclaimed space:\s*([\d.]+\s*[KMGT]?i?B)", re.I)
 
@@ -257,6 +293,9 @@ async def run_once(*, dry_run: bool = False, bot=None, run=None, now: float | No
     docker_res = None
     if cfg["enabled"] and cfg["docker"] and not dry_run:
         docker_res = await docker_prune(run, cfg["docker_hours"])
+    backups_res = None
+    if cfg["enabled"] and cfg["backups"]:
+        backups_res = await asyncio.to_thread(prune_backups, BACKUPS_ROOT, cfg["backups_keep"], dry_run=dry_run)
     try:
         du = shutil.disk_usage("/")
         disk = {"total": du.total, "used": du.used, "free": du.free}
@@ -264,7 +303,7 @@ async def run_once(*, dry_run: bool = False, bot=None, run=None, now: float | No
         disk = {}
     rep = {"at": dt.datetime.fromtimestamp(now).isoformat(timespec="seconds"), "dry_run": dry_run, "cap_bytes": cfg["cap_bytes"],
            "days": cfg["days"], "action": cfg["action"], "clean": cfg["clean"], "enabled": cfg["enabled"], "disk": disk,
-           "apps": rows, "orphans": orphans, "docker": docker_res,
+           "apps": rows, "orphans": orphans, "docker": docker_res, "backups": backups_res,
            "freed_bytes": sum(r["cleaned_bytes"] for r in rows) if not dry_run else 0,
            "reclaimable_bytes": sum(r["cleaned_bytes"] for r in rows) if dry_run else 0}
     if not dry_run:
@@ -288,6 +327,9 @@ def report_text(rep: dict | None, limit: int = 12) -> str:
     dk = rep.get("docker")
     if dk:
         lines.append(f"🐳 آخرین پاکسازیِ داکر — کشِ build: {dk.get('builder', '—')} · ایمیج‌هایِ بی‌صاحب: {dk.get('images', '—')}")
+    bk = rep.get("backups")
+    if bk and bk.get("removed"):
+        lines.append(f"🗂 پشتیبان‌هایِ قدیمیِ نصب {'(قابلِ پاک‌شدن)' if rep.get('dry_run') else 'پاک شد'}: {len(bk['removed'])} تا — {fmt_bytes(bk.get('bytes', 0))}")
     if rep.get("dry_run"):
         lines.append(f"🔍 (فقط اسکن) قابلِ آزادسازی با پاکسازی: {fmt_bytes(rep.get('reclaimable_bytes', 0))}")
     elif rep.get("freed_bytes"):
