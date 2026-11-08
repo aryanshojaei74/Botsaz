@@ -94,6 +94,7 @@ async def env(monkeypatch, tmp_path):
     await G.set_cfg("hdg_docker", "0")                                    # پاکسازیِ داکر در تست‌هایِ قبلی نقشی ندارد
     await G.set_cfg("hdg_backups", "0")                                   # و پشتیبان‌ها هم (برایِ آن‌ها تستِ جدا هست)
     monkeypatch.setattr(G, "BACKUPS_ROOT", tmp_path / "root")
+    monkeypatch.setattr(G, "OPT_ROOT", tmp_path / "opt")
     MB = 1024 * 1024
     _file(tmp_path / "apps" / "bigbot" / "data" / "blob.bin", int(1.5 * MB), 0)           # بالایِ سقف و جدید (پاک نمی‌شود)
     _file(tmp_path / "apps" / "smallbot" / "main.py", 1000, 0)
@@ -295,3 +296,26 @@ async def test_run_once_prunes_backups_when_enabled(env, tmp_path):
     await G.set_cfg("hdg_backups", "0")
     rep2 = await G.run_once(bot=env.bot, run=env.run)
     assert rep2["backups"] is None and (tmp_path / "root" / "botsaz-backup-3").exists()
+
+
+def test_prune_opt_dated_backups_sorted_by_date_and_exact_pattern(tmp_path):
+    opt = tmp_path / "opt"
+    names = ["botsaz.bak-2026-11-07-1600", "botsaz.bak-2026-11-07-2102", "botsaz.bak-2026-11-06-2359", "botsaz.bak-2026-11-08-0030"]
+    for n in names:
+        _file(opt / n / "venv" / "x", 100)
+    keep_me = [_file(opt / "botsaz" / "main.py", 5), _file(opt / "botsazvip" / "f", 5), _file(opt / "botsaz.bak-manual" / "f", 5),
+               _file(opt / "botsaz.bak-2026-11-07-21" / "f", 5)]
+    res = G.prune_backups(opt, 2, opt_style=True)
+    assert res["removed"] == ["botsaz.bak-2026-11-06-2359", "botsaz.bak-2026-11-07-1600"]                    # قدیمی‌ترین‌ها بر اساسِ تاریخ
+    assert res["kept"] == ["botsaz.bak-2026-11-07-2102", "botsaz.bak-2026-11-08-0030"] and res["bytes"] == 200
+    for k in keep_me:
+        assert k.exists(), k                                                                                # خودِ /opt/botsaz و botsazvip هرگز
+
+
+@pytest.mark.asyncio
+async def test_run_once_includes_opt_backups(env, tmp_path):
+    for n in ("botsaz.bak-2026-11-01-1000", "botsaz.bak-2026-11-02-1000", "botsaz.bak-2026-11-03-1000"):
+        _file(tmp_path / "opt" / n / "f", 30)
+    await G.set_cfg("hdg_backups", "1")
+    rep = await G.run_once(bot=env.bot, run=env.run)
+    assert rep["backups"]["removed"] == ["botsaz.bak-2026-11-01-1000"] and (tmp_path / "opt" / "botsaz.bak-2026-11-03-1000").exists()

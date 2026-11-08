@@ -38,7 +38,9 @@ logger = _get_logger(__name__)
 
 APPS_ROOT = Path(os.getenv("HOSTING_APPS_DIR", "/opt/botsazvip/apps"))
 BACKUPS_ROOT = Path(os.getenv("HDG_BACKUPS_DIR", "/root"))
+OPT_ROOT = Path(os.getenv("HDG_OPT_DIR", "/opt"))
 _BACKUP_RE = re.compile(r"^botsaz-backup-(\d+)$")
+_OPT_BAK_RE = re.compile(r"^botsaz\.bak-(\d{4})-(\d{2})-(\d{2})-(\d{4})$")      # /opt/botsaz.bak-2026-11-07-2102
 CONTAINER_PREFIX = "bsapp-"
 DEFAULTS = {"hdg_enabled": "1", "hdg_cap_mb": "5120", "hdg_days": "7", "hdg_clean": "1", "hdg_action": "stop",
             "hdg_dirs": "downloads,download,uploads,upload,tmp,temp,cache,.cache,temporary",
@@ -177,14 +179,20 @@ def fmt_bytes(n: float) -> str:
 
 
 # ───────────────────────── پشتیبان‌هایِ قدیمیِ نصب ─────────────────────────
-def prune_backups(root: Path, keep: int, *, dry_run: bool = False) -> dict:
-    """پوشه‌هایِ دقیقاً به شکلِ botsaz-backup-<شماره> را مرتب می‌کند و همه جز `keep` تایِ آخر را پاک می‌کند. فایل/پوشهٔ دیگر هرگز."""
+def prune_backups(root: Path, keep: int, *, dry_run: bool = False, opt_style: bool = False) -> dict:
+    """پوشه‌هایِ دقیقاً به شکلِ botsaz-backup-<شماره> (یا با opt_style: botsaz.bak-YYYY-MM-DD-HHMM) را مرتب می‌کند و همه جز `keep`
+    تایِ آخر را پاک می‌کند. فایل/پوشهٔ دیگر هرگز."""
     found = []
     try:
         for p in root.iterdir():
-            m = _BACKUP_RE.match(p.name)
+            if opt_style:
+                m = _OPT_BAK_RE.match(p.name)
+                key = int("".join(m.groups())) if m else None
+            else:
+                m = _BACKUP_RE.match(p.name)
+                key = int(m.group(1)) if m else None
             if m and p.is_dir() and not p.is_symlink():
-                found.append((int(m.group(1)), p))
+                found.append((key, p))
     except OSError:
         return {"removed": [], "kept": [], "bytes": 0}
     found.sort(key=lambda t: t[0])
@@ -296,6 +304,9 @@ async def run_once(*, dry_run: bool = False, bot=None, run=None, now: float | No
     backups_res = None
     if cfg["enabled"] and cfg["backups"]:
         backups_res = await asyncio.to_thread(prune_backups, BACKUPS_ROOT, cfg["backups_keep"], dry_run=dry_run)
+        opt_res = await asyncio.to_thread(prune_backups, OPT_ROOT, cfg["backups_keep"], dry_run=dry_run, opt_style=True)
+        backups_res = {"removed": backups_res["removed"] + opt_res["removed"], "kept": backups_res["kept"] + opt_res["kept"],
+                       "bytes": backups_res["bytes"] + opt_res["bytes"]}
     try:
         du = shutil.disk_usage("/")
         disk = {"total": du.total, "used": du.used, "free": du.free}
