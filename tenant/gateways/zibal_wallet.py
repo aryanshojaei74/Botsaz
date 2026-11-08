@@ -624,8 +624,10 @@ async def zibal_admin_test(cb: CallbackQuery, bot: Bot):
             "اگر خطای دامنه/ارجاع‌دهنده دیدی، «🔗 لینک ریدایرکت» را تنظیم کن.\n\n"
             "⚠️ این فاکتورِ آزمایشی را پرداخت نکن.",
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="🔍 بازکردنِ صفحهٔ پرداختِ آزمایشی", url=test_url)]]),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔍 بازکردنِ صفحهٔ پرداختِ آزمایشی", url=test_url)],
+                [InlineKeyboardButton(text="🔗 لینک ریدایرکت", callback_data="gwr:menu:zibal", style=ButtonStyle.PRIMARY)],
+                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="set:zibal", style=ButtonStyle.DANGER)]]),
         )
     else:
         await cb.message.answer(
@@ -633,6 +635,8 @@ async def zibal_admin_test(cb: CallbackQuery, bot: Bot):
             f"جزئیات: <code>{result}</code>\n\n"
             "مرچنت‌ایدی و فعال‌بودنِ درگاه را بررسی کنید.",
             parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="set:zibal", style=ButtonStyle.DANGER)]]),
         )
 
 

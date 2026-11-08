@@ -56,3 +56,24 @@ async def test_startpay_for_auto_falls_back_to_direct_when_domain_is_not_ours(mo
     monkeypatch.setattr(GR, "_auto_page_ok", good)
     url2 = await GR.startpay_for(1, "zarinpal", "A0000000000000000000000000000000abcdef")
     assert url2.startswith("https://nexivopanel.shop/gw/zarinpal/start/")
+
+
+@pytest.mark.asyncio
+async def test_status_line_warns_when_auto_domain_is_not_ours(monkeypatch):
+    async def link(bot_id, gw):
+        return "auto"
+
+    async def base(bot_id, gw):
+        return "https://nexivopanel.shop"
+
+    async def bad(b, g):
+        return False
+    monkeypatch.setattr(GR, "get_link", link)
+    monkeypatch.setattr(GR, "_callback_base", base)
+    monkeypatch.setattr(GR, "_auto_page_ok", bad)
+    assert "pay.html" in await GR.status_line(1, "zarinpal")
+
+    async def good(b, g):
+        return True
+    monkeypatch.setattr(GR, "_auto_page_ok", good)
+    assert "✅ خودکار" in await GR.status_line(1, "zarinpal")

@@ -681,10 +681,15 @@ async def zarinpal_admin_test(cb: CallbackQuery, bot: Bot):
             "اگر خطای «دسترسی از این دامنه مجاز نمی‌باشد» دیدی، زرین‌پال "
             "ارجاع از داخلِ تلگرام را قبول نمی‌کند و باید «🔗 لینک ریدایرکت» "
             "را تنظیم کنی.\n\n"
-            "⚠️ این فاکتورِ آزمایشی را پرداخت نکن.",
+            + ("ℹ️ الان لینک <b>مستقیم به درگاه</b> است (ریدایرکتِ خودکار روی این دامنه کار نمی‌کند). "
+               "اگر زرین‌پال خطا داد، فایلِ <b>pay.html</b> را از «🔗 لینک ریدایرکت» بگیر، رویِ سایتِ خودت (همان دامنهٔ ثبت‌شده در زرین‌پال) "
+               "آپلود کن و آدرسش را ثبت کن.\n\n" if str(test_url).startswith("https://payment.zarinpal.com") else "")
+            + "⚠️ این فاکتورِ آزمایشی را پرداخت نکن.",
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="🔍 بازکردنِ صفحهٔ پرداختِ آزمایشی", url=test_url)]]),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔍 بازکردنِ صفحهٔ پرداختِ آزمایشی", url=test_url)],
+                [InlineKeyboardButton(text="🔗 لینک ریدایرکت", callback_data="gwr:menu:zarinpal", style=ButtonStyle.PRIMARY)],
+                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="set:zarinpal", style=ButtonStyle.DANGER)]]),
         )
     else:
         hint = (
@@ -705,6 +710,8 @@ async def zarinpal_admin_test(cb: CallbackQuery, bot: Bot):
             f"{_sip.ip_line(_ips, _ips_src)}\n\n"
             "مرچنت‌ایدی، فعال‌بودن درگاه، تطابق دامنهٔ ثبت‌شده و آی‌پی سرور را بررسی کنید.",
             parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="set:zarinpal", style=ButtonStyle.DANGER)]]),
         )
 
 

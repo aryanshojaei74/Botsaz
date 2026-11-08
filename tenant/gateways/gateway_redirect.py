@@ -159,6 +159,11 @@ async def status_line(bot_id: int, gw: str) -> str:
     if not tpl:
         return "لینک ریدایرکت: ⚠️ ثبت نشده (مستقیم به درگاه)"
     if tpl == "auto":
+        # PATCH_GW_AUTO_RUNTIME_FALLBACK_V1: «خودکار» فقط وقتی کار می‌کند که دامنهٔ callback به همین سرور برسد
+        base = await _callback_base(bot_id, gw)
+        if base and not await _auto_page_ok(base, gw):
+            return ("لینک ریدایرکت: ⛔ «خودکار» کار نمی‌کند — دامنهٔ callback به سرورِ ربات وصل نیست؛ "
+                    "فایلِ pay.html را رویِ سایتِ خودت بگذار و آدرسش را ثبت کن")
         return "لینک ریدایرکت: ✅ خودکار (رویِ دامنهٔ callback)"
     return f"لینک ریدایرکت: ✅ {tpl.replace('{ref}', '…')}"
 
