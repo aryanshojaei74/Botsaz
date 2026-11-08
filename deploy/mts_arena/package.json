@@ -1,0 +1,13 @@
+{
+  "name": "mts-arena",
+  "version": "2.2.0",
+  "private": true,
+  "description": "MTS Arena mini app and online game server",
+  "main": "mts-arena-server.js",
+  "scripts": {
+    "start": "node mts-arena-server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
