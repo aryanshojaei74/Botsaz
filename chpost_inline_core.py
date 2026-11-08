@@ -120,3 +120,18 @@ def ready_text(username: str, did: int) -> str:
             "💡 پیام از طرفِ <b>خودِ تو</b> (با برچسبِ «via ربات») می‌رود، پس ایموجی‌هایِ پرمیومِ اکانتِ تو سالم می‌ماند. "
             f"برایِ دیدنِ همهٔ پیش‌نویس‌هایت در هر چت فقط <code>@{u}</code> را بنویس.\n"
             "⚠️ ارسال‌کننده باید ادمینِ همان کانال باشد و اکانتِ خودت پرمیوم.")
+
+
+# === PATCH_CHPOST_COPY_V1 === ارسال با «کپیِ پیامِ اصلی» (copyMessage): تلگرام ایموجیِ پرمیوم را از متنی که ربات از نو می‌سازد حذف می‌کند
+# (حتی در حالتِ اینلاین؛ تستِ واقعی)، ولی پیامِ اصلیِ ادمین را با entityهایش (شاملِ custom_emoji) کپی می‌کند، مثلِ فوروارد.
+async def copy_post(bot, chat_id, data: dict, reply_markup=None) -> bool:
+    """پیامِ اصلیِ ادمین (chpost_src_chat/chpost_src_msg) را با دکمه‌ها به chat_id کپی می‌کند. True = موفق؛ False ⇒ مسیرِ قدیمی (ساختِ دوباره)."""
+    src_chat, src_msg = data.get("chpost_src_chat"), data.get("chpost_src_msg")
+    if not (src_chat and src_msg):
+        return False
+    try:
+        await bot.copy_message(chat_id=chat_id, from_chat_id=src_chat, message_id=int(src_msg), reply_markup=reply_markup)
+        return True
+    except Exception:      # noqa: BLE001
+        logger.warning("chpost: copyMessage ناموفق (مسیرِ قدیمی استفاده می‌شود)", exc_info=True)
+        return False

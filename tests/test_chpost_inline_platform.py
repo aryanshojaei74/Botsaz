@@ -47,9 +47,14 @@ async def env(monkeypatch):
     await engine.dispose()
 
 
+async def _noop(**kw):
+    return None
+
+
 class Msg:
     def __init__(self):
         self.sent = []
+        self.chat = NS(id=ADMIN)
 
     async def answer(self, text, **kw):
         self.sent.append((text, kw))
@@ -106,7 +111,7 @@ async def test_preview_in_inline_mode_only_offers_inline_send(env, monkeypatch):
     for mode, expect_send in (("inline", False), ("new", True)):
         st = St({"chpost_text": "x", "chpost_mode": mode})
         m = Msg()
-        await PC._chpost_preview(m, st, NS())
+        await PC._chpost_preview(m, st, NS(copy_message=_noop))
         kb = m.sent[-1][1]["reply_markup"]
         datas = [b.callback_data for r in kb.inline_keyboard for b in r]
         assert "chpost:inline" in datas

@@ -13780,10 +13780,12 @@ async def _chpost_preview(msg_target: Message, state: FSMContext, bot_id: int, b
     photo = data.get("chpost_photo")
     text = data.get("chpost_text") or ""
     await msg_target.answer("👀 <b>پیش‌نمایش پست</b>\n\nاین همون چیزیه که توی کانال دیده می‌شه:")
-    if photo:
-        await msg_target.answer_photo(photo, caption=text or None)
-    else:
-        await msg_target.answer(text or "—")
+    import chpost_inline_core as _ci
+    if not await _ci.copy_post(bot or msg_target.bot, msg_target.chat.id, data):   # PATCH_CHPOST_COPY_V1: پیش‌نمایشِ عینِ پستِ اصلی
+        if photo:
+            await msg_target.answer_photo(photo, caption=text or None)
+        else:
+            await msg_target.answer(text or "—")
     await msg_target.answer("👇 دکمه‌های پست:", reply_markup=preview_kb)
 
 
@@ -13800,7 +13802,8 @@ async def tadm_chpost_content_recv(msg: Message, state: FSMContext, bot: Bot):
         await msg.answer(txt, reply_markup=kb)
         return
     if msg.checklist:
-        await state.update_data(chpost_text=_checklist_to_text(msg.checklist), chpost_photo=None)
+        await state.update_data(chpost_text=_checklist_to_text(msg.checklist), chpost_photo=None,
+                                chpost_src_chat=None, chpost_src_msg=None)
         await msg.answer(
             "ℹ️ تلگرام فعلاً اجازه نمی‌دهد بات‌های معمولی (غیرِ متصل به Business) چک‌لیستِ "
             "تعاملی به کانال بفرستند؛ این یک محدودیتِ خودِ تلگرامه، نه چیزی که از داخل ربات "
@@ -13814,7 +13817,8 @@ async def tadm_chpost_content_recv(msg: Message, state: FSMContext, bot: Bot):
                 f"❌ کپشنِ عکس {plain_len} کاراکتره؛ تلگرام حداکثر ۱۰۲۴ کاراکتر برای کپشنِ عکس "
                 "اجازه می‌ده. کوتاه‌ترش کن و دوباره بفرست:")
             return
-        await state.update_data(chpost_photo=msg.photo[-1].file_id, chpost_text=msg.html_text)
+        await state.update_data(chpost_photo=msg.photo[-1].file_id, chpost_text=msg.html_text,
+                                chpost_src_chat=msg.chat.id, chpost_src_msg=msg.message_id)   # PATCH_CHPOST_COPY_V1
     elif msg.text:
         plain_len = len(msg.text or "")
         if plain_len > 4096:
@@ -13822,7 +13826,8 @@ async def tadm_chpost_content_recv(msg: Message, state: FSMContext, bot: Bot):
                 f"❌ متنِ پست {plain_len} کاراکتره؛ تلگرام حداکثر ۴۰۹۶ کاراکتر برای یک پیامِ متنی "
                 "اجازه می‌ده. کوتاه‌ترش کن و دوباره بفرست:")
             return
-        await state.update_data(chpost_text=msg.html_text, chpost_photo=None)
+        await state.update_data(chpost_text=msg.html_text, chpost_photo=None,
+                                chpost_src_chat=msg.chat.id, chpost_src_msg=msg.message_id)   # PATCH_CHPOST_COPY_V1
     else:
         await msg.answer(
             "فقط متن، عکس یا چک‌لیستِ تلگرام پشتیبانی می‌شود (ویدیو/فایل/صدا هنوز نه). "
@@ -14064,9 +14069,12 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return
     # به همهٔ مقصدهای انتخاب‌شده می‌فرسته؛ شکستِ یکی بقیه رو متوقف نمی‌کنه.
     ok_list, fail_list = [], []
+    import chpost_inline_core as _ci
     for _cid, _word in targets:
         try:
-            if photo:
+            if await _ci.copy_post(bot, _cid, data, kb):             # PATCH_CHPOST_COPY_V1: کپیِ پیامِ اصلی ⇒ ایموجیِ پرمیوم سالم
+                pass
+            elif photo:
                 await bot.send_photo(_cid, photo, caption=text or None, reply_markup=kb)
             else:
                 await bot.send_message(_cid, text, reply_markup=kb)
@@ -14161,7 +14169,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "490"
+BUILD_ID = "491"
 
 
 @tenant_router.message(Command("version"))
