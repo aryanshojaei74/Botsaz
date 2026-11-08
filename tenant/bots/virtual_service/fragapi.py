@@ -478,6 +478,8 @@ async def menu_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
                                           callback_data="fapi:prem", style=(ButtonStyle.SUCCESS if prem else ButtonStyle.PRIMARY))])
         rows.append([InlineKeyboardButton(text="🔄 به‌روزرسانی", callback_data="fapi:menu")])
         rows.append([InlineKeyboardButton(text="🗑 حذفِ توکن", callback_data="fapi:del", style=ButtonStyle.DANGER)])
+    if (await S._get_setting(bot_id, "fragment_old_hidden", "0")) == "1":
+        rows.append([InlineKeyboardButton(text="👁 نمایشِ دوبارهٔ «اتصال به فرگمنت» قدیمی", callback_data="fapi:fgshow")])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="smm:panels", style=ButtonStyle.DANGER)])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -608,6 +610,15 @@ def register(router) -> None:
         cur = (await premium_on(row.id)) if key == "fragapi_premium" else (await S._get_setting(row.id, key, "0")) == "1"
         await S._set_setting(row.id, key, "0" if cur else "1")
         await cb.answer(off_txt if cur else on_txt, show_alert=True)
+        await _show(cb, row.id)
+
+    @router.callback_query(F.data == "fapi:fgshow")
+    async def fapi_fgshow(cb: CallbackQuery, bot: Bot):
+        row = await S._tgt_owner_strict(cb, bot)
+        if not row:
+            return
+        await S._set_setting(row.id, "fragment_old_hidden", "0")
+        await cb.answer("دوباره در لیست نمایش داده می‌شود.", show_alert=True)
         await _show(cb, row.id)
 
     @router.callback_query(F.data == "fapi:auto")

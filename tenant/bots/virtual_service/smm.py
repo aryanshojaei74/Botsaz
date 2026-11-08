@@ -2606,8 +2606,10 @@ async def smm_panels_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
         # اومده، لازم نیست دوباره تبلیغِ ارتقا ببینه، پنل‌هاش دست‌نخورده می‌مونن.
         rows.append([InlineKeyboardButton(text="🔒 افزودنِ پنلِ بیشتر (فقط پلنِ حرفه‌ای)", callback_data="smm:panel:add")])
     # === PATCH_FRAGMENT_WALLET_V1 ===
-    rows.append([InlineKeyboardButton(text="🔗 اتصال به فرگمنت (استارزِ خودکار)",
-                                      callback_data="smm:fragment:menu")])
+    # PATCH_FRAGMENT_OLD_HIDE_V1: مالک می‌تواند اتصالِ قدیمیِ «فرگمنت (کیف‌پولِ ساخته‌شده)» را از لیست پنهان کند (ولت پاک نمی‌شود)
+    if (await _get_setting(bot_id, "fragment_old_hidden", "0")) != "1":
+        rows.append([InlineKeyboardButton(text="🔗 اتصال به فرگمنت (استارزِ خودکار)",
+                                          callback_data="smm:fragment:menu")])
     # === PATCH_FRAGAPI_V1 ===
     rows.append([InlineKeyboardButton(text="🔗 اتصال به Fragment API (استارز/پرمیومِ خودکار)",
                                       callback_data="fapi:menu")])

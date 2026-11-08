@@ -214,8 +214,34 @@ async def _detail_text_kb(wallet: FragmentWallet) -> tuple[str, InlineKeyboardMa
     rows.append([InlineKeyboardButton(text="📘 راهنمایِ کاملِ راه‌اندازی",
                                       callback_data="smm:fragment:help",
                                       style=ButtonStyle.PRIMARY)])
+    rows.append([InlineKeyboardButton(text="🙈 پنهان‌کردنِ این گزینه از لیست", callback_data="smm:fragment:hide")])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="smm:panels", style=ButtonStyle.DANGER)])
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@fragment_router.callback_query(F.data == "smm:fragment:hide")
+async def fragment_hide(cb: CallbackQuery, bot: Bot):
+    """PATCH_FRAGMENT_OLD_HIDE_V1 — «اتصالِ قدیمیِ فرگمنت» را از فهرستِ ارائه‌دهندگان پنهان می‌کند.
+    خودِ کیف‌پول/کلید پاک نمی‌شود (ممکن است موجودی داشته باشد)؛ فروشِ خودکارِ آن خاموش می‌شود. فقط مالک."""
+    row = await _owner_only_strict(cb, bot)
+    if not row:
+        return
+    from tenant import set_setting
+    async with Session() as s:
+        wallet = await s.scalar(select(FragmentWallet).where(FragmentWallet.bot_id == row.id))
+    if wallet and float(wallet.last_balance_ton or 0) > 0.05:
+        await cb.answer(f"این ولت {float(wallet.last_balance_ton):.2f} TON موجودی دارد؛ اول «💸 برداشتِ TON» را بزن، بعد پنهانش کن.",
+                        show_alert=True)
+        return
+    await set_setting(row.id, "fragment_auto", "0")
+    await set_setting(row.id, "fragment_old_hidden", "1")
+    await cb.answer("پنهان شد. (هر وقت خواستی از «Fragment API» دوباره نشانش بده.)", show_alert=True)
+    from tenant.bots.virtual_service.smm import smm_panels_content
+    text, kb = await smm_panels_content(row.id)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 @fragment_router.callback_query(F.data == "smm:fragment:menu")

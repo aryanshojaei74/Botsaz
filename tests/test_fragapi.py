@@ -333,3 +333,34 @@ def test_jwt_diag_flags_truncated_and_hides_token():
     bad = good[:-40]
     assert "ناقص" in FA.jwt_diag(bad) or "⚠️" in FA.jwt_diag(bad)
     assert "۳ بخش" in FA.jwt_diag("abc.def")
+
+
+@pytest.mark.asyncio
+async def test_old_fragment_button_can_be_hidden(monkeypatch):
+    store = {}
+
+    async def gs(bid, k, d=""):
+        return store.get(k, d)
+    monkeypatch.setattr(S, "_get_setting", gs)
+    monkeypatch.setattr(S, "has_feature", lambda *a, **k: True)
+
+    class Sess:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def scalars(self, q):
+            return NS(all=lambda: [])
+
+        async def get(self, *a):
+            return NS(plan="pro")
+    monkeypatch.setattr(S, "Session", lambda: Sess())
+    _, kb = await S.smm_panels_content(1)
+    datas = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert "smm:fragment:menu" in datas
+    store["fragment_old_hidden"] = "1"
+    _, kb2 = await S.smm_panels_content(1)
+    datas2 = [b.callback_data for r in kb2.inline_keyboard for b in r]
+    assert "smm:fragment:menu" not in datas2 and "fapi:menu" in datas2
