@@ -508,6 +508,14 @@ def register(router) -> None:
         except Exception:
             logger.debug("fragapi: حذفِ پیامِ توکن ممکن نشد", exc_info=True)
         if not looks_like_jwt(tok):
+            if re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", tok):
+                await msg.answer(
+                    "❌ این یک کلیدِ <b>UUID</b> است (مثلاً کلیدِ API سایتِ دیگری مثل TGTools)، نه توکنِ Fragment API.\n\n"
+                    "• اگر کلیدِ TGTools است: از «ارائه‌دهندگانِ من ← TGTools» واردش کن.\n"
+                    "• توکنِ Fragment API یک رشتهٔ بلند و سه‌بخشی است که با <code>eyJ</code> شروع می‌شود؛ از "
+                    "fragment-api.com/dashboard ← Fragment Connections یک اتصال بساز و «JWT Token» را کپی کن.",
+                    parse_mode="HTML")
+                return
             await msg.answer("❌ توکنِ نامعتبر (باید سه بخشِ نقطه‌دار مثلِ eyJ… باشد). دوباره از منو امتحان کن.")
             return
         try:

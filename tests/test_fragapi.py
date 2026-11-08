@@ -250,3 +250,7 @@ def test_extract_username_prefers_username_line_over_at_in_name():
     assert FA.extract_username(lbl) == "real_user"
     assert FA.extract_username("@abc_def (گیرندهٔ بدونِ استارت)") == "abc_def"
     assert FA.extract_username("👤 یوزرنیم: ندارد") is None
+
+
+def test_uuid_is_not_jwt():
+    assert not FA.looks_like_jwt("00000000-1111-2222-3333-444444444444")
