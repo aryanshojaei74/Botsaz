@@ -21163,7 +21163,6 @@ async def settings_kb() -> InlineKeyboardMarkup:
         [hx_button("🏠 مدیریت دکمه‌های صفحه اصلی", callback_data="adm:homebtns", style=ButtonStyle.DANGER)],
         # === PATCH_PLATFORM_ONBOARDING_V1 ===
         [hx_button("🎓 تجربهٔ ورودِ حرفه‌ای (قوانین + خوش‌آمد)", callback_data="pvso:menu")],
-        [hx_button("📢 ارسال پیام به کانال و گروه", callback_data="chpost:menu")],
 # === PATCH_MARKETPLACE_V1 ===
         [hx_button("🛍 فروشگاهِ پروژه‌ها (ربات آماده)", callback_data="mka:hub",
                    style=ButtonStyle.SUCCESS)],

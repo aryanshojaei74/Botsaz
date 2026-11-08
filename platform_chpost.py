@@ -22,7 +22,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
-    Message,
+    InlineQuery, Message, SwitchInlineQueryChosenChat,
 )
 
 from config import PLATFORM_ADMIN_ID
@@ -288,6 +288,9 @@ async def _chpost_menu() -> tuple[str, InlineKeyboardMarkup]:
         f"{ch_line}\n{gr_line}\n\n"
     )
     rows = []
+    # === PATCH_CHPOST_INLINE_V1 === ارسالِ اینلاین (بدونِ نیاز به اتصالِ کانال)
+    rows.append([hx_button("✨ ارسال اینلاین (ایموجیِ پرمیوم سالم)", callback_data="chpost:inline_start",
+                           style=ButtonStyle.SUCCESS)])
     if chat_id or grp_id:
         txt += (
             "با «ساخت پست جدید» یک پیامِ متنی یا عکس‌دار — با همون قالب‌بندیِ تلگرامِ خودت "
@@ -318,7 +321,7 @@ async def _chpost_menu() -> tuple[str, InlineKeyboardMarkup]:
     if grp_id:
         rows.append([hx_button("🗑 قطع اتصال گروه", callback_data="chpost:delgr",
                                           style=ButtonStyle.DANGER)])
-    rows.append([hx_button("⬅️ بازگشت به تنظیمات", callback_data="adm:settings",
+    rows.append([hx_button("⬅️ بازگشت", callback_data="adm:cat:support",
                                       style=ButtonStyle.DANGER)])
     return txt, InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -557,6 +560,78 @@ async def _chpost_home_link_buttons(bot: Bot, selected_keys: list[str],
         rows.append([InlineKeyboardButton(
             text=label, url=f"https://t.me/{me.username}?start=hcb-{url_key}", **kw)])
     return rows
+
+
+# ═══════════ PATCH_CHPOST_INLINE_V1 — ارسالِ اینلاین ═══════════
+# ربات ایموجیِ پرمیوم نمی‌تواند بفرستد؛ ولی پیامی که ادمینِ پرمیوم با @ربات از حالتِ اینلاین می‌فرستد از طرفِ «خودِ او»
+# می‌رود و ایموجی‌هایش سالم می‌ماند. پیش‌نویس در DB (bot_id=0) ذخیره می‌شود و با @ربات در هر چت/کانال انتخاب می‌شود.
+@chpost_router.callback_query(F.data == "chpost:inline_start")
+async def chpost_inline_start(cb: CallbackQuery, state: FSMContext):
+    if cb.from_user.id != PLATFORM_ADMIN_ID:
+        await cb.answer("فقط مدیر اصلی", show_alert=True)
+        return
+    await state.set_state(ChpostFSM.content)
+    await state.update_data(chpost_text=None, chpost_photo=None, chpost_buttons=[],
+                            chpost_home_keys=[], chpost_mode="inline",
+                            chpost_target_chat_id=None, chpost_target_msg_id=None)
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        logger.debug("chpost inline: حذفِ کیبورد ممکن نشد", exc_info=True)
+    await cb.message.answer(
+        "✨ <b>ارسالِ اینلاین</b>\n\nمتنِ پست را بفرست (یا یک عکس با کپشن) — با همان قالب‌بندی و ایموجی‌هایِ پرمیومِ خودت. "
+        "بعد می‌توانی دکمه اضافه کنی و در آخر «✨ ارسال اینلاین» را بزنی؛ کانال/گروهِ مقصد را در تلگرام خودت انتخاب می‌کنی "
+        "(نیازی به اتصالِ کانال نیست).",
+        reply_markup=await smart_cancel_kb(), parse_mode="HTML")
+    await cb.answer()
+
+
+@chpost_router.callback_query(F.data == "chpost:inline")
+async def chpost_inline(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    if cb.from_user.id != PLATFORM_ADMIN_ID:
+        await cb.answer("فقط مدیر اصلی", show_alert=True)
+        return
+    import chpost_inline_core as CI
+    data = await state.get_data()
+    if not (data.get("chpost_photo") or (data.get("chpost_text") or "").strip()):
+        await cb.answer("متن پست خالی است.", show_alert=True)
+        return
+    try:
+        me = await bot.get_me()
+        supports = bool(getattr(me, "supports_inline_queries", False))
+    except Exception:
+        logger.exception("chpost inline: get_me ناموفق بود")
+        me, supports = None, True
+    if not supports:
+        await cb.message.answer(CI.HINT_INLINE_OFF, parse_mode="HTML")
+        await cb.answer()
+        return
+    did = await CI.draft_save(0, cb.from_user.id, data)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text="📤 انتخابِ کانال/گروه و ارسال",
+        switch_inline_query_chosen_chat=SwitchInlineQueryChosenChat(
+            query=f"cp{did}", allow_user_chats=True, allow_bot_chats=False,
+            allow_group_chats=True, allow_channel_chats=True),
+        style=ButtonStyle.SUCCESS)]])
+    await cb.message.answer(CI.ready_text(getattr(me, "username", "") or "", did), reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
+
+
+@chpost_router.inline_query(F.query.regexp(r"^\s*(cp\d+)?\s*$"))
+async def chpost_inline_query(q: InlineQuery, bot: Bot):
+    """فهرستِ پیش‌نویس‌هایِ مدیرِ اصلی؛ برایِ بقیه نتیجهٔ خالی. فقط «خالی» یا «cp<id>» را می‌گیرد (کوئری «پنل» برایِ سلف‌ساز می‌ماند)."""
+    if q.from_user.id != PLATFORM_ADMIN_ID:
+        await q.answer([], cache_time=0, is_personal=True)
+        return
+    import chpost_inline_core as CI
+    drafts = await CI.drafts_for(0, q.from_user.id, q.query)
+
+    async def _kb(d):
+        buttons, _ids, home_keys = CI.draft_parts(d)
+        rows = list(_chpost_kb(buttons, for_channel=True).inline_keyboard) if buttons else []
+        rows += await _chpost_home_link_buttons(bot, home_keys, for_channel=True)
+        return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+    await q.answer(await CI.build_results(drafts, _kb), cache_time=0, is_personal=True)
 
 
 @chpost_router.callback_query(F.data == "chpost:new")
@@ -908,7 +983,11 @@ async def _chpost_preview(msg_target: Message, state: FSMContext, bot: Bot):
     if buttons:
         kb_rows.append([hx_button("🗑 حذف آخرین دکمهٔ لینک", callback_data="chpost:delbtn")])
     kb_rows.append([hx_button("🏠 دکمه‌های صفحهٔ اصلی", callback_data="chpost:pickhome")])
-    if mode == "attach":
+    if mode == "inline":
+        # === PATCH_CHPOST_INLINE_V1 === فقط ارسالِ اینلاین؛ مقصد را خودِ ادمین در تلگرام انتخاب می‌کند
+        kb_rows.append([hx_button("✨ ارسال اینلاین (ایموجیِ پرمیوم سالم می‌ماند)", callback_data="chpost:inline",
+                                  style=ButtonStyle.SUCCESS)])
+    elif mode == "attach":
         # === PATCH_CHPOST_ATTACH_TEST_SEND_V1 ===
         kb_rows.append([hx_button("📨 پیش‌نمایش/تستِ دکمه‌ها برایِ خودم",
                                              callback_data="chpost:attach_testsend")])
@@ -918,6 +997,8 @@ async def _chpost_preview(msg_target: Message, state: FSMContext, bot: Bot):
         # === PATCH_CHPOST_GROUP_SUPPORT_V1 ===
         _ch = await get_pset("chpost_chat_id", "")
         _gr = await get_pset("chpost_group_id", "")
+        kb_rows.append([hx_button("✨ ارسال اینلاین (ایموجیِ پرمیوم سالم می‌ماند)", callback_data="chpost:inline",
+                                  style=ButtonStyle.PRIMARY)])      # PATCH_CHPOST_INLINE_V1
         if _ch:
             kb_rows.append([hx_button("✅ ارسال به کانال", callback_data="chpost:send",
                                                  style=ButtonStyle.SUCCESS)])
@@ -942,7 +1023,8 @@ async def _chpost_preview(msg_target: Message, state: FSMContext, bot: Bot):
         return
     photo = data.get("chpost_photo")
     text = data.get("chpost_text") or ""
-    await msg_target.answer("👀 <b>پیش‌نمایش پست</b>\n\nاین همون چیزیه که توی کانال دیده می‌شه:")
+    await msg_target.answer("👀 <b>پیش‌نمایش پست</b>\n\nاین همون چیزیه که توی کانال دیده می‌شه:"
+                            if mode != "inline" else "👀 <b>پیش‌نمایش پست</b>\n\nاین همون چیزیه که با ارسالِ اینلاین فرستاده می‌شه:")
     if photo:
         await msg_target.answer_photo(photo, caption=text or None)
     else:

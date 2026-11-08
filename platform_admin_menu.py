@@ -76,11 +76,14 @@ ADMIN_SECTIONS: list[dict] = [
     {
         "key": "support",
         "title": "💬 پشتیبانی و اطلاع‌رسانی",
-        "desc": "تیکت‌ها، نظرات، پیام همگانی و تبلیغات",
+        "desc": "تیکت‌ها، نظرات، پیام همگانی، ارسال به کانال و تبلیغات",
         "items": [
             ("🎫 تیکت‌های کاربران",  "adm:tickets",   ButtonStyle.PRIMARY, False),
             ("📩 نظرات کاربران",     "adm:feedbacks", ButtonStyle.PRIMARY, False),
             ("📢 پیام همگانی",       "adm:broadcast", ButtonStyle.PRIMARY, True),
+            # === PATCH_CHPOST_INLINE_V1 === ارسال به کانال/گروهِ بات‌ساز + ارسالِ اینلاین (ایموجیِ پرمیومِ سالم)
+            ("📢 ارسال پیام به کانال و گروه", "chpost:menu", ButtonStyle.PRIMARY, True),
+            ("✨ ارسال اینلاین (ایموجیِ پرمیوم)", "chpost:inline_start", ButtonStyle.SUCCESS, True),
             ("📣 تبلیغ در ربات‌های رایگان", "adm:ad_free", ButtonStyle.PRIMARY, True),
             ("📢 اطلاع به صاحبانِ ربات‌هایِ «تبدیلِ فایل»",
              "adm:notify_filelink", ButtonStyle.PRIMARY, True),
