@@ -172,6 +172,8 @@ tenant_router.include_router(tx_channel_admin_router)
 # === PATCH_TRIAL_REPORT_CHANNEL_V1 ===
 from tenant.shared.trial_report_admin import trial_report_admin_router
 tenant_router.include_router(trial_report_admin_router)
+from tenant.shared.svc_delete_report import svc_delete_report_router   # گزارشِ حذفِ سرویس (VPN)
+tenant_router.include_router(svc_delete_report_router)
 # === PATCH_ESCROW_V1 ===
 from tenant.shared.escrow import escrow_router
 tenant_router.include_router(escrow_router)
@@ -7205,6 +7207,12 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         await state.clear()
         await _trrep_menu(_FakeCb(msg), bot, state)
         return
+    if (msg.text and msg.text.strip().startswith("🗑 گزارشِ حذفِ سرویس")
+            and await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id)):
+        from tenant.shared.svc_delete_report import sdrep_menu as _sdrep_menu
+        await state.clear()
+        await _sdrep_menu(_FakeCb(msg), bot, state)
+        return
 
     # === PATCH_KYC_KEYBOARD_MODE_V1 ===
     if (msg.text and msg.text.strip().startswith("🛡 احرازِ هویتِ کاربران")
@@ -7446,6 +7454,7 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
                 "tadm:chgbonus": ("tenant.shared.charge_bonus", "tadm_chgbonus"),   # PATCH_CHARGE_BONUS_V1
                 "tadm:firstbuy": ("tenant", "tadm_firstbuy"),
                 "set:trrep": ("tenant.shared.trial_report_admin", "trrep_menu"),   # PATCH_TRIAL_REPORT_KEYBOARD_MODE_V1
+                "set:sdrep": ("tenant.shared.svc_delete_report", "sdrep_menu"),
             }
             _mod_name, _fn_name = _fin_handlers.get(_fin_cbd, (None, None))
             if _mod_name:
@@ -12403,6 +12412,9 @@ async def _sec_finance_opts(bot_id: int, plan: str) -> list[tuple[str, str]]:
         _trch = await get_setting(bot_id, "trial_report_channel", "")
         opts.append(("🔑 کانالِ گزارشِ اکانتِ تست: " + ("✅ متصل" if _trch else "❌ خاموش"),
                      "set:trrep"))
+    if _bf == "vpn_sales":
+        _sdch = await get_setting(bot_id, "svc_del_channel", "")
+        opts.append(("🗑 گزارشِ حذفِ سرویس: " + ("✅ متصل" if _sdch else "❌ خاموش"), "set:sdrep"))
     # === PATCH_KYC_V1 ===
     _kyc_on = await get_setting(bot_id, "kyc_enabled", "0") == "1"
     if ok(Feature.KYC_VERIFY):       # PATCH_FREE_PLAN_SIMPLIFY_V1
@@ -14170,7 +14182,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "503"
+BUILD_ID = "504"
 
 
 @tenant_router.message(Command("version"))
@@ -32150,6 +32162,8 @@ async def set_trial_menu(cb: CallbackQuery, bot: Bot):
                               style=ButtonStyle.SUCCESS)],     # PATCH_TRIAL_STATUS_V1
         [InlineKeyboardButton(text="🔑 کانالِ گزارشِ اکانتِ تست", callback_data="set:trrep",
                               style=ButtonStyle.SUCCESS)],     # PATCH_TRIAL_REPORT_CHANNEL_V1
+        [InlineKeyboardButton(text="🗑 گزارشِ حذفِ سرویس", callback_data="set:sdrep",
+                              style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:settings", style=ButtonStyle.DANGER)],
     ])
     text = (

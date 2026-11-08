@@ -6820,6 +6820,47 @@ async def vpn_refund_decide(cb: CallbackQuery, bot: Bot):
         logger.exception("اطلاعِ تأییدِ برگشت وجه به کاربر")
 
 
+async def _report_service_deleted(bot: Bot, bot_id: int, aid: int, user) -> None:
+    """آخرین اطلاعاتِ سرویس را قبل از حذف به کانالِ گزارش می‌فرستد (فقط اگر مالک وصل کرده)؛ هیچ‌وقت جلوی حذف را نمی‌گیرد."""
+    try:
+        from tenant import get_setting as _gs
+        if not (await _gs(bot_id, "svc_del_channel", "") or (await _gs(bot_id, "svc_del_admins", "0")) == "1"):
+            return
+        async with Session() as s:
+            a = await s.get(PanelAccount, aid)
+            if not a:
+                return
+            panel = await _panel_for_account(s, bot_id, a)
+            title = _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb, _acc_hours(a))
+            vol = f"{a.volume_mb} مگابایت" if a.volume_mb else ("نامحدود" if (a.volume_gb or 0) == 0 else f"{a.volume_gb} گیگ")
+            dur = "بی‌انقضا" if not a.days else f"{a.days} روز"
+            pname = None
+            if panel:
+                try:
+                    from tenant.bots.vpn.vpn_admin import panel_label
+                    pname = await panel_label(bot_id, panel.panel_key)
+                except Exception:
+                    logger.exception("svc_delete_report: نامِ پنل خوانده نشد")
+                    pname = panel.panel_key
+        usage = None
+        if panel:
+            client = await _panel_client(panel)
+            try:
+                usage = await asyncio.wait_for(client.get_usage(a.email), timeout=8)
+            except Exception as e:
+                logger.info("svc_delete_report: مصرفِ زنده گرفته نشد (%s)", type(e).__name__)
+            finally:
+                try:
+                    await client.close()
+                except Exception:
+                    logger.debug("svc_delete_report: بستنِ کلاینت", exc_info=True)
+        from tenant.shared.svc_delete_report import report
+        await report(bot, bot_id, a, username=getattr(user, "username", None), full_name=getattr(user, "full_name", None),
+                     usage=usage, panel_name=pname, title=title, volume=vol, duration=dur)
+    except Exception:
+        logger.exception("svc_delete_report: گزارشِ حذفِ سرویس ناموفق بود (نادیده گرفته شد)")
+
+
 @vpn_user_router.callback_query(F.data.startswith("vdel:ok:"))
 async def vpn_del_ok(cb: CallbackQuery, bot: Bot):
     aid = int(cb.data.split(":")[2])
@@ -6836,6 +6877,7 @@ async def vpn_del_ok(cb: CallbackQuery, bot: Bot):
     # ردیفِ دیتابیس هم کاملاً حذف می‌شد. حالا فقط status روی «hidden»
     # می‌رود — خودِ سرویس رویِ پنل و دیتابیس دست‌نخورده می‌ماند، فقط از
     # لیستِ «📡 سرویس‌های من» (پایین‌تر در show_my_services) فیلتر می‌شود.
+    await _report_service_deleted(bot, bot_id, aid, cb.from_user)   # گزارشِ حذفِ سرویس (کانال/گروهِ مالک)
     async with Session() as s:
         a = await s.get(PanelAccount, aid)
         if a:
