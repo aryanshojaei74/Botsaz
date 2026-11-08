@@ -230,3 +230,65 @@ async def test_memo_prompt_message_is_deleted_and_invoice_shows_memo_state(env):
     await S.ton_nomemo(env.cb("ton:nomemo"), B(), env.state)                # «ممو ندارم» هم پیامِ درخواست را پاک می‌کند
     assert len(deleted) == 1
     assert "کامنت/ممو: ندارد" in env.answers[-1]
+
+
+# ───── PATCH_TON_TYPES_V1: نوعِ دریافتِ تون (ولت / تون بالانس / ولت تلگرام) + متنِ ثبتِ قابلِ‌تنظیم ─────
+@pytest.mark.asyncio
+async def test_chooser_is_shown_only_when_more_than_one_type_is_on(env):
+    shown = []
+
+    async def answer(t, **kw):
+        shown.append((t, kw.get("reply_markup")))
+    target = SimpleNamespace(answer=answer)
+    await S.show_ton_shop_to_user(object(), target, 5, env.state)
+    assert "خریدِ تون" in shown[-1][0] and "ton:q" in str(shown[-1][1])            # فقط ولت ⇒ مستقیم مقدار
+    assert (await env.state.get_data())["ton_type"] == "wallet"
+    env.settings["ton_type_balance"] = "1"
+    env.settings["ton_type_tgwallet"] = "1"
+    await S.show_ton_shop_to_user(object(), target, 5, env.state)
+    txt, kb = shown[-1]
+    assert "تون بالانس" in txt and "فعال‌سازی ولت تلگرام" in txt and "واریز به ولت شخصی" in txt
+    datas = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert {"ton:t:wallet", "ton:t:balance", "ton:t:tgwallet"} <= set(datas)
+
+
+@pytest.mark.asyncio
+async def test_balance_type_takes_account_not_address_and_goes_manual(env):
+    env.settings["ton_type_balance"] = "1"
+    await env.state.update_data(ton_type="balance")
+    bad = env.msg("not an account !!")
+    await S.ton_wallet_in(bad, object(), env.state)
+    assert "معتبر" in env.answers[-1] and await orders(env) == []
+    await S.ton_wallet_in(env.msg("@ali_real"), object(), env.state)
+    inv = env.answers[-1]
+    assert "فاکتورِ خرید" in inv and "[تون بالانس] @ali_real" in inv
+    await S.ton_pay(env.cb(), object(), env.state)
+    (o,) = await orders(env)
+    assert o.dest_label == "[تون بالانس] @ali_real" and o.status == "awaiting_admin" and not o.dest_memo
+    notice = env.notices[-1]
+    assert "نوعِ تحویل" in notice and "تون بالانس" in notice and "ton:retry" not in str(notice)
+    reg = [a for a in env.answers if "سفارشت ثبت شد" in a][-1]
+    assert "مقصد" in reg and "[تون بالانس] @ali_real" in reg
+
+
+@pytest.mark.asyncio
+async def test_self_button_uses_own_account(env):
+    env.settings["ton_type_tgwallet"] = "1"
+    await env.state.update_data(ton_type="tgwallet")
+    c = env.cb("ton:self")
+    c.from_user.username = "ali_user"
+    await S.ton_acct_self(c, object(), env.state)
+    assert "[ولت تلگرام] @ali_user" in env.answers[-1]
+
+
+def test_ton_registered_message_is_recognised_for_custom_text():
+    from tenant.shared.vs_msg_override import rule_keys
+    msg = "✅ <b>سفارشت ثبت شد</b>\n\n💎 مقدار: 2 TON\n🎯 آدرس: <code>UQ..</code>\n💰 پرداخت‌شده: 647,346 تومان\n🔖 کد پیگیری: <code>18871</code>"
+    assert rule_keys(msg) and rule_keys(msg)[0] == "order_placed_manual"
+
+
+def test_account_label_parsing():
+    assert S._ton_acct_label("balance", "@name_1") == "[تون بالانس] @name_1"
+    assert S._ton_acct_label("tgwallet", "https://t.me/someone") == "[ولت تلگرام] @someone"
+    assert S._ton_acct_label("balance", "123456789") == "[تون بالانس] ID 123456789"
+    assert S._ton_acct_label("balance", "no spaces allowed") is None and S._ton_acct_label("balance", "@ab") is None
