@@ -322,3 +322,14 @@ async def test_long_token_in_chunks_is_accumulated(monkeypatch):
     assert not saved
     m3 = M(parts[2]); await handlers["fapi_key_save"](m3, None, st)
     assert saved == {"fragapi_jwt": "ENC:" + FULL} and "ذخیره شد" in m3.out[0]
+
+
+def test_jwt_diag_flags_truncated_and_hides_token():
+    import base64, json
+    def b(x): return base64.urlsafe_b64encode(x).rstrip(b"=").decode()
+    good = b(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()) + "." + b(json.dumps({"exp": 4102444800}).encode()) + "." + b(b"x" * 256)
+    d = FA.jwt_diag(good)
+    assert "RS256" in d and "⚠️" not in d and good not in d
+    bad = good[:-40]
+    assert "ناقص" in FA.jwt_diag(bad) or "⚠️" in FA.jwt_diag(bad)
+    assert "۳ بخش" in FA.jwt_diag("abc.def")

@@ -216,6 +216,35 @@ def looks_like_jwt(tok: str) -> bool:
     return bool(re.fullmatch(r"[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", tok or ""))
 
 
+def jwt_diag(tok: str) -> str:
+    """خلاصهٔ ساختاریِ توکن برایِ عیب‌یابی (بدونِ نمایشِ خودِ توکن): طولِ بخش‌ها، الگوریتم، انقضا، سالم‌بودنِ امضا."""
+    try:
+        parts = (tok or "").split(".")
+        if len(parts) != 3:
+            return f"ساختار: {len(parts)} بخش (باید ۳ بخش باشد)"
+
+        def dec(x):
+            return base64.urlsafe_b64decode(x + "=" * (-len(x) % 4))
+        hdr = _json.loads(dec(parts[0]))
+        alg = str(hdr.get("alg", "?"))
+        out = [f"طولِ کل {len(tok):,} نویسه؛ بخش‌ها {len(parts[0]):,}/{len(parts[1]):,}/{len(parts[2]):,}؛ الگوریتم {alg}"]
+        try:
+            exp = int(_json.loads(dec(parts[1])).get("exp", 0))
+            if exp:
+                left = (exp - time.time()) / 86400
+                out.append(f"انقضا: {int(left)} روزِ دیگر" if left >= 0 else "انقضا: ⚠️ گذشته")
+        except Exception:
+            out.append("بدنهٔ توکن خوانده نشد (احتمالاً ناقص/به‌هم‌ریخته)")
+        sig = len(dec(parts[2]))
+        if alg == "RS256" and sig not in (256, 384, 512):
+            out.append(f"⚠️ امضا {sig} بایت است؛ برایِ RS256 باید ۲۵۶/۳۸۴/۵۱۲ باشد ⇒ توکن ناقص یا اضافه دارد")
+        elif alg == "HS256" and sig != 32:
+            out.append(f"⚠️ امضا {sig} بایت است؛ برایِ HS256 باید ۳۲ باشد ⇒ توکن ناقص یا اضافه دارد")
+        return "؛ ".join(out)
+    except Exception:
+        return "ساختارِ توکن قابلِ خواندن نبود (ناقص یا به‌هم‌ریخته)"
+
+
 def mask(tok: str) -> str:
     return (tok[:8] + "…" + tok[-6:]) if len(tok) > 20 else "…"
 
@@ -535,6 +564,7 @@ def register(router) -> None:
             await state.update_data(fapi_buf=buf)
             await msg.answer(
                 f"⚠️ تا اینجا ({len(buf):,} نویسه) Fragment API قبول نکرد: {e.message}\n"
+                f"🔎 {jwt_diag(buf)}\n\n"
                 "اگر توکن هنوز تمام نشده، تکهٔ بعدی را بفرست؛ وگرنه «لغو» را بزن و از اولِ توکن دوباره شروع کن.")
             return
         await state.clear()
