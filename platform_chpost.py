@@ -616,7 +616,12 @@ async def chpost_ua_menu(cb: CallbackQuery):
         return
     creds = await _ua_creds()
     status = "🟢 متصل" if creds else "🔴 متصل نیست"
+    who = (await get_pset("chpost_ua_who", "")) if creds else ""
     txt = _UA_INTRO + f"\n\nوضعیت: <b>{status}</b>"
+    if who:
+        txt += f"\nاکانت: <b>{_html.escape(who)}</b>"
+        if "پرمیوم نیست" in who:
+            txt += "\n❗️ <b>این اکانت پرمیوم نیست؛ ایموجیِ پرمیوم کار نمی‌کند.</b> اکانتِ پرمیوم را با «تعویضِ اکانت» وصل کن."
     try:
         await cb.message.edit_text(txt, reply_markup=_ua_menu_kb(bool(creds)), parse_mode="HTML")
     except Exception:
@@ -720,6 +725,7 @@ async def chpost_ua_session(msg: Message, state: FSMContext):
         await set_pset("chpost_ua_api_id", str(data["ua_api_id"]))
         await set_pset("chpost_ua_api_hash", encrypt_secret(data["ua_api_hash"]))
         await set_pset("chpost_ua_session", encrypt_secret(t))
+        await set_pset("chpost_ua_who", who)
     except Exception:
         logger.exception("chpost ua: ذخیرهٔ نشست ناموفق")
         await msg.answer("⛔️ ذخیرهٔ رمزنگاری‌شده ممکن نشد (WALLET_ENC_KEY در .env تنظیم است؟).")
@@ -900,6 +906,7 @@ async def _ua_finish(msg: Message, state: FSMContext, session: str):
         await msg.answer("⛔️ ذخیرهٔ رمزنگاری‌شده ممکن نشد (WALLET_ENC_KEY در .env تنظیم است؟).")
         return
     await state.clear()
+    await set_pset("chpost_ua_who", who)                                      # برایِ نمایش در منو (هشدارِ «پرمیوم نیست»)
     await msg.answer(f"✅ اکانت متصل شد: <b>{_html.escape(who)}</b>\nحالا هنگامِ ساختِ پست دکمهٔ «👤 ارسال با اکانتِ من» را می‌بینی.",
                      reply_markup=await smart_home_kb(msg.from_user.id, show_admin=True), parse_mode="HTML")
     txt, kb = await _chpost_menu()
@@ -911,7 +918,7 @@ async def chpost_ua_off(cb: CallbackQuery):
     if cb.from_user.id != PLATFORM_ADMIN_ID:
         await cb.answer("فقط مدیر اصلی", show_alert=True)
         return
-    for k in ("chpost_ua_api_id", "chpost_ua_api_hash", "chpost_ua_session"):
+    for k in ("chpost_ua_api_id", "chpost_ua_api_hash", "chpost_ua_session", "chpost_ua_who"):
         await set_pset(k, "")
     await cb.answer("اکانت قطع شد؛ نشست از سرور پاک شد.", show_alert=True)
     txt, kb = await _chpost_menu()
@@ -965,10 +972,13 @@ async def chpost_ua_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
             await cb.message.answer(f"❌ دریافتِ عکس از تلگرام ناموفق بود: {e}")
             return
     lines = []
+    diag = {}
     try:
         for cid, word in targets:
             try:
-                mid = await _ub.send_post(*creds, cid, plain, data.get("chpost_entities") or [], photo_path)
+                rep = {}
+                mid = await _ub.send_post(*creds, cid, plain, data.get("chpost_entities") or [], photo_path, report=rep)
+                diag = rep or diag
             except _ub.UserbotError as e:
                 lines.append(f"❌ {word}: {e}")
                 continue
@@ -987,7 +997,13 @@ async def chpost_ua_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
             except OSError:
                 pass
     await state.clear()
-    await cb.message.answer("\n".join(lines), reply_markup=await smart_home_kb(cb.from_user.id, show_admin=True))
+    d = _ub.diag_text(diag)
+    if d:
+        lines.append(d)
+    if any(len(b) > 2 and b[2] for b in buttons):               # دکمه‌ایی با آیکونِ پرمیوم
+        lines.append("ℹ️ آیکونِ پرمیومِ <b>دکمه‌ها</b> در کانال را تلگرام برایِ دکمه‌هایِ ربات نمایش نمی‌دهد (در چتِ خصوصی دیده می‌شود)؛ "
+                     "اگر می‌خواهی در کانال هم شکلک دیده شود، ایموجیِ معمولی را داخلِ متنِ دکمه بنویس.")
+    await cb.message.answer("\n".join(lines), reply_markup=await smart_home_kb(cb.from_user.id, show_admin=True), parse_mode="HTML")
     txt, kbm = await _chpost_menu()
     await cb.message.answer(txt, reply_markup=kbm)
 

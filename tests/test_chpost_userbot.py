@@ -186,7 +186,7 @@ async def _prep(monkeypatch, sent):
     async def hb(bot, keys, for_channel=True):
         return []
 
-    async def send_post(api_id, api_hash, session, chat, text, ents, photo_path=None):
+    async def send_post(api_id, api_hash, session, chat, text, ents, photo_path=None, report=None):
         sent.append((chat, text, ents, photo_path))
         return 900 + len(sent)
     monkeypatch.setattr(PC, "_ua_creds", creds)
@@ -308,7 +308,7 @@ async def test_connect_flow_stores_encrypted_secrets_and_deletes_messages(monkey
     await PC.chpost_ua_api_id(M("12345"), st)
     await PC.chpost_ua_api_hash(M("H" * 32), st)
     await PC.chpost_ua_session(M("SESSION"), st)
-    assert store == {"chpost_ua_api_id": "12345", "chpost_ua_api_hash": "ENC(" + "H" * 32 + ")", "chpost_ua_session": "ENC(SESSION)"}
+    assert store == {"chpost_ua_api_id": "12345", "chpost_ua_api_hash": "ENC(" + "H" * 32 + ")", "chpost_ua_session": "ENC(SESSION)", "chpost_ua_who": "Ali (@ali)"}
     assert "H" * 32 in deleted and "SESSION" in deleted                                    # پیام‌هایِ حساس پاک شدند
     assert st.d == {}
 
@@ -318,3 +318,57 @@ def test_account_never_leaks_in_menu_text():
     src = inspect.getsource(PC.chpost_ua_menu)
     assert "decrypt_secret" not in src and "chpost_ua_session\", \"\"))" not in src.replace(" ", "")      # فقط «متصل/نیست»؛ هرگز مقدارِ نشست
     assert "_ua_creds()" in src and "creds else" in src
+
+
+def test_diag_text_cases():
+    assert "هیچ ایموجیِ پرمیومی شناسایی نشد" in UB.diag_text({"sent_custom": 0, "got_custom": 0})
+    assert "✅ 3 ایموجیِ پرمیوم سالم" in UB.diag_text({"sent_custom": 3, "got_custom": 3})
+    np = UB.diag_text({"sent_custom": 2, "got_custom": 0, "premium": False, "me_name": "Ali (@ali)"})
+    assert "پرمیوم نیست" in np and "Ali (@ali)" in np and "2" in np
+    assert "فقط 1 تا رسید" in UB.diag_text({"sent_custom": 3, "got_custom": 1, "premium": True})
+    assert UB.diag_text(None) == "" and UB.diag_text({}) == ""
+
+
+@pytest.mark.asyncio
+async def test_send_post_report_counts_entities_the_server_accepted(fake):
+    class M:
+        id = 5
+        entities = []                                    # تلگرام ایموجیِ پرمیوم را نپذیرفت (اکانت پرمیوم نیست)
+    async def sm(target, text, **kw):
+        return M()
+    fake.send_message = sm
+    async def me():
+        return NS(first_name="Ali", last_name="", username="ali", premium=False)
+    fake.get_me = me
+    rep = {}
+    ents = [{"type": "custom_emoji", "offset": 0, "length": 2, "custom_emoji_id": "1"},
+            {"type": "custom_emoji", "offset": 3, "length": 2, "custom_emoji_id": "2"}, {"type": "bold", "offset": 0, "length": 1}]
+    await UB.send_post(1, "h", "s", "-1001", "ab cd", ents, report=rep)
+    assert rep["sent_custom"] == 2 and rep["got_custom"] == 0 and rep["premium"] is False and "Ali (@ali)" == rep["me_name"]
+    assert "پرمیوم نیست" in UB.diag_text(rep)
+    from telethon.tl import types as T
+
+    class M2:
+        id = 6
+        entities = [T.MessageEntityCustomEmoji(0, 2, 1), T.MessageEntityCustomEmoji(3, 2, 2)]
+    async def sm2(target, text, **kw):
+        return M2()
+    fake.send_message = sm2
+    rep2 = {}
+    await UB.send_post(1, "h", "s", "-1001", "ab cd", ents, report=rep2)
+    assert rep2["got_custom"] == 2 and "✅ 2" in UB.diag_text(rep2)
+
+
+@pytest.mark.asyncio
+async def test_ua_send_shows_diag_and_button_icon_note(monkeypatch):
+    sent = []
+    await _prep(monkeypatch, sent)
+
+    async def sp(api_id, api_hash, session, chat, text, ents, photo_path=None, report=None):
+        report.update(sent_custom=1, got_custom=0, premium=False, me_name="Bob")
+        return 900
+    monkeypatch.setattr(UB, "send_post", sp)
+    cb = Cb()
+    await PC.chpost_ua_send(cb, Bot(), St({**DATA, "chpost_buttons": [["دکمه", "https://example.com", "5368324170671202286"]]}))
+    out = cb.message.answers[0]
+    assert "پرمیوم نیست" in out and "Bob" in out and "آیکونِ پرمیومِ <b>دکمه‌ها</b>" in out

@@ -109,9 +109,32 @@ async def _resolve(c, chat_id):
         return await c.get_input_entity(cid)
 
 
+def _count_custom(entities) -> int:
+    return sum(1 for e in (entities or []) if type(e).__name__ == "MessageEntityCustomEmoji")
+
+
+def diag_text(rep: dict | None) -> str:
+    """گزارشِ ایموجیِ پرمیوم بعد از ارسال (از entityهایی که تلگرام واقعاً پذیرفته)."""
+    if not rep:
+        return ""
+    sent, got = rep.get("sent_custom", 0), rep.get("got_custom", 0)
+    who = rep.get("me_name") or "اکانت"
+    if sent == 0:
+        return ("ℹ️ در پیامی که برایِ ربات فرستادی <b>هیچ ایموجیِ پرمیومی شناسایی نشد</b> (فقط ایموجیِ معمولی). "
+                "ایموجی را از پنلِ ایموجیِ تلگرامِ اکانتِ پرمیومِ خودت وارد کن — کپی‌پیست از جایِ دیگر یا ایموجیِ ساده کافی نیست.")
+    if got >= sent:
+        return f"✅ {sent} ایموجیِ پرمیوم سالم رسید."
+    if rep.get("premium") is False:
+        return (f"⚠️ <b>اکانتِ متصل ({who}) پرمیوم نیست</b>؛ تلگرام {sent - got} ایموجیِ پرمیوم را حذف کرد. "
+                "اکانتِ پرمیومِ خودت را وصل کن («🔁 تعویضِ اکانت»).")
+    return (f"⚠️ از {sent} ایموجیِ پرمیوم فقط {got} تا رسید؛ احتمالاً بعضی از بسته‌هایی‌اند که اکانتِ متصل به آن‌ها دسترسی ندارد "
+            "یا اکانت پرمیوم نیست.")
+
+
 async def send_post(api_id: int, api_hash: str, session: str, chat_id, text: str, entities_raw: list[dict] | None,
-                    photo_path: str | None = None) -> int:
-    """پست را با اکانتِ مدیر در chat_id می‌فرستد؛ شناسهٔ پیام را برمی‌گرداند."""
+                    photo_path: str | None = None, report: dict | None = None) -> int:
+    """پست را با اکانتِ مدیر در chat_id می‌فرستد؛ شناسهٔ پیام را برمی‌گرداند.
+    report (اختیاری) پر می‌شود: sent_custom (ایموجیِ پرمیومِ فرستاده‌شده)، got_custom (آنچه تلگرام پذیرفت)، premium، me_name."""
     ents = entities_to_telethon(entities_raw)
     c = _client(api_id, api_hash, session)
     try:
@@ -126,6 +149,17 @@ async def send_post(api_id: int, api_hash: str, session: str, chat_id, text: str
             m = await c.send_file(target, photo_path, caption=text or None, formatting_entities=ents or None)
         else:
             m = await c.send_message(target, text, formatting_entities=ents or None, link_preview=False)
+        if report is not None:
+            report["sent_custom"] = _count_custom(ents)
+            report["got_custom"] = _count_custom(getattr(m, "entities", None))
+            try:
+                me = await c.get_me()
+                report["premium"] = getattr(me, "premium", None)
+                report["me_name"] = (f"{(me.first_name or '')} {(me.last_name or '')}".strip() or "—") + (f" (@{me.username})" if me.username else "")
+            except Exception:      # noqa: BLE001
+                logger.debug("chpost userbot: get_me برایِ گزارش ناموفق", exc_info=True)
+            logger.info("chpost userbot: ایموجیِ پرمیوم فرستاده=%s پذیرفته=%s premium=%s",
+                        report["sent_custom"], report["got_custom"], report.get("premium"))
         return int(m.id)
     except UserbotError:
         raise
