@@ -254,3 +254,71 @@ def test_extract_username_prefers_username_line_over_at_in_name():
 
 def test_uuid_is_not_jwt():
     assert not FA.looks_like_jwt("00000000-1111-2222-3333-444444444444")
+
+
+@pytest.mark.asyncio
+async def test_long_token_in_chunks_is_accumulated(monkeypatch):
+    import tenant, wallet_crypto
+    handlers = {}
+
+    class R:
+        def message(self, *a, **k):
+            return lambda f: handlers.setdefault(f.__name__, f)
+
+        def callback_query(self, *a, **k):
+            return lambda f: f
+    FA.register(R())
+
+    class St:
+        def __init__(self):
+            self.d = {}
+
+        async def get_data(self):
+            return dict(self.d)
+
+        async def update_data(self, **k):
+            self.d.update(k)
+
+        async def clear(self):
+            self.d = {}
+
+    class M:
+        def __init__(self, t):
+            self.text = t
+            self.from_user = NS(id=5)
+            self.out = []
+
+        async def delete(self):
+            pass
+
+        async def answer(self, t, **k):
+            self.out.append(t)
+
+    async def row(bot):
+        return NS(id=1, owner_id=5)
+    saved = {}
+
+    async def setset(bid, k, v):
+        saved[k] = v
+
+    async def wal(tok):
+        if tok != FULL:
+            raise FA.FragApiError("bad", 401)
+        return {}
+
+    async def show(*a, **k):
+        return None
+    FULL = "eyJ" + "a" * 5000 + "." + "b" * 3000 + "." + "c" * 600
+    monkeypatch.setattr(tenant, "get_bot_row", row)
+    monkeypatch.setattr(S, "_set_setting", setset)
+    monkeypatch.setattr(FA, "get_wallet", wal)
+    monkeypatch.setattr(FA, "_show", show)
+    monkeypatch.setattr(wallet_crypto, "encrypt_secret", lambda t: "ENC:" + t)
+    st = St()
+    parts = [FULL[:4000], FULL[4000:8000], FULL[8000:]]
+    m1 = M(parts[0]); await handlers["fapi_key_save"](m1, None, st)
+    assert "بخشی از توکن" in m1.out[0] and not saved
+    m2 = M(parts[1]); await handlers["fapi_key_save"](m2, None, st)
+    assert not saved
+    m3 = M(parts[2]); await handlers["fapi_key_save"](m3, None, st)
+    assert saved == {"fragapi_jwt": "ENC:" + FULL} and "ذخیره شد" in m3.out[0]

@@ -489,50 +489,84 @@ def register(router) -> None:
         await state.set_state(S.SmmFSM.fragapi_key_in)
         await cb.message.answer(
             "🔑 توکنِ JWTِ «Fragment Connection» را بفرست (از fragment-api.com/dashboard، دکمهٔ کپیِ کنارِ Token).\n"
+            "اگر توکن آن‌قدر بلند است که تلگرام تکه‌تکه‌اش می‌کند، همان تکه‌ها را به ترتیب بفرست (جمع می‌شوند)، یا آن را در یک فایلِ <code>.txt</code> بفرست.\n"
             "پیامِ تو بعد از دریافت پاک می‌شود و توکن رمزنگاری‌شده ذخیره می‌شود.\n\n"
             "⚠️ این توکن اجازهٔ خرج‌کردن از ولتِ متصل را می‌دهد؛ جایِ دیگری (گروه/چتِ پشتیبانی) نفرست و ولت را کم‌موجودی نگه دار.",
             parse_mode="HTML", reply_markup=await smart_cancel_kb(bot))
         await cb.answer()
 
-    @router.message(S.SmmFSM.fragapi_key_in, F.text)
-    async def fapi_key_save(msg: Message, bot: Bot, state: FSMContext):
+    _UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+    async def _take_token_piece(msg: Message, bot: Bot, state: FSMContext, piece: str) -> None:
+        """توکنِ JWT بلند است و تلگرام پیامِ بالای ۴۰۹۶ نویسه را تکه‌تکه می‌فرستد؛ تکه‌ها جمع می‌شوند تا توکنِ کامل شود."""
         from tenant import get_bot_row
         row = await get_bot_row(bot)
-        await state.clear()
         if not row or not _is_owner_uid(msg.from_user.id, row.owner_id):
+            await state.clear()
             return
-        tok = (msg.text or "").strip()
-        if tok.upper().startswith("JWT "):
-            tok = tok[4:].strip()
         try:
             await msg.delete()
         except Exception:
             logger.debug("fragapi: حذفِ پیامِ توکن ممکن نشد", exc_info=True)
-        if not looks_like_jwt(tok):
-            if re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", tok):
-                await msg.answer(
-                    "❌ این یک کلیدِ <b>UUID</b> است (مثلاً کلیدِ API سایتِ دیگری مثل TGTools)، نه توکنِ Fragment API.\n\n"
-                    "• اگر کلیدِ TGTools است: از «ارائه‌دهندگانِ من ← TGTools» واردش کن.\n"
-                    "• توکنِ Fragment API یک رشتهٔ بلند و سه‌بخشی است که با <code>eyJ</code> شروع می‌شود؛ از "
-                    "fragment-api.com/dashboard ← Fragment Connections یک اتصال بساز و «JWT Token» را کپی کن.",
-                    parse_mode="HTML")
-                return
-            await msg.answer("❌ توکنِ نامعتبر (باید سه بخشِ نقطه‌دار مثلِ eyJ… باشد). دوباره از منو امتحان کن.")
+        data = await state.get_data()
+        buf = (data.get("fapi_buf") or "") + re.sub(r"\s+", "", piece or "")
+        if buf.upper().startswith("JWT"):
+            buf = buf[3:].lstrip(":")
+        if _UUID_RE.fullmatch(buf):
+            await state.clear()
+            await msg.answer(
+                "❌ این یک کلیدِ <b>UUID</b> است (مثلاً کلیدِ API سایتِ دیگری مثل TGTools)، نه توکنِ Fragment API.\n\n"
+                "• اگر کلیدِ TGTools است: از «ارائه‌دهندگانِ من ← TGTools» واردش کن.\n"
+                "• توکنِ Fragment API یک رشتهٔ بلند و سه‌بخشی است که با <code>eyJ</code> شروع می‌شود؛ از "
+                "fragment-api.com/dashboard ← Fragment Connections یک اتصال بساز و «JWT Token» را کپی کن.",
+                parse_mode="HTML")
+            return
+        if len(buf) > 30000 or (len(buf) >= 20 and not buf.startswith("eyJ")):
+            await state.clear()
+            await msg.answer("❌ توکنِ نامعتبر (باید سه بخشِ نقطه‌دار باشد و با eyJ شروع شود). دوباره از منو امتحان کن.")
+            return
+        if not looks_like_jwt(buf):
+            await state.update_data(fapi_buf=buf)
+            await msg.answer(f"📥 بخشی از توکن دریافت شد ({len(buf):,} نویسه). اگر توکن چند تکه شده، تکهٔ بعدی را (به ترتیب) بفرست.")
             return
         try:
-            await get_wallet(tok)
+            await get_wallet(buf)
         except FragApiError as e:
-            await msg.answer(f"❌ Fragment API این توکن را قبول نکرد: {e.message}")
+            await state.update_data(fapi_buf=buf)
+            await msg.answer(
+                f"⚠️ تا اینجا ({len(buf):,} نویسه) Fragment API قبول نکرد: {e.message}\n"
+                "اگر توکن هنوز تمام نشده، تکهٔ بعدی را بفرست؛ وگرنه «لغو» را بزن و از اولِ توکن دوباره شروع کن.")
             return
+        await state.clear()
         try:
             from wallet_crypto import encrypt_secret
-            await S._set_setting(row.id, "fragapi_jwt", encrypt_secret(tok))
+            await S._set_setting(row.id, "fragapi_jwt", encrypt_secret(buf))
         except Exception:
             logger.exception("fragapi: ذخیرهٔ توکن ناموفق")
             await msg.answer("⛔️ ذخیرهٔ رمزنگاری‌شده ممکن نشد (WALLET_ENC_KEY در .env تنظیم است؟).")
             return
         await msg.answer("✅ توکن ذخیره شد و اتصال تأیید شد.")
         await _show(msg, row.id, edit=False)
+
+    @router.message(S.SmmFSM.fragapi_key_in, F.text)
+    async def fapi_key_save(msg: Message, bot: Bot, state: FSMContext):
+        await _take_token_piece(msg, bot, state, msg.text or "")
+
+    @router.message(S.SmmFSM.fragapi_key_in, F.document)
+    async def fapi_key_file(msg: Message, bot: Bot, state: FSMContext):
+        """راهِ ساده‌تر: توکن را در یک فایلِ متنی (.txt) بفرست."""
+        doc = msg.document
+        if doc.file_size and doc.file_size > 64 * 1024:
+            await msg.answer("❌ فایل خیلی بزرگ است (توکن باید یک فایلِ متنیِ کوچک باشد).")
+            return
+        try:
+            buf = await bot.download(doc.file_id)
+            txt = buf.read().decode("utf-8", "ignore")
+        except Exception:
+            logger.exception("fragapi: دانلودِ فایلِ توکن ناموفق")
+            await msg.answer("❌ فایل خوانده نشد؛ دوباره بفرست یا توکن را متنی بفرست.")
+            return
+        await _take_token_piece(msg, bot, state, txt)
 
     async def _flip(cb: CallbackQuery, bot: Bot, key: str, on_txt: str, off_txt: str):
         row = await S._tgt_owner_strict(cb, bot)
