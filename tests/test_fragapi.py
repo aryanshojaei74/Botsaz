@@ -243,3 +243,10 @@ def test_wired_into_smm():
     src = inspect.getsource(S)
     assert "fapi:menu" in src and "fapi:go:s:" in src and "fapi:go:p:" in src and "_fapi.register(smm_router)" in src
     assert "fragapi_key_in" in src
+
+
+def test_extract_username_prefers_username_line_over_at_in_name():
+    lbl = "Ali @shop_off\n🆔 آیدی: 5\n👤 یوزرنیم: @real_user"
+    assert FA.extract_username(lbl) == "real_user"
+    assert FA.extract_username("@abc_def (گیرندهٔ بدونِ استارت)") == "abc_def"
+    assert FA.extract_username("👤 یوزرنیم: ندارد") is None

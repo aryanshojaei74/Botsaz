@@ -80,8 +80,14 @@ class FragApiAmbiguous(Exception):
 
 
 # ───────────────────────── کلاینت ─────────────────────────
+_USERNAME_LINE_RE = re.compile(r"یوزرنیم\s*:\s*@([A-Za-z][A-Za-z0-9_]{2,31})")
+
+
 def extract_username(dest_label: str | None) -> str | None:
-    m = _USERNAME_RE.search(dest_label or "")
+    """یوزرنیمِ گیرنده. اول خطِ «یوزرنیم: @x»؛ وگرنه اولین @ در متن
+    (قبلاً اگر نامِ نمایشیِ مشتری خودش @ داشت، همان به‌جای یوزرنیمِ واقعی برداشته می‌شد)."""
+    txt = dest_label or ""
+    m = _USERNAME_LINE_RE.search(txt) or _USERNAME_RE.search(txt)
     return m.group(1) if m else None
 
 
@@ -244,7 +250,12 @@ async def auto_on(bot_id: int) -> bool:
 async def premium_on(bot_id: int) -> bool:
     S = _S()
     try:
-        return (await S._get_setting(bot_id, "fragapi_premium", "0")) == "1" and bool(await S._get_setting(bot_id, "fragapi_jwt", ""))
+        if not await S._get_setting(bot_id, "fragapi_jwt", ""):
+            return False
+        v = await S._get_setting(bot_id, "fragapi_premium", "")
+        if v == "":                      # هرگز دست نخورده ⇒ همان وضعیتِ «استارزِ خودکار» (پیش‌فرضِ منطقی)
+            return (await S._get_setting(bot_id, "fragapi_auto", "0")) == "1"
+        return v == "1"
     except Exception:
         logger.exception("fragapi: خواندنِ تنظیمات ناموفق (غیرفعال فرض شد)")
         return False
@@ -405,7 +416,7 @@ async def menu_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     S = _S()
     token = await token_of(bot_id)
     auto = (await S._get_setting(bot_id, "fragapi_auto", "0")) == "1"
-    prem = (await S._get_setting(bot_id, "fragapi_premium", "0")) == "1"
+    prem = await premium_on(bot_id)
     lines = ["🔗 <b>Fragment API — تحویلِ خودکارِ استارز و پرمیوم</b>\n"]
     if token:
         lines.append(f"🔑 توکن: <code>{mask(token)}</code> ✅")
@@ -521,7 +532,7 @@ def register(router) -> None:
         if not await token_of(row.id):
             await cb.answer("اول توکن را ثبت کن.", show_alert=True)
             return
-        cur = (await S._get_setting(row.id, key, "0")) == "1"
+        cur = (await premium_on(row.id)) if key == "fragapi_premium" else (await S._get_setting(row.id, key, "0")) == "1"
         await S._set_setting(row.id, key, "0" if cur else "1")
         await cb.answer(off_txt if cur else on_txt, show_alert=True)
         await _show(cb, row.id)
