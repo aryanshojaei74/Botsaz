@@ -31,6 +31,7 @@ dependency تازه (dnspython) اضافه کنیم.
 پارامترِ origin از تهِ callback_data رد می‌شه و تویِ کل مسیر (منو → تنظیم
 دامنه → بررسی → حذف) دست‌نخورده باهاش حمل می‌شه.
 """
+from tenant.shared.owner_access import is_owner_uid as _is_owner_uid
 import re
 import secrets
 
@@ -79,7 +80,7 @@ class CustomDomainFSM(StatesGroup):
 async def _owner(cb_or_msg, bot: Bot):
     from tenant import get_bot_row
     row = await get_bot_row(bot)
-    if not row or cb_or_msg.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(cb_or_msg.from_user.id, row.owner_id):
         if hasattr(cb_or_msg, "answer") and hasattr(cb_or_msg, "message"):
             await cb_or_msg.answer("فقط مالکِ ربات به این بخش دسترسی دارد.", show_alert=True)
         return None
@@ -279,7 +280,7 @@ async def cdom_set_save(msg: Message, bot: Bot, state: FSMContext):
         await state.clear()
         await msg.answer("لغو شد.")
         return
-    if not row or msg.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(msg.from_user.id, row.owner_id):
         await state.clear()
         return
     domain = raw.lower().removeprefix("https://").removeprefix("http://").rstrip("/")

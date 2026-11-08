@@ -16,6 +16,7 @@ ad_broadcast.py — پنلِ ادمین و اسکجولرِ ارسالِ زما�
 """
 from __future__ import annotations
 
+from tenant.shared.owner_access import is_owner_uid as _is_owner_uid
 import datetime
 import asyncio
 import html as _html
@@ -113,7 +114,7 @@ async def _is_owner(msg_or_cb, bot: Bot) -> BotRow | None:
     if not row:
         return None
     uid = msg_or_cb.from_user.id
-    if uid != row.owner_id:
+    if not _is_owner_uid(uid, row.owner_id):
         return None
     return row
 

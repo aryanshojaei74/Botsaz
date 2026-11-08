@@ -21,6 +21,7 @@ callbackها:
   ادمین: dga:*   — لیست بازی‌ها، افزودن، تنظیم جایزه‌ها، سهمیه، فعال/غیرفعال
   کاربر: dg:play:{game_id}
 """
+from tenant.shared.owner_access import is_owner_uid as _is_owner_uid
 import asyncio
 import json
 import secrets
@@ -593,7 +594,7 @@ async def dg_bind_in_group(msg: Message, bot: Bot):
         if not g:
             await msg.reply("❌ کد نامعتبر یا منقضی است.")
             return
-        if msg.from_user.id != row.owner_id:
+        if not _is_owner_uid(msg.from_user.id, row.owner_id):
             await msg.reply("❌ فقط مالکِ ربات می‌تواند گروه را وصل کند.")
             return
         g.group_chat_id = msg.chat.id

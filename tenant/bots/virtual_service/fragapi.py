@@ -19,6 +19,7 @@ fragapi.py — اتصال به «Fragment API» (https://fragment-api.com، سر
 """
 from __future__ import annotations
 
+from tenant.shared.owner_access import is_owner_uid as _is_owner_uid
 import asyncio
 import base64
 import json as _json
@@ -498,7 +499,7 @@ def register(router) -> None:
         from tenant import get_bot_row
         row = await get_bot_row(bot)
         await state.clear()
-        if not row or msg.from_user.id != row.owner_id:
+        if not row or not _is_owner_uid(msg.from_user.id, row.owner_id):
             return
         tok = (msg.text or "").strip()
         if tok.upper().startswith("JWT "):

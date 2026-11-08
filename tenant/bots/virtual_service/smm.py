@@ -22,6 +22,7 @@ smm.py — فیچر پنل SMM با API استاندارد برای ربات‌�
     smm_order_mode  = auto | manual     (پیش‌فرض manual)
 """
 
+from tenant.shared.owner_access import is_owner_uid as _is_owner_uid
 from datetime import datetime  # PATCH_VS_ONBOARDING_V1
 import json  # === PATCH_SMM_PLATFORM_RENAME_V1 ===
 import re  # === PATCH_STAR_REACTION_V1 ===
@@ -20431,7 +20432,7 @@ async def _tgt_owner_strict(cb: CallbackQuery, bot: Bot):
     row = await _owner(cb, bot)
     if not row:
         return None
-    if cb.from_user.id != row.owner_id:
+    if not _is_owner_uid(cb.from_user.id, row.owner_id):
         await cb.answer("⛔️ این بخش فقط برایِ مالکِ ربات است.", show_alert=True)
         return None
     return row
@@ -20466,7 +20467,7 @@ async def ssl_tgt_key_save(msg: Message, bot: Bot, state: FSMContext):
     from tenant.bots.virtual_service import tgtools_api as _tg
     row = await get_bot_row(bot)
     await state.clear()
-    if not row or msg.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(msg.from_user.id, row.owner_id):
         return
     key = (msg.text or "").strip()
     try:

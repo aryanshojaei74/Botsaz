@@ -17,6 +17,7 @@ tenant/partner_sales.py — فروشِ ربات توسطِ «ربات همکار
 """
 from __future__ import annotations
 
+from tenant.shared.owner_access import is_owner_uid as _is_owner_uid
 import datetime
 
 from aiogram import Bot, F, Router
@@ -1147,7 +1148,7 @@ async def ps_order_decide(cb: CallbackQuery, bot: Bot):
         await cb.answer()
         return
     row, pb = ok
-    if cb.from_user.id != row.owner_id:
+    if not _is_owner_uid(cb.from_user.id, row.owner_id):
         await cb.answer("دسترسی ندارید", show_alert=True)
         return
 

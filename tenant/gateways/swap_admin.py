@@ -12,6 +12,7 @@ circular import جلوگیری شود.
 منطقِ خالصِ دیتابیس/دفترداریِ شارژها (SwapCharge، mark_paid با آپدیتِ اتمیک)
 در tenant/swap_charges.py است؛ این فایل لایهٔ رابطِ تلگرام است.
 """
+from tenant.shared.owner_access import is_owner_uid as _is_owner_uid
 import asyncio
 
 from aiogram import Bot, F, Router
@@ -712,7 +713,7 @@ async def swap_edit_field_handler(msg: Message, state: FSMContext, bot: Bot):
     import swappay
     from tenant import get_bot_row, set_setting
     row = await get_bot_row(bot)
-    if not row or msg.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(msg.from_user.id, row.owner_id):
         await state.clear()
         await msg.answer("⛔️ این تنظیم فقط برایِ مالکِ ربات است.")  # PATCH_SWAP_AUTH_FALLBACK_V1: قبلاً بی‌صدا رد می‌شد
         return
@@ -834,7 +835,7 @@ async def _swap_admin_menu_msg(bot: Bot, bot_id: int, *, chat_id=None, msg_id=No
 async def set_swap_min(msg: Message, state: FSMContext, bot: Bot):
     from tenant import get_bot_row, set_setting, get_setting, smart_cancel_kb, fa_to_int
     row = await get_bot_row(bot)
-    if not row or msg.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(msg.from_user.id, row.owner_id):
         await state.clear()
         return
     val = fa_to_int(msg.text)
@@ -870,7 +871,7 @@ async def set_swap_min(msg: Message, state: FSMContext, bot: Bot):
 async def set_swap_max(msg: Message, state: FSMContext, bot: Bot):
     from tenant import get_bot_row, set_setting, fa_to_int
     row = await get_bot_row(bot)
-    if not row or msg.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(msg.from_user.id, row.owner_id):
         await state.clear()
         return
     val_str = (msg.text or "").strip()
@@ -908,7 +909,7 @@ def _swap_coins_admin_kb(selected: set) -> InlineKeyboardMarkup:
 async def swap_coins_cancel(cb: CallbackQuery, state: FSMContext, bot: Bot):
     from tenant import get_bot_row
     row = await get_bot_row(bot)
-    if not row or cb.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(cb.from_user.id, row.owner_id):
         await cb.answer()
         return
     await state.clear()
@@ -921,7 +922,7 @@ async def swap_coins_cancel(cb: CallbackQuery, state: FSMContext, bot: Bot):
 async def swap_coins_toggle(cb: CallbackQuery, state: FSMContext, bot: Bot):
     from tenant import get_bot_row
     row = await get_bot_row(bot)
-    if not row or cb.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(cb.from_user.id, row.owner_id):
         await cb.answer()
         return
     coin = cb.data.split(":")[1]
@@ -940,7 +941,7 @@ async def swap_coins_toggle(cb: CallbackQuery, state: FSMContext, bot: Bot):
 async def swap_coins_done(cb: CallbackQuery, state: FSMContext, bot: Bot):
     from tenant import get_bot_row, set_setting
     row = await get_bot_row(bot)
-    if not row or cb.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(cb.from_user.id, row.owner_id):
         await cb.answer()
         return
     data = await state.get_data()

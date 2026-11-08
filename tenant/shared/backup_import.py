@@ -7,6 +7,7 @@ backup_import.py — بک‌آپ‌گیری و ایمپورتِ کانفیگ‌�
 استفاده می‌کند — بررسی شد که آن استیت فقط همین‌جا استفاده می‌شد.
 """
 from __future__ import annotations
+from tenant.shared.owner_access import is_owner_uid as _is_owner_uid
 from html import escape as _esc_html
 
 import io
@@ -138,7 +139,7 @@ async def tadm_cfg_import_file(msg: Message, bot: Bot, state: FSMContext):
     """دریافت فایل .botsaz و ایمپورت کانفیگ‌ها به انبار."""
     from tenant import get_bot_row, smart_cancel_kb, cfg_manage_kb, _sanitize_category
     row = await get_bot_row(bot)
-    if not row or msg.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(msg.from_user.id, row.owner_id):
         return
 
     doc = msg.document

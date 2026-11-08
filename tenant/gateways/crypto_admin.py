@@ -12,6 +12,7 @@ tenant/swap_admin.py): Router و StatesGroup مستقلِ خودش را دارد
 get_rate_smart، verify_ipn_signature) در tenant/crypto_pay.py است.
 صفحهٔ پرداختِ WebApp (create_draft/ChargeDraft) در tenant/payment_page.py است.
 """
+from tenant.shared.owner_access import is_owner_uid as _is_owner_uid
 from aiogram.enums import ButtonStyle  # PATCH_TENANT_ADMIN_COLORS_V1
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
@@ -499,7 +500,7 @@ async def set_crypto_api(msg: Message, state: FSMContext, bot: Bot):
     from tenant.gateways import crypto_pay
     from tenant import get_bot_row, smart_cancel_kb
     row = await get_bot_row(bot)
-    if not row or msg.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(msg.from_user.id, row.owner_id):
         await state.clear()
         return
     api_key = msg.text.strip()
@@ -537,7 +538,7 @@ async def set_crypto_api(msg: Message, state: FSMContext, bot: Bot):
 async def set_crypto_ipn(msg: Message, state: FSMContext, bot: Bot):
     from tenant import get_bot_row, smart_cancel_kb
     row = await get_bot_row(bot)
-    if not row or msg.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(msg.from_user.id, row.owner_id):
         await state.clear()
         return
     ipn_secret = msg.text.strip()
@@ -557,7 +558,7 @@ async def set_crypto_ipn(msg: Message, state: FSMContext, bot: Bot):
 async def set_crypto_rate(msg: Message, state: FSMContext, bot: Bot):
     from tenant import get_bot_row, set_setting
     row = await get_bot_row(bot)
-    if not row or msg.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(msg.from_user.id, row.owner_id):
         await state.clear()
         return
     raw = msg.text.strip().replace(",", "").replace("٬", "")

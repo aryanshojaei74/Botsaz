@@ -14,6 +14,7 @@ TENANT_OWNED_MODELS + فرزندانشان). اگر سرور از بین رفت�
 """
 from __future__ import annotations
 
+from tenant.shared.owner_access import is_owner_uid as _is_owner_uid
 import base64
 import datetime as _dt
 import gzip
@@ -285,7 +286,7 @@ async def restore_full_backup(bot_id: int, data: dict) -> dict:
 async def _owner_row(cb_or_msg, bot: Bot):
     from tenant import get_bot_row
     row = await get_bot_row(bot)
-    if not row or cb_or_msg.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(cb_or_msg.from_user.id, row.owner_id):
         # PATCH_BACKUP_FEEDBACK_V1: به ادمینِ غیرمالک بگو چرا (قبلاً دکمه بی‌صدا کار نمی‌کرد)
         try:
             if row and hasattr(cb_or_msg, "answer") and getattr(cb_or_msg, "data", None):

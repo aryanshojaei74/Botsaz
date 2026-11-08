@@ -19,6 +19,7 @@ panel_pk/category_pk سرویس‌ها) دوباره‌نگاشت می‌شن، 
 """
 from __future__ import annotations
 
+from tenant.shared.owner_access import is_owner_uid as _is_owner_uid
 import json
 from datetime import datetime, date
 from decimal import Decimal
@@ -137,7 +138,7 @@ async def _summary_line(data: dict) -> str:
 async def backup_export(cb: CallbackQuery, bot: Bot):
     from tenant import get_bot_row, is_owner_or_admin
     row = await get_bot_row(bot)
-    if not row or cb.from_user.id != row.owner_id:  # فایل شاملِ رمز/کلیدِ پنل‌هاست — فقط مالک
+    if not row or not _is_owner_uid(cb.from_user.id, row.owner_id):  # فایل شاملِ رمز/کلیدِ پنل‌هاست — فقط مالک
         await cb.answer()
         return
     await cb.answer("⏳ در حالِ ساختنِ بک‌آپ...")
@@ -161,7 +162,7 @@ async def backup_export(cb: CallbackQuery, bot: Bot):
 async def backup_import_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from tenant import get_bot_row, is_owner_or_admin
     row = await get_bot_row(bot)
-    if not row or cb.from_user.id != row.owner_id:  # فایل شاملِ رمز/کلیدِ پنل‌هاست — فقط مالک
+    if not row or not _is_owner_uid(cb.from_user.id, row.owner_id):  # فایل شاملِ رمز/کلیدِ پنل‌هاست — فقط مالک
         await cb.answer()
         return
     await state.set_state(BackupFSM.waiting_file)
@@ -181,7 +182,7 @@ async def backup_import_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
 async def backup_import_file(msg: Message, bot: Bot, state: FSMContext):
     from tenant import get_bot_row, is_owner_or_admin
     row = await get_bot_row(bot)
-    if not row or msg.from_user.id != row.owner_id:  # فقط مالک
+    if not row or not _is_owner_uid(msg.from_user.id, row.owner_id):  # فقط مالک
         await state.clear()
         return
     doc: Document = msg.document
@@ -239,7 +240,7 @@ async def backup_import_confirm(cb: CallbackQuery, bot: Bot, state: FSMContext):
     row = await get_bot_row(bot)
     data = (await state.get_data()).get("backup_payload")
     await state.clear()
-    if not row or cb.from_user.id != row.owner_id or not data:  # فقط مالک
+    if not row or not _is_owner_uid(cb.from_user.id, row.owner_id) or not data:  # فقط مالک
         await cb.answer()
         return
     await cb.answer("⏳ در حالِ بازگردانی...")
@@ -377,7 +378,7 @@ async def _backup_menu_content(bot_id: int | None = None) -> tuple[str, InlineKe
 async def backup_menu(cb: CallbackQuery, bot: Bot):
     from tenant import get_bot_row, is_owner_or_admin
     row = await get_bot_row(bot)
-    if not row or cb.from_user.id != row.owner_id:  # فایل شاملِ رمز/کلیدِ پنل‌هاست — فقط مالک
+    if not row or not _is_owner_uid(cb.from_user.id, row.owner_id):  # فایل شاملِ رمز/کلیدِ پنل‌هاست — فقط مالک
         # PATCH_BACKUP_FEEDBACK_V1: ادمینِ غیرمالک دلیلش را ببیند (قبلاً بی‌صدا بود: «بک‌آپ کار نمی‌کند»)
         await cb.answer("🔒 بک‌آپ فقط برایِ مالکِ ربات در دسترس است.", show_alert=True)
         if row and not getattr(cb, "data", ""):          # حالتِ کیبوردی (_FakeCb): answer بی‌اثر است ⇒ پیام بفرست

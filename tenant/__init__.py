@@ -17,6 +17,7 @@
   • لینک دعوت با ترکینگ و پاداش
   • سیستم نظر و امتیازدهی
 """
+from tenant.shared.owner_access import is_owner_uid as _is_owner_uid
 import asyncio
 import io
 import json
@@ -7173,7 +7174,7 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
                                          _sk("home", row.field))
                        if (_it := _kb_item(_kind, msg.text.strip())) is not None), None)
         if _sitem is not None:
-            if _sitem.owner_only and msg.from_user.id != row.owner_id:
+            if _sitem.owner_only and not _is_owner_uid(msg.from_user.id, row.owner_id):
                 await msg.answer(_sitem.deny_text)
                 return
             if await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id):
@@ -14169,7 +14170,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "501"
+BUILD_ID = "502"
 
 
 @tenant_router.message(Command("version"))
@@ -33025,7 +33026,7 @@ def _admsup_detail_text(a: "AdminSupport") -> str:
 @tenant_router.callback_query(F.data.startswith("admsup:view:"))
 async def admsup_view(cb: CallbackQuery, bot: Bot):
     row = await _owner_ok(cb, bot)
-    if not row or cb.from_user.id != row.owner_id:  # فقط مالک می‌تواند دسترسی‌ها را مدیریت کند
+    if not row or not _is_owner_uid(cb.from_user.id, row.owner_id):  # فقط مالک می‌تواند دسترسی‌ها را مدیریت کند
         await cb.answer("⛔️ فقط مالکِ ربات می‌تواند این بخش را مدیریت کند.", show_alert=True)
         return
     aid = int(cb.data.split(":")[2])
@@ -33041,7 +33042,7 @@ async def admsup_view(cb: CallbackQuery, bot: Bot):
 @tenant_router.callback_query(F.data.startswith("admsup:full:"))
 async def admsup_grant_full(cb: CallbackQuery, bot: Bot):
     row = await _owner_ok(cb, bot)
-    if not row or cb.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(cb.from_user.id, row.owner_id):
         await cb.answer("⛔️ فقط مالکِ ربات می‌تواند این بخش را مدیریت کند.", show_alert=True)
         return
     aid = int(cb.data.split(":")[2])
@@ -33062,7 +33063,7 @@ async def admsup_grant_full(cb: CallbackQuery, bot: Bot):
 @tenant_router.callback_query(F.data.startswith("admsup:addonly:"))
 async def admsup_toggle_addonly(cb: CallbackQuery, bot: Bot):
     row = await _owner_ok(cb, bot)
-    if not row or cb.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(cb.from_user.id, row.owner_id):
         await cb.answer("⛔️ فقط مالکِ ربات می‌تواند این بخش را مدیریت کند.", show_alert=True)
         return
     try:
@@ -33091,7 +33092,7 @@ async def admsup_toggle_addonly(cb: CallbackQuery, bot: Bot):
 @tenant_router.callback_query(F.data.startswith("admsup:perm:"))
 async def admsup_toggle_perm(cb: CallbackQuery, bot: Bot):
     row = await _owner_ok(cb, bot)
-    if not row or cb.from_user.id != row.owner_id:
+    if not row or not _is_owner_uid(cb.from_user.id, row.owner_id):
         await cb.answer("⛔️ فقط مالکِ ربات می‌تواند این بخش را مدیریت کند.", show_alert=True)
         return
     _, _, aid_s, key = cb.data.split(":")
@@ -33163,7 +33164,7 @@ async def admsup_save(msg: Message, state: FSMContext, bot: Bot):
 @tenant_router.callback_query(F.data.startswith("admsup:del:"))
 async def admsup_del(cb: CallbackQuery, bot: Bot):
     row = await get_bot_row(bot)
-    if not row or cb.from_user.id != row.owner_id:  # فقط مالک می‌تواند ادمین حذف کند
+    if not row or not _is_owner_uid(cb.from_user.id, row.owner_id):  # فقط مالک می‌تواند ادمین حذف کند
         await cb.answer()
         return
     aid = int(cb.data.split(":")[2])
