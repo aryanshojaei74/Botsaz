@@ -3120,6 +3120,22 @@ class HostedApp(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
+class ChpostDraft(Base):
+    """=== PATCH_CHPOST_INLINE_V1 === پیش‌نویسِ پستِ کانال برایِ «ارسالِ اینلاین»: ادمین پست را در ربات می‌سازد،
+    با @ربات در کانال/گروه انتخاب و ارسال می‌کند (پیام از طرفِ خودِ او می‌رود ⇒ ایموجیِ پرمیومِ او سالم می‌ماند)."""
+    __tablename__ = "chpost_drafts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(Integer, index=True)
+    user_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    text: Mapped[str | None] = mapped_column(Text)               # HTML (شاملِ <tg-emoji>)
+    photo: Mapped[str | None] = mapped_column(String(300))
+    buttons: Mapped[str | None] = mapped_column(Text)            # JSON: دکمه‌هایِ لینکی
+    button_ids: Mapped[str | None] = mapped_column(Text)         # JSON: دکمه‌هایِ ربات
+    guide_keys: Mapped[str | None] = mapped_column(Text)         # JSON
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class HostedAppEnv(Base):
     """متغیرهایِ محیطیِ یک اپ (همان چیزی که در .env می‌نشیند).
 

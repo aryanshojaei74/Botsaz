@@ -49,6 +49,8 @@ from aiogram.types import (
     BufferedInputFile, CallbackQuery, CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup,
     KeyboardButton, Message, ReactionTypeEmoji, ReplyKeyboardMarkup, ReplyKeyboardRemove,
     WebAppInfo, PreCheckoutQuery,
+    InlineQuery, InlineQueryResultArticle, InlineQueryResultCachedPhoto, InputTextMessageContent,
+    SwitchInlineQueryChosenChat,
 )
 from sqlalchemy import func, select
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -13751,6 +13753,9 @@ async def _chpost_preview(msg_target: Message, state: FSMContext, bot_id: int, b
         # defined که با «خطایی پیش‌بینی‌نشده رخ داد» به کاربر نمایش داده می‌شد.
         _ch = await get_setting(bot_id, "chpost_chat_id", "")
         _gr = await get_setting(bot_id, "chpost_group_id", "")
+        # === PATCH_CHPOST_INLINE_V1 === ارسالِ اینلاین: پیام از طرفِ خودِ ادمین می‌رود ⇒ ایموجیِ پرمیوم به‌هم نمی‌ریزد
+        kb_rows.append([InlineKeyboardButton(text="✨ ارسال اینلاین (ایموجیِ پرمیوم سالم می‌ماند)",
+                                             callback_data="tadm:chpost:inline", style=ButtonStyle.PRIMARY)])
         if _ch:
             kb_rows.append([InlineKeyboardButton(text="✅ ارسال به کانال",
                                                  callback_data="tadm:chpost:send",
@@ -14085,8 +14090,145 @@ async def tadm_chpost_send(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await cb.answer()
 
 
+# ─────────────── ارسالِ اینلاینِ پست (PATCH_CHPOST_INLINE_V1) ───────────────
+# رباتِ معمولی نمی‌تواند ایموجیِ پرمیوم بفرستد (تلگرام آن‌ها را به ایموجیِ ساده تبدیل می‌کند)، ولی پیامی که کاربرِ پرمیوم با
+# @ربات از طریقِ حالتِ اینلاین می‌فرستد از طرفِ «خودِ او» می‌رود. پس: پست در ربات ساخته و به‌صورتِ پیش‌نویس ذخیره می‌شود،
+# ادمین با دکمهٔ «انتخابِ کانال/گروه» (switch_inline_query) مقصد را انتخاب می‌کند و نتیجه را از فهرستِ @ربات می‌فرستد.
+# شرط: حالتِ اینلاینِ ربات در @BotFather (/setinline) روشن باشد (از API قابلِ‌روشن‌کردن نیست).
+_CHPOST_DRAFT_KEEP = 20
+_CHPOST_DRAFT_TTL_DAYS = 14
+
+
+async def _chpost_draft_save(bot_id: int, uid: int, data: dict) -> int:
+    import json as _json
+    from models import ChpostDraft
+    async with Session() as s:
+        d = ChpostDraft(bot_id=bot_id, user_telegram_id=uid, text=data.get("chpost_text") or "",
+                        photo=data.get("chpost_photo"),
+                        buttons=_json.dumps(data.get("chpost_buttons") or [], ensure_ascii=False),
+                        button_ids=_json.dumps(data.get("chpost_button_ids") or []),
+                        guide_keys=_json.dumps(list(data.get("chpost_guide_keys") or [])))
+        s.add(d)
+        await s.commit()
+        did = d.id
+        # فقط آخرین چند پیش‌نویسِ هر ادمین (و حداکثر ۱۴ روز) نگه داشته می‌شود
+        old = (await s.scalars(select(ChpostDraft).where(
+            ChpostDraft.bot_id == bot_id, ChpostDraft.user_telegram_id == uid)
+            .order_by(ChpostDraft.id.desc()).offset(_CHPOST_DRAFT_KEEP))).all()
+        import datetime as _dtm
+        cutoff = _dtm.datetime.utcnow() - _dtm.timedelta(days=_CHPOST_DRAFT_TTL_DAYS)
+        stale = (await s.scalars(select(ChpostDraft).where(
+            ChpostDraft.bot_id == bot_id, ChpostDraft.created_at < cutoff))).all()
+        for o in {x.id: x for x in [*old, *stale]}.values():
+            await s.delete(o)
+        await s.commit()
+    return did
+
+
+async def _chpost_drafts_for(bot_id: int, uid: int, query: str) -> list:
+    """query = «cp12» ⇒ همان پیش‌نویس؛ خالی/هر چیزِ دیگر ⇒ ۱۰ پیش‌نویسِ آخرِ همین ادمین."""
+    import re as _re
+    from models import ChpostDraft
+    m = _re.fullmatch(r"cp(\d+)", (query or "").strip().lower())
+    async with Session() as s:
+        if m:
+            d = await s.get(ChpostDraft, int(m.group(1)))
+            return [d] if d and d.bot_id == bot_id and d.user_telegram_id == uid else []
+        return list((await s.scalars(select(ChpostDraft).where(
+            ChpostDraft.bot_id == bot_id, ChpostDraft.user_telegram_id == uid)
+            .order_by(ChpostDraft.id.desc()).limit(10))).all())
+
+
+def _chpost_plain_title(html_text: str, photo: bool) -> str:
+    import html as _h
+    import re as _re
+    t = _re.sub(r"<[^>]+>", "", html_text or "")
+    t = " ".join(_h.unescape(t).split())
+    return (("🖼 " if photo else "") + (t[:48] or "پست")).strip()
+
+
+@tenant_router.callback_query(F.data == "tadm:chpost:inline")
+async def tadm_chpost_inline(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _gate(cb, bot, Feature.CHANNEL_POST)
+    if not row:
+        return
+    data = await state.get_data()
+    if not (data.get("chpost_photo") or (data.get("chpost_text") or "").strip()):
+        await cb.answer("متن پست خالی است.", show_alert=True)
+        return
+    try:
+        me = await bot.get_me()
+        supports = bool(getattr(me, "supports_inline_queries", False))
+    except Exception:
+        logger.exception("chpost inline: get_me ناموفق بود")
+        supports = True                      # مطمئن نیستیم؛ مانعِ کار نشویم
+    if not supports:
+        await cb.message.answer(
+            "⚠️ <b>حالتِ اینلاینِ رباتت خاموش است.</b>\n\n"
+            "یک‌بار این‌ها را در @BotFather بزن:\n"
+            "۱) <code>/setinline</code>\n۲) رباتت را انتخاب کن\n۳) یک متنِ راهنما بفرست (مثلاً: <code>پست</code>)\n\n"
+            "بعد همین دکمه را دوباره بزن. (این تنظیم فقط از BotFather ممکن است؛ از داخلِ ربات قابلِ‌روشن‌شدن نیست.)",
+            parse_mode="HTML")
+        await cb.answer()
+        return
+    did = await _chpost_draft_save(row.id, cb.from_user.id, data)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 انتخابِ کانال/گروه و ارسال",
+                              switch_inline_query_chosen_chat=SwitchInlineQueryChosenChat(
+                                  query=f"cp{did}", allow_user_chats=True, allow_bot_chats=False,
+                                  allow_group_chats=True, allow_channel_chats=True),
+                              style=ButtonStyle.SUCCESS)],
+    ])
+    await cb.message.answer(
+        "✨ <b>ارسالِ اینلاین آماده است</b>\n\n"
+        "۱) روی دکمهٔ زیر بزن و کانال/گروهِ مقصد را انتخاب کن.\n"
+        "۲) در همان چت پیامی مثلِ <code>@" + (getattr(me, "username", "") or "ربات") + " cp" + str(did) + "</code> باز می‌شود؛ "
+        "روی نتیجه (پیش‌نمایشِ پست) بزن تا ارسال شود.\n\n"
+        "💡 پیام از طرفِ <b>خودِ تو</b> (با برچسبِ «via ربات») می‌رود، پس ایموجی‌هایِ پرمیومِ اکانتِ تو سالم می‌ماند. "
+        "برایِ دیدنِ همهٔ پیش‌نویس‌هایت در هر چت فقط <code>@" + (getattr(me, "username", "") or "ربات") + "</code> را بنویس.\n"
+        "⚠️ ارسال کننده باید ادمینِ همان کانال باشد و اکانتِ خودت پرمیوم.",
+        reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
+
+
+@tenant_router.inline_query()
+async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
+    """فهرستِ پیش‌نویس‌هایِ پستِ ادمین؛ فقط مالک/ادمینِ همین ربات (برایِ بقیه نتیجهٔ خالی). PATCH_CHPOST_INLINE_V1"""
+    row = await get_bot_row(bot)
+    if (not row or not has_feature(row.plan, Feature.CHANNEL_POST)
+            or not await is_owner_or_admin(row.id, q.from_user.id, row.owner_id)):
+        await q.answer([], cache_time=0, is_personal=True)
+        return
+    drafts = await _chpost_drafts_for(row.id, q.from_user.id, q.query)
+    results = []
+    for d in drafts:
+        import json as _json
+        try:
+            buttons = _json.loads(d.buttons or "[]")
+            button_ids = _json.loads(d.button_ids or "[]")
+            guide_keys = _json.loads(d.guide_keys or "[]")
+        except ValueError:
+            buttons, button_ids, guide_keys = [], [], []
+        try:
+            kb = await _chpost_full_kb(row.id, buttons, button_ids, bot=bot, guide_keys=guide_keys)
+        except Exception:
+            logger.exception("chpost inline: ساختِ دکمه‌ها ناموفق (بدونِ دکمه)")
+            kb = None
+        title = _chpost_plain_title(d.text or "", bool(d.photo))
+        rid = f"cp{d.id}"
+        if d.photo:
+            results.append(InlineQueryResultCachedPhoto(id=rid, photo_file_id=d.photo, title=title,
+                                                        caption=(d.text or None), parse_mode="HTML", reply_markup=kb))
+        else:
+            results.append(InlineQueryResultArticle(
+                id=rid, title=title, description="پیش‌نویسِ پستِ کانال — برایِ ارسال بزن",
+                input_message_content=InputTextMessageContent(message_text=d.text or "—", parse_mode="HTML"),
+                reply_markup=kb))
+    await q.answer(results, cache_time=0, is_personal=True)
+
+
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "488"
+BUILD_ID = "489"
 
 
 @tenant_router.message(Command("version"))
