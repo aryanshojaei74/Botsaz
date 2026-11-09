@@ -123,6 +123,8 @@ from platform_hdg import hdg_router   # PATCH_HOSTING_DISK_GUARD_V1
 router.include_router(hdg_router)
 from platform_cmds_menu import cmds_router   # دستورهایِ مدیر به‌صورتِ دکمه
 router.include_router(cmds_router)
+from platform_vip_addall import vip_addall_router   # افزودنِ روز به همهٔ سرورهایِ فعال‌سازی
+router.include_router(vip_addall_router)
 
 # === PATCH_SPLIT_TICKETS_V1 ===
 # بخشِ «سیستم تیکت» به فایلِ مستقلِ platform_tickets.py منتقل شد. علاوه بر
@@ -15507,6 +15509,8 @@ async def _vip_screen() -> tuple[str, InlineKeyboardMarkup]:
                    style=ButtonStyle.PRIMARY)],
         # === PATCH_VIP_USERS_V1 ===
         [hx_button("👥 کاربران و ربات‌ها", callback_data="vip:users:0",
+                   style=ButtonStyle.SUCCESS)],
+        [hx_button("➕ افزودنِ روز به همهٔ سرورها", callback_data="vip:addall",
                    style=ButtonStyle.SUCCESS)],
         # === PATCH_SUPPORT_V1 ===
         [hx_button("💬 پشتیبانی مینی‌اپ", callback_data="vip:set:support",
