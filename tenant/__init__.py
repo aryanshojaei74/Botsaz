@@ -14182,7 +14182,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "516"
+BUILD_ID = "517"
 
 
 @tenant_router.message(Command("version"))
@@ -20590,13 +20590,19 @@ async def _thb_smm_service_list(cb: CallbackQuery, mb_id: int, bot_id: int,
     if not svcs:
         await cb.answer("سرویسی تو این دسته نیست.", show_alert=True)
         return
-    kb_rows = [[InlineKeyboardButton(text=f"🛰 {sv.name[:45]}", callback_data=f"thb:picksmmproduct:{mb_id}:{sv.id}", style=ButtonStyle.PRIMARY)]
+    kb_rows = []
+    if cat_mode == "one" and cat_pk is not None:
+        kb_rows.append([InlineKeyboardButton(
+            text=f"📂 اتصالِ کلِ این دسته به دکمه ({len(svcs)} سرویس)",
+            callback_data=f"thb:pickcat:{mb_id}:{cat_pk}", style=ButtonStyle.SUCCESS)])
+    kb_rows += [[InlineKeyboardButton(text=f"🛰 {sv.name[:45]}", callback_data=f"thb:picksmmproduct:{mb_id}:{sv.id}", style=ButtonStyle.PRIMARY)]
               for sv in svcs[:80]]  # سقفِ نمایش تا کیبورد خیلی بزرگ نشه
     kb_rows.append([InlineKeyboardButton(text="⬅️ بازگشت به دسته‌ها", callback_data=f"thb:setsmmproduct:{mb_id}", style=ButtonStyle.DANGER)])
     text = (
         "🎯 <b>اتصالِ مستقیم به یک سرویس</b>\n\n"
         "هر سرویسی که انتخاب کنی، با زدنِ این دکمه کاربر مستقیم می‌ره سراغِ خریدِ همون سرویس "
-        "(بدونِ نیازِ به مرورِ کلِ خدماتِ مجازی):"
+        "(بدونِ نیازِ به مرورِ کلِ خدماتِ مجازی).\n"
+        "یا با «📂 اتصالِ کلِ این دسته»، همهٔ سرویس‌هایِ این دسته به کاربر نشان داده می‌شود:"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
     try:
@@ -20623,6 +20629,33 @@ async def thb_setsmmproduct_pick(cb: CallbackQuery, bot: Bot):
         mb.config = json.dumps({"smm_service_id": svc_id}, ensure_ascii=False)
         await s.commit()
     await cb.answer("✅ سرویس به این دکمه وصل شد.")
+    is_disabled = mb_id in await _disabled_btn_ids(row.id)
+    try:
+        await cb.message.edit_text(_thb_text(mb, is_disabled), reply_markup=_thb_kb(mb, is_disabled),
+                                   parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(_thb_text(mb, is_disabled), reply_markup=_thb_kb(mb, is_disabled),
+                                parse_mode="HTML")
+
+
+@tenant_router.callback_query(F.data.startswith("thb:pickcat:"))
+async def thb_setsmmcategory_pick(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    parts = cb.data.split(":")
+    mb_id, cat_id = int(parts[2]), int(parts[3])
+    from models import SmmCategory
+    async with Session() as s:
+        mb = await s.get(MainButton, mb_id)
+        cat = await s.get(SmmCategory, cat_id)
+        if not mb or mb.bot_id != row.id or not cat or cat.bot_id != row.id:
+            await cb.answer("یافت نشد", show_alert=True)
+            return
+        mb.action = "smm_direct_product"
+        mb.config = json.dumps({"smm_category_ids": [cat.id]}, ensure_ascii=False)
+        await s.commit()
+    await cb.answer("✅ کلِ دسته به این دکمه وصل شد.")
     is_disabled = mb_id in await _disabled_btn_ids(row.id)
     try:
         await cb.message.edit_text(_thb_text(mb, is_disabled), reply_markup=_thb_kb(mb, is_disabled),
