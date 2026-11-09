@@ -256,6 +256,7 @@ class SmmFSM(StatesGroup):
     man_price = State()
     man_min = State()
     man_max = State()
+    man_desc = State()          # PATCH_SMM_MANUAL_PRO_V1: توضیحاتِ اختیاریِ سرویسِ دستی
     user_link = State()         # کاربر لینک می‌فرستد
     user_link_confirm = State() # پیش‌نمایش و تأیید لینک
     user_qty = State()          # کاربر تعداد می‌فرستد
@@ -4966,6 +4967,7 @@ async def _smm_myservice_detail_content(bot_id: int, svc_id: int, back_page: int
         f"📝 توضیحات: {'ثبت شده ✅' if v.description else 'ثبت نشده'}",
         f"💵 قیمت: {pr}",
         f"🔢 حداقل/حداکثر: {v.min_qty} / {v.max_qty}",
+        f"🚦 وضعیت: {'فعال ✅' if v.is_active else 'غیرفعال ⏸'}",
     ]
     rows = [
         [InlineKeyboardButton(text="✏️ تغییرِ اسم", callback_data=f"smm:rename:{v.id}:{back_page}")],
@@ -4989,8 +4991,17 @@ async def _smm_myservice_detail_content(bot_id: int, svc_id: int, back_page: int
             InlineKeyboardButton(text="🔼 بالاتر", callback_data=f"smm:svc:moveup:{v.id}:{back_page}"),
             InlineKeyboardButton(text="🔽 پایین‌تر", callback_data=f"smm:svc:movedown:{v.id}:{back_page}"),
         ])
+    # === PATCH_SMM_MANUAL_PRO_V1 ===
+    rows.append([InlineKeyboardButton(text="🔌 اتصال به دکمهٔ منو / زیرمنو", callback_data=f"smm:manbtn:{v.id}", style=ButtonStyle.SUCCESS)])
+    rows.append([InlineKeyboardButton(
+        text=("⏸ غیرفعال کن (مخفی از مشتری)" if v.is_active else "▶️ فعال کن"),
+        callback_data=f"smm:svctoggle:{v.id}:{back_page}")])
+    if v.is_manual:
+        rows.append([InlineKeyboardButton(text=f"📥 ورودیِ سفارش: {_INPUT_KIND_FA[_input_kind(v)]}", callback_data=f"smm:inpk:{v.id}")])
+        rows.append([InlineKeyboardButton(text="🧬 ساختِ کپی از این سرویس", callback_data=f"smm:mandup:{v.id}")])
     rows.append([InlineKeyboardButton(text="🗑 حذفِ سرویس", callback_data=f"smm:del:{v.id}:{back_page}", style=ButtonStyle.DANGER)])
-    rows.append([InlineKeyboardButton(text="⬅️ بازگشت به لیست", callback_data=f"smm:myservices:{back_page}", style=ButtonStyle.DANGER)])
+    _back_cb = "smm:manlist" if back_page == 0 else f"smm:myservices:{back_page}"
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت به لیست", callback_data=_back_cb, style=ButtonStyle.DANGER)])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -5231,7 +5242,10 @@ async def smm_del_service(cb: CallbackQuery, bot: Bot):
     await cb.answer("حذف شد")
     # === PATCH_SMM_MYSERVICES_REDESIGN_V1 ===
     # چون خودِ سرویس حذف شد، برگردیم به لیست، نه صفحه‌ی جزئیاتِ خودش
-    text, kb = await _smm_myservices_list_content(row.id, back_page)
+    if back_page == 0:   # PATCH_SMM_MANUAL_PRO_V1: از لیستِ سرویس‌هایِ دستی آمده
+        text, kb = await manual_services_content(row.id)
+    else:
+        text, kb = await _smm_myservices_list_content(row.id, back_page)
     try:
         await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except Exception:
@@ -8868,7 +8882,9 @@ async def manual_services_content(bot_id: int) -> tuple[str, InlineKeyboardMarku
                     "⚠️ برای فعال‌سازی این بخش، یک‌بار ربات را ری‌استارت کن.\n"
                     "اگر باز هم خطا دیدی به پشتیبانی اطلاع بده."), kb
     lines = ["✍️ <b>سرویس‌های دستی</b>\n",
-             "این سرویس‌ها به پنل وصل نیستند؛ سفارششان همیشه برای تأیید ادمین می‌آید.\n"]
+             "این سرویس‌ها به پنل وصل نیستند؛ سفارششان همیشه برای تأیید ادمین می‌آید.\n",
+             "برای هر سرویس با «⚙️ مدیریت» می‌توانی اسم، قیمت، توضیحات، دسته، حداقل/حداکثر، "
+             "ورودی سفارش، فعال/غیرفعال و اتصال به دکمهٔ منو را تنظیم کنی.\n"]
     # دستهٔ انتخاب‌شدهٔ هر سرویس دستی را برای نمایش و مدیریت شفاف می‌خوانیم.
     _manual_cat_ids = {v.category_pk for v in svcs if getattr(v, "category_pk", None)}
     _manual_cat_names = {}
@@ -8878,7 +8894,7 @@ async def manual_services_content(bot_id: int) -> tuple[str, InlineKeyboardMarku
                 SmmCategory.bot_id == bot_id,
                 SmmCategory.id.in_(_manual_cat_ids)))).all()
         _manual_cat_names = {c.id: c.name for c in _manual_cats}
-    rows = [[InlineKeyboardButton(text="➕ ساخت سرویس دستی", callback_data="smm:mannew")]]
+    rows = [[InlineKeyboardButton(text="➕ ساخت سرویس دستی", callback_data="smm:mannew", style=ButtonStyle.SUCCESS)]]
     rows.append([InlineKeyboardButton(
         text="📂 دسته‌بندی سرویس‌های مستقل",
         callback_data="smm:manualcat:menu")])
@@ -8908,7 +8924,8 @@ async def manual_services_content(bot_id: int) -> tuple[str, InlineKeyboardMarku
         lines.append(f"• [{smm_api.service_type_label(smm_api.detect_service_type(v.name, v.category or ''))}] "
                      f"{v.name[:38]} — {pr}\n  📂 دسته‌بندی: {_cat_name} · ورودیِ سفارش: {_INPUT_KIND_FA[_input_kind(v)]}")
         rows.append([
-            InlineKeyboardButton(text=f"🗑 حذف: {v.name[:22]}", callback_data=f"smm:mandel:{v.id}"),
+            InlineKeyboardButton(text=f"⚙️ مدیریت: {v.name[:20]}", callback_data=f"smm:svcview:{v.id}:0", style=ButtonStyle.PRIMARY),
+            InlineKeyboardButton(text="🗑 حذف", callback_data=f"smm:mandel:{v.id}"),
             # === PATCH_SMM_MANUAL_CATEGORY_FLOW_V2 ===
             InlineKeyboardButton(text="📂 دسته‌بندی", callback_data=f"smm:svc:cat:{v.id}:man"),
         ])
@@ -8994,7 +9011,7 @@ async def smm_mannew_boost(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await state.update_data(force_platform="boost", force_type="boost")
     from tenant import smart_cancel_kb
     await cb.message.answer(
-        "🚀 <b>ساختِ سرویسِ دستیِ بوست</b> — گام ۱ از ۴\n\n"
+        "🚀 <b>ساختِ سرویسِ دستیِ بوست</b> — گام ۱ از ۵\n\n"
         "نام سرویس را بفرست (مثلاً: <code>بوست کانال ۱ الی ۵ روزه</code>).",
         parse_mode="HTML", reply_markup=await smart_cancel_kb(bot))
     await cb.answer()
@@ -9051,7 +9068,7 @@ async def smm_mannew(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await state.set_state(SmmFSM.man_name)
     from tenant import smart_cancel_kb
     await cb.message.answer(
-        "✍️ <b>ساخت سرویس دستی</b> — گام ۱ از ۴\n\n"
+        "✍️ <b>ساخت سرویس دستی</b> — گام ۱ از ۵\n\n"
         "نام سرویس را بفرست.\n"
         "💡 برای دسته‌بندی خودکار، بهتر است نام شامل پلتفرم و نوع باشد؛ "
         "مثال: <code>افزایش ممبر تلگرام کیفیت بالا</code> یا "
@@ -9077,7 +9094,7 @@ async def smm_man_name_in(msg: Message, bot: Bot, state: FSMContext):
     await state.update_data(man_name=name)
     await state.set_state(SmmFSM.man_price)
     from tenant import smart_cancel_kb
-    await msg.answer("گام ۲ از ۴ — قیمت فروش را به <b>تومان به‌ازای هر ۱۰۰۰ عدد</b> بفرست (فقط عدد):",
+    await msg.answer("گام ۲ از ۵ — قیمت فروش را به <b>تومان به‌ازای هر ۱۰۰۰ عدد</b> بفرست (فقط عدد):",
                      parse_mode="HTML", reply_markup=await smart_cancel_kb(bot))
 
 
@@ -9099,7 +9116,7 @@ async def smm_man_price_in(msg: Message, bot: Bot, state: FSMContext):
     await state.update_data(man_price=int(raw))
     await state.set_state(SmmFSM.man_min)
     from tenant import smart_cancel_kb
-    await msg.answer("گام ۳ از ۴ — حداقل تعداد سفارش را بفرست (فقط عدد، مثلاً 1000):",
+    await msg.answer("گام ۳ از ۵ — حداقل تعداد سفارش را بفرست (فقط عدد، مثلاً 1000):",
                      reply_markup=await smart_cancel_kb(bot))
 
 
@@ -9121,7 +9138,7 @@ async def smm_man_min_in(msg: Message, bot: Bot, state: FSMContext):
     await state.update_data(man_min=int(raw))
     await state.set_state(SmmFSM.man_max)
     from tenant import smart_cancel_kb
-    await msg.answer("گام ۴ از ۴ — حداکثر تعداد سفارش را بفرست (فقط عدد، مثلاً 100000):",
+    await msg.answer("گام ۴ از ۵ — حداکثر تعداد سفارش را بفرست (فقط عدد، مثلاً 100000):",
                      reply_markup=await smart_cancel_kb(bot))
 
 
@@ -9183,21 +9200,217 @@ async def smm_man_max_in(msg: Message, bot: Bot, state: FSMContext):
         s.add(_svc)
         await s.commit()
         new_id = _svc.id          # کلیدِ اصلیِ عددی، بعد از commit
-    await state.clear()
-    p = smm_api.platform_label(_plat_guess)
-    t = smm_api.service_type_label(_type_guess)
+    await state.update_data(man_new_id=new_id)
+    await state.set_state(SmmFSM.man_desc)
+    from tenant import smart_cancel_kb
     await msg.answer(
-        f"✅ سرویس دستی ساخته شد.\n\n"
-        f"🛰 {name}\n📂 دسته‌بندی: بدون دسته\n"
-        f"🧭 تشخیص خودکار: {p} · {t}\n💵 {price:,} ت/هزار\n🔢 {mn} تا {mx}\n\n"
-        f"اکنون می‌توانی آن را به یکی از دسته‌های ساخته‌شده اضافه کنی؛ "
-        f"در غیر این صورت بدون دسته باقی می‌ماند.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📂 انتخاب دسته‌بندی", callback_data=f"smm:svc:cat:{new_id}:man")],
-            [InlineKeyboardButton(text="🔢 ورودیِ سفارش: لینک (برایِ عدد/آیدی بزن)", callback_data=f"smm:inpk:{new_id}")],
-            [InlineKeyboardButton(text="✍️ سرویس‌های دستی", callback_data="smm:manlist")]]))
+        "گام ۵ از ۵ — <b>توضیحات سرویس</b> را بفرست (اختیاری).\n"
+        "این متن قبل از خرید به مشتری نشان داده می‌شود: کیفیت، سرعتِ تحویل، شرایط و ...\n\n"
+        "اگر توضیحی نمی‌خواهی «-» بفرست.",
+        parse_mode="HTML", reply_markup=await smart_cancel_kb(bot))
 
 
+async def _man_created_summary(bot_id: int, svc_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    async with Session() as s:
+        v = await s.get(SmmService, svc_id)
+    if not v or v.bot_id != bot_id:
+        return "❌ سرویس پیدا نشد.", InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✍️ سرویس‌های دستی", callback_data="smm:manlist")]])
+    p = smm_api.platform_label(v.platform_key or "")
+    t = smm_api.service_type_label(v.type_key or "")
+    text = (f"✅ سرویس دستی ساخته شد.\n\n"
+            f"🛰 {v.name}\n🔢 شمارهٔ محصول: <code>{v.id}</code>\n"
+            f"🧭 {p} · {t}\n💵 {int(v.sell_rate):,} ت/هزار\n🔢 {v.min_qty} تا {v.max_qty}\n"
+            f"📝 توضیحات: {'ثبت شد ✅' if v.description else 'ندارد'}\n\n"
+            f"از دکمه‌های زیر دسته، دکمهٔ منو و بقیهٔ تنظیمات را هم بچین.")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔌 اتصال به دکمهٔ منو / زیرمنو", callback_data=f"smm:manbtn:{v.id}", style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="📂 انتخاب دسته‌بندی", callback_data=f"smm:svc:cat:{v.id}:man")],
+        [InlineKeyboardButton(text="⚙️ مدیریتِ کاملِ این سرویس", callback_data=f"smm:svcview:{v.id}:0", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="🔢 ورودیِ سفارش: لینک (برایِ عدد/آیدی بزن)", callback_data=f"smm:inpk:{v.id}")],
+        [InlineKeyboardButton(text="✍️ سرویس‌های دستی", callback_data="smm:manlist")]])
+    return text, kb
+
+
+@smm_router.message(SmmFSM.man_desc, F.text)
+async def smm_man_desc_in(msg: Message, bot: Bot, state: FSMContext):
+    """=== PATCH_SMM_MANUAL_PRO_V1 === گامِ پنجمِ ساختِ سرویسِ دستی: توضیحات."""
+    row = await _owner(msg, bot)
+    if not row:
+        return
+    raw = (msg.text or "").strip()
+    data = await state.get_data()
+    sid = data.get("man_new_id")
+    await state.clear()
+    if raw not in ("-", "❌ لغو", "❌ لغو / بازگشت") and sid:
+        async with Session() as s:
+            v = await s.get(SmmService, sid)
+            if v and v.bot_id == row.id:
+                v.description = raw[:1000]
+                await s.commit()
+    if not sid:
+        await msg.answer("لغو شد.")
+        return
+    text, kb = await _man_created_summary(row.id, sid)
+    await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+# === PATCH_SMM_MANUAL_PRO_V1 ===
+# اتصالِ سرویسِ دستی به دکمه/زیرمنویِ ربات، بدونِ نیاز به رفتن به بخشِ دیگر.
+async def _manbtn_content(bot_id: int, svc_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    async with Session() as s:
+        btns = (await s.scalars(select(MainButton).where(MainButton.bot_id == bot_id)
+                                .order_by(MainButton.parent_id.is_(None).desc(),
+                                          MainButton.row, MainButton.col))).all()
+        v = await s.get(SmmService, svc_id)
+    back = InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"smm:svcview:{svc_id}:0", style=ButtonStyle.DANGER)
+    if not btns:
+        return ("هنوز دکمه‌ای در منوی ربات نساخته‌ای. اول از «دکمه‌هایِ صفحهٔ اصلی» دکمه بساز."), \
+            InlineKeyboardMarkup(inline_keyboard=[[back]])
+    kids: dict[int, list] = {}
+    for b in btns:
+        if b.parent_id is not None:
+            kids.setdefault(b.parent_id, []).append(b)
+
+    def _on(b) -> bool:
+        if b.action != "smm_direct_product":
+            return False
+        c = _mb_direct_cfg(b)
+        return svc_id in [int(x) for x in ([c["smm_service_id"]] if c.get("smm_service_id") else c.get("smm_service_ids", []))]
+
+    rows = []
+
+    def _row(b, ind):
+        if b.action not in (None, "smm_direct_product"):
+            rows.append([InlineKeyboardButton(text=f"{ind}🔒 {b.label}", callback_data=f"smm:manbtn:lock:{svc_id}")])
+        elif _on(b):
+            rows.append([InlineKeyboardButton(text=f"{ind}✅ {b.label} (جدا کن)", callback_data=f"smm:manbtn:off:{svc_id}:{b.id}")])
+        else:
+            rows.append([InlineKeyboardButton(text=f"{ind}⚪️ {b.label}", callback_data=f"smm:manbtn:set:{svc_id}:{b.id}")])
+
+    for b in [x for x in btns if x.parent_id is None]:
+        _row(b, "")
+        for c in kids.get(b.id, []):
+            _row(c, "↳ ")
+    rows.append([back])
+    text = (f"🔌 <b>اتصالِ «{v.name if v else ''}» به دکمه</b>\n\n"
+            "دکمه‌ای را انتخاب کن؛ با زدنش کاربر مستقیم به این سرویس می‌رسد. "
+            "می‌توانی چند سرویس را به یک دکمه وصل کنی.\n"
+            "⚪️ آزاد · ✅ وصل‌شده (با زدن جدا می‌شود) · 🔒 عملکردِ دیگری دارد")
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@smm_router.callback_query(F.data.regexp(r"^smm:manbtn:\d+$"))
+async def smm_manbtn_menu(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    svc_id = int(cb.data.split(":")[2])
+    text, kb = await _manbtn_content(row.id, svc_id)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
+
+
+@smm_router.callback_query(F.data.startswith("smm:manbtn:lock:"))
+async def smm_manbtn_lock(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    await cb.answer("این دکمه عملکردِ دیگری دارد؛ اول از «تنظیماتِ دکمه» عملکردش را بردار.", show_alert=True)
+
+
+@smm_router.callback_query(F.data.regexp(r"^smm:manbtn:(set|off):\d+:\d+$"))
+async def smm_manbtn_apply(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    _, _, op, sv, mbid = cb.data.split(":")
+    svc_id, mb_id = int(sv), int(mbid)
+    async with Session() as s:
+        v = await s.get(SmmService, svc_id)
+        mb = await s.get(MainButton, mb_id)
+        if not v or v.bot_id != row.id or not mb or mb.bot_id != row.id:
+            await cb.answer("پیدا نشد", show_alert=True)
+            return
+        if mb.action not in (None, "smm_direct_product"):
+            await cb.answer("این دکمه عملکردِ دیگری دارد.", show_alert=True)
+            return
+        cfg = _mb_direct_cfg(mb) if mb.action == "smm_direct_product" else {}
+        if cfg and not (cfg.get("smm_service_id") or cfg.get("smm_service_ids")):
+            await cb.answer("این دکمه به دسته/پلتفرم وصل است؛ اول از «تنظیماتِ دکمه» جدایش کن.", show_alert=True)
+            return
+        ids = [int(cfg["smm_service_id"])] if cfg.get("smm_service_id") else [int(x) for x in cfg.get("smm_service_ids", [])]
+        if op == "set":
+            if svc_id not in ids:
+                ids.append(svc_id)
+            note = "✅ وصل شد."
+        else:
+            ids = [i for i in ids if i != svc_id]
+            note = "🔓 جدا شد."
+        if ids:
+            mb.action = "smm_direct_product"
+            mb.config = json.dumps({"smm_service_ids": ids}, ensure_ascii=False)
+        else:
+            mb.action = None
+            mb.config = None
+        await s.commit()
+    await cb.answer(note)
+    text, kb = await _manbtn_content(row.id, svc_id)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@smm_router.callback_query(F.data.startswith("smm:svctoggle:"))
+async def smm_svc_toggle_active(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    _, _, sv, bp = cb.data.split(":")
+    async with Session() as s:
+        v = await s.get(SmmService, int(sv))
+        if not v or v.bot_id != row.id:
+            await cb.answer("پیدا نشد", show_alert=True)
+            return
+        v.is_active = not bool(v.is_active)
+        await s.commit()
+        st = v.is_active
+    await cb.answer("✅ فعال شد" if st else "⏸ غیرفعال شد (به مشتری نمایش داده نمی‌شود)")
+    text, kb = await _smm_myservice_detail_content(row.id, int(sv), int(bp))
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@smm_router.callback_query(F.data.startswith("smm:mandup:"))
+async def smm_man_duplicate(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    sv = int(cb.data.split(":")[2])
+    import time as _t
+    async with Session() as s:
+        v = await s.get(SmmService, sv)
+        if not v or v.bot_id != row.id or not v.is_manual:
+            await cb.answer("پیدا نشد", show_alert=True)
+            return
+        n = SmmService(
+            bot_id=row.id, service_id=f"man{int(_t.time())}", name=f"{v.name} (کپی)"[:255], category=v.category or "",
+            panel_rate=0, sell_rate=v.sell_rate, min_qty=v.min_qty, max_qty=v.max_qty,
+            is_active=True, is_manual=True, description=v.description,
+            platform_key=v.platform_key, type_key=v.type_key, category_pk=v.category_pk)
+        n.input_kind = getattr(v, "input_kind", None)
+        s.add(n)
+        await s.commit()
+        nid = n.id
+    await cb.answer("✅ کپی ساخته شد")
+    text, kb = await _smm_myservice_detail_content(row.id, nid, 0)
+    await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 async def show_smm_services_to_user(bot: Bot, msg_or_cb, bot_id: int):
