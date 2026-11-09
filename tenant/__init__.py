@@ -14182,7 +14182,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "519"
+BUILD_ID = "520"
 
 
 @tenant_router.message(Command("version"))
@@ -15967,6 +15967,7 @@ def _thb_kb_action(mb, bot_field: str = "", plan: str = "") -> InlineKeyboardMar
     elif mb.action == "smm_direct_product":
         # === PATCH_SMM_DIRECT_PRODUCT_BUTTON_V1 ===
         rows.append([InlineKeyboardButton(text="🔁 تغییرِ سرویسِ متصل", callback_data=f"thb:setsmmproduct:{mb.id}", style=ButtonStyle.PRIMARY)])
+        rows.append([InlineKeyboardButton(text="✍️ اتصال به سرویس‌های دستیِ خودم", callback_data=f"thb:manlist:{mb.id}", style=ButtonStyle.PRIMARY)])
         rows.append([InlineKeyboardButton(text="↩️ حذفِ اتصالِ سرویس", callback_data=f"thb:unsetsmmproduct:{mb.id}", style=ButtonStyle.DANGER)])
     elif mb.action == "free_trial":
         rows.append([InlineKeyboardButton(text="🧪 تنظیمات تست (نوع کانفیگ)",
@@ -16130,6 +16131,8 @@ def _thb_kb_action_pick(mb, bot_field: str = "", plan: str = "", category: str =
         if bot_field == "virtual_service" and not _is_partner:
             rows.append([InlineKeyboardButton(text="🎯 اتصال مستقیم به یک سرویسِ خدماتِ مجازی",
                                               callback_data=f"thb:setsmmproduct:{mb.id}", style=ButtonStyle.PRIMARY)])
+            rows.append([InlineKeyboardButton(text="✍️ اتصال به سرویس‌های دستیِ خودم",
+                                              callback_data=f"thb:manlist:{mb.id}", style=ButtonStyle.PRIMARY)])
         if bot_field == "vpn_sales" and not _is_partner:
             rows.append([InlineKeyboardButton(text="🎁 تبدیل به «تست رایگان VPN»",
                                               callback_data=f"thb:setfreetrial:{mb.id}", style=ButtonStyle.PRIMARY)])
@@ -20663,6 +20666,85 @@ async def thb_setsmmcategory_pick(cb: CallbackQuery, bot: Bot):
     except Exception:
         await cb.message.answer(_thb_text(mb, is_disabled), reply_markup=_thb_kb(mb, is_disabled),
                                 parse_mode="HTML")
+
+
+async def _thb_manual_list_view(cb: CallbackQuery, mb_id: int, bot_id: int) -> None:
+    from models import SmmService
+    async with Session() as s:
+        mb = await s.get(MainButton, mb_id)
+        svcs = (await s.scalars(select(SmmService).where(
+            SmmService.bot_id == bot_id, SmmService.is_manual == True)
+            .order_by(SmmService.id))).all()
+    on: set[int] = set()
+    if mb and mb.action == "smm_direct_product":
+        try:
+            c = json.loads(mb.config or "{}")
+        except Exception:
+            c = {}
+        on = {int(c["smm_service_id"])} if c.get("smm_service_id") else {int(x) for x in c.get("smm_service_ids", [])}
+    rows = [[InlineKeyboardButton(text=f"{'✅' if sv.id in on else '⚪️'} {sv.name[:45]}",
+                                  callback_data=f"thb:mantog:{mb_id}:{sv.id}")] for sv in svcs[:80]]
+    rows.append([InlineKeyboardButton(text="➕ ساخت سرویس دستیِ جدید", callback_data="smm:mannew", style=ButtonStyle.SUCCESS)])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"thb:show:{mb_id}", style=ButtonStyle.DANGER)])
+    text = ("✍️ <b>اتصال به سرویس‌های دستی</b>\n\n"
+            "سرویس(ها) را بزن تا به این دکمه وصل شوند (✅ = وصل). "
+            "با زدنِ دکمه، کاربر مستقیم به همین سرویس(ها) می‌رسد.\n")
+    if not svcs:
+        text += "\nهنوز سرویس دستی‌ای نساخته‌ای؛ با «➕ ساخت…» بساز و بعد برگرد."
+    try:
+        await cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            raise
+
+
+@tenant_router.callback_query(F.data.startswith("thb:manlist:"))
+async def thb_manual_list(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await _thb_manual_list_view(cb, int(cb.data.split(":")[2]), row.id)
+    await cb.answer()
+
+
+@tenant_router.callback_query(F.data.startswith("thb:mantog:"))
+async def thb_manual_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    parts = cb.data.split(":")
+    mb_id, svc_id = int(parts[2]), int(parts[3])
+    from models import SmmService
+    async with Session() as s:
+        mb = await s.get(MainButton, mb_id)
+        sv = await s.get(SmmService, svc_id)
+        if not mb or mb.bot_id != row.id or not sv or sv.bot_id != row.id:
+            await cb.answer("یافت نشد", show_alert=True)
+            return
+        if mb.action not in (None, "smm_direct_product"):
+            await cb.answer("این دکمه عملکردِ دیگری دارد؛ اول عملکردش را بردار.", show_alert=True)
+            return
+        try:
+            c = json.loads(mb.config or "{}") if mb.action else {}
+        except Exception:
+            c = {}
+        if c and not (c.get("smm_service_id") or c.get("smm_service_ids")):
+            await cb.answer("این دکمه به دسته/پلتفرم وصل است؛ اول جدایش کن.", show_alert=True)
+            return
+        ids = [int(c["smm_service_id"])] if c.get("smm_service_id") else [int(x) for x in c.get("smm_service_ids", [])]
+        if svc_id in ids:
+            ids.remove(svc_id)
+        else:
+            ids.append(svc_id)
+        if ids:
+            mb.action = "smm_direct_product"
+            mb.config = json.dumps({"smm_service_ids": ids}, ensure_ascii=False)
+        else:
+            mb.action = None
+            mb.config = None
+        await s.commit()
+    await cb.answer("✅")
+    await _thb_manual_list_view(cb, mb_id, row.id)
 
 
 @tenant_router.callback_query(F.data.startswith("thb:unsetsmmproduct:"))
