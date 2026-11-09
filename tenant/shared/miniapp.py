@@ -1720,7 +1720,7 @@ async def api_vs_smm_tree(bot_id: int, mb: int = 0,
             groups.append({"key": str(cid), "label": names.get(cid, "؟"), "count": len(items),
                            "types": [{"key": t, "label": smm_api.service_type_label(t), "count": n}
                                      for t, n in sorted(types.items(), key=lambda kv: -kv[1])]})
-        base["depth"] = 2 if (await get_setting(bot_id, "qlc_depth", "3")) == "2" else 3
+        base["depth"] = 2 if (await get_setting(bot_id, "qlc_depth", "3")) in ("1", "2") else 3
     else:
         by_p: dict[str, dict[str, int]] = {}
         for v in svcs:

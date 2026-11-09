@@ -1099,7 +1099,7 @@ async def smm_admin_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
         text="✍️ متن‌هایِ اطلاع‌رسانیِ سفارش", callback_data="smm:texts")])
     # === PATCH_SMM_QLC_DEPTH_V1 ===
     _qd = await _get_setting(bot_id, "qlc_depth", "3")
-    _qd_txt = ("دسته ← سرویس" if _qd == "2" else "دسته ← نوع ← سرویس")
+    _qd_txt = _QLC_DEPTH_TXT.get(_qd, _QLC_DEPTH_TXT["3"])
     rows.append([InlineKeyboardButton(
         text=f"🧭 مسیرِ خرید: {_qd_txt}", callback_data="smm:qlcdepth")])
     _dm = await _get_setting(bot_id, "smm_desc_mode", "auto")
@@ -2219,6 +2219,21 @@ def _chunk_rows(buttons: list, cols: int) -> list:
     return [buttons[i:i + cols] for i in range(0, len(buttons), cols)]
 
 
+_QLC_DEPTH_TXT = {"1": "فقط سرویس", "2": "دسته ← سرویس", "3": "دسته ← نوع ← سرویس"}
+
+
+async def _qlc_all_content(bot_id: int, mb_id: int, svcs: list, page: int = 1) -> tuple[str, InlineKeyboardMarkup]:
+    """عمقِ ۱: سرویس‌هایِ دسته(های) وصل‌شده مستقیم و بدونِ مرحلهٔ دسته/نوع."""
+    items, page, pages = _page_slice(sorted(svcs, key=lambda v: v.id), page)
+    rows = [[InlineKeyboardButton(text=v.name[:55], callback_data=f"smmu:svcbraw:{v.id}:{mb_id}")]
+            for v in items]
+    nav = _page_nav(f"smm:qlc:{mb_id}:all", page, pages)
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="mbtn:home", style=ButtonStyle.DANGER)])
+    return "📦 سرویس موردنظر رو انتخاب کن:", InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 async def _qlc_root_content(bot_id: int, mb_id: int, svcs: list) -> tuple[str, InlineKeyboardMarkup]:
     """=== PATCH_SMM_QUICKLINK_CATNAV_V1 ===
     سطحِ اولِ مسیر برایِ دکمه‌یِ متصل‌شده به «دسته‌هایِ دستی»: بر خلافِ
@@ -2274,7 +2289,10 @@ async def show_smm_direct_product_entry(msg, bot: Bot, bot_id: int, mb_id: int, 
             await msg.answer("⚠️ این سرویس دیگر در دسترس نیست.")
         return
     if cfg.get("smm_category_ids"):
-        text, kb = await _qlc_root_content(bot_id, mb_id, svcs)
+        if (await _get_setting(bot_id, "qlc_depth", "3")) == "1":
+            text, kb = await _qlc_all_content(bot_id, mb_id, svcs)
+        else:
+            text, kb = await _qlc_root_content(bot_id, mb_id, svcs)
     else:
         text, kb = _qlu_root_content(mb_id, svcs)
     await msg.answer(text, reply_markup=kb)
@@ -2301,7 +2319,10 @@ async def smm_qlc_nav(cb: CallbackQuery, bot: Bot):
     if not svcs:
         await cb.answer("سرویسی در دسترس نیست", show_alert=True)
         return
-    if kind == "root":
+    if kind == "all" or (kind == "root" and (await _get_setting(row.id, "qlc_depth", "3")) == "1"):
+        _pg = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 1
+        text, kb = await _qlc_all_content(row.id, mb_id, svcs, _pg)
+    elif kind == "root":
         text, kb = await _qlc_root_content(row.id, mb_id, svcs)
     elif kind == "cat":
         cat_pk = int(parts[4])
@@ -2405,7 +2426,7 @@ async def smmu_pick_service_breadcrumb_raw(cb: CallbackQuery, bot: Bot, state: F
         if sv is not None and getattr(sv, "category_pk", None):
             _nm = (await _qlc_category_names(row.id, [sv.category_pk])).get(sv.category_pk)
             if _nm:
-                if (await _get_setting(row.id, "qlc_depth", "3")) == "2":
+                if (await _get_setting(row.id, "qlc_depth", "3")) in ("1", "2"):
                     breadcrumb = _nm
                 else:
                     breadcrumb = f"{_nm} › {smm_api.service_type_label(_svc_platform_type(sv)[1])}"
@@ -2415,7 +2436,10 @@ async def smmu_pick_service_breadcrumb_raw(cb: CallbackQuery, bot: Bot, state: F
     _qback = None
     try:
         if sv is not None and getattr(sv, "category_pk", None):
-            if (await _get_setting(row.id, "qlc_depth", "3")) == "2":
+            _d = await _get_setting(row.id, "qlc_depth", "3")
+            if _d == "1":
+                _qback = f"smm:qlc:{mb_id}:all"
+            elif _d == "2":
                 _qback = f"smm:qlc:{mb_id}:cat:{sv.category_pk}"
             else:
                 _qback = f"smm:qlc:{mb_id}:typ:{sv.category_pk}:{_svc_platform_type(sv)[1]}"
@@ -5909,10 +5933,9 @@ async def smm_qlc_depth_toggle(cb: CallbackQuery, bot: Bot):
         await cb.answer()
         return
     cur = await _get_setting(row.id, "qlc_depth", "3")
-    new = "2" if cur == "3" else "3"
+    new = {"3": "2", "2": "1"}.get(cur, "3")
     await _set_setting(row.id, "qlc_depth", new)
-    await cb.answer("مسیرِ خرید: " +
-                    ("دسته ← سرویس" if new == "2" else "دسته ← نوع ← سرویس"))
+    await cb.answer("مسیرِ خرید: " + _QLC_DEPTH_TXT[new])
     await smm_menu(cb, bot)
 
 
