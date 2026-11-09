@@ -121,6 +121,8 @@ from platform_chpost import chpost_router
 router.include_router(chpost_router)
 from platform_hdg import hdg_router   # PATCH_HOSTING_DISK_GUARD_V1
 router.include_router(hdg_router)
+from platform_cmds_menu import cmds_router   # دستورهایِ مدیر به‌صورتِ دکمه
+router.include_router(cmds_router)
 
 # === PATCH_SPLIT_TICKETS_V1 ===
 # بخشِ «سیستم تیکت» به فایلِ مستقلِ platform_tickets.py منتقل شد. علاوه بر

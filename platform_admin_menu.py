@@ -114,6 +114,7 @@ ADMIN_SECTIONS: list[dict] = [
             # === PATCH_PLATFORM_PREMIUM_EMOJI_V1 ===
             ("⭐ افزودن ایموجی پرمیوم (ربات اصلی)", "pemj:menu:0", ButtonStyle.PRIMARY, True),
             ("➕ افزودن استیکر", "pst:menu", ButtonStyle.SUCCESS, True),
+            ("🧰 دستورهایِ مدیر (/)", "cmds:menu", ButtonStyle.PRIMARY, True),
         ],
     },
     {
