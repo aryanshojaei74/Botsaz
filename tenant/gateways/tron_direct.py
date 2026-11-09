@@ -1559,13 +1559,16 @@ async def trxd_amount(msg: Message, bot: Bot, state: FSMContext):
 
     # === PATCH_KYC_GATE_ALL_PATHS_V1 === سقفِ احرازِ هویت
     from tenant.shared.kyc import gate as _kyc_gate
-    _why = await _kyc_gate(row.id, msg.from_user.id, amount)
+    _why = await _kyc_gate(row.id, msg.from_user.id, amount, method="crypto")
     if _why:
         await msg.answer(_why)
         return
 
     min_t = await min_toman_setting(row.id, asset)
     max_t = await max_toman_setting(row.id, asset)
+    from tenant.shared.crypto_exempt import is_exempt as _cx_exempt
+    if await _cx_exempt(row.id):
+        min_t, max_t = 0, 0
     if min_t > 0 and amount < min_t:
         await msg.answer(f"❌ حداقل مبلغِ شارژ <b>{min_t:,} تومان</b> است. "
                          "عددِ بزرگ‌تری بفرست:")

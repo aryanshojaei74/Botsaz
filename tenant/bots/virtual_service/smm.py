@@ -1130,6 +1130,10 @@ async def smm_admin_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
         text=("📦 سفارشِ انبوه (چندلینکی): ✅ روشن" if await _bulk_enabled(bot_id) else "📦 سفارشِ انبوه (چندلینکی): ⛔️ خاموش"),
         callback_data="smm:bulktoggle")])
     rows.append([InlineKeyboardButton(
+        text=("🔘 دکمهٔ شیشه‌ایِ سفارشِ انبوه: ✅ نمایش" if await _bulk_button_shown(bot_id)
+              else "🔘 دکمهٔ شیشه‌ایِ سفارشِ انبوه: ⛔️ پنهان (دستورِ /multi_ می‌ماند)"),
+        callback_data="smm:bulkbtntoggle")])
+    rows.append([InlineKeyboardButton(
         text="\u267b\ufe0f ریستِ محصولات", callback_data="smm:reset",
         style=ButtonStyle.DANGER)])
     # === PATCH_SMM_AI_ASSISTANT_V1 ===
@@ -2183,6 +2187,11 @@ def _page_slice(items: list, page: int) -> tuple[list, int, int]:
     pages = max(1, (len(items) + _SVC_LIST_PAGE - 1) // _SVC_LIST_PAGE)
     page = max(1, min(int(page or 1), pages))
     return items[(page - 1) * _SVC_LIST_PAGE: page * _SVC_LIST_PAGE], page, pages
+
+
+async def _bulk_button_shown(bot_id: int) -> bool:
+    """دکمهٔ شیشه‌ایِ «سفارشِ انبوه» (مستقل از خودِ قابلیت و دستورِ /multi_): پیش‌فرض نمایش."""
+    return (await _get_setting(bot_id, "smm_bulk_button", "1")) != "0"
 
 
 async def _bulk_enabled(bot_id: int) -> bool:
@@ -5745,6 +5754,18 @@ async def smm_bulk_toggle(cb: CallbackQuery, bot: Bot):
     new = "0" if await _bulk_enabled(row.id) else "1"
     await _set_setting(row.id, "smm_bulk_enabled", new)
     await cb.answer("📦 سفارشِ انبوه: " + ("روشن شد (دکمه و /multi_ فعال)" if new == "1" else "خاموش شد (دکمه و /multi_ بسته)"), show_alert=True)
+    await smm_menu(cb, bot)
+
+
+@smm_router.callback_query(F.data == "smm:bulkbtntoggle")
+async def smm_bulk_button_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    new = "0" if await _bulk_button_shown(row.id) else "1"
+    await _set_setting(row.id, "smm_bulk_button", new)
+    await cb.answer("🔘 دکمهٔ سفارشِ انبوه: " + ("نمایش داده می‌شود" if new == "1" else "پنهان شد؛ سفارشِ انبوه با دستورِ /multi_<شماره> کار می‌کند"), show_alert=True)
     await smm_menu(cb, bot)
 
 
@@ -10478,7 +10499,7 @@ async def send_smm_product_page(msg_or_cb, bot: Bot, vid: int, state: FSMContext
     _bulk_on = _ik == "link" and await _bulk_enabled(row.id)      # PATCH_SMM_BULK_TOGGLE_V1
     cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
         *([[InlineKeyboardButton(text="📦 ثبتِ سفارشِ انبوه (چندلینکی)", callback_data=f"smmu:bulk:{vid}",
-                                 style=ButtonStyle.PRIMARY)]] if _bulk_on else []),
+                                 style=ButtonStyle.PRIMARY)]] if (_bulk_on and await _bulk_button_shown(row.id)) else []),
         ([InlineKeyboardButton(text="⬅️ بازگشت به لیست", callback_data=back_cb, style=ButtonStyle.DANGER),
           InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="mbtn:home", style=ButtonStyle.DANGER)]
          if back_cb else

@@ -178,3 +178,22 @@ def test_ai_assistant_button_action_registered_for_virtual_service_only():
     assert a[2] == frozenset({"virtual_service"}) and "دستیار" in a[0]
     import inspect
     assert 'action == "ai_assistant"' in inspect.getsource(tenant._run_button_action)
+
+
+@pytest.mark.asyncio
+async def test_bulk_button_can_be_hidden_while_command_and_flow_stay(db, monkeypatch):
+    bid, sid = await _shop(db, monkeypatch)
+    monkeypatch.setattr(smm, "CallbackQuery", CB)
+    await smm._set_setting(bid, "smm_bulk_button", "0")
+    tenant._SETTING_CACHE.clear()
+    m = Msg()
+    await smm.send_smm_product_page(CB(message=m), None, sid, St())
+    assert f"smmu:bulk:{sid}" not in cbs(m.shown[-1][1])                       # دکمهٔ شیشه‌ای پنهان
+    assert f"/multi_{sid}" in m.shown[-1][0]                                   # دستورِ /multi_ در متن هست
+    async with db() as s:
+        v = await s.get(models.SmmService, sid)
+    t, st = Msg(), St()
+    await smm._bulk_start_prompt(t, st, v)                                     # خودِ سفارشِ انبوه با دستور کار می‌کند
+    assert st.state is not None and "ثبتِ سفارشِ انبوه" in t.shown[-1][0]
+    text, kb = await smm.smm_admin_content(bid)
+    assert "smm:bulkbtntoggle" in cbs(kb)

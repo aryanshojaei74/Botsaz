@@ -137,6 +137,9 @@ async def w_swap_amount(msg: Message, state: FSMContext, bot: Bot):
     swap_max_str = await get_setting(row.id, "swap_max_toman", "0")
     swap_max = int(swap_max_str or "0")
 
+    from tenant.shared.crypto_exempt import is_exempt as _cx_exempt
+    if await _cx_exempt(row.id):
+        swap_min, swap_max = 1, 0
     if not amount or amount < swap_min:
         await msg.answer(f"مبلغ نامعتبر است. حداقل {swap_min:,} تومان بفرست.")
         return
@@ -146,7 +149,7 @@ async def w_swap_amount(msg: Message, state: FSMContext, bot: Bot):
 
     # === PATCH_KYC_GATE_ALL_PATHS_V1 === سقفِ احرازِ هویت
     from tenant.shared.kyc import gate as _kyc_gate
-    _why = await _kyc_gate(row.id, msg.from_user.id, amount)
+    _why = await _kyc_gate(row.id, msg.from_user.id, amount, method="crypto")
     if _why:
         await msg.answer(_why)
         return

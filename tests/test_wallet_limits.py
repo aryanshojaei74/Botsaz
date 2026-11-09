@@ -567,7 +567,7 @@ async def test_admin_menu_lists_only_active_gateways(db, monkeypatch):
     assert "کارت‌به‌کارت" in text and "زیبال" not in text
     _enable(monkeypatch)
     text2, kb2 = await adm._menu_content(row.id)
-    assert "هیچ درگاهِ شارژی" in text2 and [b.callback_data for r in kb2.inline_keyboard for b in r] == ["tadm:sec:finance"]
+    assert "هیچ درگاهِ شارژی" in text2 and [b.callback_data for r in kb2.inline_keyboard for b in r] == ["wlim:cryptofree", "tadm:sec:finance"]
 
 
 @pytest.mark.asyncio

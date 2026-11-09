@@ -47,6 +47,12 @@ async def _menu_content(bot_id: int):
         rows.append([InlineKeyboardButton(text=f"{g.label} — {_fmt_range(mn, mx)}",
                                           callback_data=f"wlim:g:{g.key}", style=ButtonStyle.PRIMARY)])
     lines.append("\nدرگاه‌هایِ غیرفعال این‌جا نمی‌آیند.")
+    from tenant.shared.crypto_exempt import is_exempt
+    _free = await is_exempt(bot_id)
+    lines.append("\n🪙 <b>ارز دیجیتال بدونِ سقف و احرازِ هویت:</b> " + ("✅ روشن" if _free else "⛔️ خاموش")
+                 + "\n(وقتی روشن است، واریزِ ارز دیجیتال/سواپ‌ولت/ترون مستقیم حداقل و حداکثر و احرازِ هویت ندارد و در سقفِ روزانهٔ کارت و درگاه شمرده نمی‌شود؛ بقیهٔ درگاه‌ها مثلِ قبل می‌مانند.)")
+    rows.append([InlineKeyboardButton(text="🪙 ارز دیجیتال بدونِ سقف و احراز: " + ("✅ روشن" if _free else "⛔️ خاموش"),
+                                      callback_data="wlim:cryptofree", style=(ButtonStyle.SUCCESS if _free else ButtonStyle.PRIMARY))])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:finance", style=ButtonStyle.DANGER)])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -81,6 +87,20 @@ async def _show(target, text: str, kb) -> None:
 def _key_from(data: str) -> str | None:
     key = data.split(":")[2] if data.count(":") >= 2 else ""
     return key if key in WL.GATEWAYS else None
+
+
+@wallet_limits_admin_router.callback_query(F.data == "wlim:cryptofree")
+async def wlim_crypto_free(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok, get_setting, set_setting
+    from tenant.shared.crypto_exempt import KEY
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cur = (await get_setting(row.id, KEY, "0")) == "1"
+    await set_setting(row.id, KEY, "0" if cur else "1")
+    await cb.answer("🪙 ارز دیجیتال: " + ("حالا مثلِ بقیه سقف و احراز دارد" if cur else "بدونِ سقف و احرازِ هویت شد"), show_alert=True)
+    text, kb = await _menu_content(row.id)
+    await _show(cb, text, kb)
 
 
 @wallet_limits_admin_router.callback_query(F.data == "wlim:menu")

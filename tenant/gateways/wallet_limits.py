@@ -143,6 +143,10 @@ def _to_int(v) -> int:
 async def get_limits(bot_id: int, gw_key: str) -> tuple[int, int]:
     """(حداقل، حداکثر) مؤثر برایِ این ربات. حداکثر ۰ = بدونِ سقف."""
     g = GATEWAYS[gw_key]
+    if gw_key in ("crypto", "swap"):
+        from tenant.shared.crypto_exempt import is_exempt
+        if await is_exempt(bot_id):
+            return 1, 0
     mn = _to_int(await _s(bot_id, g.min_key, ""))
     if mn <= 0:
         mn = g.default_min

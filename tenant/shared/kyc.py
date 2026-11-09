@@ -154,13 +154,14 @@ async def direct_card_today(s, bot_id: int, user_id: int, since) -> int:
 async def charged_today(bot_id: int, user_id: int) -> int:
     """مجموعِ واریزهایِ واقعیِ بازهٔ روزانه (نک: window_start) + خریدهایِ مستقیمِ کارت‌به‌کارت."""
     since = await window_start(bot_id)
+    from tenant.shared.crypto_exempt import is_exempt, CRYPTO_KINDS
+    skip_crypto = await is_exempt(bot_id)
     async with Session() as s:
-        v = await s.scalar(
-            select(func.coalesce(func.sum(WalletTxn.amount), 0)).where(
-                WalletTxn.bot_id == bot_id,
-                WalletTxn.user_id == user_id,
-                deposit_txn_filter(),
-                WalletTxn.created_at >= since))
+        conds = [WalletTxn.bot_id == bot_id, WalletTxn.user_id == user_id, deposit_txn_filter(),
+                 WalletTxn.created_at >= since]
+        if skip_crypto:
+            conds.append(WalletTxn.kind.notin_(CRYPTO_KINDS))
+        v = await s.scalar(select(func.coalesce(func.sum(WalletTxn.amount), 0)).where(*conds))
         direct = await direct_card_today(s, bot_id, user_id, since)
     try:
         return int(float(v or 0)) + direct
@@ -238,7 +239,7 @@ async def note_charge(bot_id: int, user_id: int) -> bool:
     return False
 
 
-async def gate(bot_id: int, telegram_id: int, amount) -> str | None:
+async def gate(bot_id: int, telegram_id: int, amount, method: str | None = None) -> str | None:
     """محافظِ آمادهٔ مسیرهایِ شارژ. اگر مجاز نبود، متنِ خطا را برمی‌گرداند.
 
     === PATCH_KYC_GATE_ALL_PATHS_V1 ===
@@ -251,6 +252,10 @@ async def gate(bot_id: int, telegram_id: int, amount) -> str | None:
     فروش بدترین حالتِ ممکن است.
     """
     try:
+        if method == "crypto":
+            from tenant.shared.crypto_exempt import is_exempt
+            if await is_exempt(bot_id):
+                return None
         if not await enabled(bot_id):
             return None
         async with Session() as s:

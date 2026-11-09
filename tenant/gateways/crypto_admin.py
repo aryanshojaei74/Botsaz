@@ -341,7 +341,7 @@ async def w_crypto_amount(msg: Message, state: FSMContext, bot: Bot):
     # است؛ اگر نرخ در دسترس نبود صفر می‌شود و گیت طبیعتاً رد نمی‌کند.
     _kyc_amt = amount_toman if currency == "toman" else amount_toman_final
     from tenant.shared.kyc import gate as _kyc_gate
-    _why = await _kyc_gate(row.id, msg.from_user.id, _kyc_amt)
+    _why = await _kyc_gate(row.id, msg.from_user.id, _kyc_amt, method="crypto")
     if _why:
         await msg.answer(_why)
         return
