@@ -49,9 +49,9 @@ async def test_run_button_feeds_the_command_through_the_dispatcher(monkeypatch):
     async def h(m: Message):
         seen.append((m.text, m.from_user.id, m.chat.id))
     parent = Router()
-    parent.include_router(CM.cmds_router)
     dp.include_router(parent)
     dp.include_router(r)
+    monkeypatch.setattr(CM, "cmds_router", parent)
     answered = []
 
     async def ans(*a, **k):
