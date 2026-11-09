@@ -170,6 +170,10 @@ async def ensure_smm_columns(force: bool = False):
             ("provider_desc_fa_hash", "VARCHAR(16)", "VARCHAR(16)"),
             # === PATCH_SMM_INPUT_KIND_V1 ===
             ("input_kind", "VARCHAR(10) DEFAULT ''", "VARCHAR(10) DEFAULT ''"),
+            # === PATCH_SMM_MANUAL_PRO2_V1 ===
+            ("image_file_id", "VARCHAR(255)", "VARCHAR(255)"),
+            ("input_prompt", "TEXT", "TEXT"),
+            ("delivery_text", "TEXT", "TEXT"),
         ],
         "smm_orders": [("panel_status", "VARCHAR(30)", "VARCHAR(30)")],
         # === PATCH_SMM_CATEGORY_DESC_V1 ===
@@ -257,6 +261,8 @@ class SmmFSM(StatesGroup):
     man_min = State()
     man_max = State()
     man_desc = State()          # PATCH_SMM_MANUAL_PRO_V1: توضیحاتِ اختیاریِ سرویسِ دستی
+    man_field = State()         # PATCH_SMM_MANUAL_PRO2_V1: عکس / سؤالِ ورودی / پیامِ تحویل
+    man_umsg = State()          # PATCH_SMM_MANUAL_PRO2_V1: پیامِ ادمین به مشتریِ یک سفارش
     user_link = State()         # کاربر لینک می‌فرستد
     user_link_confirm = State() # پیش‌نمایش و تأیید لینک
     user_qty = State()          # کاربر تعداد می‌فرستد
@@ -4998,6 +5004,9 @@ async def _smm_myservice_detail_content(bot_id: int, svc_id: int, back_page: int
         callback_data=f"smm:svctoggle:{v.id}:{back_page}")])
     if v.is_manual:
         rows.append([InlineKeyboardButton(text=f"📥 ورودیِ سفارش: {_INPUT_KIND_FA[_input_kind(v)]}", callback_data=f"smm:inpk:{v.id}")])
+        rows.append([InlineKeyboardButton(text=f"🖼 عکسِ محصول: {'دارد ✅' if v.image_file_id else 'ندارد'}", callback_data=f"smm:mf:img:{v.id}:{back_page}")])
+        rows.append([InlineKeyboardButton(text=f"❓ سؤال از مشتری: {'سفارشی ✅' if v.input_prompt else 'پیش‌فرض'}", callback_data=f"smm:mf:prompt:{v.id}:{back_page}")])
+        rows.append([InlineKeyboardButton(text=f"📨 پیامِ تحویلِ خودکار: {'دارد ✅' if v.delivery_text else 'ندارد'}", callback_data=f"smm:mf:deliv:{v.id}:{back_page}")])
         rows.append([InlineKeyboardButton(text="🧬 ساختِ کپی از این سرویس", callback_data=f"smm:mandup:{v.id}")])
     rows.append([InlineKeyboardButton(text="🗑 حذفِ سرویس", callback_data=f"smm:del:{v.id}:{back_page}", style=ButtonStyle.DANGER)])
     _back_cb = "smm:manlist" if back_page == 0 else f"smm:myservices:{back_page}"
@@ -6569,6 +6578,10 @@ async def _smm_vs_order_detail_content(bot_id: int, order_id: int,
         kb_rows.append([InlineKeyboardButton(
             text="🟠 نیمه‌تمام (ثبتِ مقدارِ تحویل‌نشده)", callback_data=f"smm:vs:st:part:{o.id}:{_enc}",
             style=ButtonStyle.PRIMARY)])
+    if is_manual:   # PATCH_SMM_MANUAL_PRO2_V1
+        kb_rows.append([InlineKeyboardButton(
+            text="📨 ارسال پیام/اطلاعاتِ تحویل به مشتری",
+            callback_data=f"smm:vs:umsg:{o.id}:{back_cb.replace(':', '~')}", style=ButtonStyle.PRIMARY)])
     kb_rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=back_cb, style=ButtonStyle.DANGER)])
     kb = InlineKeyboardMarkup(inline_keyboard=kb_rows)
     return text, kb
@@ -6664,6 +6677,7 @@ async def smm_vs_complete(cb: CallbackQuery, bot: Bot):
         await s.commit()
     await cb.answer("✅ سفارش تکمیل شد.", show_alert=True)
     await _notify_user(row.id, oid, (await _smm_txt(row.id, "completed")), bot=bot)
+    await _send_delivery_text(row.id, oid, bot)   # PATCH_SMM_MANUAL_PRO2_V1
     text, kb = await _smm_vs_order_detail_content(row.id, oid, back_cb)
     try:
         await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -6786,6 +6800,7 @@ async def smm_vs_setstatus(cb: CallbackQuery, bot: Bot, state: FSMContext):
             await s.commit()
         await cb.answer("✅ سفارش تکمیل شد.", show_alert=True)
         await _notify_user(row.id, oid, (await _smm_txt(row.id, "completed")), bot=bot)
+        await _send_delivery_text(row.id, oid, bot)   # PATCH_SMM_MANUAL_PRO2_V1
         await _vs_show_detail(cb, row.id, oid, back_cb)
         return
 
@@ -9387,6 +9402,135 @@ async def smm_svc_toggle_active(cb: CallbackQuery, bot: Bot):
         await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
+_MF_INFO = {
+    "img": ("🖼 <b>عکسِ محصول</b>\n\nیک عکس بفرست؛ بالایِ صفحهٔ محصول به مشتری نشان داده می‌شود.\nبرایِ حذفِ عکس «-» بفرست."),
+    "prompt": ("❓ <b>سؤال از مشتری</b>\n\nمتنی که مشتری موقعِ سفارش می‌بیند و باید جوابش را بفرستد "
+               "(مثلاً «آیدیِ عددیِ حسابت در بازی را بفرست» یا «ایمیلِ اکانت را بنویس»).\n"
+               "برایِ برگشت به پیش‌فرض «-» بفرست."),
+    "deliv": ("📨 <b>پیامِ تحویلِ خودکار</b>\n\nهر وقت سفارشِ این محصول را «تکمیل» کنی، این متن خودکار برایِ مشتری "
+              "فرستاده می‌شود (مثلاً توضیحِ دریافت، کد، لینکِ آموزش).\nبرایِ حذف «-» بفرست."),
+}
+
+
+@smm_router.callback_query(F.data.startswith("smm:mf:"))
+async def smm_mf_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    _, _, field, sv, bp = cb.data.split(":")
+    async with Session() as s:
+        v = await s.get(SmmService, int(sv))
+    if not v or v.bot_id != row.id or field not in _MF_INFO:
+        await cb.answer("پیدا نشد", show_alert=True)
+        return
+    await state.set_state(SmmFSM.man_field)
+    await state.update_data(mf_field=field, mf_svc=int(sv), mf_back=int(bp))
+    await cb.message.answer(
+        _MF_INFO[field], parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="❌ لغو", callback_data=f"smm:svcview:{sv}:{bp}", style=ButtonStyle.DANGER)]]))
+    await cb.answer()
+
+
+@smm_router.message(SmmFSM.man_field)
+async def smm_mf_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner(msg, bot)
+    if not row:
+        return
+    d = await state.get_data()
+    field, sv, bp = d.get("mf_field"), d.get("mf_svc"), d.get("mf_back", 0)
+    raw = (msg.text or "").strip()
+    if raw in ("❌ لغو", "❌ لغو / بازگشت"):
+        await state.clear()
+        await msg.answer("لغو شد.")
+        return
+    val = None
+    if field == "img":
+        if msg.photo:
+            val = msg.photo[-1].file_id
+        elif raw != "-":
+            await msg.answer("فقط عکس بفرست (یا «-» برایِ حذف).")
+            return
+    else:
+        if not raw:
+            await msg.answer("متن بفرست (یا «-» برایِ حذف).")
+            return
+        val = None if raw == "-" else raw[:1000 if field == "prompt" else 3000]
+    col = {"img": "image_file_id", "prompt": "input_prompt", "deliv": "delivery_text"}[field]
+    async with Session() as s:
+        v = await s.get(SmmService, sv)
+        if not v or v.bot_id != row.id:
+            await state.clear()
+            await msg.answer("سرویس پیدا نشد.")
+            return
+        setattr(v, col, val)
+        await s.commit()
+    await state.clear()
+    text, kb = await _smm_myservice_detail_content(row.id, sv, bp)
+    await msg.answer("✅ ذخیره شد." if val else "🗑 حذف شد.")
+    await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def _send_delivery_text(bot_id: int, order_pk: int, bot: "Bot | None" = None) -> None:
+    """پیامِ تحویلِ خودکارِ محصولِ دستی، بعد از «تکمیل» (اگر ادمین تنظیم کرده باشد)."""
+    try:
+        async with Session() as s:
+            o = await s.get(SmmOrder, order_pk)
+            v = await s.get(SmmService, o.smm_service_pk) if (o and o.smm_service_pk) else None
+        txt = getattr(v, "delivery_text", None) if v else None
+        if txt:
+            await _notify_user(bot_id, order_pk, "📨 " + txt, bot=bot)
+    except Exception:
+        logger.exception("[SMM] ارسالِ پیامِ تحویلِ خودکار ناموفق بود")
+
+
+@smm_router.callback_query(F.data.startswith("smm:vs:umsg:"))
+async def smm_vs_umsg_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    parts = cb.data.split(":")
+    oid = int(parts[3])
+    back = parts[4] if len(parts) > 4 else "smm~vs~menu"
+    async with Session() as s:
+        o = await s.get(SmmOrder, oid)
+    if not o or o.bot_id != row.id:
+        await cb.answer("پیدا نشد", show_alert=True)
+        return
+    await state.set_state(SmmFSM.man_umsg)
+    await state.update_data(umsg_oid=oid, umsg_back=back)
+    await cb.message.answer(
+        f"📨 پیامی که می‌خواهی برایِ مشتریِ سفارش #{o.tracking_code or o.id} بفرستی را بنویس "
+        "(متن، عکس یا فایل — مثلاً اطلاعاتِ تحویل).",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="❌ لغو", callback_data=f"smm:vs:st:back:{oid}:{back}", style=ButtonStyle.DANGER)]]))
+    await cb.answer()
+
+
+@smm_router.message(SmmFSM.man_umsg)
+async def smm_vs_umsg_send(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner(msg, bot)
+    if not row:
+        return
+    d = await state.get_data()
+    oid = d.get("umsg_oid")
+    await state.clear()
+    if (msg.text or "").strip() in ("❌ لغو", "❌ لغو / بازگشت"):
+        await msg.answer("لغو شد.")
+        return
+    async with Session() as s:
+        o = await s.get(SmmOrder, oid) if oid else None
+    if not o or o.bot_id != row.id:
+        await msg.answer("سفارش پیدا نشد.")
+        return
+    try:
+        await bot.copy_message(o.user_telegram_id, msg.chat.id, msg.message_id)
+        await msg.answer("✅ برایِ مشتری ارسال شد.")
+    except Exception as e:
+        logger.exception("[SMM] ارسالِ پیامِ ادمین به مشتری ناموفق بود")
+        await msg.answer(f"❌ ارسال نشد (شاید مشتری ربات را بلاک کرده): {e}")
+
+
 @smm_router.callback_query(F.data.startswith("smm:mandup:"))
 async def smm_man_duplicate(cb: CallbackQuery, bot: Bot):
     row = await _owner(cb, bot)
@@ -10799,8 +10943,25 @@ async def send_smm_product_page(msg_or_cb, bot: Bot, vid: int, state: FSMContext
         + (f"📦 ثبت سفارش انبوه: /multi_{v.id}" if _bulk_on else "")
         + f"{_rate}"
         f"{desc_line}\n\n"
-        f"۱/۲ — {_input_prompt(_ik, _link_prompt)}"
+        f"۱/۲ — {_html_escape(v.input_prompt) if getattr(v, 'input_prompt', None) else _input_prompt(_ik, _link_prompt)}"
     )
+    # === PATCH_SMM_MANUAL_PRO2_V1 === عکسِ محصول
+    _img = getattr(v, "image_file_id", None)
+    if _img:
+        try:
+            if is_cb:
+                try:
+                    await target.delete()
+                except Exception:
+                    logger.debug("[SMM] پاک‌کردنِ پیامِ قبلی قبل از عکسِ محصول ممکن نبود")
+            if len(text) <= 1024:
+                await target.answer_photo(_img, caption=text, parse_mode="HTML", reply_markup=cancel_kb)
+            else:
+                await target.answer_photo(_img)
+                await target.answer(text, parse_mode="HTML", reply_markup=cancel_kb)
+            return True
+        except Exception:
+            logger.exception("[SMM] ارسالِ عکسِ محصول ناموفق بود؛ متنِ ساده فرستاده شد")
     if is_cb:
         try:
             await target.edit_text(text, parse_mode="HTML", reply_markup=cancel_kb)

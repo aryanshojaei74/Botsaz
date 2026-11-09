@@ -2381,6 +2381,10 @@ class SmmService(Base):
     # === PATCH_SMM_INPUT_KIND_V1 === آنچه مشتری هنگامِ سفارش می‌فرستد: ""/"link" = لینک (پیش‌فرض)،
     # "number" = فقط عدد (آیدی/شماره، مثلاً «میو پوینت»)، "text" = متنِ آزاد
     input_kind: Mapped[str | None] = mapped_column(String(10), default="", server_default="")
+    # === PATCH_SMM_MANUAL_PRO2_V1 === عکسِ محصول، سؤالِ دلخواه از مشتری، پیامِ تحویلِ خودکار
+    image_file_id: Mapped[str | None] = mapped_column(String(255))
+    input_prompt: Mapped[str | None] = mapped_column(Text)
+    delivery_text: Mapped[str | None] = mapped_column(Text)
 
 
 class SmmOrder(Base):
