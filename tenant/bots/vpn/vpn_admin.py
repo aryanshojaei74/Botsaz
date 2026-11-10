@@ -805,6 +805,11 @@ async def menu_kb(panels: list[VpnPanel], bot_id: int = 0) -> "InlineKeyboardMar
     # === PATCH_SVC_CLEANUP_V1 === (تیکت #863) حذفِ دستیِ سرویس‌هایِ منقضی‌نشده‌حذف‌شده
     from tenant.bots.vpn.svc_cleanup import entry_button as _svc_cleanup_btn
     rows.append([_svc_cleanup_btn()])
+    # === PATCH_ORPHAN_PLANS_V1 === پلن‌هایِ فروشِ پنل‌هایِ حذف‌شده (قبلاً هیچ راهی برایِ حذفشان نبود)
+    _orph_n = sum(n for _, n in await _orphan_plan_groups(bot_id))
+    if _orph_n:
+        rows.append([InlineKeyboardButton(text=f"🧹 پلن‌هایِ بدونِ پنل ({_orph_n})",
+                                          callback_data="tvpn:orph", style=ButtonStyle.DANGER)])
 
     # === PATCH_QR_BACKGROUND_V1 ===
     # دکمه‌اش به «🎛 دکمه‌ها و تنظیمات» منتقل شد، چون فقط مالِ پنلِ خودکار
@@ -816,6 +821,99 @@ async def menu_kb(panels: list[VpnPanel], bot_id: int = 0) -> "InlineKeyboardMar
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:products",
                                       style=await _ibs(bot_id, "ibtn:back") or ButtonStyle.DANGER)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# === PATCH_ORPHAN_PLANS_V1 ===
+async def _orphan_plan_groups(bot_id: int) -> list[tuple[str, int]]:
+    """پلن‌هایِ فروشی که پنلِ صاحبشان دیگر وجود ندارد: [(panel_key, تعداد)]."""
+    from sqlalchemy import func as _f
+    async with Session() as s:
+        live = {k for (k,) in (await s.execute(select(VpnPanel.panel_key).where(VpnPanel.bot_id == bot_id))).all()}
+        rows = (await s.execute(select(VpnPlan.panel_key, _f.count(VpnPlan.id)).where(
+            VpnPlan.bot_id == bot_id).group_by(VpnPlan.panel_key))).all()
+    return [(k or "", int(n)) for k, n in rows if (k or "") not in live]
+
+
+@vpn_admin_router.callback_query(F.data == "tvpn:orph")
+async def vpn_orphans(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    groups = await _orphan_plan_groups(row.id)
+    if not groups:
+        await cb.answer("پلنِ بدونِ پنلی نیست ✅", show_alert=True)
+        return await vpn_menu(cb, bot)
+    rows = [[InlineKeyboardButton(text=f"🗑 حذفِ {n} پلنِ «{PANEL_LABELS.get(k, k) or 'بدونِ کلید'}»",
+                                  callback_data=f"tvpn:orphdel:{i}", style=ButtonStyle.DANGER)]
+            for i, (k, n) in enumerate(groups)]
+    if len(groups) > 1:
+        rows.append([InlineKeyboardButton(text="🗑 حذفِ همهٔ این پلن‌ها", callback_data="tvpn:orphdel:all",
+                                          style=ButtonStyle.DANGER)])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tvpn:menu", style=ButtonStyle.DANGER)])
+    text = ("🧹 <b>پلن‌هایِ بدونِ پنل</b>\n\nاین پلن‌ها مالِ پنل‌هایی‌اند که حذف شده‌اند و دیگر جایی برایِ مدیریتشان نبود. "
+            "حذفشان به سرویس‌هایِ قبلاً فروخته‌شده کاری ندارد.\n\n"
+            + "\n".join(f"• {PANEL_LABELS.get(k, k) or '—'}: {n} پلن" for k, n in groups))
+    try:
+        await cb.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    except Exception:
+        await cb.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await cb.answer()
+
+
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:orphdel:"))
+async def vpn_orphans_delete(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    sel = cb.data.split(":")[2]
+    groups = await _orphan_plan_groups(row.id)
+    keys = [k for k, _ in groups] if sel == "all" else (
+        [groups[int(sel)][0]] if sel.isdigit() and int(sel) < len(groups) else [])
+    if not keys:
+        await cb.answer("پیدا نشد (شاید قبلاً حذف شده).", show_alert=True)
+        return await vpn_orphans(cb, bot)
+    n = 0
+    async with Session() as s:
+        for pl in (await s.scalars(select(VpnPlan).where(
+                VpnPlan.bot_id == row.id, VpnPlan.panel_key.in_(keys)))).all():
+            await s.delete(pl)
+            n += 1
+        await s.commit()
+    await cb.answer(f"🗑 {n} پلن حذف شد", show_alert=True)
+    await vpn_orphans(cb, bot)
+
+
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:plansdelall:"))
+async def vpn_plans_delete_all(cb: CallbackQuery, bot: Bot):
+    """حذفِ یک‌جایِ همهٔ پلن‌هایِ فروشِ یک پنل (با تأیید)."""
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    parts = cb.data.split(":")
+    key = parts[2]
+    if len(parts) > 3 and parts[3] == "ok":
+        async with Session() as s:
+            n = 0
+            for pl in (await s.scalars(select(VpnPlan).where(
+                    VpnPlan.bot_id == row.id, VpnPlan.panel_key == key))).all():
+                await s.delete(pl)
+                n += 1
+            await s.commit()
+        await cb.answer(f"🗑 {n} پلن حذف شد", show_alert=True)
+        fake_cb = type("CB", (), {"data": f"tvpn:plans:{key}", "answer": cb.answer,
+                                  "message": cb.message, "from_user": cb.from_user})()
+        return await vpn_plans(fake_cb, bot)
+    async with Session() as s:
+        n = len((await s.scalars(select(VpnPlan.id).where(
+            VpnPlan.bot_id == row.id, VpnPlan.panel_key == key))).all())
+    await cb.message.edit_text(
+        f"⚠️ همهٔ <b>{n}</b> پلنِ فروشِ «{PANEL_LABELS.get(key, key)}» برایِ همیشه حذف شود؟\n"
+        "سرویس‌هایِ قبلاً فروخته‌شده دست‌نخورده می‌مانند.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ بله، همه را حذف کن", callback_data=f"tvpn:plansdelall:{key}:ok",
+                                  style=ButtonStyle.DANGER)],
+            [InlineKeyboardButton(text="❌ انصراف", callback_data=f"tvpn:plans:{key}", style=ButtonStyle.PRIMARY)]]))
+    await cb.answer()
 
 
 # ─────────────── کیبورد مدیریت یک پنل خاص ───────────────
@@ -2314,12 +2412,13 @@ async def vpn_delete_ok(cb: CallbackQuery, bot: Bot):
             select(VpnPanel).where(VpnPanel.bot_id == row.id, VpnPanel.panel_key == key))
         if panel:
             await s.delete(panel)
-            # === PATCH_PANEL_DELETE_PLANS_V1 === پلن‌هایِ فروشِ این پنل هم حذف شوند (plan_id در سفارش‌ها FK نیست)
-            from models import VpnPlan
-            for _pl in (await s.scalars(select(VpnPlan).where(
-                    VpnPlan.bot_id == row.id, VpnPlan.panel_key == key))).all():
-                await s.delete(_pl)
-            await s.commit()
+        # === PATCH_PANEL_DELETE_PLANS_V1 === پلن‌هایِ فروشِ این پنل هم حذف شوند (plan_id در سفارش‌ها FK نیست)
+        # === PATCH_ORPHAN_PLANS_V1 === حتی اگر ردیفِ خودِ پنل از قبل نبود، پلن‌هایِ مانده پاک شوند
+        from models import VpnPlan
+        for _pl in (await s.scalars(select(VpnPlan).where(
+                VpnPlan.bot_id == row.id, VpnPlan.panel_key == key))).all():
+            await s.delete(_pl)
+        await s.commit()
     await cb.answer(f"{label} حذف شد", show_alert=False)
     await vpn_menu(cb, bot)
 
@@ -4102,6 +4201,9 @@ async def vpn_plans(cb: CallbackQuery, bot: Bot):
                 callback_data=f"tvpn:planmenu:{key}:{p.id}")])
     rows_kb.append([InlineKeyboardButton(text="➕ افزودن پلن جدید", callback_data=f"tvpn:planadd:{key}",
                                          style=await _ibs(row.id, "ibtn:vpn_setup"))])
+    if plans:   # === PATCH_ORPHAN_PLANS_V1 ===
+        rows_kb.append([InlineKeyboardButton(text=f"🗑 حذفِ همهٔ پلن‌هایِ این پنل ({len(plans)})",
+                                             callback_data=f"tvpn:plansdelall:{key}", style=ButtonStyle.DANGER)])
     # === PATCH_PLAN_TABLE_VIEW_V1 === حالتِ نمایشِ پلن‌ها به مشتری (فقط پلنِ حرفه‌ای)
     from plans import has_feature as _hf, Feature as _Ft
     from tenant import get_setting as _gset
