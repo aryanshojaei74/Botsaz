@@ -1186,10 +1186,58 @@ async def vpn_panel_rename_save(msg: Message, bot: Bot, state: FSMContext):
         return
     await state.clear()
     from tenant import set_setting
+    _old_label = await panel_label(row.id, key)
     await set_setting(row.id, panel_label_key(key), name)
     await msg.answer(f"✅ نام این پنل به <b>{_html_escape_mod.escape(name)}</b> تغییر کرد.")
+    # === PATCH_PANEL_LABEL_TO_CATEGORY_V1 === (MAHDI) «اسمِ پنل را عوض می‌کنم ولی در خرید سرویس عوض نمی‌شود»:
+    # دکمه‌هایِ صفحهٔ خرید نامِ «دسته‌بندیِ پلن» است؛ اگر دسته‌ای هم‌نامِ اسمِ قدیمیِ پنل بود، پیشنهادِ تغییرِ آن را بده.
+    try:
+        _cats = await _panel_categories(row.id, key)
+        _olds = {_old_label.strip(), PANEL_LABELS.get(key, "").strip()} - {""}
+        _hits = [(i, c) for i, c in enumerate(_cats) if c.strip() in _olds and c.strip() != name]
+        if _hits and len(name) <= 20:
+            await msg.answer(
+                "🏷 در صفحهٔ «خرید سرویس» دکمه‌ها نامِ <b>دسته‌بندیِ پلن‌ها</b> هستند، نه نامِ پنل. "
+                "این دسته‌ها هم‌نامِ اسمِ قبلیِ پنل بودند؛ نامشان هم عوض شود؟",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    *[[InlineKeyboardButton(text=f"✅ «{c}» ← «{name}»", callback_data=f"tvpn:plabcat:{key}:{i}",
+                                            style=ButtonStyle.SUCCESS)] for i, c in _hits[:3]],
+                    [InlineKeyboardButton(text="❌ نه، همین‌طور بماند", callback_data=f"tvpn:panel:{key}",
+                                          style=ButtonStyle.DANGER)]]))
+        elif _hits:
+            await msg.answer("ℹ️ دسته‌بندیِ پلن‌ها هم‌نامِ اسمِ قبلیِ پنل است ولی نامِ جدید بیش از ۲۰ کاراکتر است "
+                             "(سقفِ نامِ دسته)؛ اگر خواستی از «پلن‌هایِ فروش ← 🏷 دسته» کوتاه‌تر وارد کن.")
+    except Exception:
+        logger.exception("vpn_admin: پیشنهادِ تغییرِ نامِ دسته هم‌نامِ پنل ناموفق بود")
     info, kb = await _vpn_panel_menu_content(row, key)
     await msg.answer(info, reply_markup=kb)
+
+
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:plabcat:"))
+async def vpn_panel_label_to_category(cb: CallbackQuery, bot: Bot):
+    """PATCH_PANEL_LABEL_TO_CATEGORY_V1 — نامِ دستهٔ هم‌نامِ پنل را به نامِ نمایشیِ فعلیِ پنل تغییر می‌دهد."""
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    _, _, key, idx = cb.data.split(":")
+    cats = await _panel_categories(row.id, key)
+    new = (await panel_label(row.id, key)).strip()
+    if not idx.isdigit() or int(idx) >= len(cats) or not new or len(new) > 20:
+        await cb.answer("این گزینه دیگر معتبر نیست.", show_alert=True)
+        return
+    old = cats[int(idx)]
+    async with Session() as s:
+        plans = (await s.scalars(select(VpnPlan).where(
+            VpnPlan.bot_id == row.id, VpnPlan.panel_key == key, VpnPlan.category == old))).all()
+        for p in plans:
+            p.category = new
+        await s.commit()
+    await cb.answer(f"✅ {len(plans)} پلن به‌روز شد", show_alert=True)
+    info, kb = await _vpn_panel_menu_content(row, key)
+    try:
+        await cb.message.edit_text(f"✅ دستهٔ «{old}» ← «{new}» ({len(plans)} پلن).\n\n" + info, reply_markup=kb)
+    except Exception:
+        await cb.message.answer(info, reply_markup=kb)
 
 
 @vpn_admin_router.callback_query(F.data.startswith("tvpn:panel:"))
