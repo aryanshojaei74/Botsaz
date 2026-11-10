@@ -7369,6 +7369,20 @@ async def _renew_quote(bot_id: int, telegram_id: int, pk: str, rc: "_RenewCfg", 
     return int(days * rc.pd + gb * rc.pg)
 
 
+async def _renew_min_quote(bot_id: int, telegram_id: int, pk: str, rc: "_RenewCfg", days: int) -> tuple[int, bool]:
+    """=== PATCH_RENEW_GB_ONLY_PRICING_V1 === (Weirdnet: «تمدید روشن است ولی می‌گوید فعال نیست»)
+    وقتی قیمتِ روزانه صفر است (فروش آنلاین فقط بر اساسِ حجم/تعرفهٔ مدت‌دار)، قیمتِ «فقط زمان» صفر درمی‌آمد و تمدید
+    به‌اشتباه غیرفعال اعلام می‌شد. اینجا کمترین قیمتِ مثبت بینِ «فقط زمان» و «زمان + هر حجمِ مجاز» برمی‌گردد.
+    خروجی: (کمترین قیمتِ مثبت یا ۰، آیا خودِ «فقط زمان» قیمتِ مثبت دارد)."""
+    only = await _renew_quote(bot_id, telegram_id, pk, rc, days)
+    cands = [only] if only > 0 else []
+    for g in _renew_gb_options(rc):
+        q = await _renew_quote(bot_id, telegram_id, pk, rc, days, g)
+        if q > 0:
+            cands.append(q)
+    return (min(cands) if cands else 0), only > 0
+
+
 def _renew_day_options(rc: "_RenewCfg") -> list[int]:
     if rc.simple_days > 0:
         return [rc.simple_days]
@@ -7439,16 +7453,16 @@ async def vpn_renew_menu(cb: CallbackQuery, bot: Bot):
         rc = await _renew_cfg(row.id, cb.from_user.id, pk)
         opts = []
         for d in _renew_day_options(rc):
-            q = await _renew_quote(row.id, cb.from_user.id, pk, rc, d)
+            q, only_ok = await _renew_min_quote(row.id, cb.from_user.id, pk, rc, d)   # PATCH_RENEW_GB_ONLY_PRICING_V1
             if q > 0:
-                opts.append((d, q))
+                opts.append((d, q, only_ok))
         if not opts:
             await cb.answer("⛔️ تمدید در حال حاضر فعال نیست.", show_alert=True)
             return
-        for d, q in opts:
+        for d, q, only_ok in opts:
             price = q if rc.mirror else await _renew_partner_price(row.id, cb.from_user.id, q, pk, "custom")
             rows.append([InlineKeyboardButton(
-                text=f"♻️ +{d} روز — {rial(price)}",
+                text=f"♻️ +{d} روز — " + ("" if only_ok else "از ") + f"{rial(price)}",
                 callback_data=f"vrend:{aid}:{d}", style=_renew_style)])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"vsvc:{aid}",
                                       style=_back_style)])
@@ -7494,7 +7508,7 @@ async def vpn_renew_pay_days(cb: CallbackQuery, bot: Bot):
             await cb.answer("این گزینهٔ تمدید معتبر نیست؛ دوباره از منوی تمدید انتخاب کن.",
                             show_alert=True)
             return
-        if await _renew_quote(bot_id, cb.from_user.id, _pk_r, rc, add_days) <= 0:
+        if (await _renew_min_quote(bot_id, cb.from_user.id, _pk_r, rc, add_days))[0] <= 0:   # PATCH_RENEW_GB_ONLY_PRICING_V1
             await cb.answer("⛔️ تمدید در حال حاضر فعال نیست.", show_alert=True)
             return
 
@@ -7506,10 +7520,14 @@ async def vpn_renew_pay_days(cb: CallbackQuery, bot: Bot):
             # مرحلهٔ دوم: انتخابِ حجمِ همراهِ تمدید (یا فقط روز)
             from tenant import ibtn_style as _ibs
             _st = await _ibs(bot_id, "ibtn:renew") or ButtonStyle.SUCCESS
-            vrows = [[InlineKeyboardButton(
-                text=f"♻️ فقط +{add_days} روز — {rial(await _rp(add_days, 0))}",
-                callback_data=f"vrend:{aid}:{add_days}:0", style=_st)]]
+            vrows = []
+            if await _renew_quote(bot_id, cb.from_user.id, _pk_r, rc, add_days) > 0:    # PATCH_RENEW_GB_ONLY_PRICING_V1: «فقط زمان» بدونِ قیمت نمایش داده نشود
+                vrows.append([InlineKeyboardButton(
+                    text=f"♻️ فقط +{add_days} روز — {rial(await _rp(add_days, 0))}",
+                    callback_data=f"vrend:{aid}:{add_days}:0", style=_st)])
             for g in _gb_opts:
+                if await _renew_quote(bot_id, cb.from_user.id, _pk_r, rc, add_days, g) <= 0:
+                    continue
                 vrows.append([InlineKeyboardButton(
                     text=f"♻️ +{add_days} روز + {g} گیگ — {rial(await _rp(add_days, g))}",
                     callback_data=f"vrend:{aid}:{add_days}:{g}", style=_st)])
@@ -7522,6 +7540,9 @@ async def vpn_renew_pay_days(cb: CallbackQuery, bot: Bot):
             return
         add_gb = add_gb or 0
         price = await _rp(add_days, add_gb)
+        if price <= 0:    # PATCH_RENEW_GB_ONLY_PRICING_V1: هرگز تمدیدِ رایگان (مثلاً دکمهٔ قدیمیِ «فقط زمان» وقتی قیمتِ روز صفر است)
+            await cb.answer("این گزینهٔ تمدید دیگر معتبر نیست؛ دوباره از منوی تمدید انتخاب کن.", show_alert=True)
+            return
         u = await s.scalar(select(BotUser).where(
             BotUser.bot_id == bot_id, BotUser.telegram_id == cb.from_user.id).with_for_update())
         if not u or float(u.balance) < price:
