@@ -750,6 +750,10 @@ async def menu_kb(panels: list[VpnPanel], bot_id: int = 0) -> "InlineKeyboardMar
         rows.append([KeyboardButton(text="🔍 جستجوی کانفیگ با کد سرویس", style=ButtonStyle.PRIMARY)])  # === PATCH_VPN_PANEL_COLOR_V1 ===
         rows.append([KeyboardButton(text="🤝 حساب‌های همکار (تخفیف)", style=ButtonStyle.PRIMARY)])  # === PATCH_VPN_PANEL_COLOR_V1 ===
         rows.append([KeyboardButton(text="🧹 سرویس‌های منقضی‌شده (حذف دستی)", style=ButtonStyle.PRIMARY)])  # PATCH_SVC_CLEANUP_V1
+        # === PATCH_ORPHAN_PLANS_V1 === (حالتِ کیبوردی)
+        _orph_n_k = sum(n for _, n in await _orphan_plan_groups(bot_id))
+        if _orph_n_k:
+            rows.append([KeyboardButton(text=f"🧹 پلن‌هایِ بدونِ پنل ({_orph_n_k})", style=ButtonStyle.DANGER)])
         rows.append([KeyboardButton(text="⬅️ بازگشت به سرویس‌ها و محصولات")])
         return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 

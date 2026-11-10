@@ -19,3 +19,24 @@ def test_orphans(monkeypatch, tmp_path):
             await s.commit()
         assert sorted(await A._orphan_plan_groups(1)) == [("marzban", 2), ("wgres", 1)]
     asyncio.run(go())
+
+
+def test_reply_kb_shows_orphan_button(monkeypatch, tmp_path):
+    async def go():
+        eng = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/t2.db")
+        async with eng.begin() as c:
+            await c.run_sync(models.Base.metadata.create_all)
+        S = async_sessionmaker(eng, expire_on_commit=False)
+        monkeypatch.setattr(A, "Session", S)
+        import tenant
+        async def gs(b, k, d=""): return "reply" if k == "menu_mode" else d
+        monkeypatch.setattr(tenant, "get_setting", gs)
+        async def bp(b): return "pro"
+        monkeypatch.setattr(A, "_bot_plan", bp)
+        async with S() as s:
+            s.add(models.VpnPlan(bot_id=1, panel_key="marzban", title="t", volume_gb=1, days=1, price=1))
+            await s.commit()
+        kb = await A.menu_kb([], 1)
+        texts = [b.text for r in kb.keyboard for b in r]
+        assert any(t.startswith("🧹 پلن‌هایِ بدونِ پنل") for t in texts)
+    asyncio.run(go())

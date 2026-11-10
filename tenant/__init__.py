@@ -7542,6 +7542,11 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
             _etext, _ekb = await _exp_render(row.id, 0)
             await msg.answer(_etext, reply_markup=_ekb)
             return
+        # === PATCH_ORPHAN_PLANS_V1 === (حالتِ کیبوردی)
+        if msg.text and msg.text.startswith("🧹 پلن‌هایِ بدونِ پنل") and row.field == "vpn_sales":
+            from tenant.bots.vpn.vpn_admin import vpn_orphans as _vpn_orph
+            await _vpn_orph(_FakeCb(msg, "tvpn:orph"), bot)
+            return
         # === PATCH_VPN_PARTNER_REPLY_KB_V1 ===
         if msg.text == "🤝 حساب‌های همکار (تخفیف)":
             from tenant.bots.vpn.vpn_partners import _partner_list_text_kb
@@ -14201,7 +14206,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "524"
+BUILD_ID = "525"
 
 
 @tenant_router.message(Command("version"))
