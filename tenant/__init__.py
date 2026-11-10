@@ -14182,7 +14182,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "521"
+BUILD_ID = "522"
 
 
 @tenant_router.message(Command("version"))
@@ -14775,6 +14775,9 @@ async def _tn_antispam_kb(bot_id: int, plan: str = "") -> InlineKeyboardMarkup:
             text=("🟢 تاییدِ شماره‌همراه: روشن" if phone_on else "🔴 تاییدِ شماره‌همراه: خاموش"),
             callback_data="set:toggle_phoneverify",
             style=(ButtonStyle.SUCCESS if phone_on else ButtonStyle.DANGER))],
+        # === PATCH_PHONE_COLLECT_ALL_V1 ===
+        [InlineKeyboardButton(text="📣 درخواستِ شماره از کاربرانِ قبلی", callback_data="set:phonecollect",
+                              style=ButtonStyle.PRIMARY)],
         # === PATCH_ANTISPAM_TEMP_LOCK_V1 ===
         [InlineKeyboardButton(
             text=("⏳ حالت: قفلِ موقت (بدونِ بن) — زدن = بنِ دائمی" if _mode == "temp"
@@ -14801,9 +14804,10 @@ async def _tn_antispam_text(bot_id: int) -> str:
         "به این ربات بفرستد:\n"
         f"• بار ۱ و ۲ فقط اخطار می‌گیرد\n"
         + after +
-        "📱 <b>تاییدِ شماره‌همراه</b> (ضدِ رفرالِ فیک): اگه روشن باشه، هر کاربرِ "
-        "جدید بعدِ عضویتِ اجباری و /start، مجبوره شماره‌شو با دکمهٔ تلگرام "
-        "تایید کنه (فقط شماره‌هایِ ایران، +98) تا بتونه از ربات استفاده کنه."
+        "📱 <b>تاییدِ شماره‌همراه</b> (ضدِ رفرالِ فیک): اگه روشن باشه، همهٔ کاربرها "
+        "(جدید و قدیمی) با اولین پیام یا دکمه، مجبورن شماره‌شونو با دکمهٔ تلگرام "
+        "تایید کنن (فقط شماره‌هایِ ایران، +98) تا بتونن از ربات استفاده کنن.\n"
+        "📣 با «درخواستِ شماره از کاربرانِ قبلی» برایِ همهٔ کسانی که هنوز شماره ندادن پیامِ درخواست می‌ره."
     )
 
 
@@ -14892,6 +14896,100 @@ async def tn_phoneverify_toggle(cb: CallbackQuery, bot: Bot):
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     await cb.answer("✅ تاییدِ شماره‌همراه " + ("فعال شد" if new == "on" else "غیرفعال شد"))
+
+
+# === PATCH_PHONE_COLLECT_ALL_V1 ===
+# پیشنهادِ #198: گیتِ شماره فقط وقتی کاربر خودش سراغِ ربات/پرداخت بیاید اجرا می‌شود؛ کاربرانِ
+# قدیمی که سر نمی‌زنند هیچ‌وقت شماره نمی‌دهند. این دکمه برایِ همهٔ کاربرانِ بدونِ شمارهٔ
+# تاییدشده پیامِ درخواست (با دکمهٔ ارسالِ شماره) می‌فرستد.
+_phone_collect_running: set[int] = set()
+
+
+async def _phone_collect_targets(bot_id: int) -> list[int]:
+    async with Session() as s:
+        rows = (await s.execute(select(BotUser.telegram_id).where(
+            BotUser.bot_id == bot_id, BotUser.is_banned == False,          # noqa: E712
+            (BotUser.phone_verified == False) | (BotUser.phone_verified.is_(None))))).all()   # noqa: E712
+    return [r[0] for r in rows if r[0]]
+
+
+async def _phone_collect_run(bot: Bot, row, admin_chat_id: int, ids: list[int]) -> tuple[int, int]:
+    from tenant.shared.sms_verify import sms_mode
+    from aiogram.exceptions import TelegramRetryAfter
+    sms = await sms_mode(row.id)
+    if sms:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="📨 دریافتِ کدِ تأیید با پیامک", callback_data="phv:sms", style=ButtonStyle.SUCCESS)]])
+        text = ("📱 <b>تاییدِ شماره‌همراه</b>\n\nبرایِ ادامهٔ استفاده از ربات و خرید، لطفاً شمارهٔ موبایلت را "
+                "تایید کن. روی دکمهٔ زیر بزن.")
+    else:
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=BTN_PHONE_VERIFY, request_contact=True)]],
+                                 resize_keyboard=True)
+        text = ("📱 <b>تاییدِ شماره‌همراه</b>\n\nبرایِ ادامهٔ استفاده از ربات و خرید، لطفاً یک‌بار شماره‌ات را "
+                "تایید کن. روی دکمهٔ پایین بزن — خودِ تلگرام شماره را می‌فرستد.\n\n"
+                "⚠️ فقط شماره‌هایِ ایران (+۹۸) پذیرفته می‌شود.")
+    ok = fail = 0
+    try:
+        for uid in ids:
+            if await is_owner_or_admin(row.id, uid, row.owner_id):
+                continue
+            try:
+                await bot.send_message(uid, text, reply_markup=kb, parse_mode="HTML")
+                ok += 1
+            except TelegramRetryAfter as e:
+                await asyncio.sleep(float(e.retry_after) + 1)
+                try:
+                    await bot.send_message(uid, text, reply_markup=kb, parse_mode="HTML")
+                    ok += 1
+                except Exception:
+                    fail += 1
+            except Exception:
+                fail += 1
+            await asyncio.sleep(0.06)
+    finally:
+        _phone_collect_running.discard(row.id)
+    try:
+        await bot.send_message(
+            admin_chat_id,
+            f"📣 درخواستِ شماره تمام شد.\n✅ ارسال‌شده: {ok}\n❌ ناموفق (ربات را بسته‌اند): {fail}\n\n"
+            "هر کس شماره‌اش را بفرستد، در پروفایلش ثبت می‌شود.")
+    except Exception:
+        logger.exception("گزارشِ پایانِ درخواستِ شماره برایِ ادمین ارسال نشد")
+    return ok, fail
+
+
+@tenant_router.callback_query(F.data.startswith("set:phonecollect"))
+async def tn_phone_collect(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    ids = await _phone_collect_targets(row.id)
+    if cb.data.endswith(":go"):
+        if row.id in _phone_collect_running:
+            await cb.answer("در حالِ ارسال است؛ صبر کن تا تمام شود.", show_alert=True)
+            return
+        if not ids:
+            await cb.answer("کاربرِ بدونِ شماره‌ای نمانده.", show_alert=True)
+            return
+        _phone_collect_running.add(row.id)
+        asyncio.create_task(_phone_collect_run(bot, row, cb.message.chat.id, ids))
+        await cb.answer("شروع شد؛ پایانِ کار گزارش می‌دهم.", show_alert=True)
+        return
+    async with Session() as s:
+        total = await s.scalar(select(func.count()).select_from(BotUser).where(BotUser.bot_id == row.id)) or 0
+    await cb.message.answer(
+        "📣 <b>درخواستِ شماره از کاربرانِ قبلی</b>\n\n"
+        f"کلِ کاربران: <b>{total}</b>\nبدونِ شمارهٔ تاییدشده: <b>{len(ids)}</b>\n\n"
+        "برایِ همهٔ کاربرانِ بدونِ شماره یک پیام با دکمهٔ «ارسالِ شماره» فرستاده می‌شود. "
+        "هر کس بفرستد، شماره‌اش ثبت می‌شود.\n\n"
+        "ℹ️ برایِ اینکه کسی بدونِ شماره نتواند از ربات استفاده کند، «تاییدِ شماره‌همراه» را هم روشن بگذار؛ "
+        "آن گزینه از همهٔ کاربران (قدیمی و جدید) در اولین پیام/دکمه شماره می‌خواهد.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"✅ ارسال برایِ {len(ids)} نفر", callback_data="set:phonecollect:go",
+                                  style=ButtonStyle.SUCCESS)],
+            [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="set:antispam", style=ButtonStyle.DANGER)]]))
+    await cb.answer()
 
 
 async def _tn_render_banlist(cb: CallbackQuery, bot_id: int, offset: int):
