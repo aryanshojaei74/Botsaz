@@ -260,3 +260,21 @@ async def test_client_without_secret_or_unreachable():
     assert await c.files(1) == []
     c2 = H.VipClient(base="http://vip", secret="bad", transport=httpx.MockTransport(lambda r: httpx.Response(401, json={"detail": "no"})))
     assert await c2.logs(1) == ""
+
+
+def test_config_hints_from_mini_app_auth_log():
+    log = "x\n[mts-arena] ورود رد شد: bad-signature\n[mts-arena] ورود رد شد: no-initdata\n[mts-arena] ورود رد شد: expired\n"
+    kinds = {(i.kind, i.hint[:12]) for i in H.parse_config_log(log)}
+    assert len(H.parse_config_log(log)) == 3 and all(k == "config" for k, _ in kinds)
+    sig = next(i for i in H.parse_config_log(log) if "امضا" in i.message)
+    assert "BOT_TOKENS=" in sig.hint and sig.ai_fixable is False
+    assert H.parse_config_log("BOT_TOKEN تنظیم نشده است؛ بازی آنلاین کار نمی‌کند.")[0].message.startswith("توکنِ ربات")
+    assert H.parse_config_log("ورود موفق\nهمه‌چی خوبه") == []
+
+
+@pytest.mark.asyncio
+async def test_diagnose_reports_config_issue_and_not_ai_fixable():
+    vip = FakeVip({"main.py": "x = 1\n"}, log="[mts-arena] ورود رد شد: bad-signature\n")
+    rep, _ = await H.diagnose(vip.client(), 7, compiler())
+    assert [i.kind for i in rep.issues] == ["config"]
+    assert rep.fixable is False and "تنظیمات" in rep.text() and "BOT_TOKENS" in rep.text()

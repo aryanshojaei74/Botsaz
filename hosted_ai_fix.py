@@ -127,7 +127,8 @@ class Report:
         return "\n".join(lines)
 
 
-_KIND_FA = {"syntax": "خطای نوشتاری (Syntax)", "module": "ماژولِ نصب‌نشده", "runtime": "خطایِ زمانِ اجرا", "other": "خطا"}
+_KIND_FA = {"syntax": "خطای نوشتاری (Syntax)", "module": "ماژولِ نصب‌نشده", "runtime": "خطایِ زمانِ اجرا", "other": "خطا",
+            "config": "تنظیمات"}
 
 
 def _esc(s: str) -> str:
@@ -317,6 +318,37 @@ def parse_log(log: str) -> list[Issue]:
     return list(out.values())[-6:]
 
 
+# ───────────────────────── مشکل‌هایِ «تنظیمات» از لاگ (بدونِ هوش مصنوعی و بدونِ تغییرِ کد) ─────────────────────────
+# PATCH_HOSTED_CONFIG_HINTS_V1 — مینی‌اپ/رباتی که ورودِ کاربر را با initData و توکنِ ربات تأیید می‌کند وقتی رد می‌کند، دلیلش را
+# در لاگ می‌نویسد؛ این‌جا همان دلیل به راهِ حلِ دقیق تبدیل می‌شود. اصلاحش تنظیمِ متغیر است، نه ویرایشِ کدِ کاربر.
+_CONFIG_RULES = (
+    ("bad-signature",
+     "ورودِ بازیکن رد شد: امضایِ تلگرام با توکنِ ربات‌هایِ ثبت‌شده نمی‌خواند.",
+     "مینی‌اپ از رباتی باز شده که توکنش به اپ داده نشده. توکنِ همهٔ رباتی که مینی‌اپ از آن‌ها باز می‌شود را در «متغیرها (.env)» بگذار: "
+     "BOT_TOKENS=توکنِ‌اول,توکنِ‌دوم (جدا با ویرگول) و اپ را ری‌استارت کن. اگر کدِ اپ فقط BOT_TOKEN را می‌خواند، باید نسخه‌ایِ از آن "
+     "که چند توکن را می‌پذیرد نصب شود."),
+    ("no-initdata",
+     "ورودِ بازیکن رد شد: مینی‌اپ بدونِ اطلاعاتِ تلگرام (initData) باز شده.",
+     "مینی‌اپ را از دکمهٔ Menu ربات (BotFather ← Menu Button) یا لینکِ t.me/ربات/اپ باز کن؛ لینکِ معمولی یا دکمهٔ کیبوردی initData نمی‌دهد."),
+    ("expired",
+     "ورودِ بازیکن رد شد: اعتبارِ initData (۲۴ ساعت) تمام شده.",
+     "مینی‌اپ را ببند و دوباره از ربات باز کن؛ نشستِ بیش از یک روز باز مانده معتبر نیست."),
+    ("no-token",
+     "توکنِ ربات به اپ نرسیده است.",
+     "BOT_TOKEN (یا BOT_TOKENS برایِ چند ربات) را در «متغیرها (.env)» بگذار و اپ را ری‌استارت کن."),
+)
+
+
+def parse_config_log(log: str) -> list[Issue]:
+    text = log or ""
+    out: list[Issue] = []
+    for needle, msg, hint in _CONFIG_RULES:
+        marker = f"ورود رد شد: {needle}"
+        if marker in text or (needle == "no-token" and "BOT_TOKEN تنظیم نشده" in text):
+            out.append(Issue(kind="config", path=None, line=None, message=msg, source="log", hint=hint))
+    return out
+
+
 # ───────────────────────── کامپایل با پایتونِ ایمیج ─────────────────────────
 
 _CHECK_SRC = r'''
@@ -500,6 +532,8 @@ async def diagnose(client: VipClient, app_id: int, compiler: Compiler | None = N
             if mod and req is not None and req_has(req, PIP_NAMES.get(mod.group(1).split(".")[0], mod.group(1).split(".")[0])):
                 it.hint = "در requirements.txt هست ولی نصب نشده؛ «ساخت» (build) دوباره بزن."
                 it.ai_fixable = False
+        issues.setdefault(it.key(), it)
+    for it in parse_config_log(log):                      # PATCH_HOSTED_CONFIG_HINTS_V1
         issues.setdefault(it.key(), it)
     rep.issues = list(issues.values())
     if rep.py_source == "local":

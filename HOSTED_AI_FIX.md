@@ -61,3 +61,9 @@ venv/bin/python scripts/hosted_ai_fix.py --owner <TELEGRAM_ID>            # گز
 venv/bin/python scripts/hosted_ai_fix.py --owner <TELEGRAM_ID> --fix       # + طرحِ اصلاح (بدونِ نوشتن)
 venv/bin/python scripts/hosted_ai_fix.py --owner <TELEGRAM_ID> --fix --apply
 ```
+
+
+## مشکل‌هایِ «تنظیمات» (بدونِ هوش مصنوعی)
+اگر لاگِ اپ دلیلِ رد شدنِ ورودِ کاربر را بنویسد (`ورود رد شد: bad-signature | no-initdata | expired | no-token`، همان چیزی که MTS Arena نسخهٔ ۱.۳.۴ می‌نویسد)،
+`diagnose()` یک مشکلِ نوعِ «تنظیمات» با راهِ حلِ دقیق نشان می‌دهد (مثلاً `BOT_TOKENS=توکن۱,توکن۲` برایِ چند ربات). این‌ها کدِ کاربر را عوض نمی‌کنند و
+«اصلاح با هوش مصنوعی» برایشان فعال نمی‌شود چون راهِ حل تنظیمِ متغیر یا باز کردنِ مینی‌اپ از دکمهٔ درست است.
