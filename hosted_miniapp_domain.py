@@ -365,6 +365,136 @@ def remove_static(app_name: str) -> bool:
     return existed
 
 
+# ───────────────────────── مدیریتِ فایل‌هایِ مینی‌اپ (جایگزینی / ویرایش / حذفِ تک‌فایل) ─────────────────────────
+# PATCH_MINIAPP_FILES_V1 — مثلِ بخشِ «فایل‌هایِ پروژه»: مالک بدونِ آپلودِ دوبارهٔ کلِ zip یک فایل را عوض یا ویرایش می‌کند.
+MAX_FILE_BYTES = 5 * 1024 * 1024
+MAX_TEXT_EDIT_BYTES = 512 * 1024
+LIST_LIMIT = 500
+_TEXT_EXTS = frozenset({".html", ".htm", ".js", ".mjs", ".css", ".json", ".txt", ".svg", ".xml", ".md", ".webmanifest"})
+
+
+def _is_text_name(name: str) -> bool:
+    return posixpath.splitext(name.lower())[1] in _TEXT_EXTS
+
+
+def _dir_size(root: Path) -> int:
+    total = 0
+    for f in root.rglob("*"):
+        try:
+            if f.is_file() and not f.is_symlink():
+                total += f.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def list_static(app_name: str) -> list[dict]:
+    """فهرستِ فایل‌هایِ مینی‌اپ: [{path, size, text}] (حداکثر LIST_LIMIT)، index.html اول."""
+    try:
+        root = static_dir(app_name).resolve()
+    except ValueError:
+        return []
+    out: list[dict] = []
+    if not root.is_dir():
+        return out
+    for f in sorted(root.rglob("*")):
+        try:
+            if f.is_symlink() or not f.is_file():
+                continue
+            rel = f.relative_to(root).as_posix()
+            out.append({"path": rel, "size": f.stat().st_size, "text": _is_text_name(rel)})
+        except (OSError, ValueError):
+            continue
+        if len(out) >= LIST_LIMIT:
+            break
+    out.sort(key=lambda d: (d["path"] != "index.html", d["path"]))
+    return out
+
+
+def _file_target(app_name: str, rel: str) -> tuple[Path | None, str]:
+    """(مسیرِ امنِ فایل داخلِ پوشهٔ اپ یا None، دلیل). فقط مسیرِ نسبی؛ بدونِ .. ، فایلِ مخفی و symlink."""
+    name = _safe_member((rel or "").strip())
+    if name is None or name.endswith("/") or name in (".", ""):
+        return None, "مسیرِ فایل نامعتبر است."
+    try:
+        root = static_dir(app_name).resolve()
+    except ValueError:
+        return None, "نامِ اپ نامعتبر است."
+    target = (root / name)
+    cand = target.resolve()
+    if root not in cand.parents:
+        return None, "مسیرِ فایل نامعتبر است."
+    for parent in [target, *target.parents]:
+        if parent == root:
+            break
+        if parent.is_symlink():
+            return None, "مسیرِ فایل نامعتبر است."
+    return target, ""
+
+
+def read_static_text(app_name: str, rel: str) -> Result:
+    target, why = _file_target(app_name, rel)
+    if target is None:
+        return Result(False, why)
+    if not _is_text_name(target.name):
+        return Result(False, "فقط فایل‌هایِ متنی (html، js، css، json، txt، svg) قابلِ ویرایش‌اند؛ برایِ بقیه «جایگزینی» را بزن.")
+    try:
+        if not target.is_file():
+            return Result(False, "فایل پیدا نشد.")
+        if target.stat().st_size > MAX_TEXT_EDIT_BYTES:
+            return Result(False, f"فایل بزرگ‌تر از {MAX_TEXT_EDIT_BYTES // 1024} کیلوبایت است؛ «جایگزینی» را بزن.")
+        data = target.read_bytes()
+    except OSError as e:
+        return Result(False, f"خواندنِ فایل ناموفق بود: {e}")
+    try:
+        return Result(True, data.decode("utf-8"))
+    except UnicodeDecodeError:
+        return Result(False, "فایل متنیِ UTF-8 نیست؛ «جایگزینی» را بزن.")
+
+
+def write_static(app_name: str, rel: str, data: bytes, *, must_exist: bool = False) -> Result:
+    """فایل را می‌نویسد (جایگزینیِ فایلِ موجود یا افزودنِ فایلِ تازه). index.html باید باقی بماند."""
+    target, why = _file_target(app_name, rel)
+    if target is None:
+        return Result(False, why)
+    if not static_dir(app_name).is_dir() or not has_static(app_name):
+        return Result(False, "اول zipِ مینی‌اپ را بارگذاری کن.")
+    if len(data) > MAX_FILE_BYTES:
+        return Result(False, f"حجمِ فایل بیشتر از {MAX_FILE_BYTES // (1024 * 1024)} مگابایت است.")
+    exists = target.is_file()
+    if must_exist and not exists:
+        return Result(False, "فایل پیدا نشد.")
+    if not exists and sum(1 for _ in static_dir(app_name).rglob("*") if _.is_file()) >= MAX_FILES:
+        return Result(False, f"تعدادِ فایل‌ها به سقفِ {MAX_FILES} رسیده است.")
+    if _dir_size(static_dir(app_name)) - (target.stat().st_size if exists else 0) + len(data) > MAX_UNZIPPED_BYTES:
+        return Result(False, f"حجمِ کلِ مینی‌اپ از {MAX_UNZIPPED_BYTES // (1024 * 1024)} مگابایت بیشتر می‌شود.")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(f".{target.name}.{int(time.time() * 1000)}.tmp")
+        tmp.write_bytes(data)
+        os.replace(tmp, target)
+    except OSError as e:
+        return Result(False, f"نوشتنِ فایل ناموفق بود: {e}")
+    _HOST_CACHE.clear()
+    return Result(True, ("فایل جایگزین شد." if exists else "فایل افزوده شد."))
+
+
+def delete_static_file(app_name: str, rel: str) -> Result:
+    target, why = _file_target(app_name, rel)
+    if target is None:
+        return Result(False, why)
+    if target.name == "index.html" and target.parent == static_dir(app_name).resolve():
+        return Result(False, "index.html را نمی‌شود حذف کرد؛ به‌جایش «جایگزینی» را بزن.")
+    try:
+        if not target.is_file():
+            return Result(False, "فایل پیدا نشد.")
+        target.unlink()
+    except OSError as e:
+        return Result(False, f"حذفِ فایل ناموفق بود: {e}")
+    _HOST_CACHE.clear()
+    return Result(True, "فایل حذف شد.")
+
+
 def resolve_static(app_name: str, rel_path: str) -> Path | None:
     """مسیرِ فایل (ضدِ path-traversal). مسیرِ بدونِ پسوند (روتِ SPA) → index.html."""
     root = static_dir(app_name).resolve()
