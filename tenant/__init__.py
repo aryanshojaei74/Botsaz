@@ -14223,7 +14223,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "533"
+BUILD_ID = "534"
 
 
 @tenant_router.message(Command("version"))
@@ -16800,6 +16800,13 @@ IBTN_CATALOG_GROUPS: list[tuple[str, dict[str, str]]] = [
         "ibtn:adm_sec_admins":   "👮 ادمین‌ها و پشتیبانی",
         "ibtn:adm_sec_settings": "🎛 دکمه‌ها و تنظیمات",
     }),
+    # === PATCH_VS_BUY_COLORS_V1 === (Starzivo) رنگِ دکمه‌هایِ صفحهٔ خریدِ تون/استارز در رباتِ خدماتِ مجازی
+    ("💎 خریدِ تون / استارز (خدماتِ مجازی)", {
+        "ibtn:vs_choice": "🔹 انتخابِ روشِ دریافت (واریز به ولت، ...)",
+        "ibtn:vs_amount": "💠 مقدارهایِ آماده",
+        "ibtn:vs_custom": "✍️ مقدارِ دلخواه",
+        "ibtn:vs_cancel": "❌ لغو",
+    }),
     ("🤖 پنل مدیریت — VPN خودکار", {
         "ibtn:vpn_toggle":    "🟢/🔴 فعال/غیرفعال VPN",
         "ibtn:vpn_test":      "🔌 تست اتصال",
@@ -16951,6 +16958,7 @@ _IBTN_GROUP_FIELDS: dict[str, set[str]] = {
     "📦 سرویس‌های من (کانفیگ)": {"vpn_sales"},
     "🛒 خرید / پلن": {"vpn_sales"},
     "🤖 پنل مدیریت — VPN خودکار": {"vpn_sales"},
+    "💎 خریدِ تون / استارز (خدماتِ مجازی)": {"virtual_service"},   # PATCH_VS_BUY_COLORS_V1
 }
 _IBTN_KEY_FIELDS: dict[str, set[str]] = {
     "ibtn:adm_cfg": {"vpn_sales"},

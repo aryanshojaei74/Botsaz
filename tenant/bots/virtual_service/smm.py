@@ -18246,11 +18246,15 @@ async def show_ton_shop_to_user(bot: Bot, target: Message, bot_id: int,
         _lines = ["💎 <b>خریدِ تون (TON)</b>\n", "لطفاً یکی از روش‌هایِ دریافت را بر اساس نیازِ خودت انتخاب کن:\n"]
         for _k in _types:
             _lines.append(f"<b>{_TON_TYPES[_k][0]}</b>\n{_TON_TYPES[_k][1]}\n")
+        _st_ch = await _vs_style(bot_id, "ibtn:vs_choice", ButtonStyle.PRIMARY)
+        _st_cn = await _vs_style(bot_id, "ibtn:vs_cancel", ButtonStyle.DANGER)
+        _ck = {"style": _st_ch} if _st_ch is not None else {}
+        _cc = {"style": _st_cn} if _st_cn is not None else {}
         await target.answer(
             "\n".join(_lines), parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                *[[InlineKeyboardButton(text=_TON_TYPES[_k][0], callback_data=f"ton:t:{_k}")] for _k in _types],
-                [InlineKeyboardButton(text="❌ لغو", callback_data="fsm:cancel")]]))
+                *[[InlineKeyboardButton(text=_TON_TYPES[_k][0], callback_data=f"ton:t:{_k}", **_ck)] for _k in _types],
+                [InlineKeyboardButton(text="❌ لغو", callback_data="fsm:cancel", **_cc)]]))
         return
     if state is not None:
         await state.update_data(ton_type=_types[0] if _types else "wallet")
@@ -18260,13 +18264,22 @@ async def show_ton_shop_to_user(bot: Bot, target: Message, bot_id: int,
 async def _ton_show_amount(bot: Bot, target: Message, bot_id: int, state, rate, qmin, qmax) -> None:
     if state is not None:
         await state.set_state(SmmFSM.ton_amount_in)
+    # === PATCH_VS_BUY_COLORS_V1 === صفحهٔ انتخابِ مقدار: خوش‌ساخت‌تر، با قیمتِ هر بسته رویِ دکمه
+    _kind = ((await state.get_data()).get("ton_type") if state is not None else None) or "wallet"
+    _how = f"{_TON_TYPES[_kind][0]}\n" if _kind in _TON_TYPES else ""
     await target.answer(
-        "💎 <b>خریدِ تون (TON)</b>\n\n"
-        f"نرخ: هر ۱ TON = <b>{rate:,.0f} تومان</b>\n"
-        f"یکی از مقدارهای آماده را بزن یا «✍️ مقدار دلخواه» و عدد را بفرست "
-        f"(بینِ {qmin:g} تا {qmax:g} — اعشاری مجاز، مثال: 1.5):",
+        "💎 <b>خریدِ تون (TON)</b>\n"
+        "━━━━━━━━━━━━━━━\n"
+        + (f"{_how}" if _how else "")
+        + f"📈 نرخِ امروز: هر ۱ TON = <b>{rate:,.0f} تومان</b>\n"
+        f"📏 بازهٔ سفارش: <b>{qmin:g}</b> تا <b>{qmax:g}</b> TON\n"
+        "⚡️ تحویلِ سریع و مطمئن\n"
+        "━━━━━━━━━━━━━━━\n"
+        "👇 یکی از بسته‌هایِ آماده را بزن، یا «✍️ مقدارِ دلخواه» را انتخاب کن و عدد را بفرست "
+        "(اعشار مجاز است، مثلاً 1.5):",
         parse_mode="HTML",
-        reply_markup=_pick_kb([q for q in _TON_PICKS if qmin <= q <= qmax], "ton:q", "TON", "ton:qc"))
+        reply_markup=await _pick_kb_styled(bot_id, [q for q in _TON_PICKS if qmin <= q <= qmax], "ton:q", "TON", "ton:qc",
+                                           price_of=lambda q: round(q * rate), icon="💎"))
 
 
 # === PATCH_TON_TYPES_V1 === (SINA) «نوعِ دریافتِ تون» — مالک هر نوع را جداگانه روشن/خاموش می‌کند.
@@ -19539,6 +19552,41 @@ _STAR_PICKS = (50, 75, 100)
 _TON_PICKS = (0.1, 0.5, 1)
 
 
+# === PATCH_VS_BUY_COLORS_V1 === رنگِ دکمه‌هایِ صفحهٔ خریدِ تون/استارز؛ مالک از «رنگِ دکمه‌ها» عوضشان می‌کند.
+async def _vs_style(bot_id: int, key: str, default):
+    """رنگِ انتخابیِ مالک یا پیش‌فرض؛ فقط وقتی پلنِ ربات «دکمهٔ رنگی» دارد (مثلِ بقیهٔ ربات)."""
+    try:
+        from tenant import ibtn_style, _ibtn_colored_allowed
+        if not await _ibtn_colored_allowed(bot_id):
+            return None
+        return (await ibtn_style(bot_id, key)) or default
+    except Exception:
+        logger.exception("[smm] خواندنِ رنگِ دکمهٔ خرید ناموفق بود")
+        return None
+
+
+async def _pick_kb_styled(bot_id: int, picks, prefix: str, unit: str, custom_cb: str,
+                          price_of=None, cols: int = 2, icon: str = "💠") -> InlineKeyboardMarkup:
+    """نسخهٔ رنگی/دو‌ستونهٔ _pick_kb؛ اگر price_of داده شود قیمتِ هر مقدار هم رویِ دکمه می‌آید. callbackها همان قبلی‌اند."""
+    st_amt = await _vs_style(bot_id, "ibtn:vs_amount", ButtonStyle.PRIMARY)
+    st_cus = await _vs_style(bot_id, "ibtn:vs_custom", ButtonStyle.SUCCESS)
+    st_can = await _vs_style(bot_id, "ibtn:vs_cancel", ButtonStyle.DANGER)
+
+    def _b(text, cb, st):
+        kw = {"text": text, "callback_data": cb}
+        if st is not None:
+            kw["style"] = st
+        return InlineKeyboardButton(**kw)
+    btns = []
+    for p in picks:
+        label = f"{icon} {p:g} {unit}" + (f" · {price_of(p):,} ت" if price_of else "")
+        btns.append(_b(label, f"{prefix}:{p:g}", st_amt))
+    rows = [btns[i:i + cols] for i in range(0, len(btns), cols)]
+    rows.append([_b("✍️ مقدارِ دلخواه", custom_cb, st_cus)])
+    rows.append([_b("❌ لغو", "fsm:cancel", st_can)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def _pick_kb(picks, prefix: str, unit: str, custom_cb: str) -> InlineKeyboardMarkup:
     """مقدارهای آماده + «مقدار دلخواه» + لغو (اینلاین؛ در هر دو حالتِ منو کار می‌کند)."""
     rows = []
@@ -19559,7 +19607,8 @@ async def show_stars_shop_to_user(bot: Bot, target: Message, bot_id: int, state:
         f"نرخ: هر ⭐ = <b>{rate:,.0f} تومان</b>\n"
         f"یکی از تعدادهای آماده را بزن یا «✍️ مقدار دلخواه» و عدد را بفرست (بینِ {qmin:,} تا {qmax:,}):",
         parse_mode="HTML",
-        reply_markup=_pick_kb([q for q in _STAR_PICKS if qmin <= q <= qmax], "star:q", "⭐", "star:qc"))
+        reply_markup=await _pick_kb_styled(bot_id, [q for q in _STAR_PICKS if qmin <= q <= qmax], "star:q", "⭐", "star:qc",
+                                           price_of=lambda q: round(q * rate), icon="⭐"))
 
 
 @smm_router.callback_query(F.data == "ssl:calc")

@@ -101,3 +101,29 @@ def test_bulk_select_price_cat_delete(monkeypatch, tmp_path):
             assert await s.get(models.SmmService, 1) is None and await s.get(models.SmmService, 3) is not None
             assert await s.get(models.SmmService, 9) is not None
     asyncio.run(go())
+
+
+def test_vs_pick_kb_styled(monkeypatch):
+    import tenant
+    from aiogram.enums import ButtonStyle
+    async def run(allowed, saved):
+        async def ok(b): return allowed
+        async def ibs(b, k): return saved.get(k)
+        monkeypatch.setattr(tenant, "_ibtn_colored_allowed", ok)
+        monkeypatch.setattr(tenant, "ibtn_style", ibs)
+        return await smm._pick_kb_styled(1, [0.1, 0.5, 1], "ton:q", "TON", "ton:qc", price_of=lambda q: round(q * 299400), icon="💎")
+    kb = asyncio.run(run(True, {}))
+    flat = [b for r in kb.inline_keyboard for b in r]
+    assert [b.callback_data for b in flat] == ["ton:q:0.1", "ton:q:0.5", "ton:q:1", "ton:qc", "fsm:cancel"]
+    assert "29,940" in flat[0].text and flat[0].style == ButtonStyle.PRIMARY and flat[-1].style == ButtonStyle.DANGER
+    assert len(kb.inline_keyboard[0]) == 2          # دو ستون
+    kb2 = asyncio.run(run(True, {"ibtn:vs_amount": ButtonStyle.SUCCESS}))
+    assert kb2.inline_keyboard[0][0].style == ButtonStyle.SUCCESS      # رنگِ انتخابیِ مالک
+    kb3 = asyncio.run(run(False, {}))
+    assert all(b.style is None for r in kb3.inline_keyboard for b in r)    # پلنِ بدونِ رنگ ⇒ بی‌رنگ مثلِ قبل
+
+
+def test_vs_color_catalog():
+    import tenant
+    assert "ibtn:vs_amount" in tenant.IBTN_CATALOG
+    assert tenant._IBTN_GROUP_FIELDS["💎 خریدِ تون / استارز (خدماتِ مجازی)"] == {"virtual_service"}
