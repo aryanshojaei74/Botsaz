@@ -25,3 +25,79 @@ def test_apay_hide_pay_btn():
     t2, kb = AP.invoice_view(title="x", pay_rial=1, card="", holder="", order_id="o", pay_url="https://x.y",
                              check_cb="c", cancel_cb="d", show_pay_btn=False)
     assert "💳 پرداخت" in [b.text for r in kb.inline_keyboard for b in r]
+
+
+import asyncio
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+import models
+
+
+class _Cb:
+    def __init__(self, data):
+        self.data = data
+        self.message = type("M", (), {"edit_text": staticmethod(lambda *a, **k: _noop()),
+                                      "answer": staticmethod(lambda *a, **k: _noop())})()
+        self.from_user = type("U", (), {"id": 1})()
+    async def answer(self, *a, **k): pass
+
+
+async def _noop(): return None
+
+
+def test_bulk_select_price_cat_delete(monkeypatch, tmp_path):
+    async def go():
+        eng = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/t.db")
+        async with eng.begin() as c:
+            await c.run_sync(models.Base.metadata.create_all)
+        S = async_sessionmaker(eng, expire_on_commit=False)
+        monkeypatch.setattr(smm, "Session", S)
+        class R: id = 1
+        async def own(cb, bot): return R()
+        monkeypatch.setattr(smm, "_owner", own)
+        store = {}
+        async def gs(b, k, d=""): return store.get(k, d)
+        async def ss(b, k, v): store[k] = v
+        monkeypatch.setattr(smm, "_get_setting", gs)
+        monkeypatch.setattr(smm, "_set_setting", ss)
+        async with S() as s:
+            for i in (1, 2, 3):
+                s.add(models.SmmService(id=i, bot_id=1, service_id=f"m{i}", name=f"s{i}", is_manual=True,
+                                        sell_rate=1000 * i, min_qty=1, max_qty=100, category_pk=None))
+            s.add(models.SmmService(id=9, bot_id=2, service_id="x", name="other", is_manual=True, sell_rate=5))
+            s.add(models.SmmCategory(id=7, bot_id=1, platform="telegram", name="c", is_active=True))
+            await s.commit()
+        await smm.smm_msel_mode(_Cb("smm:msel:mode:1"), None)
+        assert store["smm_mysvc_selmode"] == "1"
+        await smm.smm_msel_toggle(_Cb("smm:msel:t:1:1"), None)
+        await smm.smm_msel_toggle(_Cb("smm:msel:t:2:1"), None)
+        await smm.smm_msel_toggle(_Cb("smm:msel:t:9:1"), None)      # سرویسِ رباتِ دیگر: نباید اثر بگذارد
+        assert await smm._msel_valid(1) == [1, 2]
+        t, kb = await smm._smm_myservices_list_content(1, 1)
+        cbs = [b.callback_data for r in kb.inline_keyboard for b in r]
+        assert "smm:msel:price" in cbs and "smm:msel:del" in cbs
+        await smm.smm_msel_cat_set(_Cb("smm:msel:catset:7"), None)
+        async with S() as s:
+            assert (await s.get(models.SmmService, 1)).category_pk == 7
+            assert (await s.get(models.SmmService, 3)).category_pk is None
+            assert (await s.get(models.SmmService, 9)).category_pk is None
+        await smm.smm_msel_active(_Cb("smm:msel:act:off"), None)
+        async with S() as s:
+            assert not (await s.get(models.SmmService, 2)).is_active
+            assert (await s.get(models.SmmService, 9)).is_active
+        class Msg:
+            def __init__(self, t): self.text = t; self.from_user = type("U", (), {"id": 1})()
+            async def answer(self, *a, **k): pass
+        class St:
+            def __init__(self): self.d = {"msel_mode": "up"}
+            async def get_data(self): return self.d
+            async def clear(self): pass
+        await smm.smm_msel_price_apply(Msg("10"), None, St())
+        async with S() as s:
+            assert int((await s.get(models.SmmService, 1)).sell_rate) == 1100
+            assert int((await s.get(models.SmmService, 2)).sell_rate) == 2200
+            assert int((await s.get(models.SmmService, 3)).sell_rate) == 3000
+        await smm.smm_msel_del(_Cb("smm:msel:delok"), None)
+        async with S() as s:
+            assert await s.get(models.SmmService, 1) is None and await s.get(models.SmmService, 3) is not None
+            assert await s.get(models.SmmService, 9) is not None
+    asyncio.run(go())

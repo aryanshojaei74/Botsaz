@@ -265,6 +265,7 @@ class SmmFSM(StatesGroup):
     man_desc = State()          # PATCH_SMM_MANUAL_PRO_V1: توضیحاتِ اختیاریِ سرویسِ دستی
     man_field = State()         # PATCH_SMM_MANUAL_PRO2_V1: عکس / سؤالِ ورودی / پیامِ تحویل
     man_umsg = State()          # PATCH_SMM_MANUAL_PRO2_V1: پیامِ ادمین به مشتریِ یک سفارش
+    msel_price = State()        # PATCH_SMM_MYSVC_BULK_V1: مقدارِ تغییرِ قیمتِ گروهی
     user_link = State()         # کاربر لینک می‌فرستد
     user_link_confirm = State() # پیش‌نمایش و تأیید لینک
     user_qty = State()          # کاربر تعداد می‌فرستد
@@ -4911,6 +4912,9 @@ async def _smm_myservices_list_content(bot_id: int, page: int = 1) -> tuple[str,
     page = min(page, total_pages)
     svcs = svcs_all[(page - 1) * _MYSVC_PAGE_SIZE: page * _MYSVC_PAGE_SIZE]
     rows = []
+    # === PATCH_SMM_MYSVC_BULK_V1 === حالتِ انتخاب (تیک) برایِ عملیاتِ گروهی
+    _selmode = (await _get_setting(bot_id, "smm_mysvc_selmode", "0")) == "1"
+    _sel = await _msel_get(bot_id) if _selmode else set()
     for v in svcs:
         if v.sell_rate and float(v.sell_rate) > 0:
             pr = f"🔒{int(v.sell_rate):,}"
@@ -4918,7 +4922,11 @@ async def _smm_myservices_list_content(bot_id: int, page: int = 1) -> tuple[str,
             pr = "⚠️بدونِ قیمت"
         else:
             pr = f"⚙️{float(v.panel_rate):g}"
-        rows.append([InlineKeyboardButton(text=f"{v.name[:38]} — {pr}", callback_data=f"smm:svcview:{v.id}:{page}")])
+        if _selmode:
+            rows.append([InlineKeyboardButton(
+                text=f"{'☑️' if v.id in _sel else '⬜️'} {v.name[:34]} — {pr}", callback_data=f"smm:msel:t:{v.id}:{page}")])
+        else:
+            rows.append([InlineKeyboardButton(text=f"{v.name[:38]} — {pr}", callback_data=f"smm:svcview:{v.id}:{page}")])
     nav = []
     if page > 1:
         nav.append(InlineKeyboardButton(text="◀️ قبلی", callback_data=f"smm:myservices:{page-1}"))
@@ -4926,10 +4934,301 @@ async def _smm_myservices_list_content(bot_id: int, page: int = 1) -> tuple[str,
         nav.append(InlineKeyboardButton(text="بعدی ▶️", callback_data=f"smm:myservices:{page+1}"))
     if nav:
         rows.append(nav)
+    # === PATCH_SMM_MYSVC_BULK_V1 ===
+    rows.append([InlineKeyboardButton(
+        text=("✅ حالتِ انتخاب (تیک): روشن" if _selmode else "☑️ حالتِ انتخاب (تیک): خاموش"),
+        callback_data=f"smm:msel:mode:{page}", style=ButtonStyle.PRIMARY)])
+    if _selmode:
+        _n = len(_sel)
+        rows.append([InlineKeyboardButton(text="☑️ همهٔ این صفحه", callback_data=f"smm:msel:pg:{page}"),
+                     InlineKeyboardButton(text=f"☑️ همهٔ نتایج ({total})", callback_data="smm:msel:all")])
+        if _n:
+            rows.append([InlineKeyboardButton(text=f"💵 تغییرِ قیمت ({_n})", callback_data="smm:msel:price", style=ButtonStyle.SUCCESS),
+                         InlineKeyboardButton(text=f"📂 انتقال به دسته ({_n})", callback_data="smm:msel:cat", style=ButtonStyle.SUCCESS)])
+            rows.append([InlineKeyboardButton(text=f"▶️ فعال ({_n})", callback_data="smm:msel:act:on"),
+                         InlineKeyboardButton(text=f"⏸ غیرفعال ({_n})", callback_data="smm:msel:act:off")])
+            rows.append([InlineKeyboardButton(text=f"🗑 حذف ({_n})", callback_data="smm:msel:del", style=ButtonStyle.DANGER),
+                         InlineKeyboardButton(text="🧹 برداشتنِ تیک‌ها", callback_data="smm:msel:clr")])
     # === PATCH_SMM_PRODUCTS_HUB_V1 / PATCH_SMM_MYSERVICES_GROUPED_V1 ===
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=back_target, style=ButtonStyle.DANGER)])
-    text = f"{header} (صفحهٔ {page} از {total_pages}، مجموعاً {total})\n\nروی هرکدوم بزن تا جزئیات و دکمه‌هاش رو ببینی:"
+    text = (f"{header} (صفحهٔ {page} از {total_pages}، مجموعاً {total})\n\n"
+            + ("رویِ هر محصول بزن تا تیک بخورد/برداشته شود؛ بعد عملیاتِ گروهی را بزن:" if _selmode
+               else "روی هرکدوم بزن تا جزئیات و دکمه‌هاش رو ببینی:"))
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# === PATCH_SMM_MYSVC_BULK_V1 === (Infldor: «تیک زدن از داخل دسته‌ها؛ حذف/اضافه/تغییر قیمتِ گروهی»)
+async def _msel_get(bot_id: int) -> set[int]:
+    try:
+        return {int(x) for x in json.loads(await _get_setting(bot_id, "smm_mysvc_sel", "[]") or "[]")}
+    except (ValueError, TypeError):
+        return set()
+
+
+async def _msel_set(bot_id: int, ids: set[int]) -> None:
+    await _set_setting(bot_id, "smm_mysvc_sel", json.dumps(sorted(ids)))
+
+
+async def _mysvc_filtered(bot_id: int) -> list:
+    """همان فیلترِ لیستِ «مدیریتِ محصولات» (جستجو/دسته/پلتفرم+نوع)؛ برایِ «همهٔ نتایج»."""
+    filt_plat = await _get_setting(bot_id, "smm_mysvc_filter_plat", "")
+    filt_type = await _get_setting(bot_id, "smm_mysvc_filter_type", "")
+    filt_cat = await _get_setting(bot_id, "smm_mysvc_filter_cat", "")
+    filt_q = await _get_setting(bot_id, "smm_mysvc_filter_q", "")
+    async with Session() as s:
+        allv = (await s.scalars(select(SmmService).where(SmmService.bot_id == bot_id).order_by(SmmService.id))).all()
+    if filt_q:
+        return [v for v in allv if _mysvc_match(v, filt_q)]
+    if filt_cat != "" and filt_cat.lstrip("-").isdigit():
+        return [v for v in allv if int(v.category_pk or 0) == int(filt_cat)]
+    if filt_plat:
+        return [v for v in allv if _svc_platform_type(v) == (filt_plat, filt_type)]
+    return list(allv)
+
+
+async def _msel_show(cb: CallbackQuery, bot_id: int, page: int = 1) -> None:
+    text, kb = await _smm_myservices_list_content(bot_id, page)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        logger.debug("[smm] ویرایشِ لیستِ انتخاب ممکن نشد (بی‌اهمیت)")
+
+
+@smm_router.callback_query(F.data.startswith("smm:msel:mode:"))
+async def smm_msel_mode(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    page = int(cb.data.split(":")[3])
+    on = (await _get_setting(row.id, "smm_mysvc_selmode", "0")) == "1"
+    await _set_setting(row.id, "smm_mysvc_selmode", "0" if on else "1")
+    await _msel_set(row.id, set())
+    await cb.answer("حالتِ انتخاب " + ("خاموش شد" if on else "روشن شد"))
+    await _msel_show(cb, row.id, page)
+
+
+@smm_router.callback_query(F.data.startswith("smm:msel:t:"))
+async def smm_msel_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    _, _, _, vid, page = cb.data.split(":")
+    sel = await _msel_get(row.id)
+    sel.symmetric_difference_update({int(vid)})
+    await _msel_set(row.id, sel)
+    await cb.answer()
+    await _msel_show(cb, row.id, int(page))
+
+
+@smm_router.callback_query(F.data.startswith("smm:msel:pg:"))
+async def smm_msel_page(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    page = int(cb.data.split(":")[3])
+    items = await _mysvc_filtered(row.id)
+    ids = {v.id for v in items[(page - 1) * _MYSVC_PAGE_SIZE: page * _MYSVC_PAGE_SIZE]}
+    sel = await _msel_get(row.id)
+    sel = (sel - ids) if ids and ids <= sel else (sel | ids)
+    await _msel_set(row.id, sel)
+    await cb.answer()
+    await _msel_show(cb, row.id, page)
+
+
+@smm_router.callback_query(F.data == "smm:msel:all")
+async def smm_msel_all(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    ids = {v.id for v in await _mysvc_filtered(row.id)}
+    sel = await _msel_get(row.id)
+    await _msel_set(row.id, set() if ids and ids <= sel else ids)
+    await cb.answer()
+    await _msel_show(cb, row.id, 1)
+
+
+@smm_router.callback_query(F.data == "smm:msel:clr")
+async def smm_msel_clear(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    await _msel_set(row.id, set())
+    await cb.answer("تیک‌ها برداشته شد")
+    await _msel_show(cb, row.id, 1)
+
+
+async def _msel_valid(bot_id: int) -> list[int]:
+    """فقط شناسه‌هایِ تیک‌خوردهٔ همین ربات که هنوز وجود دارند."""
+    sel = await _msel_get(bot_id)
+    if not sel:
+        return []
+    async with Session() as s:
+        return [r for (r,) in (await s.execute(select(SmmService.id).where(
+            SmmService.bot_id == bot_id, SmmService.id.in_(sel)))).all()]
+
+
+@smm_router.callback_query(F.data == "smm:msel:del")
+async def smm_msel_del_ask(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    ids = await _msel_valid(row.id)
+    if not ids:
+        return await cb.answer("چیزی تیک نخورده.", show_alert=True)
+    await cb.message.edit_text(
+        f"⚠️ <b>حذفِ گروهیِ {len(ids)} محصول</b>\n\nبرایِ همیشه از فهرستِ فروش برداشته می‌شوند "
+        "(سفارش‌هایِ قبلی دست‌نخورده می‌مانند). مطمئنی؟",
+        parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"🗑 بله، {len(ids)} محصول حذف شود", callback_data="smm:msel:delok",
+                                  style=ButtonStyle.DANGER)],
+            [InlineKeyboardButton(text="❌ انصراف", callback_data="smm:myservices:1", style=ButtonStyle.PRIMARY)]]))
+    await cb.answer()
+
+
+@smm_router.callback_query(F.data == "smm:msel:delok")
+async def smm_msel_del(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    ids = await _msel_valid(row.id)
+    n = 0
+    async with Session() as s:
+        for v in (await s.scalars(select(SmmService).where(
+                SmmService.bot_id == row.id, SmmService.id.in_(ids or [0])))).all():
+            await s.delete(v)
+            n += 1
+        await s.commit()
+    await _msel_set(row.id, set())
+    await cb.answer(f"🗑 {n} محصول حذف شد", show_alert=True)
+    await _msel_show(cb, row.id, 1)
+
+
+@smm_router.callback_query(F.data.startswith("smm:msel:act:"))
+async def smm_msel_active(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    on = cb.data.endswith(":on")
+    ids = await _msel_valid(row.id)
+    if not ids:
+        return await cb.answer("چیزی تیک نخورده.", show_alert=True)
+    async with Session() as s:
+        await s.execute(update(SmmService).where(SmmService.bot_id == row.id, SmmService.id.in_(ids)).values(is_active=on))
+        await s.commit()
+    await cb.answer(f"{'▶️ فعال' if on else '⏸ غیرفعال'} شد: {len(ids)} محصول", show_alert=True)
+    await _msel_show(cb, row.id, 1)
+
+
+@smm_router.callback_query(F.data == "smm:msel:cat")
+async def smm_msel_cat_pick(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    ids = await _msel_valid(row.id)
+    if not ids:
+        return await cb.answer("چیزی تیک نخورده.", show_alert=True)
+    async with Session() as s:
+        cats = (await s.scalars(select(SmmCategory).where(SmmCategory.bot_id == row.id).order_by(SmmCategory.id))).all()
+    rows = [[InlineKeyboardButton(text=f"📂 {c.name[:40]}", callback_data=f"smm:msel:catset:{c.id}")] for c in cats[:60]]
+    rows.append([InlineKeyboardButton(text="🚫 بدونِ دسته", callback_data="smm:msel:catset:0")])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="smm:myservices:1", style=ButtonStyle.DANGER)])
+    await cb.message.edit_text(f"📂 <b>انتقالِ {len(ids)} محصول به کدام دسته؟</b>", parse_mode="HTML",
+                               reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    await cb.answer()
+
+
+@smm_router.callback_query(F.data.startswith("smm:msel:catset:"))
+async def smm_msel_cat_set(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    cid = int(cb.data.split(":")[3])
+    ids = await _msel_valid(row.id)
+    async with Session() as s:
+        if cid:
+            c = await s.get(SmmCategory, cid)
+            if not c or c.bot_id != row.id:
+                return await cb.answer("دسته پیدا نشد", show_alert=True)
+        await s.execute(update(SmmService).where(SmmService.bot_id == row.id, SmmService.id.in_(ids or [0])).values(
+            category_pk=cid or None))
+        await s.commit()
+    await cb.answer(f"✅ {len(ids)} محصول منتقل شد", show_alert=True)
+    await _msel_show(cb, row.id, 1)
+
+
+@smm_router.callback_query(F.data == "smm:msel:price")
+async def smm_msel_price_menu(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    ids = await _msel_valid(row.id)
+    if not ids:
+        return await cb.answer("چیزی تیک نخورده.", show_alert=True)
+    await cb.message.edit_text(
+        f"💵 <b>تغییرِ قیمتِ {len(ids)} محصول</b>\n\nروشِ تغییر را انتخاب کن:\n"
+        "• <b>قیمتِ ثابت:</b> همهٔ محصولات همان قیمتِ دستی را می‌گیرند (تومانِ هر ۱۰۰۰ عدد؛ برایِ محصولِ تکی قیمتِ یک عدد).\n"
+        "• <b>افزایش/کاهشِ درصدی:</b> از قیمتِ فعلیِ هر محصول.",
+        parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔒 قیمتِ ثابت", callback_data="smm:msel:pm:fixed")],
+            [InlineKeyboardButton(text="➕ افزایشِ درصدی", callback_data="smm:msel:pm:up"),
+             InlineKeyboardButton(text="➖ کاهشِ درصدی", callback_data="smm:msel:pm:down")],
+            [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="smm:myservices:1", style=ButtonStyle.DANGER)]]))
+    await cb.answer()
+
+
+@smm_router.callback_query(F.data.startswith("smm:msel:pm:"))
+async def smm_msel_price_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    mode = cb.data.split(":")[3]
+    if mode not in ("fixed", "up", "down"):
+        return await cb.answer()
+    await state.set_state(SmmFSM.msel_price)
+    await state.update_data(msel_mode=mode)
+    await cb.message.answer(
+        {"fixed": "🔒 قیمتِ ثابت را به تومان بفرست (فقط عدد):",
+         "up": "➕ درصدِ افزایش را بفرست (مثلاً 10):",
+         "down": "➖ درصدِ کاهش را بفرست (مثلاً 10):"}[mode])
+    await cb.answer()
+
+
+@smm_router.message(SmmFSM.msel_price, F.text)
+async def smm_msel_price_apply(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner(msg, bot)
+    if not row:
+        return
+    d = await state.get_data()
+    mode = d.get("msel_mode")
+    raw = (msg.text or "").translate(_FA_DIGITS).replace(",", "").replace("٬", "").strip()
+    try:
+        val = float(raw)
+    except ValueError:
+        return await msg.answer("❌ فقط عدد بفرست.")
+    if val <= 0 or (mode == "down" and val >= 100) or val > 10 ** 9:
+        return await msg.answer("❌ عددِ نامعتبر.")
+    await state.clear()
+    ids = await _msel_valid(row.id)
+    n = 0
+    async with Session() as s:
+        for v in (await s.scalars(select(SmmService).where(
+                SmmService.bot_id == row.id, SmmService.id.in_(ids or [0])))).all():
+            if mode == "fixed":
+                new = int(round(val))
+            else:
+                if v.sell_rate and float(v.sell_rate) > 0:
+                    base = float(v.sell_rate)
+                else:
+                    base = float(await compute_sell_price(row.id, v, 1 if _qty_factor(v) == 1.0 else 1000))
+                new = int(round(base * (1 + val / 100 if mode == "up" else 1 - val / 100)))
+            if new <= 0:
+                continue
+            v.sell_rate = new
+            n += 1
+        await s.commit()
+    await msg.answer(f"✅ قیمتِ {n} محصول تغییر کرد.")
+    text, kb = await _smm_myservices_list_content(row.id, 1)
+    await msg.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 async def _smm_myservice_detail_content(bot_id: int, svc_id: int, back_page: int) -> tuple[str, InlineKeyboardMarkup]:
