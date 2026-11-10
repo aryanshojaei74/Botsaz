@@ -1,8 +1,7 @@
 'use strict';
 // MTS Arena — وب‌سرور مینی‌اپ + سرور بازی آنلاین (بدون وابستگی خارجی؛ Node.js 18 به بالا)
 // - index.html کنار همین فایل (یا در پوشه‌ی public) نمایش داده می‌شود.
-// - بیلیارد: ارتباط با HTTP روی /api (بدون نیاز به WebSocket).
-// - تخته‌نرد: ارتباط با WebSocket روی /ws.
+// - بیلیارد و تخته‌نرد: ارتباط با WebSocket روی /ws (نسخه‌ی HTTP روی /api برای سازگاری باقی مانده است).
 // - هویت بازیکنان با initData تلگرام و توکن ربات (BOT_TOKEN) بررسی می‌شود.
 
 const http = require('node:http');
@@ -10,19 +9,26 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
+const APP_VERSION = require('./package.json').version;   // نسخه‌ی مینی‌اپ (فقط از package.json خوانده می‌شود)
 const PORT = Number(process.env.PORT) || 3000;
-const BOT_TOKEN = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '';
+const BOT_TOKENS = [...new Set(
+  [process.env.BOT_TOKENS, process.env.TELEGRAM_BOT_TOKENS, process.env.BOT_TOKEN, process.env.TELEGRAM_BOT_TOKEN]
+    .filter(Boolean).join(',').split(/[,\s;]+/).map(t => t.trim().replace(/^['"]|['"]$/g, '')).filter(t => /^\d{6,}:[A-Za-z0-9_-]{30,}$/.test(t))
+)];
+const BOT_TOKEN = BOT_TOKENS[0] || '';
 const PUBLIC_DIR = fs.existsSync(path.join(__dirname, 'public', 'index.html')) ? path.join(__dirname, 'public') : __dirname;
 const MAX_MSG = 32 * 1024;
 const MAX_BODY = 256 * 1024;
 const AUTH_MAX_AGE_SEC = 24 * 3600;
 const MAX_MULTI_PLAYERS = 8;
 const POLL_WAIT_MS = 20000;          // درخواست poll تا ۲۰ ثانیه منتظر پیام می‌ماند
-const SESSION_IDLE_MS = 90000;       // نشستی که ۹۰ ثانیه poll نشده، خارج می‌شود
+const SESSION_IDLE_MS = 90000;
+const WS_RESUME_GRACE_MS = 60000; // مهلت بازیابی اتصال بدون آزاد شدن صندلی اتاق       // نشستی که ۹۰ ثانیه poll نشده، خارج می‌شود
+const WS_SNAP_BACKLOG = 256 * 1024;  // کلاینت WebSocket که این‌قدر عقب است، snapshot قدیمی را دریافت نمی‌کند
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const CSP = "default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' blob:; connect-src 'self' wss: https:; frame-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors https://web.telegram.org https://*.telegram.org https://t.me";
 
-if (!BOT_TOKEN) console.warn('[mts-arena] BOT_TOKEN تنظیم نشده است؛ بازی آنلاین کار نمی‌کند.');
+if (!BOT_TOKENS.length) console.warn('[mts-arena] BOT_TOKEN تنظیم نشده است؛ بازی آنلاین کار نمی‌کند.');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -39,7 +45,7 @@ function handleHttp(req, res) {
   if (pathname.startsWith('/api/')) return handleApi(req, res, pathname);
   if (pathname === '/healthz') {
     res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
-    return res.end('MTS Arena relay: OK');
+    return res.end('MTS Arena relay v' + APP_VERSION + ': OK');
   }
   let rel;
   try { rel = decodeURIComponent(pathname).replace(/^\/+/, ''); } catch (_) { res.writeHead(400); return res.end(); }
@@ -123,7 +129,7 @@ function apiPoll(res, data) {
   const s = sessions.get(String(data.token || ''));
   if (!s || !s.open) return json(res, 401, { error: 'session' });
   s.lastSeen = Date.now();
-  if (s.inbox.length) return json(res, 200, { msgs: s.inbox.splice(0).map(x => JSON.parse(x)) });
+  if (s.inbox.length) return json(res, 200, { msgs: s.takeInbox().map(x => JSON.parse(x)) });
   if (s.waiter) { const w = s.waiter; s.waiter = null; clearTimeout(w.timer); w.done([]); }
   const waiter = { timer: null, done: msgs => json(res, 200, { msgs: msgs.map(x => JSON.parse(x)) }) };
   waiter.timer = setTimeout(() => {
@@ -142,17 +148,21 @@ class HttpSession {
     this.http = true;
     this.open = true;
     this.att = { uid: user.uid, name: user.name, code: null, host: false, mode: null };
-    this.inbox = [];
+    this.inbox = [];                  // هر مورد: { text, key }
     this.waiter = null;
     this.lastSeen = Date.now();
   }
-  send(text) {
+  // key: اگر پیام کلیدی داشته باشد (snapshot هر فرستنده)، فقط آخرینش در صف می‌ماند؛
+  // این جلوی انباشته شدن صف و تأخیر تدریجی را می‌گیرد.
+  send(text, key) {
     if (!this.open) return;
-    this.inbox.push(text);
+    if (key) this.inbox = this.inbox.filter(e => e.key !== key);
+    this.inbox.push({ text, key: key || null });
     if (this.inbox.length > 500) this.inbox.splice(0, this.inbox.length - 500);
     const w = this.waiter;
-    if (w) { this.waiter = null; clearTimeout(w.timer); w.done(this.inbox.splice(0)); }
+    if (w) { this.waiter = null; clearTimeout(w.timer); w.done(this.takeInbox()); }
   }
+  takeInbox() { return this.inbox.splice(0).map(e => e.text); }
   close() { dropSession(this); }
 }
 
@@ -175,6 +185,9 @@ setInterval(() => {
 
 // ---------- WebSocket (تخته‌نرد؛ فریم‌بندی RFC 6455) ----------
 const server = http.createServer(handleHttp);
+// اتصال‌های keep-alive بلندتر از درخواست poll (۲۰ ثانیه) نگه داشته شوند تا هر بار دوباره وصل نشوند
+server.keepAliveTimeout = 70000;
+server.headersTimeout = 75000;
 
 server.on('upgrade', (req, socket) => {
   let pathname = '';
@@ -272,10 +285,16 @@ class Conn {
     return true;
   }
   onClose() {
-    if (!conns.has(this)) return;
+    if (!conns.has(this) || this._resumeTimer) return;
     this.open = false;
-    conns.delete(this);
-    leave(this);
+    // قطع کوتاه شبکه نباید اتاق را نابود کند. عضو برای ۶۰ ثانیه رزرو می‌ماند.
+    this._resumeTimer = setTimeout(() => {
+      this._resumeTimer = null;
+      if (!conns.has(this) || this.open) return;
+      leave(this);
+      conns.delete(this);
+    }, WS_RESUME_GRACE_MS);
+    this._resumeTimer.unref?.();
   }
 }
 
@@ -297,6 +316,14 @@ function onClientMessage(ws, raw) {
 
 function sendJSON(ws, obj) { ws.send(JSON.stringify(obj)); }
 
+// ارسال یک پیام relay به یک عضو. پیام‌های snapshot (key) در صورت عقب‌ماندن گیرنده رها می‌شوند.
+function deliver(target, obj, key) {
+  const text = JSON.stringify(obj);
+  if (target.http) return target.send(text, key);
+  if (key && target.socket && target.socket.writableLength > WS_SNAP_BACKLOG) return;
+  target.send(text);
+}
+
 function members(code) {
   return [...conns].filter(c => c.open && c.att && c.att.code === code);
 }
@@ -304,11 +331,34 @@ function members(code) {
 function hello(ws, initData) {
   const user = verifyInitData(String(initData || ''));
   if (!user) return ws.close(4401, 'unauthorized');
+  let resume = null;
   for (const o of [...conns]) {
-    if (o !== ws && o.att && o.att.uid === user.uid) { leave(o); o.close(4000, 'replaced'); }
+    if (o === ws || !o.att || o.att.uid !== user.uid) continue;
+    if (!o.open && o._resumeTimer) {
+      // اتصال قبلی به‌صورت ناگهانی قطع شده؛ صندلی و نقش اتاق را به اتصال جدید منتقل کن.
+      clearTimeout(o._resumeTimer);
+      o._resumeTimer = null;
+      resume = { ...o.att };
+      conns.delete(o);
+    } else {
+      // ورود هم‌زمان همان حساب از یک نشست زنده: نشست قدیمی به‌صورت قطعی جایگزین می‌شود.
+      leave(o);
+      o.close(4000, 'replaced');
+    }
   }
-  ws.att = { uid: user.uid, name: user.name, code: null, host: false, mode: null };
-  sendJSON(ws, { t: 'hello-ok', id: user.uid, name: user.name });
+  ws.att = resume || { uid: user.uid, name: user.name, code: null, host: false, mode: null };
+  ws.att.name = user.name || ws.att.name;
+  const roomMembers = ws.att.code ? members(ws.att.code) : [];
+  const room = ws.att.code ? {
+    code: ws.att.code,
+    host: roomMembers.find(x => x.att.host)?.att.uid || (ws.att.host ? user.uid : null),
+    mode: ws.att.mode,
+    players: roomMembers.map(x => ({ id: x.att.uid, name: x.att.name }))
+  } : null;
+  sendJSON(ws, { t: 'hello-ok', id: user.uid, name: user.name, room });
+  if (room) {
+    for (const peer of members(room.code)) if (peer !== ws) sendJSON(peer, { t: 'peer-rejoined', id: user.uid });
+  }
 }
 
 function create(ws, m) {
@@ -348,9 +398,10 @@ function relay(ws, m) {
   if (!ws.att.code) return;
   const data = m.data && typeof m.data === 'object' ? m.data : {};
   const kind = String(m.kind || '').slice(0, 20);
+  const key = (kind === 'snap' || kind === 'aim') ? kind + ':' + ws.att.uid : null;   // فقط آخرین snapshot/aim هر بازیکن مهم است
   const others = members(ws.att.code).filter(c => c !== ws);
   const targets = ws.att.mode === 'multi' ? others : others.slice(0, 1);
-  for (const p of targets) sendJSON(p, { t: 'relay', from: ws.att.uid, kind, data });
+  for (const p of targets) deliver(p, { t: 'relay', from: ws.att.uid, kind, data }, key);
 }
 
 function leave(ws) {
@@ -362,22 +413,38 @@ function leave(ws) {
 }
 
 // ---------- بررسی initData تلگرام (طبق مستندات رسمی Mini Apps) ----------
+const authWarnAt = new Map();
+function authFail(reason) {
+  const now = Date.now();
+  if (now - (authWarnAt.get(reason) || 0) > 30000) {
+    authWarnAt.set(reason, now);
+    console.warn('[mts-arena] ورود رد شد: ' + reason);
+  }
+  return null;
+}
+
 function verifyInitData(initData) {
-  if (!BOT_TOKEN || !initData) return null;
+  if (!BOT_TOKENS.length) return authFail('no-token');
+  if (!initData) return authFail('no-initdata');
   const params = new URLSearchParams(initData);
   const hash = params.get('hash');
-  if (!hash) return null;
+  if (!hash) return authFail('no-hash');
   params.delete('hash');
   const check = [...params.entries()]
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([k, v]) => `${k}=${v}`)
     .join('\n');
-  const secret = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
-  const expected = crypto.createHmac('sha256', secret).update(check).digest('hex');
-  const a = Buffer.from(expected), bb = Buffer.from(hash.toLowerCase());
-  if (a.length !== bb.length || !crypto.timingSafeEqual(a, bb)) return null;
+  const bb = Buffer.from(hash.toLowerCase());
+  let okBot = false;
+  for (const tok of BOT_TOKENS) {
+    const secret = crypto.createHmac('sha256', 'WebAppData').update(tok).digest();
+    const expected = crypto.createHmac('sha256', secret).update(check).digest('hex');
+    const a = Buffer.from(expected);
+    if (a.length === bb.length && crypto.timingSafeEqual(a, bb)) { okBot = true; break; }
+  }
+  if (!okBot) return authFail('bad-signature');
   const authDate = Number(params.get('auth_date') || 0);
-  if (!authDate || Math.floor(Date.now() / 1000) - authDate > AUTH_MAX_AGE_SEC) return null;
+  if (!authDate || Math.floor(Date.now() / 1000) - authDate > AUTH_MAX_AGE_SEC) return authFail('expired');
   let user;
   try { user = JSON.parse(params.get('user') || 'null'); } catch (_) { return null; }
   if (!user || user.id === undefined) return null;
@@ -397,6 +464,6 @@ function normalizeDigits(s) {
 setInterval(() => { for (const c of conns) if (c.open && c.writeFrame) c.writeFrame(0x9, Buffer.alloc(0)); }, 25000).unref();
 
 if (require.main === module) {
-  server.listen(PORT, '0.0.0.0', () => console.log('[mts-arena] listening on port ' + PORT));
+  server.listen(PORT, '0.0.0.0', () => console.log('[mts-arena] v' + APP_VERSION + ' listening on port ' + PORT));
 }
 module.exports = { server };
