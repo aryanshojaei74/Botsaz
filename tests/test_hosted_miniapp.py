@@ -56,3 +56,32 @@ async def test_clear_and_guide():
     assert (await M.clear_menu_button(TOK, call=c)).ok and c.calls[-1][1] == {"menu_button": {"type": "default"}}
     g = M.guide_text()
     assert "BotFather" in g and "https" in g and "Menu Button" in g
+
+
+def test_find_bot_tokens_multi():
+    import hosted_miniapp as HM
+    t1 = "111111111:" + "A" * 35
+    t2 = "222222222:" + "B" * 35
+    t3 = "333333333:" + "C" * 35
+    assert HM.find_bot_tokens({"BOT_TOKEN": t1}) == [t1]
+    assert HM.find_bot_tokens({"bot_tokens": f"{t1}, {t2}\n{t3}"}) == [t1, t2, t3]
+    assert HM.find_bot_tokens({"BOT_TOKEN": t1, "BOT_TOKENS": f"{t2},{t1}"}) == [t2, t1]      # بدونِ تکرار
+    assert HM.find_bot_tokens({"PORT": "3000", "X": "nope"}) == []
+    assert HM.find_bot_token({"BOT_TOKEN": t1}) == t1          # رفتارِ قبلی دست‌نخورده
+
+
+def test_set_for_app_multi_bots():
+    import asyncio
+    import hosted_miniapp as HM
+    t1 = "111111111:" + "A" * 35
+    t2 = "222222222:" + "B" * 35
+    calls = []
+
+    async def fake_call(token, method, payload=None, **k):
+        calls.append((token, method))
+        if method == "getMe":
+            return {"ok": True, "result": {"username": "bot" + token[:1]}}
+        return {"ok": True}
+    r = asyncio.run(HM.set_for_app({"BOT_TOKENS": f"{t1},{t2}"}, "https://game.example.com", call=fake_call))
+    assert r.ok and "@bot1" in r.message and "@bot2" in r.message
+    assert [c for c in calls if c[1] == "setChatMenuButton"] == [(t1, "setChatMenuButton"), (t2, "setChatMenuButton")]

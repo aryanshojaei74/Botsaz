@@ -58,6 +58,34 @@ def find_bot_token(envs: dict[str, str] | list[tuple[str, str]]) -> str | None:
     return None
 
 
+# === PATCH_MULTI_BOT_MINIAPP_V1 === (MTS Arena) یک مینی‌اپ می‌تواند برایِ چند ربات (مثلاً رباتِ تست + رباتِ اصلی) کار کند:
+# توکن‌ها در BOT_TOKENS (جدا با ویرگول/فاصله/خطِ جدید) و/یا BOT_TOKEN و بقیهٔ کلیدهایِ معمول.
+_TOKENS_KEYS = ("BOT_TOKENS", "TELEGRAM_BOT_TOKENS", "TG_BOT_TOKENS")
+
+
+def find_bot_tokens(envs: dict[str, str] | list[tuple[str, str]]) -> list[str]:
+    """همهٔ توکن‌هایِ معتبرِ اپ (بدونِ تکرار، با حفظِ ترتیب): کلیدهایِ چندتایی، کلیدهایِ تکیِ معمول، و هر مقدارِ توکن‌مانند."""
+    items = dict(envs) if not isinstance(envs, dict) else dict(envs)
+    norm = {str(k).strip().upper(): str(v).strip().strip("'\"") for k, v in items.items()}
+    out: list[str] = []
+
+    def _add(t: str) -> None:
+        t = (t or "").strip().strip("'\"")
+        if _TOKEN_RE.match(t) and t not in out:
+            out.append(t)
+    for k in _TOKENS_KEYS:
+        for part in re.split(r"[,\s;]+", norm.get(k, "")):
+            _add(part)
+    for k in _TOKEN_KEYS:
+        _add(norm.get(k, ""))
+    for k, v in norm.items():
+        if k in _TOKENS_KEYS or k in _TOKEN_KEYS:
+            continue
+        for part in re.split(r"[,\s;]+", v):
+            _add(part)
+    return out
+
+
 async def _call(token: str, method: str, payload: dict | None = None, *, session: aiohttp.ClientSession | None = None) -> dict:
     own = session is None
     s = session or aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15))
@@ -95,10 +123,16 @@ async def clear_menu_button(token: str, *, call=_call) -> Result:
 
 async def set_for_app(envs, url: str, text: str = "🌐 باز کردن", *, call=_call) -> Result:
     """envs: متغیرهایِ محیطیِ اپِ میزبانی‌شده (dict یا جفت‌ها). توکن را خودش پیدا می‌کند."""
-    token = find_bot_token(envs)
-    if not token:
+    tokens = find_bot_tokens(envs)
+    if not tokens:
         return Result(False, "توکنِ ربات در «متغیرها (.env)» پیدا نشد. اول BOT_TOKEN=... را آن‌جا ذخیره کن.")
-    return await set_menu_button(token, url, text, call=call)
+    if len(tokens) == 1:
+        return await set_menu_button(tokens[0], url, text, call=call)
+    # چند ربات (BOT_TOKENS): برایِ همه وصل می‌کنیم و نتیجهٔ هر کدام را جدا گزارش می‌دهیم
+    results = [await set_menu_button(t, url, text, call=call) for t in tokens]
+    ok = any(r.ok for r in results)
+    lines = [(f"@{r.bot_username}: " if r.bot_username else "") + r.message for r in results]
+    return Result(ok, "\n".join(lines), next((r.bot_username for r in results if r.bot_username), ""))
 
 
 async def fill_bot_usernames(limit: int = 60, *, call=_call) -> int:
