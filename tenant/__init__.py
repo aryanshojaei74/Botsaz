@@ -6879,7 +6879,7 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
     elif action == "gw_pro":
         # === PATCH_GIVEAWAY_PRO_PARTNER_V1 === فقط ربات همکار؛ بقیه پیامِ نبودنِ دسترسی
         _row_gwp = await get_bot_row(bot)
-        if _row_gwp and _row_gwp.plan == "partner":
+        if _row_gwp and (_row_gwp.plan == "partner" or _row_gwp.field == "giveaway"):
             from tenant.bots.giveaway.pro import show_hub as _gwp_hub
             await _gwp_hub(msg, bot, _row_gwp, msg.from_user.id)
         else:
@@ -14223,7 +14223,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "529"
+BUILD_ID = "530"
 
 
 @tenant_router.message(Command("version"))
@@ -16320,7 +16320,7 @@ def _thb_kb_action_pick(mb, bot_field: str = "", plan: str = "", category: str =
                 continue
             if _akey == "escrow" and not has_feature(plan, Feature.ESCROW):   # PATCH_ESCROW_V1
                 continue
-            if _akey == "gw_pro" and not _is_partner:      # PATCH_GIVEAWAY_PRO_PARTNER_V1: فقط ربات همکار (ربات مادر جدا دارد)
+            if _akey == "gw_pro" and not (_is_partner or bot_field == "giveaway"):   # PATCH_GIVEAWAY_PRO_PARTNER_V1: همکار + رباتِ قرعه‌کشی (ربات مادر جدا دارد)
                 continue
             # === PATCH_STORE_MINIAPP_GATE_V1 === فقط وقتی مینی‌اپ روشن و محلِ نمایشش «کیبورد» است
             if _akey == "store_miniapp" and not store_miniapp_ok:
@@ -20402,7 +20402,7 @@ async def thb_set_simple_action(cb: CallbackQuery, bot: Bot):
         return
     parts = cb.data.split(":")
     action_key, mb_id = parts[2], int(parts[3])
-    if action_key not in _SIMPLE_ACTIONS or (action_key == "gw_pro" and row.plan != "partner"):
+    if action_key not in _SIMPLE_ACTIONS or (action_key == "gw_pro" and row.plan != "partner" and row.field != "giveaway"):
         await cb.answer("نامعتبر", show_alert=True)
         return
     async with Session() as s:

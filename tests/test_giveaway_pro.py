@@ -421,6 +421,8 @@ def test_offered_only_to_partner_bots():
     assert "thb:setsimple:gw_pro:1" in cbs_for("partner")
     for plan in ("free", "growth", "pro"):
         assert "thb:setsimple:gw_pro:1" not in cbs_for(plan), plan
+    kb = tenant._thb_kb_action_pick(mb, "giveaway", "free", "tool")      # رباتِ نوعِ قرعه‌کشی هم دارد
+    assert "thb:setsimple:gw_pro:1" in [b.callback_data for r in kb.inline_keyboard for b in r]
     import platform_bot as PB
     for f in ("vpn_sales", "virtual_service", "digital_shop", "booking", "giveaway", "general", "partner"):
         cs = [b.callback_data for r in PB.action_kb(f).inline_keyboard for b in r]
