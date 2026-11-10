@@ -14207,7 +14207,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "526"
+BUILD_ID = "527"
 
 
 @tenant_router.message(Command("version"))
@@ -29294,6 +29294,7 @@ async def tadm_broadcast(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await state.set_state(AdminFSM.broadcast_text)
     await cb.message.answer(
         "📢 متن پیام همگانی را بنویسید:\n"
+        "↪️ یا یک پیام (مثلاً از کانالتان) را <b>فوروارد</b> کنید تا عیناً و با نامِ مبدأ برایِ همه فوروارد شود.\n"
         "می‌توانید از قالب‌بندی خود تلگرام استفاده کنید (بولد، ایتالیک، نقل‌قول و...).\n\n"
         "🖼 یا می‌تونید یه <b>عکس، گیف، ویدیو یا فایل</b> با کپشن (متنِ زیرِ آن) بفرستید — "
         "همون رسانه با همون کپشن برای همه ارسال می‌شه.",
@@ -29302,10 +29303,20 @@ async def tadm_broadcast(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await cb.answer()
 
 
+# === PATCH_BROADCAST_FORWARD_V1 === (پیشنهادِ Infldor: «قابلیت فوروارد همگانی»)
+# هر پیامی که مدیر در این مرحله «فوروارد» کند، عیناً (با نامِ مبدأ، مثلاً کانال) برایِ همه فوروارد می‌شود.
+@tenant_router.message(AdminFSM.broadcast_text, F.forward_origin)
+async def bc_forward(msg: Message, bot: Bot, state: FSMContext):
+    await state.update_data(bc_text="📨 پیامِ فوروارد‌شده (عیناً و با نامِ مبدأ برایِ همه فوروارد می‌شود)",
+                            bc_photo=None, bc_mtype=None, bc_button_ids=[], bc_guide_keys=[], bc_support_link=None,
+                            bc_fwd=[msg.chat.id, msg.message_id])
+    await _bc_ask_audience(msg, state, bot)
+
+
 @tenant_router.message(AdminFSM.broadcast_text, F.text)
 async def bc_text(msg: Message, bot: Bot, state: FSMContext):
     body = msg.html_text  # حفظ قالب‌بندی تلگرام
-    await state.update_data(bc_text=body, bc_photo=None, bc_mtype=None, bc_button_ids=[])
+    await state.update_data(bc_text=body, bc_photo=None, bc_mtype=None, bc_button_ids=[], bc_fwd=None)
     await _bc_after_content(msg, bot, state)
 
 
@@ -29729,6 +29740,7 @@ async def bc_send(cb: CallbackQuery, state: FSMContext, bot: Bot):
     guide_keys = list(data.get("bc_guide_keys") or [])  # PATCH_BROADCAST_PICK_GUIDE_V1
     support_link = data.get("bc_support_link")  # PATCH_BROADCAST_SUPPORT_BTN_V1
     bc_audience = data.get("bc_audience") or None   # PATCH_BROADCAST_AUDIENCE_V1
+    bc_fwd = data.get("bc_fwd") or None             # PATCH_BROADCAST_FORWARD_V1
     await state.clear()
     bc_kb = None
     kb_rows = []
@@ -29762,7 +29774,9 @@ async def bc_send(cb: CallbackQuery, state: FSMContext, bot: Bot):
                        media_id=bc_photo or None, media_type=(bc_mtype if bc_photo else None),
                        kb_json=(bc_kb.model_dump_json(exclude_none=True) if bc_kb else None),
                        chat_id=cb.message.chat.id, msg_id=cb.message.message_id,
-                       cursor_uid=0, total_count=n_users, audience=bc_audience)
+                       cursor_uid=0, total_count=n_users, audience=bc_audience,
+                       **({"media_type": "forward", "fwd_chat_id": int(bc_fwd[0]), "fwd_msg_id": int(bc_fwd[1])}
+                          if bc_fwd else {}))
         s.add(bc)
         await s.commit()
         bc_id = bc.id

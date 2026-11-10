@@ -67,6 +67,7 @@ async def _menu_content(bot_id: int):
     on = await AP._get(bot_id, "apay_enabled", "0") == "1"
     show_wallet = await AP._get(bot_id, "apay_show_wallet", "1") == "1"
     show_purchase = await AP._get(bot_id, "apay_show_purchase", "1") == "1"
+    pay_btn = await AP._get(bot_id, "apay_pay_btn", "1") != "0"      # PATCH_APAY_HIDE_PAY_BTN_V1
     min_amount = await AP.get_min_amount(bot_id)
     max_amount = await AP.get_max_amount(bot_id)
     disp = await get_display_name(bot_id)
@@ -127,6 +128,10 @@ async def _menu_content(bot_id: int):
             text=f"🛒 نمایش موقعِ پرداختِ محصول: {'✅' if show_purchase else '❌'}",
             callback_data="ap:show_purchase",
             style=(ButtonStyle.SUCCESS if show_purchase else ButtonStyle.DANGER))],
+        [InlineKeyboardButton(
+            text=f"💳 دکمهٔ «پرداخت» در فاکتور: {'✅ نمایش' if pay_btn else '❌ مخفی'}",
+            callback_data="ap:paybtn",
+            style=(ButtonStyle.SUCCESS if pay_btn else ButtonStyle.DANGER))],
         [InlineKeyboardButton(text="📢 لاگِ پرداخت‌هایِ آپی در کانال",
                               callback_data="ap:log", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="🧪 تستِ اتصال و موجودی",
@@ -292,6 +297,19 @@ async def ap_show_toggle(cb: CallbackQuery, bot: Bot):
     cur = await AP._get(row.id, key, "1") == "1"
     await AP._set(row.id, key, "0" if cur else "1")
     await cb.answer("پنهان شد" if cur else "نمایش داده می‌شود")
+    await _show(cb, row.id)
+
+
+@apay_router.callback_query(F.data == "ap:paybtn")
+async def ap_paybtn_toggle(cb: CallbackQuery, bot: Bot):
+    """PATCH_APAY_HIDE_PAY_BTN_V1 — پنهان/نمایشِ دکمهٔ «💳 پرداخت» زیرِ فاکتور (وقتی شمارهٔ کارت و دکمه‌هایِ کپی هست)."""
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cur = await AP._get(row.id, "apay_pay_btn", "1") != "0"
+    await AP._set(row.id, "apay_pay_btn", "0" if cur else "1")
+    await cb.answer("دکمهٔ پرداخت مخفی شد (فقط وقتی کارت نمایش داده می‌شود)" if cur else "دکمهٔ پرداخت نمایش داده می‌شود", show_alert=cur)
     await _show(cb, row.id)
 
 
@@ -763,7 +781,8 @@ async def _apu_create_charge_locked(msg: Message, bot: Bot, row, amount: int, tg
     text, kb = AP.invoice_view(
         title=await get_display_name(row.id), pay_rial=pay_rial, card=card, holder=holder,
         order_id=oid, pay_url=str(res["pay_url"]), check_cb=f"apu:check:{oid}",
-        cancel_cb=f"apu:cancel:{oid}", fee_toman=fee, credit_toman=int(amount))
+        cancel_cb=f"apu:cancel:{oid}", fee_toman=fee, credit_toman=int(amount),
+        show_pay_btn=(await AP._get(row.id, "apay_pay_btn", "1")) != "0")   # PATCH_APAY_HIDE_PAY_BTN_V1
     sent = await msg.answer(text, reply_markup=kb, parse_mode="HTML")
     # === PATCH_APAY_FAST_WATCH_V1 ===
     try:

@@ -568,6 +568,9 @@ class Broadcast(Base):
     cursor_uid: Mapped[int | None] = mapped_column(Integer)      # آخرین BotUser.id که پردازش شد
     total_count: Mapped[int | None] = mapped_column(Integer)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime)  # ضربانِ اجرا (برایِ تشخیصِ اجرایِ مرده)
+    # === PATCH_BROADCAST_FORWARD_V1 === ارسالِ همگانی به‌صورتِ «فوروارد» (media_type="forward")
+    fwd_chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    fwd_msg_id: Mapped[int | None] = mapped_column(BigInteger)
     # === PATCH_BROADCAST_AUDIENCE_V1 === (تیکت #863) مخاطب: خالی=همه | svc_any | svc_unlimited | svc_none | panel:<key>
     audience: Mapped[str | None] = mapped_column(String(60), nullable=True)
 
@@ -2384,6 +2387,8 @@ class SmmService(Base):
     # === PATCH_SMM_MANUAL_PRO2_V1 === عکسِ محصول، سؤالِ دلخواه از مشتری، پیامِ تحویلِ خودکار
     image_file_id: Mapped[str | None] = mapped_column(String(255))
     input_prompt: Mapped[str | None] = mapped_column(Text)
+    unit_name: Mapped[str | None] = mapped_column(String(30))   # PATCH_SMM_UNIT_NAME_V1: «عدد»، «اکانت»، …
+    unit_mode: Mapped[str] = mapped_column(String(10), default="auto", server_default="auto")   # auto / per_unit / per_1000
     delivery_text: Mapped[str | None] = mapped_column(Text)
 
 

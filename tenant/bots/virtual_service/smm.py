@@ -174,6 +174,8 @@ async def ensure_smm_columns(force: bool = False):
             ("image_file_id", "VARCHAR(255)", "VARCHAR(255)"),
             ("input_prompt", "TEXT", "TEXT"),
             ("delivery_text", "TEXT", "TEXT"),
+            ("unit_name", "VARCHAR(30)", "VARCHAR(30)"),     # PATCH_SMM_UNIT_NAME_V1
+            ("unit_mode", "VARCHAR(10) DEFAULT 'auto'", "VARCHAR(10) DEFAULT 'auto'"),
         ],
         "smm_orders": [("panel_status", "VARCHAR(30)", "VARCHAR(30)")],
         # === PATCH_SMM_CATEGORY_DESC_V1 ===
@@ -698,7 +700,8 @@ def _qty_factor(svc) -> float:
 
 def unit_label(svc) -> str:
     """برچسب واحد برایِ نمایش به کاربر."""
-    return "هر عدد" if _qty_factor(svc) == 1.0 else "هر ۱۰۰۰ عدد"
+    _un = (getattr(svc, "unit_name", None) or "").strip() or "عدد"    # PATCH_SMM_UNIT_NAME_V1
+    return f"هر {_un}" if _qty_factor(svc) == 1.0 else f"هر ۱۰۰۰ {_un}"
 
 
 # === PATCH_SMM_AUTO_DESC_V1 ===
@@ -5004,6 +5007,11 @@ async def _smm_myservice_detail_content(bot_id: int, svc_id: int, back_page: int
         callback_data=f"smm:svctoggle:{v.id}:{back_page}")])
     if v.is_manual:
         rows.append([InlineKeyboardButton(text=f"📥 ورودیِ سفارش: {_INPUT_KIND_FA[_input_kind(v)]}", callback_data=f"smm:inpk:{v.id}")])
+        _um = (getattr(v, "unit_mode", "auto") or "auto")
+        rows.append([InlineKeyboardButton(
+            text="💲 قیمت برایِ: " + {"per_unit": "یک عدد", "per_1000": "هر ۱۰۰۰ عدد"}.get(_um, "خودکار (حداکثر ۱ ⇒ یک عدد)"),
+            callback_data=f"smm:munit:{v.id}:{back_page}")])
+        rows.append([InlineKeyboardButton(text=f"🏷 نامِ واحد: {(v.unit_name or 'عدد')}", callback_data=f"smm:mf:unit:{v.id}:{back_page}")])
         rows.append([InlineKeyboardButton(text=f"🖼 عکسِ محصول: {'دارد ✅' if v.image_file_id else 'ندارد'}", callback_data=f"smm:mf:img:{v.id}:{back_page}")])
         rows.append([InlineKeyboardButton(text=f"❓ سؤال از مشتری: {'سفارشی ✅' if v.input_prompt else 'پیش‌فرض'}", callback_data=f"smm:mf:prompt:{v.id}:{back_page}")])
         rows.append([InlineKeyboardButton(text=f"📨 پیامِ تحویلِ خودکار: {'دارد ✅' if v.delivery_text else 'ندارد'}", callback_data=f"smm:mf:deliv:{v.id}:{back_page}")])
@@ -9109,7 +9117,9 @@ async def smm_man_name_in(msg: Message, bot: Bot, state: FSMContext):
     await state.update_data(man_name=name)
     await state.set_state(SmmFSM.man_price)
     from tenant import smart_cancel_kb
-    await msg.answer("گام ۲ از ۵ — قیمت فروش را به <b>تومان به‌ازای هر ۱۰۰۰ عدد</b> بفرست (فقط عدد):",
+    await msg.answer("گام ۲ از ۵ — قیمت فروش را به <b>تومان به‌ازای هر ۱۰۰۰ عدد</b> بفرست (فقط عدد).\n"
+                     "💡 اگر حداکثرِ سفارش را ۱ می‌گذاری، همین عدد <b>قیمتِ یک عدد</b> حساب می‌شود؛ "
+                     "بعداً از «⚙️ مدیریت» می‌توانی واحد را عوض کنی:",
                      parse_mode="HTML", reply_markup=await smart_cancel_kb(bot))
 
 
@@ -9407,6 +9417,8 @@ _MF_INFO = {
     "prompt": ("❓ <b>سؤال از مشتری</b>\n\nمتنی که مشتری موقعِ سفارش می‌بیند و باید جوابش را بفرستد "
                "(مثلاً «آیدیِ عددیِ حسابت در بازی را بفرست» یا «ایمیلِ اکانت را بنویس»).\n"
                "برایِ برگشت به پیش‌فرض «-» بفرست."),
+    "unit": ("🏷 <b>نامِ واحد</b>\n\nنامِ واحدِ فروش را بفرست؛ در قیمت به مشتری نشان داده می‌شود "
+             "(مثلاً «اکانت»، «کد»، «عدد»، «دلار» ⇒ «هر اکانت»).\nبرایِ برگشت به «عدد» «-» بفرست."),
     "deliv": ("📨 <b>پیامِ تحویلِ خودکار</b>\n\nهر وقت سفارشِ این محصول را «تکمیل» کنی، این متن خودکار برایِ مشتری "
               "فرستاده می‌شود (مثلاً توضیحِ دریافت، کد، لینکِ آموزش).\nبرایِ حذف «-» بفرست."),
 }
@@ -9455,8 +9467,8 @@ async def smm_mf_save(msg: Message, bot: Bot, state: FSMContext):
         if not raw:
             await msg.answer("متن بفرست (یا «-» برایِ حذف).")
             return
-        val = None if raw == "-" else raw[:1000 if field == "prompt" else 3000]
-    col = {"img": "image_file_id", "prompt": "input_prompt", "deliv": "delivery_text"}[field]
+        val = None if raw == "-" else raw[:{"prompt": 1000, "unit": 30}.get(field, 3000)]
+    col = {"img": "image_file_id", "prompt": "input_prompt", "deliv": "delivery_text", "unit": "unit_name"}[field]
     async with Session() as s:
         v = await s.get(SmmService, sv)
         if not v or v.bot_id != row.id:
@@ -9469,6 +9481,30 @@ async def smm_mf_save(msg: Message, bot: Bot, state: FSMContext):
     text, kb = await _smm_myservice_detail_content(row.id, sv, bp)
     await msg.answer("✅ ذخیره شد." if val else "🗑 حذف شد.")
     await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@smm_router.callback_query(F.data.startswith("smm:munit:"))
+async def smm_unit_mode_cycle(cb: CallbackQuery, bot: Bot):
+    """PATCH_SMM_UNIT_NAME_V1 — چرخش: خودکار ← یک عدد ← هر ۱۰۰۰ عدد (فقط سرویسِ دستیِ همین ربات)."""
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    _, _, sv, bp = cb.data.split(":")
+    async with Session() as s:
+        v = await s.get(SmmService, int(sv))
+        if not v or v.bot_id != row.id or not v.is_manual:
+            await cb.answer("پیدا نشد", show_alert=True)
+            return
+        cur = (v.unit_mode or "auto")
+        v.unit_mode = {"auto": "per_unit", "per_unit": "per_1000"}.get(cur, "auto")
+        await s.commit()
+        nxt = v.unit_mode
+    await cb.answer({"per_unit": "قیمت = یک عدد", "per_1000": "قیمت = هر ۱۰۰۰ عدد"}.get(nxt, "خودکار"))
+    text, kb = await _smm_myservice_detail_content(row.id, int(sv), int(bp))
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 async def _send_delivery_text(bot_id: int, order_pk: int, bot: "Bot | None" = None) -> None:

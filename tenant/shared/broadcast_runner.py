@@ -195,7 +195,9 @@ async def run_broadcast(bc_id: int) -> None:
             for uid, tg_id, was_blocked in users:
                 while True:
                     try:
-                        if bc.media_id:
+                        if bc.media_type == "forward" and bc.fwd_msg_id:     # PATCH_BROADCAST_FORWARD_V1
+                            await bot.forward_message(tg_id, bc.fwd_chat_id, bc.fwd_msg_id)
+                        elif bc.media_id:
                             await getattr(bot, _BC_MEDIA_SEND.get(bc.media_type or "photo", "send_photo"))(
                                 tg_id, bc.media_id, caption=bc.text or None, reply_markup=kb)
                         else:

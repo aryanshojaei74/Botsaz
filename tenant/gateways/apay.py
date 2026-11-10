@@ -327,7 +327,7 @@ async def get_fee_cfg(bot_id: int) -> tuple[str, int]:
 
 def invoice_view(*, title: str, pay_rial: int, card: str, holder: str, order_id: str,
                  pay_url: str, check_cb: str, cancel_cb: str, support_url: str = "",
-                 fee_toman: int = 0, credit_toman: int = 0):
+                 fee_toman: int = 0, credit_toman: int = 0, show_pay_btn: bool = True):
     """متن و کیبوردِ فاکتور — مشترکِ رباتِ مستأجر و بات‌ساز."""
     from aiogram.types import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
     from aiogram.enums import ButtonStyle
@@ -350,7 +350,8 @@ def invoice_view(*, title: str, pay_rial: int, card: str, holder: str, order_id:
     if card:
         lines += ["📋 <b>مراحل:</b>",
                   "۱. <b>دقیقاً</b> همین مبلغ را به همین کارت واریز کن (رقم‌هایِ آخر مهم است)؛ "
-                  "با دکمه‌هایِ کپی می‌توانی مستقیم از اپِ بانک پرداخت کنی، یا «💳 پرداخت» را بزن.",
+                  "با دکمه‌هایِ کپی می‌توانی مستقیم از اپِ بانک پرداخت کنی"
+                  + ("، یا «💳 پرداخت» را بزن." if show_pay_btn else "."),
                   "۲. کیف پولت خودکار شارژ می‌شود؛ اگر طول کشید «🔍 بررسیِ پرداخت» را بزن."]
     else:
         lines += ["📋 <b>مراحل:</b>",
@@ -367,7 +368,8 @@ def invoice_view(*, title: str, pay_rial: int, card: str, holder: str, order_id:
                                           copy_text=CopyTextButton(text=str(pay_rial))))
     if copy:
         rows.append(copy)
-    rows.append([InlineKeyboardButton(text="💳 پرداخت", url=pay_url)])
+    if show_pay_btn or not card:     # PATCH_APAY_HIDE_PAY_BTN_V1: بدونِ کارتِ نمایش‌داده‌شده، این دکمه تنها راهِ پرداخت است
+        rows.append([InlineKeyboardButton(text="💳 پرداخت", url=pay_url)])
     rows.append([InlineKeyboardButton(text="🔍 بررسیِ پرداخت", callback_data=check_cb,
                                       style=ButtonStyle.SUCCESS)])
     if support_url:
