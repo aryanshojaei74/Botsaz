@@ -179,6 +179,8 @@ from tenant.shared.escrow import escrow_router
 tenant_router.include_router(escrow_router)
 from tenant.shared.balance_transfer import btr_router   # PATCH_BALANCE_TRANSFER_V1
 tenant_router.include_router(btr_router)
+from tenant.shared.withdraw import wd_router   # PATCH_WITHDRAW_V1
+tenant_router.include_router(wd_router)
 from tenant.bots.vpn.vpn_metered import mtr_router   # PATCH_METERED_PLAN_V1
 tenant_router.include_router(mtr_router)
 from tenant.bots.vpn.stock_delivery import sd_router   # PATCH_STOCK_MANUAL_DELIVERY_V1
@@ -7990,6 +7992,11 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
     if msg.text == "📋 تاریخچه تراکنش‌ها":
         await _wallet_history_text(msg, bot)
         return
+    # === PATCH_WITHDRAW_V1 === (حالتِ کیبوردی)
+    if msg.text == "💸 درخواست برداشت وجه":
+        from tenant.shared.withdraw import start as _wd_start
+        await _wd_start(msg, bot, state)
+        return
     # === PATCH_BALANCE_TRANSFER_V1 === (حالتِ کیبوردی)
     if msg.text == "🔁 انتقال موجودی":
         from tenant.shared.balance_transfer import start as _btr_start
@@ -8515,6 +8522,13 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
             options.append((_wc_lbl, "wcode:redeem", prim))
     except Exception:
         logger.exception("افزودنِ دکمهٔ کدِ شارژ به کیف پول ناموفق بود")
+    # === PATCH_WITHDRAW_V1 === فقط وقتی مالک برداشت را روشن کرده
+    try:
+        from tenant.shared.withdraw import enabled as _wd_on, BTN_LABEL as _wd_lbl
+        if await _wd_on(bot_id):
+            options.append((_wd_lbl, "wd:start", prim))
+    except Exception:
+        logger.exception("افزودنِ دکمهٔ برداشت به کیف پول ناموفق بود")
     options.append(("📋 تاریخچه تراکنش‌ها", "w:history", prim))
     # === PATCH_GATEWAY_LAYOUT_V1 === ترتیبِ دلخواهِ دکمه‌هایِ درگاه
     from tenant.gateways.gateway_layout import apply_order_options as _gw_ord_o
@@ -8566,13 +8580,16 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
     except Exception:
         logger.exception("charge bonus hint")
         _cb_note = ""
+    # === PATCH_WITHDRAW_V1 === متنِ هشدار: پیش‌فرض / دلخواهِ مالک / حذف
+    from tenant.shared import withdraw as _wd
+    _wd_note = await _wd.wallet_note(bot_id, _wd.WALLET_NOTE_DEFAULT)
     wallet_text = (
         f"{header}"
         f"💰 <b>کیف پول</b>\n\n"
         f"💵 موجودی: <b>{rial(u.balance)}</b>"
         f"{_cb_note}"
         f"{ref_note}"
-        f"\n\n⚠️ <i>مبلغ کیف پول قابل برداشت نمی‌باشد و فقط برای خرید سرویس استفاده می‌شود.</i>"
+        + (f"\n\n{_wd_note}" if _wd_note else "")
     )
 
     if await get_setting(bot_id, "menu_mode", "reply") == "inline":
@@ -8850,7 +8867,9 @@ async def show_profile(msg, bot_id: int, u: BotUser):
     uname = ("@" + u.username) if u.username else "—"
     full_name = _html.escape(u.full_name or "—")
     jdate, jtime = _jalali_date_time(u.joined_at)
-    ref_lines = _ps.ref_summary(st)
+    # === PATCH_WITHDRAW_V1 === همان متنِ هشدار (قابلِ ویرایش/حذف توسطِ مالک)
+    from tenant.shared import withdraw as _wd_p
+    ref_lines = _ps.ref_summary(st, await _wd_p.wallet_note(bot_id, _ps.REF_NOTE_DEFAULT))
 
     default_text = (
         "👤 <b>مشخصات شما</b>\n\n"
@@ -14182,7 +14201,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "522"
+BUILD_ID = "523"
 
 
 @tenant_router.message(Command("version"))

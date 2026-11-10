@@ -611,7 +611,7 @@ def test_section_key_format(reg):
 def test_virtual_finance_items_registered(vs):
     regmod, mod = vs
     items = regmod.registered_items(regmod.section_key("finance", "virtual_service"))
-    assert {i.callback for i in items} == {"tadm:smmorderchannel", "set:hesabpay", "btr:admin", "vsg:menu"}
+    assert {i.callback for i in items} == {"tadm:smmorderchannel", "set:hesabpay", "btr:admin", "wd:admin", "vsg:menu"}
     for i in items:
         assert i.handler is not None and not i.owner_only and not i.needs_state
 
@@ -634,7 +634,7 @@ def test_finance_items_keep_previous_positions(vs):
     out = [cb for _, cb in regmod.merge_into(base, items)]
     assert out == ["tadm:receiptchannel", "set:txlog", "set:kyc", "tadm:smmorderchannel",
                    "set:wallet_receipt_buttons", "set:phonelog", "set:toggle_payphone", "vsg:menu",
-                   "set:crypto", "set:hesabpay", "set:swap", "btr:admin"]
+                   "set:crypto", "set:hesabpay", "set:swap", "btr:admin", "wd:admin"]
 
 
 def test_finance_items_when_optional_neighbours_missing(vs):
@@ -642,7 +642,7 @@ def test_finance_items_when_optional_neighbours_missing(vs):
     base = [("a", "tadm:receiptchannel"), ("s", "set:swap")]        # نه crypto، نه payphone، …
     items = regmod.visible_items(regmod.section_key("finance", "virtual_service"), "pro")
     out = [cb for _, cb in regmod.merge_into(base, items)]
-    assert out == ["tadm:receiptchannel", "tadm:smmorderchannel", "set:hesabpay", "set:swap", "btr:admin", "vsg:menu"]
+    assert out == ["tadm:receiptchannel", "tadm:smmorderchannel", "set:hesabpay", "set:swap", "btr:admin", "wd:admin", "vsg:menu"]
 
 
 @pytest.mark.parametrize("plan", _plans())
@@ -677,7 +677,7 @@ def test_other_kinds_get_no_section_items(vs, vpn):
     vs_reg, _ = vs
     vpn_reg, _ = vpn
     assert vs_reg.registered_items(vs_reg.section_key("admins", "virtual_service")) == []
-    assert [i.callback for i in vpn_reg.registered_items(vpn_reg.section_key("finance", "vpn_sales"))] == ["btr:admin", "mtr:adm"]
+    assert [i.callback for i in vpn_reg.registered_items(vpn_reg.section_key("finance", "vpn_sales"))] == ["btr:admin", "wd:admin", "mtr:adm"]
     assert vs_reg.registered_items(vs_reg.section_key("finance", "digital_shop")) == []
 
 

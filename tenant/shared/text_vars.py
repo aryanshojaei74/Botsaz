@@ -235,7 +235,8 @@ async def _user_values(names: set[str], bot_id: int | None, user, tg_user) -> di
                 v["ref_orders"] = str(st.inv_orders)
                 v["ref_spent"] = f"{st.inv_spent:,}"
                 v["ref_earned"] = f"{st.ref_total_earned:,}"
-                v["ref_summary"] = _ps.ref_summary(st)          # HTMLِ قابلِ‌اعتماد؛ escape نمی‌شود
+                from tenant.shared import withdraw as _wdv
+                v["ref_summary"] = _ps.ref_summary(st, await _wdv.wallet_note(bot_id, _ps.REF_NOTE_DEFAULT))   # HTMLِ قابلِ‌اعتماد؛ escape نمی‌شود
         except Exception:
             logger.exception("[text_vars] خواندنِ متغیرهایِ دیتابیسیِ کاربر ناموفق بود")
     elif "balance" in need_db and user is not None:

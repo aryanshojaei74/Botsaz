@@ -112,7 +112,11 @@ async def compute(bot_id: int, u, *, is_virtual_service: bool = False) -> Profil
     return st
 
 
-def ref_summary(st: ProfileStats) -> str:
+REF_NOTE_DEFAULT = ("⚠️ <i>این مبلغ‌ها به‌صورت خودکار به موجودی‌ات اضافه شده و فقط "
+                    "داخل ربات قابل خرج است (غیرقابل برداشت نقدی).</i>")
+
+
+def ref_summary(st: ProfileStats, note: str | None = None) -> str:
     """بلوکِ «زیرمجموعه‌گیری» — همان متنِ قبلیِ show_profile، کلمه‌به‌کلمه."""
     lines = (
         f"🔗 زیرمجموعه‌های دعوت‌شده: {st.ref_count} نفر\n"
@@ -121,9 +125,8 @@ def ref_summary(st: ProfileStats) -> str:
     )
     if st.ref_reward_enabled and (st.ref_reward_amount > 0 or st.ref_total_earned > 0):
         lines += f"🎁 اعتبار پاداش دریافتی تا به الان: {st.ref_total_earned:,} تومان\n"
-    lines += ("⚠️ <i>این مبلغ‌ها به‌صورت خودکار به موجودی‌ات اضافه شده و فقط "
-              "داخل ربات قابل خرج است (غیرقابل برداشت نقدی).</i>")
-    return lines
+    _n = REF_NOTE_DEFAULT if note is None else note     # PATCH_WITHDRAW_V1: رشتهٔ خالی = حذفِ متن
+    return lines + _n if _n else lines.rstrip("\n")
 
 
 def account_status_text(active: bool) -> str:

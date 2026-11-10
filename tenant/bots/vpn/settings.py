@@ -276,6 +276,21 @@ register_settings_items(section_key("finance", KIND), [
 ])
 
 
+# === PATCH_WITHDRAW_V1 === برداشتِ وجه + متنِ دلخواه/حذفِ هشدارِ کیف پول
+async def _withdraw_admin(cb, bot):
+    from tenant.shared.withdraw import admin_menu
+    await admin_menu(cb, bot)
+
+
+register_settings_items(section_key("finance", KIND), [
+    SettingsItem(
+        label="💸 برداشتِ وجه و متنِ کیف پول", callback="wd:admin",
+        handler=_withdraw_admin,
+        after=("btr:admin", "set:swap", "set:crypto", "set:kyc", "set:txlog", "tadm:receiptchannel"),
+    ),
+])
+
+
 # === PATCH_METERED_PLAN_V1 === بستهٔ اعتباری (پرداخت به‌ازایِ مصرف از کیف پول) — فقط پلنِ حرفه‌ای
 async def _metered_admin(cb, bot, state):
     from tenant.bots.vpn.vpn_metered import admin_menu

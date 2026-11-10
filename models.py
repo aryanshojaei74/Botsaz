@@ -2967,6 +2967,20 @@ class RefPrizeClaim(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
+class WithdrawRequest(Base):
+    """درخواستِ برداشتِ وجه از کیف پول — PATCH_WITHDRAW_V1. status: pending / paid / rejected."""
+    __tablename__ = "withdraw_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("bot_users.id"), index=True)
+    amount: Mapped[float] = mapped_column(Numeric(12, 0))
+    dest: Mapped[str | None] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(12), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 class BalanceTransfer(Base):
     """انتقالِ موجودی بینِ دو کاربرِ یک ربات — PATCH_BALANCE_TRANSFER_V1.
     status: pending (منتظرِ تأییدِ ادمین؛ مبلغ از فرستنده کسر و نگه داشته شده) / done / rejected."""
@@ -3006,6 +3020,7 @@ TENANT_OWNED_MODELS = [
     GateReferralLink,
     EscrowDeal,   # === PATCH_ESCROW_V1 ===
     BalanceTransfer,   # === PATCH_BALANCE_TRANSFER_V1 ===
+    WithdrawRequest,   # === PATCH_WITHDRAW_V1 ===
     MeteredAccount,    # === PATCH_METERED_PLAN_V1 ===
     StockDelivery,     # === PATCH_STOCK_MANUAL_DELIVERY_V1 ===
     RefPrizeClaim,   # === PATCH_REFPOINT_PRIZES_V1 ===
