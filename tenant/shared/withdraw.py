@@ -579,3 +579,25 @@ async def api_list(bot_id: int, user_id: int) -> list[dict]:
     return [{"id": w.id, "amount": int(w.amount), "status": w.status, "destination": w.dest,
              "created_at": w.created_at.isoformat() if w.created_at else None,
              "decided_at": w.decided_at.isoformat() if w.decided_at else None} for w in ws]
+
+
+# ═══════════════════ ثبت در «مالی و کیف پول» برایِ بقیهٔ انواعِ ربات ═══════════════════
+# vpn_sales / virtual_service / panel_seller در settings.py خودشان ثبت می‌کنند؛ بقیه (فروشگاه، رزرو، تبلیغات، …) این‌جا،
+# تا مالکِ هر رباتی که کیف پول دارد بتواند متنِ «قابلِ برداشت نیست» را عوض/حذف کند و برداشت را روشن کند (پیشنهادِ #201).
+async def _admin_entry_handler(cb, bot):
+    await admin_menu(cb, bot)
+
+
+def _register_other_kinds() -> None:
+    try:
+        from tenant.settings_registry import SettingsItem, register_settings_items, section_key
+        for _kind in ("digital_shop", "booking", "ad_bot", "escrow_bot", "giveaway", "funstat", "community_mgmt"):
+            register_settings_items(section_key("finance", _kind), [
+                SettingsItem(label="💸 برداشتِ وجه و متنِ کیف پول", callback="wd:admin", handler=_admin_entry_handler,
+                             after=("btr:admin", "set:swap", "set:crypto", "set:kyc", "set:txlog", "tadm:receiptchannel")),
+            ])
+    except Exception:      # noqa: BLE001
+        logger.exception("withdraw: ثبتِ آیتمِ مالی برایِ انواعِ دیگرِ ربات ناموفق بود")
+
+
+_register_other_kinds()
