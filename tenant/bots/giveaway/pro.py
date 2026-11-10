@@ -333,7 +333,11 @@ async def _row(bot: Bot):
     if is_mother_bot(bot):
         return await mother_row()
     from tenant import get_bot_row
-    return await get_bot_row(bot)
+    row = await get_bot_row(bot)
+    # === PATCH_GIVEAWAY_PRO_PARTNER_V1 === قرعه‌کشی/منویِ حرفه‌ای فقط برایِ ربات مادر، همکارها و رباتِ نوعِ giveaway
+    if row is not None and getattr(row, "plan", "") != "partner" and getattr(row, "field", "") != "giveaway":
+        return None
+    return row
 
 
 def mother_routers() -> list[Router]:

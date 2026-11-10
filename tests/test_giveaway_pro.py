@@ -19,7 +19,7 @@ from tenant.bots.giveaway import user as USR
 
 pytestmark = pytest.mark.asyncio
 BOT, OWNER = 5, 100
-ROW = SimpleNamespace(id=BOT, owner_id=OWNER, field="vpn_sales", token="5:T", plan="pro", status="active", username="gwbot")
+ROW = SimpleNamespace(id=BOT, owner_id=OWNER, field="vpn_sales", token="5:T", plan="partner", status="active", username="gwbot")
 
 
 class FakeBot:
@@ -116,7 +116,7 @@ async def env(monkeypatch):
     tenant._SETTING_CACHE.clear()
     USR._LOCK.clear()
     async with mk() as s:
-        s.add(models.Bot(id=BOT, owner_id=OWNER, token="5:T", username="gwbot", field="vpn_sales", plan="pro", status="active"))
+        s.add(models.Bot(id=BOT, owner_id=OWNER, token="5:T", username="gwbot", field="vpn_sales", plan="partner", status="active"))
         for uid in (OWNER, 11, 12, 13):
             s.add(models.BotUser(bot_id=BOT, telegram_id=uid, full_name=f"u{uid}", balance=0))
         await s.commit()
@@ -411,8 +411,16 @@ async def test_support_button(env):
     assert "https://t.me/helper" in cbs(c.message.edits[0][1])
 
 
-def test_not_offered_to_tenant_bots():
-    assert "gw_pro" not in tenant._SIMPLE_ACTIONS
+def test_offered_only_to_partner_bots():
+    assert "gw_pro" in tenant._SIMPLE_ACTIONS
+    mb = SimpleNamespace(id=1, action=None, parent_id=None)
+
+    def cbs_for(plan):
+        kb = tenant._thb_kb_action_pick(mb, "vpn_sales", plan, "tool")
+        return [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert "thb:setsimple:gw_pro:1" in cbs_for("partner")
+    for plan in ("free", "growth", "pro"):
+        assert "thb:setsimple:gw_pro:1" not in cbs_for(plan), plan
     import platform_bot as PB
     for f in ("vpn_sales", "virtual_service", "digital_shop", "booking", "giveaway", "general", "partner"):
         cs = [b.callback_data for r in PB.action_kb(f).inline_keyboard for b in r]
@@ -470,3 +478,16 @@ async def test_platform_home_button_opens_hub_for_mother(env, monkeypatch):
     monkeypatch.setattr(config, "PLATFORM_ADMIN_ID", OWNER)
     await PB._run_custom_home_btn({"type": "gw_pro", "label": "ق"}, msg, None, None)
     assert out and "gwp:new" in cbs(out[0][1]) and "gwp:lang" in cbs(out[0][1])
+
+
+async def test_non_partner_tenant_row_blocked(env, monkeypatch):
+    other = SimpleNamespace(id=BOT, owner_id=OWNER, field="vpn_sales", token="5:T", plan="pro", status="active")
+    async def get_row(bot):
+        return other
+    monkeypatch.setattr(tenant, "get_bot_row", get_row)
+    assert await P._row(FakeBot()) is None
+    gw_field = SimpleNamespace(id=BOT, owner_id=OWNER, field="giveaway", token="5:T", plan="free", status="active")
+    async def get_row2(bot):
+        return gw_field
+    monkeypatch.setattr(tenant, "get_bot_row", get_row2)
+    assert (await P._row(FakeBot())).field == "giveaway"

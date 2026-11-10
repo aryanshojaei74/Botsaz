@@ -293,6 +293,14 @@ _include(community_router, "community_mgmt")  # === PATCH_COMMUNITY_MGMT_V1 ===
 _include(funstat_bot_router, "funstat")  # === PATCH_FUNSTAT_BOT_V1 ===
 from tenant.bots.giveaway import giveaway_router  # === PATCH_GIVEAWAY_BOT_V1 ===
 _include(giveaway_router, "giveaway")
+# === PATCH_GIVEAWAY_PRO_PARTNER_V1 === شرکت در قرعه‌کشی (gw:) و منویِ حرفه‌ای (gwp:) برایِ ربات‌هایِ همکار؛ کپیِ مستقل چون
+# روترهایِ اصلی قبلاً والد دارند. دسترسی داخلِ pro._row محدود به همکار / نوعِ giveaway است.
+try:
+    from tenant.bots.giveaway.pro import mother_routers as _gwp_partner_routers
+    for _gwp_r in _gwp_partner_routers():
+        tenant_router.include_router(_gwp_r)
+except Exception:      # noqa: BLE001
+    logger.exception("نصبِ قرعه‌کشیِ حرفه‌ای برایِ همکارها ناموفق بود")
 from tenant.shared.sms_verify import sms_verify_router   # === PATCH_SMS_VERIFY_V1 ===
 tenant_router.include_router(sms_verify_router)
 from tenant.bots.panel_seller import panel_seller_router  # === PATCH_PANEL_SELLER_V1 ===
@@ -6868,6 +6876,14 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
         # === PATCH_SMM_AI_BUTTON_ACTION_V1 ===
         from tenant.bots.virtual_service.smm_ai import start_ask_from_button as _ai_start
         await _ai_start(msg, bot, state)
+    elif action == "gw_pro":
+        # === PATCH_GIVEAWAY_PRO_PARTNER_V1 === فقط ربات همکار؛ بقیه پیامِ نبودنِ دسترسی
+        _row_gwp = await get_bot_row(bot)
+        if _row_gwp and _row_gwp.plan == "partner":
+            from tenant.bots.giveaway.pro import show_hub as _gwp_hub
+            await _gwp_hub(msg, bot, _row_gwp, msg.from_user.id)
+        else:
+            await msg.answer("⛔️ این بخش در این ربات فعال نیست.")
     elif action in ("giveaway", "giveaway_results"):
         # === PATCH_GIVEAWAY_BOT_V1 ===
         from tenant.bots.giveaway.user import show_list as _gw_list, show_results_list as _gw_res
@@ -14207,7 +14223,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "528"
+BUILD_ID = "529"
 
 
 @tenant_router.message(Command("version"))
@@ -15547,6 +15563,8 @@ _SIMPLE_ACTIONS: dict[str, tuple[str, str, frozenset | None]] = {
     # === PATCH_SMM_AI_BUTTON_ACTION_V1 === (SINA) دستیارِ هوشمندِ مشتری قابلِ وصل‌شدن به هر دکمه
     "ai_assistant":     ("🤖 پرسش از دستیارِ هوشمند", "این دکمه حالا از مشتری سؤال می‌گیرد و دستیارِ هوشمند جواب می‌دهد (نیازمندِ روشن‌بودنِ دستیار در تنظیماتِ ربات).",
                          frozenset({"virtual_service"})),
+    # === PATCH_GIVEAWAY_PRO_PARTNER_V1 === (Nexivo) قرعه‌کشیِ حرفه‌ای در ربات‌هایِ «همکار» (همان منویِ ربات مادر)
+    "gw_pro":           ("🎰 قرعه‌کشیِ حرفه‌ای بات‌ساز", "این دکمه حالا منویِ قرعه‌کشیِ حرفه‌ای (ساخت، مدیریت، پروفایل، زبان) را باز می‌کند.", None),
     "giveaway_results": ("🏆 نتایجِ قرعه‌کشی‌ها", "این دکمه حالا نتایجِ قرعه‌کشی‌هایِ پایان‌یافته را نشان می‌دهد.",
                          frozenset({"giveaway"})),
     "funstat_search": ("🔎 جست‌وجویِ Fun Stat",
@@ -16301,6 +16319,8 @@ def _thb_kb_action_pick(mb, bot_field: str = "", plan: str = "", category: str =
             if _akey == "nft_market" and not has_feature(plan, Feature.NFT_MARKET):
                 continue
             if _akey == "escrow" and not has_feature(plan, Feature.ESCROW):   # PATCH_ESCROW_V1
+                continue
+            if _akey == "gw_pro" and not _is_partner:      # PATCH_GIVEAWAY_PRO_PARTNER_V1: فقط ربات همکار (ربات مادر جدا دارد)
                 continue
             # === PATCH_STORE_MINIAPP_GATE_V1 === فقط وقتی مینی‌اپ روشن و محلِ نمایشش «کیبورد» است
             if _akey == "store_miniapp" and not store_miniapp_ok:
@@ -20382,7 +20402,7 @@ async def thb_set_simple_action(cb: CallbackQuery, bot: Bot):
         return
     parts = cb.data.split(":")
     action_key, mb_id = parts[2], int(parts[3])
-    if action_key not in _SIMPLE_ACTIONS:
+    if action_key not in _SIMPLE_ACTIONS or (action_key == "gw_pro" and row.plan != "partner"):
         await cb.answer("نامعتبر", show_alert=True)
         return
     async with Session() as s:
