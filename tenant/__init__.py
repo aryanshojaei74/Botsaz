@@ -7998,7 +7998,8 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         await _wallet_history_text(msg, bot)
         return
     # === PATCH_WITHDRAW_V1 === (حالتِ کیبوردی)
-    if msg.text == "💸 درخواست برداشت وجه":
+    from tenant.shared.withdraw import label as _wd_label_k, BTN_LABEL as _wd_btn_k
+    if msg.text and msg.text in (_wd_btn_k, await _wd_label_k(bot_id)):
         from tenant.shared.withdraw import start as _wd_start
         await _wd_start(msg, bot, state)
         return
@@ -8529,9 +8530,9 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
         logger.exception("افزودنِ دکمهٔ کدِ شارژ به کیف پول ناموفق بود")
     # === PATCH_WITHDRAW_V1 === فقط وقتی مالک برداشت را روشن کرده
     try:
-        from tenant.shared.withdraw import enabled as _wd_on, BTN_LABEL as _wd_lbl
+        from tenant.shared.withdraw import enabled as _wd_on, label as _wd_label
         if await _wd_on(bot_id):
-            options.append((_wd_lbl, "wd:start", prim))
+            options.append((await _wd_label(bot_id), "wd:start", prim))
     except Exception:
         logger.exception("افزودنِ دکمهٔ برداشت به کیف پول ناموفق بود")
     options.append(("📋 تاریخچه تراکنش‌ها", "w:history", prim))
@@ -14206,7 +14207,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "525"
+BUILD_ID = "526"
 
 
 @tenant_router.message(Command("version"))

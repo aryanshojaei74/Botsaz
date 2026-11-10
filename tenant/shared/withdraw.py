@@ -38,6 +38,7 @@ class WdFSM(StatesGroup):
     dest = State()
     a_min = State()
     a_note = State()
+    a_label = State()
 
 
 def _fa(t: str) -> str:
@@ -70,6 +71,12 @@ async def _gs(bot_id: int, key: str, default: str = "") -> str:
     return await get_setting(bot_id, key, default)
 
 
+async def label(bot_id: int) -> str:
+    """نامِ دکمهٔ برداشت در کیف پول — قابلِ تغییر توسطِ مالک (wd_label)."""
+    t = (await _gs(bot_id, "wd_label", "")).strip()
+    return t[:60] if t else BTN_LABEL
+
+
 async def enabled(bot_id: int) -> bool:
     return (await _gs(bot_id, "wd_enabled", "0")) == "1"
 
@@ -94,7 +101,7 @@ async def wallet_note(bot_id: int, default_text: str) -> str:
             return t
     if await enabled(bot_id):
         return (f"💸 با رسیدنِ مبلغِ قابلِ‌برداشت به {fmt(await min_amount(bot_id))} می‌توانی از دکمهٔ "
-                f"«{BTN_LABEL}» درخواست بدهی.")
+                f"«{_html.escape(await label(bot_id))}» درخواست بدهی.")
     return default_text
 
 
@@ -259,9 +266,20 @@ async def wd_dest(msg: Message, bot: Bot, state: FSMContext):
                           [_btn("❌ انصراف", "wd:cancel", ButtonStyle.DANGER)]]))
 
 
+async def notify_admins_new(bot: Bot, row, me, w) -> None:
+    """اعلانِ درخواستِ تازه به مالک/ادمین‌ها با دکمه‌هایِ واریز/رد (مشترکِ ربات و API)."""
+    from tenant import _notify_admins
+    fn = _html.escape(me.full_name or "") + (f" (@{me.username})" if me.username else "")
+    await _notify_admins(
+        bot, row,
+        f"💸 <b>درخواستِ برداشت #{w.id}</b>\n\n👤 {fn} (<code>{me.telegram_id}</code>)\n"
+        f"💵 مبلغ: <b>{fmt(w.amount)}</b>\n🏦 <code>{_html.escape(w.dest or '')}</code>",
+        _kb([[_btn("✅ واریز شد", f"wd:ap:{w.id}", ButtonStyle.SUCCESS),
+              _btn("❌ رد و برگشتِ مبلغ", f"wd:rj:{w.id}", ButtonStyle.DANGER)]]))
+
+
 @wd_router.callback_query(F.data == "wd:ok")
 async def wd_confirm(cb: CallbackQuery, bot: Bot, state: FSMContext):
-    from tenant import _notify_admins
     row = await _row(bot)
     d = await state.get_data()
     await state.clear()
@@ -281,13 +299,7 @@ async def wd_confirm(cb: CallbackQuery, bot: Bot, state: FSMContext):
     except Exception:
         logger.info("wd: ویرایشِ پیامِ تأیید ممکن نشد (بی‌اهمیت)")
     await cb.answer()
-    fn = _html.escape(me.full_name or "") + (f" (@{me.username})" if me.username else "")
-    await _notify_admins(
-        bot, row,
-        f"💸 <b>درخواستِ برداشت #{w.id}</b>\n\n👤 {fn} (<code>{me.telegram_id}</code>)\n"
-        f"💵 مبلغ: <b>{fmt(amt)}</b>\n🏦 <code>{_html.escape(dest)}</code>",
-        _kb([[_btn("✅ واریز شد", f"wd:ap:{w.id}", ButtonStyle.SUCCESS),
-              _btn("❌ رد و برگشتِ مبلغ", f"wd:rj:{w.id}", ButtonStyle.DANGER)]]))
+    await notify_admins_new(bot, row, me, w)
 
 
 async def _notify_user(bot: Bot, tg: int, text: str) -> None:
@@ -359,6 +371,7 @@ async def _admin_view(bot_id: int):
     ]
     if pend:
         rows.append([_btn(f"📋 درخواست‌هایِ منتظر ({pend})", "wd:pend", ButtonStyle.PRIMARY)])
+    rows.append([_btn("🏷 تغییرِ نامِ دکمهٔ برداشت", "wd:label", ButtonStyle.PRIMARY)])
     rows.append([_btn("✏️ متنِ دلخواه زیرِ کیف پول", "wd:note:edit", ButtonStyle.PRIMARY)])
     rows.append([_btn(("👁 نمایشِ متنِ پیش‌فرض" if mode != "default" else "🙈 حذفِ متنِ هشدار"),
                       "wd:note:default" if mode != "default" else "wd:note:hide")])
@@ -443,6 +456,33 @@ async def wd_min_save(msg: Message, bot: Bot, state: FSMContext):
     await msg.answer(txt, reply_markup=kb)
 
 
+@wd_router.callback_query(F.data == "wd:label")
+async def wd_label_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _admin_row(cb, bot)
+    if not row:
+        return
+    await state.set_state(WdFSM.a_label)
+    await cb.message.answer(
+        f"🏷 نامِ فعلیِ دکمه: <b>{_html.escape(await label(row.id))}</b>\n\n"
+        "نامِ جدید را بفرست (حداکثر ۶۰ حرف؛ ایموجی هم مجاز است). برایِ برگشت به نامِ پیش‌فرض «-» بفرست.",
+        reply_markup=_cancel_kb())
+    await cb.answer()
+
+
+@wd_router.message(WdFSM.a_label, F.text)
+async def wd_label_save(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import set_setting, is_owner_or_admin
+    row = await _row(bot)
+    if not row or not await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id):
+        return
+    t = (msg.text or "").strip()
+    await set_setting(row.id, "wd_label", "" if t == "-" else t[:60])
+    await state.clear()
+    txt, kb = await _admin_view(row.id)
+    await msg.answer("✅ نامِ دکمه ذخیره شد.")
+    await msg.answer(txt, reply_markup=kb)
+
+
 @wd_router.callback_query(F.data == "wd:note:edit")
 async def wd_note_edit(cb: CallbackQuery, bot: Bot, state: FSMContext):
     row = await _admin_row(cb, bot)
@@ -506,3 +546,36 @@ async def wd_pending(cb: CallbackQuery, bot: Bot):
             reply_markup=_kb([[_btn("✅ واریز شد", f"wd:ap:{w.id}", ButtonStyle.SUCCESS),
                                _btn("❌ رد و برگشتِ مبلغ", f"wd:rj:{w.id}", ButtonStyle.DANGER)]]))
     await cb.answer()
+
+
+# ═══════════════════ API (وب‌سرویس) ═══════════════════
+async def api_info(bot_id: int, user) -> dict:
+    avail = await withdrawable(bot_id, user.id, int(user.balance or 0))
+    return {"enabled": await enabled(bot_id), "min_amount": await min_amount(bot_id), "source": await source(bot_id),
+            "balance": int(user.balance or 0), "withdrawable": avail, "label": await label(bot_id)}
+
+
+async def api_request(bot_id: int, user, amount: int | None, dest: str):
+    """خروجی: ("ok", WithdrawRequest) یا (کدِ خطا, None)."""
+    if not await enabled(bot_id):
+        return "withdraw_disabled", None
+    if not amount or amount <= 0:
+        return "invalid_amount", None
+    if amount < await min_amount(bot_id):
+        return "below_minimum", None
+    if len((dest or "").strip()) < 6:
+        return "invalid_destination", None
+    if amount > await withdrawable(bot_id, user.id, int(user.balance or 0)):
+        return "insufficient_withdrawable", None
+    res, w = await create_request(bot_id, user.id, amount, dest.strip())
+    return ("ok", w) if res == "ok" else ("insufficient_balance", None)
+
+
+async def api_list(bot_id: int, user_id: int) -> list[dict]:
+    async with Session() as s:
+        ws = (await s.scalars(select(WithdrawRequest).where(
+            WithdrawRequest.bot_id == bot_id, WithdrawRequest.user_id == user_id)
+            .order_by(WithdrawRequest.id.desc()).limit(50))).all()
+    return [{"id": w.id, "amount": int(w.amount), "status": w.status, "destination": w.dest,
+             "created_at": w.created_at.isoformat() if w.created_at else None,
+             "decided_at": w.decided_at.isoformat() if w.decided_at else None} for w in ws]

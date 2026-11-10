@@ -21,6 +21,7 @@ vpn_api.py — APIِ فروشِ VPN برایِ رباتِ «فروش VPN» (PATC
     delete    حذفِ سرویس از پنل و ربات (service)
     charge    فاکتورِ شارژِ کیف‌پول با آپی (amount) ← pay_url؛  charge_status (order_id)
     trial     دریافتِ تستِ رایگان (طبقِ تنظیماتِ سراسریِ تست؛ هر کاربر یک‌بار)
+    withdraw_info / withdraw (amount, destination) / withdraws   برداشتِ وجه از کیف‌پول (اگر مالک روشن کرده باشد)
     ticket    ثبتِ تیکت (text[, subject])؛  tickets فهرستِ تیکت‌ها (+ پاسخ‌ها)؛  ticket_reply (ticket_id, text)
 
 کلیدِ کاملِ ربات (Bot.api_key) برایِ عملیاتِ کاربری پارامترِ telegram_id می‌خواهد؛ کلیدِ شخصیِ کاربر فقط
@@ -398,6 +399,24 @@ _DEL_PER_MIN = 10
 _CHG_PER_MIN = 6
 
 
+# === PATCH_API_REPORTS_V1 === (Weirdnet) گزارشِ تست/حذفِ سرویس که از طریقِ API انجام می‌شود هم به کانالِ مالک برود
+async def _with_tmp_bot(bot_id: int, fn) -> None:
+    """fn(bot) را با یک Botِ موقت (از توکنِ ربات) اجرا می‌کند؛ هر خطایی فقط لاگ می‌شود."""
+    try:
+        from aiogram import Bot as _AiogramBot
+        async with Session() as s:
+            _row = await s.get(BotRow, bot_id)
+        if not _row:
+            return
+        _tb = _AiogramBot(token=_row.token)
+        try:
+            await fn(_tb)
+        finally:
+            await _tb.session.close()
+    except Exception:
+        logger.exception("vpn_api: ارسالِ گزارش به کانالِ مالک ناموفق بود (نادیده گرفته شد)")
+
+
 async def _do_delete(ctx: AuthCtx, user: BotUser | None, p: dict) -> JSONResponse:
     """action=delete: حذفِ سرویس از پنل و از ربات (بدونِ برگشتِ پول). فقط وقتی پنل واقعاً حذف کرد (یا حساب از قبل نبود)
     ردیفِ محلی پاک می‌شود؛ خطایِ پنل ⇒ panel_error و سرویس سرجایش می‌ماند تا دوباره تلاش شود."""
@@ -414,6 +433,15 @@ async def _do_delete(ctx: AuthCtx, user: BotUser | None, p: dict) -> JSONRespons
         ok, why = await _delete_from_panel(pf, acc.email, ctx.bot_id)
         if not ok:
             return _err("panel_error", message=(why or "")[:200])
+    # === PATCH_API_REPORTS_V1 === گزارشِ حذف (قبل از پاک‌شدنِ ردیف، چون از رویِ ردیف ساخته می‌شود)
+    try:
+        from tenant.bots.vpn.vpn_user import _report_service_deleted
+        async with Session() as s:
+            _owner_u = await s.scalar(select(BotUser).where(
+                BotUser.bot_id == ctx.bot_id, BotUser.telegram_id == acc.user_telegram_id))
+        await _with_tmp_bot(ctx.bot_id, lambda b: _report_service_deleted(b, ctx.bot_id, acc.id, _owner_u))
+    except Exception:
+        logger.exception("vpn_api: گزارشِ حذفِ سرویس ناموفق بود (نادیده گرفته شد)")
     async with Session() as s:
         a2 = await s.get(PanelAccount, acc.id)
         if a2:
@@ -472,6 +500,16 @@ async def _notify_sale(bot_id: int, user_db_id: int, title: str, price, code) ->
 
 
 # === PATCH_VPN_API_TRIAL_TICKET_V1 === (Weirdnet: «دریافت تست و ثبت تیکت و پاسخ هم اضافه شود»)
+async def _api_trial_report(bot_id: int, user: BotUser, link, volume: str, duration: str, panel_key, source: str) -> None:
+    """گزارشِ تستِ دریافت‌شده از API در کانال/ادمین‌هایِ مالک (همان گزارشِ تستِ داخلِ ربات، با گیتِ پلنِ همان)."""
+    try:
+        import tenant as T
+        await _with_tmp_bot(bot_id, lambda b: T._trial_report_post(
+            b, bot_id, user, getattr(user, "username", None), link or "", volume, duration, panel_key, source))
+    except Exception:
+        logger.exception("vpn_api: گزارشِ تست ناموفق بود (نادیده گرفته شد)")
+
+
 async def _do_trial(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
     """تستِ رایگانِ API — فقط تنظیماتِ سراسریِ تست (trial_enabled/trial_gb/trial_days/trial_hours/trial_source). قانون‌هایِ اختصاصیِ هر دکمهٔ تست اعمال نمی‌شود."""
     import tenant as T
@@ -545,6 +583,9 @@ async def _do_trial(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
             cfg.status, cfg.owner_user_id = "sold", user.id
             payload, vol, d = cfg.payload, cfg.volume_gb, cfg.days
             await s.commit()
+        # === PATCH_API_REPORTS_V1 ===
+        await _api_trial_report(ctx.bot_id, user, payload, f"{vol} گیگ" if vol else "نامحدود", f"{d} روز" if d else "بی‌انقضا",
+                                None, "stock")
         return JSONResponse({"ok": True, "trial": {"source": "stock", "config": payload, "volume_gb": vol, "days": d}})
 
     panel = trial_panel
@@ -570,6 +611,10 @@ async def _do_trial(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
             a = new_acc
         out = _svc_payload(a)
         out["trial"] = True
+        # === PATCH_API_REPORTS_V1 ===
+        _vol_lbl = (f"{int(round(gb * 1024))} مگابایت" if gb < 1 else f"{int(gb)} گیگ")
+        _dur_lbl = (f"{hours} ساعت" if hours and not days else (f"{days} روز" if days else "بی‌انقضا"))
+        await _api_trial_report(ctx.bot_id, user, sub_link, _vol_lbl, _dur_lbl, panel.panel_key, "panel")
         return JSONResponse({"ok": True, "service": out})
     except PanelError as e:
         await _rollback()
@@ -825,6 +870,30 @@ async def dispatch(ctx: AuthCtx, action: str, p: dict) -> JSONResponse:
         if user is None:
             return _err("telegram_id_required" if ctx.full_access else "user_not_found")
         return await _do_trial(ctx, user, p)
+
+    if action in ("withdraw_info", "withdraw", "withdraws"):      # PATCH_API_WITHDRAW_V1 (Weirdnet)
+        if user is None:
+            return _err("telegram_id_required" if ctx.full_access else "user_not_found")
+        from tenant.shared import withdraw as W
+        if action == "withdraw_info":
+            return JSONResponse({"ok": True, **await W.api_info(ctx.bot_id, user)})
+        if action == "withdraws":
+            items = await W.api_list(ctx.bot_id, user.id)
+            return JSONResponse({"ok": True, "count": len(items), "items": items})
+        if not _rate_ok(f"wd:{ctx.bot_id}:{user.id}", 5):
+            return _err("rate_limited")
+        amt_raw = str(p.get("amount") or "").replace(",", "").strip()
+        amt = int(amt_raw) if amt_raw.isdigit() else None
+        code, w = await W.api_request(ctx.bot_id, user, amt, str(p.get("destination") or p.get("card") or p.get("dest") or ""))
+        if code != "ok":
+            return _err(code)
+
+        async def _tell(b):
+            async with Session() as s2:
+                _row = await s2.get(BotRow, ctx.bot_id)
+            await W.notify_admins_new(b, _row, user, w)
+        await _with_tmp_bot(ctx.bot_id, _tell)
+        return JSONResponse({"ok": True, "request": {"id": w.id, "amount": int(w.amount), "status": "pending"}})
 
     if action in ("ticket", "tickets", "ticket_reply"):
         if user is None:

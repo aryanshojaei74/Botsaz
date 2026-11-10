@@ -51,3 +51,37 @@ def test_flow(monkeypatch, tmp_path):
         async with S() as s:
             assert int((await s.get(models.BotUser, 1)).balance) == 400000
     asyncio.run(go())
+
+
+def test_api_and_label(monkeypatch, tmp_path):
+    async def go():
+        eng = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/t3.db")
+        async with eng.begin() as c:
+            await c.run_sync(models.Base.metadata.create_all)
+        S = async_sessionmaker(eng, expire_on_commit=False)
+        monkeypatch.setattr(W, "Session", S)
+        store = {"wd_source": "all"}
+        async def gs(b, k, d=""): return store.get(k, d)
+        monkeypatch.setattr(W, "_gs", gs)
+        async with S() as s:
+            s.add(models.BotUser(id=1, bot_id=1, telegram_id=10, balance=500000))
+            await s.commit()
+            u = await s.get(models.BotUser, 1)
+        assert await W.label(1) == W.BTN_LABEL
+        store["wd_label"] = "برداشت درآمد"
+        assert await W.label(1) == "برداشت درآمد"
+        assert (await W.api_request(1, u, 200000, "6037-9999-1111"))[0] == "withdraw_disabled"
+        store["wd_enabled"] = "1"
+        assert (await W.api_request(1, u, 1000, "6037-9999-1111"))[0] == "below_minimum"
+        assert (await W.api_request(1, u, 200000, "abc"))[0] == "invalid_destination"
+        assert (await W.api_request(1, u, 900000, "6037-9999-1111"))[0] == "insufficient_withdrawable"
+        code, w = await W.api_request(1, u, 200000, "6037-9999-1111")
+        assert code == "ok" and w.id
+        info = await W.api_info(1, await _fresh(S))
+        assert info["balance"] == 300000 and info["label"] == "برداشت درآمد"
+        items = await W.api_list(1, 1)
+        assert items[0]["status"] == "pending" and items[0]["amount"] == 200000
+    async def _fresh(S):
+        async with S() as s:
+            return await s.get(models.BotUser, 1)
+    asyncio.run(go())
