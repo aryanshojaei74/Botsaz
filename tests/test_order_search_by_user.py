@@ -206,3 +206,55 @@ def test_no_other_handler_claims_the_new_callbacks():
     for data in ("tadm:uinv:5:1", "tadm:uinvd:s:3:5"):
         claimers = [p for p in prefixes if data.startswith(p)]
         assert len(claimers) == 1, (data, claimers)
+
+
+@pytest.mark.asyncio
+async def test_charge_detail_shows_the_purchase_made_right_after_it(env, monkeypatch):
+    import tenant.bots.virtual_service.smm as smm_mod
+    monkeypatch.setattr(smm_mod, "Session", env)
+    t0 = dt.datetime(2026, 11, 9, 20, 0)
+    async with env() as s:
+        u = await s.scalar(select(models.BotUser).where(models.BotUser.telegram_id == UID))
+        other = await s.scalar(select(models.BotUser).where(models.BotUser.telegram_id == 777))
+        s.add(models.BluPalCharge(bot_id=1, user_telegram_id=UID, order_id="bp-9", amount_toman=420000, status="paid",
+                                  tracking_code="BT", seq_code="21250", created_at=t0 - dt.timedelta(minutes=5), paid_at=t0))
+        await s.flush()
+        bp = await s.scalar(select(models.BluPalCharge).where(models.BluPalCharge.order_id == "bp-9"))
+
+        def gift(user, when, **kw):
+            return models.GiftOrder(bot_id=1, buyer_user_id=user.id, gift_emoji="💎", dest_telegram_id=0, quantity=1,
+                                    pay_method="wallet", created_at=when, **kw)
+        s.add_all([
+            gift(u, t0 + dt.timedelta(minutes=3), gift_id="tonsell_1", star_count=11, price_toman=410128, dest_label="UQBCityAddr",
+                 dest_memo="MEMO123", status="sent", tracking_code="TON-1"),
+            gift(u, t0 + dt.timedelta(hours=2), gift_id="tonsell_2", star_count=50, price_toman=1, dest_label="LATE", status="sent",
+                 tracking_code="TON-LATE"),                                    # خارج از بازهٔ ۳۰ دقیقه
+            gift(other, t0 + dt.timedelta(minutes=3), gift_id="tonsell_3", star_count=60, price_toman=1, dest_label="OTHERUSER",
+                 status="sent", tracking_code="TON-OTHER"),                    # کاربرِ دیگر
+        ])
+        await s.commit()
+        upk, bid = u.id, bp.id
+    cb = _CB(f"tadm:uinvd:b:{bid}:{upk}")
+    await tenant.tadm_user_invoice_detail(cb, NS())
+    text, kb = cb.edited[0]
+    assert "خریدِ بعد از این شارژ" in text
+    assert "UQBCityAddr" in text and "MEMO123" in text and "TON-1" in text and "0.11 TON" in text and "410,128" in text
+    assert "LATE" not in text and "OTHERUSER" not in text
+    assert f"tadm:uinv:{upk}:0" in [c for _t, c in _btns(kb)]
+
+
+@pytest.mark.asyncio
+async def test_charge_with_no_following_purchase_says_so(env, monkeypatch):
+    import tenant.bots.virtual_service.smm as smm_mod
+    monkeypatch.setattr(smm_mod, "Session", env)
+    async with env() as s:
+        u = await s.scalar(select(models.BotUser).where(models.BotUser.telegram_id == UID))
+        s.add(models.BluPalCharge(bot_id=1, user_telegram_id=UID, order_id="bp-10", amount_toman=1000, status="paid",
+                                  tracking_code="BT2", seq_code="9", created_at=dt.datetime(2026, 11, 8, 1, 0),
+                                  paid_at=dt.datetime(2026, 11, 8, 1, 1)))
+        await s.commit()
+        bp = await s.scalar(select(models.BluPalCharge).where(models.BluPalCharge.order_id == "bp-10"))
+        upk, bid = u.id, bp.id
+    cb = _CB(f"tadm:uinvd:b:{bid}:{upk}")
+    await tenant.tadm_user_invoice_detail(cb, NS())
+    assert "خریدی ثبت نشده" in cb.edited[0][0]

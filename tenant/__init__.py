@@ -14258,7 +14258,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "554"
+BUILD_ID = "555"
 
 
 @tenant_router.message(Command("version"))
@@ -29262,6 +29262,55 @@ async def _find_user_for_search(s, bot_id: int, raw: str):
     return await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, func.lower(BotUser.username) == name))
 
 
+_RELATED_WINDOW_MIN = 30
+
+
+async def _related_purchases_text(s, bot_id: int, u, since) -> str:
+    """بعد از یک شارژِ کیف‌پول، کاربر معمولاً همان لحظه چیزی می‌خرد (مثلاً TON). خریدهایِ همان کاربر تا ۳۰ دقیقه بعد از شارژ را
+    با مشخصاتِ کامل برمی‌گرداند تا ادمین بداند شارژ برایِ خریدِ چه محصولی بوده (حدسی بر اساسِ زمان؛ شارژ به سفارش وصل نیست)."""
+    if not since or not u:
+        return ""
+    from models import ProductOrder, Product
+    from tenant.bots.virtual_service.smm import _vs_gift_item_label
+    until = since + _dt.timedelta(minutes=_RELATED_WINDOW_MIN)
+    rows = []                                           # (زمان، متن)
+
+    def add(ts, text):
+        rows.append((ts, text))
+    for o in (await s.scalars(select(GiftOrder).where(
+            GiftOrder.bot_id == bot_id, GiftOrder.buyer_user_id == u.id,
+            GiftOrder.created_at >= since, GiftOrder.created_at <= until).order_by(GiftOrder.id))).all():
+        e, lbl = _inv_state(o.status)
+        add(o.created_at, f"{e} {_vs_gift_item_label(o)} — {int(float(o.price_toman or 0) * int(o.quantity or 1)):,} ت\n"
+                          f"   🎯 گیرنده: <code>{_hesc(o.dest_label or '—')}</code>"
+                          + (f"\n   📝 ممو: <code>{_hesc(o.dest_memo)}</code>" if o.dest_memo else "")
+                          + f"\n   🧾 کد: <code>{o.tracking_code or o.id}</code> · {lbl}")
+    for o in (await s.scalars(select(SmmOrder).where(
+            SmmOrder.bot_id == bot_id, SmmOrder.user_telegram_id == u.telegram_id,
+            SmmOrder.created_at >= since, SmmOrder.created_at <= until).order_by(SmmOrder.id))).all():
+        e, lbl = _inv_state(o.status)
+        add(o.created_at, f"{e} 🛰 {_hesc(o.service_name or o.service_id)} × {o.quantity} — {int(float(o.price_toman or 0)):,} ت\n"
+                          f"   🔗 {_hesc((o.link or '—')[:120])}\n   🧾 کد: <code>{o.tracking_code or o.id}</code> · {lbl}")
+    for o in (await s.scalars(select(ProductOrder).where(
+            ProductOrder.bot_id == bot_id, ProductOrder.user_id == u.id,
+            ProductOrder.created_at >= since, ProductOrder.created_at <= until).order_by(ProductOrder.id))).all():
+        prod = await s.get(Product, o.product_id) if o.product_id else None
+        e, lbl = _inv_state(o.status)
+        add(o.created_at, f"{e} 🛍 {_hesc(prod.title if prod else '—')} — {int(o.amount or 0):,} ت\n"
+                          f"   🧾 کد: <code>{o.tracking_code or o.id}</code> · {lbl}")
+    for o in (await s.scalars(select(Order).where(
+            Order.bot_id == bot_id, Order.user_id == u.id, Order.pay_method != "card_charge",
+            Order.created_at >= since, Order.created_at <= until).order_by(Order.id))).all():
+        e, lbl = _inv_state(o.status)
+        add(o.created_at, f"{e} 📦 {o.volume_gb} گیگ · {o.days} روز — {int(float(o.amount or 0)):,} ت\n"
+                          f"   🧾 کد: <code>{o.tracking_code or o.id}</code> · {lbl}")
+    if not rows:
+        return f"\n\n🛒 <b>خریدِ بعد از این شارژ:</b> تا {_RELATED_WINDOW_MIN} دقیقه بعد خریدی ثبت نشده."
+    rows.sort(key=lambda x: x[0] or _dt.datetime.min)
+    return (f"\n\n🛒 <b>خریدِ بعد از این شارژ</b> (تا {_RELATED_WINDOW_MIN} دقیقه بعد؛ بر اساسِ زمان)\n"
+            + "\n".join(f"{i}) {t}" for i, (_ts, t) in enumerate(rows[:5], 1)))
+
+
 _INV_PAGE = 10
 
 
@@ -29367,6 +29416,11 @@ async def tadm_user_invoice_detail(cb: CallbackQuery, bot: Bot):
         text = await _order_detail_text(row.id, oid)
         if text is None:
             return await cb.answer("سفارش یافت نشد.", show_alert=True)
+        async with Session() as s2:
+            _o = await s2.get(Order, oid)
+            _u = await s2.get(BotUser, upk)
+            if _o and _o.pay_method == "card_charge" and _o.status == "paid" and _u and _u.bot_id == row.id:
+                text += await _related_purchases_text(s2, row.id, _u, _o.created_at)
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ بازگشت", callback_data=back, style=ButtonStyle.DANGER)]])
     elif kind == "b":
         from models import BluPalCharge
@@ -29376,6 +29430,10 @@ async def tadm_user_invoice_detail(cb: CallbackQuery, bot: Bot):
         if not ch or ch.bot_id != row.id:
             return await cb.answer("پیدا نشد.", show_alert=True)
         text = _bp_detail(ch)
+        async with Session() as s2:
+            _u = await s2.get(BotUser, upk)
+            if _u and _u.bot_id == row.id and ch.status == "paid":
+                text += await _related_purchases_text(s2, row.id, _u, ch.paid_at or ch.created_at)
         kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ بازگشت", callback_data=back, style=ButtonStyle.DANGER)]])
     elif kind == "s":
         from tenant.bots.virtual_service.smm import _smm_vs_order_detail_content
