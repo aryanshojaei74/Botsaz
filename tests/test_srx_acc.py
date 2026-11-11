@@ -169,6 +169,8 @@ async def test_real_function_chunks_at_2500_and_flags(monkeypatch):
     assert [r["count"] for r in sent] == [2500, 2500, 1000]
     assert progress == [2500, 5000, 6000]
     assert all(r["msg_id"] == 9 and r["peer"] == ("peer", "mychannel") for r in sent)
+    import time
     assert len({r["random_id"] for r in sent}) == 3
+    assert all(abs(r["random_id"] / 2 ** 32 - time.time()) < 60 for r in sent)
     with pytest.raises(ACC.AccGiftError):
         await ACC.send_paid_reaction(1, link="bad", count=3)

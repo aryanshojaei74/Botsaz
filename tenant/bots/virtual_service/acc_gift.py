@@ -196,6 +196,21 @@ def parse_post_link(link: str) -> tuple[str, int] | None:
     return (m.group(1), int(m.group(2))) if m else None
 
 
+_rid_last = 0.0
+_rid_offset = 0
+
+
+def _paid_random_id() -> int:
+    """random_idِ ری‌اکشنِ استارزی باید «زمان‌محور» باشد (مثلِ msg_idِ MTProto: ثانیه << 32 + شمارنده)؛ عددِ تصادفیِ خام
+    را تلگرام با RANDOM_ID_EXPIRED رد می‌کند."""
+    import time
+    global _rid_last, _rid_offset
+    now = time.time()
+    _rid_offset = _rid_offset + 4 if now == _rid_last else 0
+    _rid_last = now
+    return int(now * 2 ** 32) + _rid_offset
+
+
 def _reaction_privacy(anonymous: bool):
     """نسخه‌هایِ جدیدِ Telethon نوعِ PaidReactionPrivacy دارند؛ قدیمی‌ها فقط Bool."""
     try:
@@ -222,7 +237,6 @@ async def send_paid_reaction(bot_id: int, *, link: str, count: int, anonymous: b
     if not creds:
         raise AccGiftError("اکانتِ پشتیبانی وصل نشده.")
     channel, msg_id = parsed
-    import secrets
     try:
         from telethon.tl.functions.messages import SendPaidReactionRequest
     except ImportError as e:
@@ -236,7 +250,7 @@ async def send_paid_reaction(bot_id: int, *, link: str, count: int, anonymous: b
         while left > 0:
             n = min(left, _REACTION_MAX_PER_CALL)
             req = SendPaidReactionRequest(peer=peer, msg_id=msg_id, count=n,
-                                          random_id=secrets.randbits(63), private=_reaction_privacy(anonymous))
+                                          random_id=_paid_random_id(), private=_reaction_privacy(anonymous))
             try:
                 await asyncio.wait_for(c(req), _CALL_TIMEOUT)
             except (asyncio.TimeoutError, ConnectionError, OSError) as e:
