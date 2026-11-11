@@ -65,6 +65,10 @@ def _classify(e: Exception) -> str:
         return "کاربرِ مقصد پیدا نشد (یوزرنیم/آیدی نامعتبر)."
     if "USER_PRIVACY" in up or "PRIVACY" in up:
         return "تنظیماتِ حریمِ خصوصیِ کاربر اجازهٔ دریافتِ گیفت را نمی‌دهد."
+    if "MESSAGEIDINVALID" in flat or "MSGIDINVALID" in flat:
+        return "پست پیدا نشد (شناسهٔ پیام نامعتبر است)."
+    if "CHANNELPRIVATE" in flat or "CHANNELINVALID" in flat:
+        return "کانال خصوصی است یا برایِ اکانتِ پشتیبانی در دسترس نیست."
     if "FLOOD" in up:
         return "تلگرام موقتاً محدود کرد (FloodWait)؛ کمی بعد دوباره امتحان کن."
     if "AUTH_KEY" in up or "SESSION_REVOKED" in up or "USER_DEACTIVATED" in up:
@@ -178,3 +182,70 @@ async def send_gift(bot_id: int, *, username: str | None, tg_id: int | None, gif
         except Exception as e:  # noqa: BLE001
             from telethon.errors import RPCError
             raise AccGiftError(_classify(e), definite=isinstance(e, RPCError)) from e
+
+
+# === PATCH_ACC_STAR_REACTION_V1 ===
+_REACTION_MAX_PER_CALL = 2500
+_POST_RE = None
+
+
+def parse_post_link(link: str) -> tuple[str, int] | None:
+    """https://t.me/<channel>/<id> ⇒ (channel, id)؛ لینکِ نامعتبر ⇒ None."""
+    import re
+    m = re.match(r"^https?://t\.me/([A-Za-z0-9_]{4,32})/(\d+)/?$", (link or "").strip())
+    return (m.group(1), int(m.group(2))) if m else None
+
+
+def _reaction_privacy(anonymous: bool):
+    """نسخه‌هایِ جدیدِ Telethon نوعِ PaidReactionPrivacy دارند؛ قدیمی‌ها فقط Bool."""
+    try:
+        from telethon.tl.types import PaidReactionPrivacyAnonymous, PaidReactionPrivacyDefault
+        return PaidReactionPrivacyAnonymous() if anonymous else PaidReactionPrivacyDefault()
+    except ImportError:
+        return True if anonymous else None
+
+
+async def send_paid_reaction(bot_id: int, *, link: str, count: int, anonymous: bool = False,
+                             on_chunk=None) -> None:
+    """``count`` ری‌اکشنِ استارزی رویِ پستِ ``link`` می‌گذارد (هر ری‌اکشن = ۱ ⭐ از موجودیِ اکانتِ پشتیبانی).
+
+    هر فراخوانی حداکثر ۲۵۰۰ ⭐ است؛ تعدادِ بیشتر تکه‌تکه می‌رود. بعد از هر تکهٔ موفق ``on_chunk(done_so_far)`` صدا زده
+    می‌شود تا صدازننده پیشرفت را ذخیره کند. خطایِ قطعی (RPCError = ارسال نشده) با نامشخص (قطعِ شبکه/تایم‌اوت) جدا است؛
+    روی نامشخص هرگز retry نکن.
+    """
+    parsed = parse_post_link(link)
+    if not parsed:
+        raise AccGiftError("لینکِ پست معتبر نیست (باید به شکلِ https://t.me/channel/123 باشد).")
+    if int(count) < 1:
+        raise AccGiftError("تعدادِ ری‌اکشن معتبر نیست.")
+    creds = await _creds(bot_id)
+    if not creds:
+        raise AccGiftError("اکانتِ پشتیبانی وصل نشده.")
+    channel, msg_id = parsed
+    import secrets
+    try:
+        from telethon.tl.functions.messages import SendPaidReactionRequest
+    except ImportError as e:
+        raise AccGiftError("نسخهٔ telethon قدیمی است و ری‌اکشنِ استارزی ندارد (pip install -U telethon).") from e
+    async with _Conn(creds) as c:
+        try:
+            peer = await asyncio.wait_for(c.get_input_entity(channel), _CALL_TIMEOUT)
+        except Exception as e:  # noqa: BLE001 — هنوز چیزی ارسال نشده
+            raise AccGiftError(f"کانالِ پست برایِ اکانتِ پشتیبانی پیدا نشد: {_classify(e)}") from e
+        left, done = int(count), 0
+        while left > 0:
+            n = min(left, _REACTION_MAX_PER_CALL)
+            req = SendPaidReactionRequest(peer=peer, msg_id=msg_id, count=n,
+                                          random_id=secrets.randbits(63), private=_reaction_privacy(anonymous))
+            try:
+                await asyncio.wait_for(c(req), _CALL_TIMEOUT)
+            except (asyncio.TimeoutError, ConnectionError, OSError) as e:
+                raise AccGiftError(f"پاسخِ تلگرام نرسید ({type(e).__name__}); ممکن است ری‌اکشن ثبت شده باشد.",
+                                   definite=False) from e
+            except Exception as e:  # noqa: BLE001
+                from telethon.errors import RPCError
+                raise AccGiftError(_classify(e), definite=isinstance(e, RPCError)) from e
+            left -= n
+            done += n
+            if on_chunk is not None:
+                await on_chunk(done)

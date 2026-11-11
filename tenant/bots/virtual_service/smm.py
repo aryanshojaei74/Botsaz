@@ -6735,6 +6735,9 @@ async def _vs_gift_detail_content(bot_id: int, order_id: int,
     elif gid.startswith("srx_") and st in ("awaiting_admin", "pending"):
         rows.append([InlineKeyboardButton(text="✅ انجام شد", callback_data=f"srx:ok:{o.id}", style=ButtonStyle.SUCCESS),
                      InlineKeyboardButton(text="❌ رد", callback_data=f"srx:no:{o.id}", style=ButtonStyle.DANGER)])
+        if await _srx_acc_has(o.bot_id):
+            rows.append([InlineKeyboardButton(text="👤 ثبت با اکانتِ پشتیبانی", callback_data=f"srx:acc:{o.id}",
+                                              style=ButtonStyle.PRIMARY)])
     elif gid.startswith("tonsell_") and st in ("awaiting_admin", "pending"):
         rows.append([InlineKeyboardButton(text="✅ ارسال شد", callback_data=f"ton:done:{o.id}", style=ButtonStyle.SUCCESS),
                      InlineKeyboardButton(text="↩️ رد و بازگشتِ وجه", callback_data=f"ton:refund:{o.id}", style=ButtonStyle.DANGER)])
@@ -18951,9 +18954,9 @@ async def srx_admin_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
             GiftOrder.status == "awaiting_admin"))
     text = (
         "⭐️ <b>ری‌اکشنِ استارزیِ پست</b>\n\n"
-        "این ویژگی همیشه دستی است — مشتری تعداد و لینکِ پست را می‌دهد و "
-        "پول می‌دهد؛ تو با روشِ خودت واقعاً ری‌اکشن‌ها را رویِ آن پست ثبت "
-        "می‌کنی، بعد در پنل تاییدش می‌کنی.\n\n"
+        "مشتری تعداد و لینکِ پست را می‌دهد و پول می‌دهد. ثبتِ ری‌اکشن‌ها یا دستی است "
+        "(خودت رویِ پست ثبت می‌کنی و در پنل تأیید می‌زنی) یا با «اکانتِ پشتیبانی» که در «🤝 واسطه‌گری» "
+        "وصل کرده‌ای و استارز دارد.\n\n"
         f"نرخ: هر ⭐️ = <b>{rate:,.0f} تومان</b>\n"
         f"حداقلِ تعداد: <b>{qmin:,}</b> ری‌اکشن\n"
         f"سفارش‌هایِ در انتظار: <b>{pending or 0}</b>\n\n"
@@ -18969,6 +18972,7 @@ async def srx_admin_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
         [InlineKeyboardButton(text=f"📈 درصدِ سود ({_smargin:g}٪)", callback_data="srx:setmargin")],
         [InlineKeyboardButton(text="⚙️ قیمتِ پایهٔ ⭐/نرخِ دلار", callback_data="sauto:base")],
         [InlineKeyboardButton(text=f"🔽 حداقلِ تعداد ({qmin:,})", callback_data="srx:setmin")],
+        *await _srx_acc_menu_rows(bot_id),
         [InlineKeyboardButton(text="🧾 سفارش‌هایِ در انتظار", callback_data="srx:orders:0")],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="smm:manlist", style=ButtonStyle.DANGER)],
     ])
@@ -19248,10 +19252,7 @@ async def srx_order_detail(cb: CallbackQuery, bot: Bot):
     if not o or o.bot_id != row.id:
         await cb.answer("پیدا نشد", show_alert=True)
         return
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ انجام شد", callback_data=f"srx:ok:{order_id}", style=ButtonStyle.SUCCESS),
-        InlineKeyboardButton(text="❌ رد", callback_data=f"srx:no:{order_id}", style=ButtonStyle.DANGER),
-    ], [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="srx:orders:0", style=ButtonStyle.DANGER)]])
+    kb = await _srx_admin_kb(row.id, order_id, back="srx:orders:0")
     await cb.message.edit_text(
         f"#{await order_no(GiftOrder, order_id)} — {(o.star_count or 0):,}⭐️ ری‌اکشن\n"
         f"🔗 پست: {_html_escape(str(o.dest_label or ''))}\n💰 {float(o.price_toman or 0):,.0f} تومان\n"
@@ -19458,12 +19459,8 @@ async def srx_anon_choice(cb: CallbackQuery, bot: Bot, state: FSMContext):
         f"⭐️ تعداد: {qty:,}\n🔗 پست: {raw}\n" + ("🕶 ثبت: ناشناس\n" if anon else "👤 ثبت: با نامِ تو\n") +
         f"🔖 کد پیگیری: <code>{trk}</code>", parse_mode="HTML")
 
-    admin_kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ انجام شد", callback_data=f"srx:ok:{order_id}",
-                             style=ButtonStyle.SUCCESS),
-        InlineKeyboardButton(text="❌ رد", callback_data=f"srx:no:{order_id}",
-                             style=ButtonStyle.DANGER),
-    ]])
+    admin_kb = await _srx_admin_kb(row.id, order_id)
+    _srx_auto = await _srx_acc_auto_on(row.id)
     await _notify_manual_order(
         bot, row,
         f"⭐️ سفارشِ ری‌اکشنِ استارزی — #{await order_no(GiftOrder, order_id)}\n"
@@ -19472,8 +19469,12 @@ async def srx_anon_choice(cb: CallbackQuery, bot: Bot, state: FSMContext):
         + ("🕶 <b>ثبت: ناشناس</b> — هنگامِ ثبت، گزینهٔ مخفی‌کردنِ نام را بزن\n" if anon
            else "👤 <b>ثبت: با نامِ مشتری</b> (ناشناس نیست)\n")
         + f"🔖 کد: {trk}\n\n"
-        f"باید خودت دستی ری‌اکشن‌ها را رویِ این پست ثبت کنی، بعد «✅ انجام شد» را بزن.",
+        + ("🤖 ثبتِ خودکار با اکانتِ پشتیبانی در حالِ انجام است؛ نتیجه اینجا اعلام می‌شود."
+           if _srx_auto else
+           "باید خودت دستی ری‌اکشن‌ها را رویِ این پست ثبت کنی، بعد «✅ انجام شد» را بزن."),
         admin_kb)
+    if _srx_auto:
+        _srx_acc_spawn(bot, row, order_id)
 
 
 @smm_router.callback_query(F.data.startswith("srx:ok:"))
@@ -19544,6 +19545,183 @@ async def srx_admin_reject(cb: CallbackQuery, bot: Bot):
                 f"🔖 کد پیگیری: <code>{trk}</code>", parse_mode="HTML")
         except Exception:
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+
+
+# === PATCH_ACC_STAR_REACTION_V1 === ثبتِ خودکارِ ری‌اکشنِ استارزی با «اکانتِ پشتیبانی» (Telethon، همان اکانتِ گیفت)
+async def _srx_acc_has(bot_id: int) -> bool:
+    try:
+        from tenant.bots.virtual_service import acc_gift as _acc
+        return await _acc.has_account(bot_id)
+    except Exception:
+        logger.exception("srx_acc: بررسیِ اکانتِ پشتیبانی ناموفق")
+        return False
+
+
+async def _srx_acc_auto_on(bot_id: int) -> bool:
+    return (await _get_setting(bot_id, "srx_acc_auto", "0")) == "1" and await _srx_acc_has(bot_id)
+
+
+async def _srx_admin_kb(bot_id: int, order_id: int, back: str | None = None) -> InlineKeyboardMarkup:
+    rows = [[
+        InlineKeyboardButton(text="✅ انجام شد", callback_data=f"srx:ok:{order_id}", style=ButtonStyle.SUCCESS),
+        InlineKeyboardButton(text="❌ رد", callback_data=f"srx:no:{order_id}", style=ButtonStyle.DANGER),
+    ]]
+    if await _srx_acc_has(bot_id):
+        rows.append([InlineKeyboardButton(text="👤 ثبت با اکانتِ پشتیبانی", callback_data=f"srx:acc:{order_id}",
+                                          style=ButtonStyle.PRIMARY)])
+    if back:
+        rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=back, style=ButtonStyle.DANGER)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _srx_acc_menu_rows(bot_id: int) -> list:
+    if not await _srx_acc_has(bot_id):
+        return [[InlineKeyboardButton(text="👤 ثبتِ خودکار با اکانتِ پشتیبانی (نیازمندِ اتصالِ اکانت)",
+                                      callback_data="srx:accoff")]]
+    on = (await _get_setting(bot_id, "srx_acc_auto", "0")) == "1"
+    return [[InlineKeyboardButton(text=("👤 ثبتِ خودکار با اکانت: روشن ✅" if on else "👤 ثبتِ خودکار با اکانت: خاموش"),
+                                  callback_data="srx:acctog",
+                                  style=(ButtonStyle.SUCCESS if on else ButtonStyle.PRIMARY))]]
+
+
+@smm_router.callback_query(F.data == "srx:accoff")
+async def srx_acc_not_connected(cb: CallbackQuery, bot: Bot):
+    await cb.answer("اول اکانتِ پشتیبانی را وصل کن: «🤝 واسطه‌گری ← اتصالِ اکانت». اکانت باید استارز داشته باشد.", show_alert=True)
+
+
+@smm_router.callback_query(F.data == "srx:acctog")
+async def srx_acc_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    if not await _srx_acc_has(row.id):
+        return await cb.answer("اکانتِ پشتیبانی وصل نیست.", show_alert=True)
+    cur = (await _get_setting(row.id, "srx_acc_auto", "0")) == "1"
+    await _set_setting(row.id, "srx_acc_auto", "0" if cur else "1")
+    await cb.answer("خودکار روشن شد: از این پس هر سفارش خودکار ثبت می‌شود." if not cur else "خودکار خاموش شد.", show_alert=True)
+    text, kb = await srx_admin_content(row.id)
+    try:
+        await cb.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+    except Exception:
+        logger.info("تازه‌کردنِ منویِ ری‌اکشنِ استارزی ممکن نشد", exc_info=True)
+
+
+_srx_running: set[int] = set()
+
+
+def _srx_acc_spawn(bot: Bot, row, order_id: int, *, by_admin: bool = False) -> None:
+    t = asyncio.create_task(srx_acc_fulfil(bot, row, order_id, by_admin=by_admin))
+    _tgt_tasks.add(t)
+    t.add_done_callback(_tgt_tasks.discard)
+
+
+async def _srx_acc_revert(bot: Bot, row, order_id: int, reason: str, *, warn: bool = False) -> None:
+    async with Session() as s:
+        o = await s.get(GiftOrder, order_id, with_for_update=True)
+        if not o or o.bot_id != row.id:
+            return
+        if o.status == "auto_processing":
+            o.status = "awaiting_admin"
+        o.fail_reason = (reason or "ثبتِ خودکار انجام نشد")[:500]
+        link, qty, done, trk = o.dest_label, int(o.star_count or 0), int(o.sent_qty or 0), o.tracking_code
+        await s.commit()
+    part = (f"\n📦 تا الان {done:,} از {qty:,} ری‌اکشن ثبت شده؛ فقط «باقی‌مانده» را دستی ثبت کن." if done else "")
+    await _notify_manual_order(
+        bot, row,
+        f"{'⚠️' if warn else '🤖'} ثبتِ خودکارِ ری‌اکشنِ استارزی — سفارش #{await order_no(GiftOrder, order_id)}\n\n{reason}{part}\n\n"
+        f"🔗 {link}\n🔖 کد: {trk}\n\nاین سفارش به «در انتظارِ ادمین» برگشت؛ دستی ثبت کن و «✅ انجام شد» را بزن.",
+        await _srx_admin_kb(row.id, order_id))
+
+
+async def srx_acc_fulfil(bot: Bot, row, order_id: int, *, by_admin: bool = False) -> None:
+    from tenant.bots.virtual_service import acc_gift as _acc
+    if order_id in _srx_running:
+        return
+    _srx_running.add(order_id)
+    try:
+        async with Session() as s:     # ادعایِ اتمیکِ سفارش: همزمان فقط یک مسیر (دستی/خودکار)
+            o = await s.get(GiftOrder, order_id, with_for_update=True)
+            if (not o or o.bot_id != row.id or not str(o.gift_id).startswith("srx_")
+                    or o.status != "awaiting_admin"):
+                return
+            o.status = "auto_processing"
+            link, qty, done, anon = o.dest_label, int(o.star_count or 0), int(o.sent_qty or 0), bool(o.anonymous)
+            await s.commit()
+
+        async def _save(n: int):
+            async with Session() as s2:
+                o2 = await s2.get(GiftOrder, order_id, with_for_update=True)
+                if o2:
+                    o2.sent_qty = done + n
+                    await s2.commit()
+
+        try:
+            await _acc.send_paid_reaction(row.id, link=link, count=max(0, qty - done), anonymous=anon, on_chunk=_save)
+        except _acc.AccGiftError as e:
+            if not e.definite:
+                await _srx_acc_revert(
+                    bot, row, order_id,
+                    f"{e.message}\n⛔ قبل از هر کاری رویِ پست و موجودیِ استارزِ اکانتِ پشتیبانی چک کن؛ "
+                    f"اگر ری‌اکشن‌ها ثبت شده‌اند دوباره نفرست.", warn=True)
+            else:
+                await _srx_acc_revert(bot, row, order_id, e.message)
+            return
+        await _srx_finish(bot, row, order_id)
+    except Exception:
+        logger.exception("srx_acc: خطایِ پیش‌بینی‌نشده در سفارش %s", order_id)
+        try:
+            await _srx_acc_revert(
+                bot, row, order_id,
+                "خطایِ داخلی رخ داد. اگر مطمئن نیستی ری‌اکشن‌ها ثبت شده‌اند یا نه، اول رویِ پست و استارزِ اکانت چک کن.",
+                warn=True)
+        except Exception:
+            logger.exception("srx_acc: برگرداندنِ سفارش به دستی هم ناموفق بود")
+    finally:
+        _srx_running.discard(order_id)
+
+
+async def _srx_finish(bot: Bot, row, order_id: int) -> None:
+    async with Session() as s:
+        o = await s.get(GiftOrder, order_id, with_for_update=True)
+        if not o or o.bot_id != row.id or o.status != "auto_processing":
+            return
+        o.status = "sent"
+        o.sent_qty = int(o.star_count or 0)
+        buyer = await s.get(BotUser, o.buyer_user_id)
+        buyer_tg_id = buyer.telegram_id if buyer else None
+        trk, qty, link = o.tracking_code, o.star_count, o.dest_label
+        await s.commit()
+    await _notify_gift_order_trust_success(bot, row, order_id)
+    await _notify_manual_order(bot, row, f"✅ ری‌اکشنِ استارزیِ سفارش #{await order_no(GiftOrder, order_id)} با اکانتِ پشتیبانی ثبت شد "
+                                         f"({qty:,} ⭐ رویِ {link}).")
+    if buyer_tg_id:
+        try:
+            await bot.send_message(
+                buyer_tg_id,
+                f"✅ سفارش شما با موفقیت تکمیل شد! 🎉\n\n⭐ تعداد {qty:,} ری‌اکشنِ استارزی رویِ پست ثبت شد.\n"
+                f"🔗 {link}\n🔖 کد پیگیری: <code>{trk}</code>", parse_mode="HTML")
+        except Exception:
+            logger.exception("srx_acc: پیامِ تکمیل به مشتری نرسید")
+
+
+@smm_router.callback_query(F.data.startswith("srx:acc:"))
+async def srx_acc_go(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    order_id = int(cb.data.split(":")[2])
+    if not await _srx_acc_has(row.id):
+        return await cb.answer("اکانتِ پشتیبانی وصل نیست (🤝 واسطه‌گری ← اتصالِ اکانت).", show_alert=True)
+    async with Session() as s:
+        o = await s.get(GiftOrder, order_id)
+    if (not o or o.bot_id != row.id or o.status != "awaiting_admin" or not str(o.gift_id).startswith("srx_")):
+        return await cb.answer("این سفارش قبلاً رسیدگی شده یا برایِ ثبت با اکانت مناسب نیست.", show_alert=True)
+    await cb.answer("👤 در حالِ ثبت با اکانتِ پشتیبانی… نتیجه اینجا اعلام می‌شود.", show_alert=True)
+    _srx_acc_spawn(bot, row, order_id, by_admin=True)
+    try:
+        await cb.message.delete()
+    except Exception:
+        logger.info("حذفِ پیامِ سفارشِ ری‌اکشن پس از ثبتِ خودکار ممکن نشد")
 
 
 # ─────────────── فروشگاهِ استارز — طرفِ مشتری ───────────────
