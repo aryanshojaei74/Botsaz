@@ -14258,7 +14258,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "552"
+BUILD_ID = "553"
 
 
 @tenant_router.message(Command("version"))
@@ -29255,58 +29255,140 @@ async def _find_user_for_search(s, bot_id: int, raw: str):
     return await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, func.lower(BotUser.username) == name))
 
 
-async def _user_invoices_view(s, bot_id: int, raw: str, limit: int = 25):
-    """(متن، کیبورد) یا None اگر کاربری با این آیدی/یوزرنیم در این ربات نبود."""
-    from models import ProductOrder, BluPalCharge
-    u = await _find_user_for_search(s, bot_id, raw)
-    if not u:
-        return None
-    items = []          # (created_at, emoji, state, kind, code, amount, order_id_or_None)
+_INV_PAGE = 10
 
-    def add(ts, status, kind, code, amount, oid=None):
+
+async def _collect_user_invoices(s, bot_id: int, u) -> list[tuple]:
+    """همهٔ فاکتورهایِ یک کاربر (همه نوع و همه وضعیت) ⇒ [(زمان، ایموجی، وضعیت، نوع، کد، مبلغ، callback)] جدید به قدیم."""
+    from models import ProductOrder, BluPalCharge
+    items = []
+
+    def add(ts, status, kind, code, amount, cb):
         e, lbl = _inv_state(status)
-        items.append((ts, e, lbl, kind, code or "—", float(amount or 0), oid))
+        items.append((ts, e, lbl, kind, code or "—", float(amount or 0), cb))
     for o in (await s.scalars(select(Order).where(Order.bot_id == bot_id, Order.user_id == u.id)
-                              .order_by(Order.id.desc()).limit(60))).all():
-        add(o.created_at, o.status, "💳 شارژ" if o.pay_method == "card_charge" else "📦 سرویس",
-            o.tracking_code, o.amount, o.id)
+                              .order_by(Order.id.desc()).limit(80))).all():
+        add(o.created_at, o.status, "💳 شارژ" if o.pay_method == "card_charge" else "📦 سرویس", o.tracking_code, o.amount,
+            f"tadm:order_detail:{o.id}")
     for o in (await s.scalars(select(SmmOrder).where(SmmOrder.bot_id == bot_id, SmmOrder.user_telegram_id == u.telegram_id)
-                              .order_by(SmmOrder.id.desc()).limit(60))).all():
-        add(o.created_at, o.status, "🛰 خدمات", o.tracking_code, o.price_toman)
+                              .order_by(SmmOrder.id.desc()).limit(80))).all():
+        add(o.created_at, o.status, "🛰 خدمات", o.tracking_code, o.price_toman, f"tadm:ud:s:{o.id}:{u.id}")
     for o in (await s.scalars(select(GiftOrder).where(GiftOrder.bot_id == bot_id, GiftOrder.buyer_user_id == u.id)
-                              .order_by(GiftOrder.id.desc()).limit(60))).all():
-        add(o.created_at, o.status, "🎁 گیفت/استارز", o.tracking_code, o.price_toman)
+                              .order_by(GiftOrder.id.desc()).limit(80))).all():
+        add(o.created_at, o.status, "🎁 گیفت/استارز", o.tracking_code, o.price_toman, f"tadm:ud:g:{o.id}:{u.id}")
     for o in (await s.scalars(select(ProductOrder).where(ProductOrder.bot_id == bot_id, ProductOrder.user_id == u.id)
-                              .order_by(ProductOrder.id.desc()).limit(60))).all():
-        add(o.created_at, o.status, "🛍 محصول", o.tracking_code, o.amount)
+                              .order_by(ProductOrder.id.desc()).limit(80))).all():
+        add(o.created_at, o.status, "🛍 محصول", o.tracking_code, o.amount, f"tadm:ud:p:{o.id}:{u.id}")
     for o in (await s.scalars(select(BluPalCharge).where(BluPalCharge.bot_id == bot_id,
                                                          BluPalCharge.user_telegram_id == u.telegram_id)
-                              .order_by(BluPalCharge.id.desc()).limit(60))).all():
-        add(o.created_at, o.status, "💳 بلوپال", o.seq_code or o.tracking_code, o.amount_toman)
+                              .order_by(BluPalCharge.id.desc()).limit(80))).all():
+        add(o.created_at, o.status, "💳 بلوپال", o.seq_code or o.tracking_code, o.amount_toman, f"tadm:bpl:{o.id}")
     items.sort(key=lambda x: x[0] or _dt.datetime.min, reverse=True)
+    return items
+
+
+def _render_user_invoices(u, items: list[tuple], page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
+    """هر فاکتور یک دکمهٔ شیشه‌ای است؛ با زدنش مشخصاتِ کاملِ همان سفارش باز می‌شود."""
     ok = [i for i in items if i[1] == "✅"]
     pending = [i for i in items if i[1] == "⏳"]
     uname = f"@{u.username}" if u.username else "—"
-    head = (f"🔎 <b>فاکتورهای کاربر</b>\n👤 {_hesc(u.full_name or '—')} · {uname} · <code>{u.telegram_id}</code>\n"
+    pages = max(1, (len(items) + _INV_PAGE - 1) // _INV_PAGE)
+    page = min(max(0, page), pages - 1)
+    text = (f"🔎 <b>فاکتورهای کاربر</b>\n👤 {_hesc(u.full_name or '—')} · {uname} · <code>{u.telegram_id}</code>\n"
             f"┈┅━━⊷⊰✨⊱⊶━━┅┈\n✅ پرداخت‌شده: <b>{len(ok)}</b> ({int(sum(i[5] for i in ok)):,} تومان)\n"
             f"⏳ پرداخت‌نشده/در انتظار: <b>{len(pending)}</b>\n❌ ناموفق/رد‌شده: <b>{len(items) - len(ok) - len(pending)}</b>\n"
-            "┈┅━━⊷⊰✨⊱⊶━━┅┈")
-    if not items:
-        body = "\nهنوز فاکتوری ندارد."
-    else:
-        lines = []
-        for ts, e, lbl, kind, code, amt, _oid in items[:limit]:
-            d, _t = _jalali_date_time(ts) if ts else ("—", "")
-            lines.append(f"{e} {kind} <code>{code}</code> — {int(amt):,} ت — {d} — {lbl}")
-        body = "\n" + "\n".join(lines)
-        if len(items) > limit:
-            body += f"\n… و {len(items) - limit} فاکتورِ قدیمی‌تر"
-    btns = [[InlineKeyboardButton(text=f"{e} {code} — {int(amt):,} ت", callback_data=f"tadm:order_detail:{oid}",
-                                  style=ButtonStyle.PRIMARY)]
-            for _ts, e, _l, _k, code, amt, oid in items[:10] if oid]
+            "┈┅━━⊷⊰✨⊱⊶━━┅┈\n"
+            + ("روی هر فاکتور بزن تا مشخصاتش (محصول، مبلغ، گیرنده و ...) باز شود:" if items else "هنوز فاکتوری ندارد.")
+            + (f"\nصفحهٔ {page + 1} از {pages}" if pages > 1 else ""))
+    btns = []
+    for ts, e, _lbl, kind, code, amt, cbd in items[page * _INV_PAGE:(page + 1) * _INV_PAGE]:
+        d, _t = _jalali_date_time(ts) if ts else ("—", "")
+        btns.append([InlineKeyboardButton(text=f"{e} {kind} {code} — {int(amt):,} ت — {d}"[:64], callback_data=cbd,
+                                          style=ButtonStyle.PRIMARY)])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️ قبلی", callback_data=f"tadm:ulist:{u.id}:{page - 1}"))
+    if page < pages - 1:
+        nav.append(InlineKeyboardButton(text="بعدی ▶️", callback_data=f"tadm:ulist:{u.id}:{page + 1}"))
+    if nav:
+        btns.append(nav)
     btns.append([InlineKeyboardButton(text="🔍 جستجوی دیگر", callback_data="tadm:order_search", style=ButtonStyle.PRIMARY)])
     btns.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:orders", style=ButtonStyle.DANGER)])
-    return head + body, InlineKeyboardMarkup(inline_keyboard=btns)
+    return text, InlineKeyboardMarkup(inline_keyboard=btns)
+
+
+async def _user_invoices_view(s, bot_id: int, raw: str, page: int = 0):
+    """(متن، کیبورد) یا None اگر کاربری با این آیدی/یوزرنیم در این ربات نبود."""
+    u = await _find_user_for_search(s, bot_id, raw)
+    if not u:
+        return None
+    return _render_user_invoices(u, await _collect_user_invoices(s, bot_id, u), page)
+
+
+@tenant_router.callback_query(F.data.startswith("tadm:ulist:"))
+async def tadm_user_invoices_page(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    try:
+        _, _, upk, page = cb.data.split(":")
+        upk, page = int(upk), int(page)
+    except ValueError:
+        return await cb.answer()
+    async with Session() as s:
+        u = await s.get(BotUser, upk)
+        if not u or u.bot_id != row.id:
+            return await cb.answer("کاربر پیدا نشد", show_alert=True)
+        text, kb = _render_user_invoices(u, await _collect_user_invoices(s, row.id, u), page)
+    await _safe_edit(cb, text, reply_markup=kb)
+    await cb.answer()
+
+
+@tenant_router.callback_query(F.data.startswith("tadm:ud:"))
+async def tadm_user_invoice_detail(cb: CallbackQuery, bot: Bot):
+    """مشخصاتِ کاملِ یک فاکتورِ خدمات/گیفت/محصول از لیستِ فاکتورهایِ کاربر (با دکمهٔ بازگشت به همان لیست)."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    try:
+        _, _, kind, oid, upk = cb.data.split(":")
+        oid, upk = int(oid), int(upk)
+    except ValueError:
+        return await cb.answer()
+    back = f"tadm:ulist:{upk}:0"
+    if kind == "s":
+        from tenant.bots.virtual_service.smm import _smm_vs_order_detail_content
+        text, kb = await _smm_vs_order_detail_content(row.id, oid, back)
+    elif kind == "g":
+        from tenant.bots.virtual_service.smm import _vs_gift_detail_content
+        text, kb = await _vs_gift_detail_content(row.id, oid, back)
+    elif kind == "p":
+        from models import ProductOrder, Product
+        async with Session() as s:
+            o = await s.get(ProductOrder, oid)
+            if not o or o.bot_id != row.id:
+                return await cb.answer("سفارش پیدا نشد", show_alert=True)
+            u = await s.get(BotUser, o.user_id)
+            prod = await s.get(Product, o.product_id) if o.product_id else None
+        d, t = _jalali_date_time(o.created_at) if o.created_at else ("—", "")
+        e, lbl = _inv_state(o.status)
+        text = ("🛍 <b>سفارش محصول</b>\n┈┅━━⊷⊰✨⊱⊶━━┅┈\n"
+                f"🏷 محصول: <b>{_hesc(prod.title if prod else '—')}</b>\n"
+                f"🧾 کد پیگیری: <code>{o.tracking_code or o.id}</code>\n"
+                f"💰 مبلغ: <b>{int(o.amount or 0):,} تومان</b>\n"
+                f"📊 وضعیت: {e} {_hesc(o.status)} ({lbl})\n"
+                f"💳 روش پرداخت: {_hesc(o.pay_method or '—')}\n"
+                f"👤 کاربر: {_hesc(u.full_name) if u else '—'} · " + (f"@{u.username}" if u and u.username else "—")
+                + f" · <code>{u.telegram_id if u else '—'}</code>\n"
+                + (f"🎁 گیرندهٔ هدیه: <code>{o.gift_recipient_tg_id}</code>\n" if o.gift_recipient_tg_id else "")
+                + (f"🧾 متنِ رسید: {_hesc((o.receipt_text or '')[:200])}\n" if o.receipt_text else "")
+                + f"🗓 {d} {t}")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="⬅️ بازگشت", callback_data=back, style=ButtonStyle.DANGER)]])
+    else:
+        return await cb.answer()
+    await _safe_edit(cb, text, reply_markup=kb)
+    await cb.answer()
 
 
 @tenant_router.message(_OrderSearchFSM.waiting)
