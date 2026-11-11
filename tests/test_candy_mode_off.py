@@ -62,7 +62,7 @@ def test_free_games_and_table_stop_when_candy_off(monkeypatch):
             out.append(text)
     asyncio.run(G.gg_start(M()))
     asyncio.run(G._start_race(M(), "math"))
-    assert len(out) == 2 and "شرطبندی حدس عدد" in out[0] and "شرطبندی ریاضی" in out[1]
+    assert out == []        # PATCH_NO_HALLOWEEN_NOTICE_V1: بعد از هالوین بی‌صدا نادیده گرفته می‌شود (نه «هالوین تمام شد»، نه تبلیغِ مسابقهٔ پولی)
     assert 5 not in G._GAMES and 5 not in G._RACES
     with pytest.raises(SkipHandler):
         asyncio.run(G.gg_top(M()))

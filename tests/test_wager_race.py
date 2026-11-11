@@ -354,7 +354,8 @@ async def test_paid_prefix_without_amount_asks_for_amount_and_plain_name_is_free
     for t in ("شرطبندی حدس عدد", "شرط‌بندی حدس عدد", "شرط بندی سرعت", "شرطبندی ریاضی"):
         assert R._is_paid_hint(msg(t)) and not R._is_create(msg(t)) and not G._is_start(msg(t))
         await R.race_paid_hint(msg(t))
-        assert "مبلغ" in out[-1] and "شرطبندی" in out[-1] and "رایگان" in out[-1]
+        assert "مبلغ" in out[-1] and "شرطبندی" in out[-1]
+        assert "رایگان" not in out[-1]      # PATCH_NO_HALLOWEEN_NOTICE_V1: مودِ شیرینی خاموش ⇒ تبلیغِ بازیِ رایگان نیست
     for t in ("حدس عدد", "بازی حدس عدد", "سرعت", "بازی سرعت", "ریاضی", "بازی ریاضی"):
         assert not R._is_paid_hint(msg(t)) and not R._is_create(msg(t))
     assert G._is_start(msg("حدس عدد")) and G._is_start(msg("بازی حدس عدد"))

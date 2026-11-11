@@ -273,12 +273,11 @@ async def _gate(msg: Message) -> bool:
 
 
 async def _free_ended(msg: Message, game: str) -> bool:
-    """مودِ شیرینی تمام شده: بازیِ رایگان دیگر شروع نمی‌شود؛ به‌جایش راهِ مسابقهٔ پولی با کیف‌پول گفته می‌شود."""
+    """مودِ شیرینی تمام شده: بازیِ رایگان دیگر شروع نمی‌شود (بی‌صدا؛ پیامی در گروه نمی‌آید)."""
     import platform_candy as _CA
     if await _CA.candy_active():
         return False
-    await msg.reply(f"🎃 بازیِ رایگانِ هالوین تمام شد.\n💰 برایِ مسابقهٔ پولی با کیف‌پول بنویس: <code>شرطبندی {game}</code>",
-                    parse_mode="HTML")
+    # PATCH_NO_HALLOWEEN_NOTICE_V1: بعد از پایانِ هالوین دیگر پیامِ «هالوین تمام شد» در گروه نمی‌آید؛ «سرعت/حدس عدد/ریاضی»ِ تنها بی‌صدا نادیده گرفته می‌شود.
     return True
 
 

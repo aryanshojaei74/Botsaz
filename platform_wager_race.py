@@ -395,6 +395,16 @@ def _is_paid_hint(m: Message) -> bool:
     return bool(m.text and _NO_AMOUNT.match(core._norm(m.text)))
 
 
+async def _candy_on() -> bool:
+    """PATCH_NO_HALLOWEEN_NOTICE_V1: تبلیغِ «بازیِ رایگان با شیرینی» فقط وقتی مودِ شیرینی/هالوین واقعاً روشن است."""
+    try:
+        import platform_candy as _CA
+        return await _CA.candy_active()
+    except Exception:
+        logger.exception("بررسیِ مودِ شیرینی ناموفق بود؛ تبلیغِ بازیِ رایگان نشان داده نمی‌شود")
+        return False
+
+
 @platform_wager_race_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_paid_hint))
 async def race_paid_hint(msg: Message):
     """«شرطبندی حدس عدد» بدونِ مبلغ = مسابقهٔ پولی؛ مبلغ را می‌خواهد (بازیِ رایگان فقط با «حدس عدد» شروع می‌شود)."""
@@ -409,7 +419,7 @@ async def race_paid_hint(msg: Message):
     lim = (f"از {_rial(cfg['min'])} تا {_rial(cfg['max'])}" if cfg.get("max") else f"حداقل {_rial(cfg['min'])}")
     await msg.reply(f"💰 برای مسابقهٔ پولیِ <b>{game}</b> مبلغ را هم بنویس (به تومان، {lim}):\n"
                     f"<code>شرطبندی {game} {ex}</code>"
-                    + ("" if game == "الگو" else f"\n\n🆓 بازیِ رایگان با شیرینی: فقط «{game}» را بنویس."),
+                    + ("" if (game == "الگو" or not await _candy_on()) else f"\n\n🆓 بازیِ رایگان با شیرینی: فقط «{game}» را بنویس."),
                     parse_mode="HTML")
 
 
@@ -648,7 +658,8 @@ async def help_section() -> str:
     return "\n".join([
         "💰 <b>مسابقه‌هایِ پولیِ دونفره (با کیف پول)</b>",
         *[rows[g] for g in on],
-        "ℹ️ اگر فقط «حدس عدد» / «سرعت» / «ریاضی» (بدونِ «شرطبندی» و مبلغ) بنویسی، بازیِ رایگان با شیرینی شروع می‌شود.",
+        *(["ℹ️ اگر فقط «حدس عدد» / «سرعت» / «ریاضی» (بدونِ «شرطبندی» و مبلغ) بنویسی، بازیِ رایگان با شیرینی شروع می‌شود."]
+          if await _candy_on() else []),
         f"عددِ آخر مبلغِ هر نفر به تومان است ({lim}). هر کس بخواهد می‌تواند مسابقهٔ خودش را بسازد یا به مسابقهٔ دیگران "
         "بپیوندد؛ چند مسابقه هم‌زمان برگزار می‌شود. برای بازی با یک نفرِ مشخص، دستور را روی پیامِ او ریپلای کن.",
         f"{fee} کسی برنده نشد یا حریفی نیامد ⇒ پولِ هر دو کامل برمی‌گردد.",
