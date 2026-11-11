@@ -283,6 +283,8 @@ router.include_router(platform_add_days_router)
 # === PATCH_OFFSITE_BACKUP_V1 ===
 from platform_offsite_backup import platform_offsite_router
 router.include_router(platform_offsite_router)
+from platform_server_backup import platform_server_backup_router   # PATCH_SERVER_BACKUP_V1
+router.include_router(platform_server_backup_router)
 # === PATCH_PLATFORM_SADMIN_V1 ===
 from platform_sadmin import platform_sadmin_router
 router.include_router(platform_sadmin_router)
@@ -16908,6 +16910,8 @@ async def _render_adm_bots_page(cb: CallbackQuery, page: int, flt: str = "active
     from platform_backup import is_platform_admin as _is_pa, backup_buttons as _pb_btns
     if _is_pa(cb.from_user.id):
         kb_rows.append(_pb_btns())
+        from platform_server_backup import server_backup_button as _svb_btn   # PATCH_SERVER_BACKUP_V1
+        kb_rows.append(_svb_btn())
 
     if not rows:
         kb_rows.append([hx_button("⬅️ بازگشت", callback_data="adm:back",
