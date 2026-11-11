@@ -14258,7 +14258,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "550"
+BUILD_ID = "551"
 
 
 @tenant_router.message(Command("version"))
@@ -29215,10 +29215,98 @@ async def tadm_order_search_start(cb: CallbackQuery, bot: Bot, state: FSMContext
     await cb.message.answer(
         "🔍 <b>جستجوی سفارش</b>\n\n"
         "کد پیگیری یا شماره فاکتور را بفرست:\n"
-        "مثال: <code>AB12CD34</code> یا <code>BS5-0001</code>",
+        "مثال: <code>AB12CD34</code> یا <code>BS5-0001</code>\n\n"
+        "🔎 یا <b>آیدی عددی</b> یا <b>@یوزرنیم</b> کاربر را بفرست تا همهٔ فاکتورهایش (پرداخت‌شده و پرداخت‌نشده) را ببینی:\n"
+        "مثال: <code>123456789</code> یا <code>@username</code>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="❌ لغو", callback_data="tadm:orders", style=ButtonStyle.DANGER)]]))
     await cb.answer()
+
+
+def _hesc(v) -> str:
+    import html as _h
+    return _h.escape(str(v), quote=False)
+
+
+# === PATCH_ORDER_SEARCH_BY_USER_V1 === (SINA) جستجوی فاکتورهایِ یک کاربر با آیدیِ عددی یا یوزرنیم؛ همهٔ وضعیت‌ها
+_INV_OK = {"paid", "sent", "completed", "done", "delivered", "success", "approved", "active"}
+_INV_BAD = {"rejected", "failed", "canceled", "cancelled", "expired", "refunded", "error"}
+
+
+def _inv_state(status: str) -> tuple[str, str]:
+    st = (status or "").lower()
+    if st in _INV_OK:
+        return "✅", "پرداخت‌شده"
+    if st in _INV_BAD:
+        return "❌", "ناموفق/رد‌شده"
+    return "⏳", "پرداخت‌نشده/در انتظار"
+
+
+async def _find_user_for_search(s, bot_id: int, raw: str):
+    t = (raw or "").strip()
+    if not t:
+        return None
+    t = t.replace("https://t.me/", "").replace("t.me/", "")
+    if t.lstrip("-").isdigit():
+        return await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == int(t)))
+    name = t.lstrip("@").strip().lower()
+    if not name or not name.replace("_", "").isalnum():
+        return None
+    return await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, func.lower(BotUser.username) == name))
+
+
+async def _user_invoices_view(s, bot_id: int, raw: str, limit: int = 25):
+    """(متن، کیبورد) یا None اگر کاربری با این آیدی/یوزرنیم در این ربات نبود."""
+    from models import ProductOrder, BluPalCharge
+    u = await _find_user_for_search(s, bot_id, raw)
+    if not u:
+        return None
+    items = []          # (created_at, emoji, state, kind, code, amount, order_id_or_None)
+
+    def add(ts, status, kind, code, amount, oid=None):
+        e, lbl = _inv_state(status)
+        items.append((ts, e, lbl, kind, code or "—", float(amount or 0), oid))
+    for o in (await s.scalars(select(Order).where(Order.bot_id == bot_id, Order.user_id == u.id)
+                              .order_by(Order.id.desc()).limit(60))).all():
+        add(o.created_at, o.status, "💳 شارژ" if o.pay_method == "card_charge" else "📦 سرویس",
+            o.tracking_code, o.amount, o.id)
+    for o in (await s.scalars(select(SmmOrder).where(SmmOrder.bot_id == bot_id, SmmOrder.user_telegram_id == u.telegram_id)
+                              .order_by(SmmOrder.id.desc()).limit(60))).all():
+        add(o.created_at, o.status, "🛰 خدمات", o.tracking_code, o.price_toman)
+    for o in (await s.scalars(select(GiftOrder).where(GiftOrder.bot_id == bot_id, GiftOrder.buyer_user_id == u.id)
+                              .order_by(GiftOrder.id.desc()).limit(60))).all():
+        add(o.created_at, o.status, "🎁 گیفت/استارز", o.tracking_code, o.price_toman)
+    for o in (await s.scalars(select(ProductOrder).where(ProductOrder.bot_id == bot_id, ProductOrder.user_id == u.id)
+                              .order_by(ProductOrder.id.desc()).limit(60))).all():
+        add(o.created_at, o.status, "🛍 محصول", o.tracking_code, o.amount)
+    for o in (await s.scalars(select(BluPalCharge).where(BluPalCharge.bot_id == bot_id,
+                                                         BluPalCharge.user_telegram_id == u.telegram_id)
+                              .order_by(BluPalCharge.id.desc()).limit(60))).all():
+        add(o.created_at, o.status, "💳 بلوپال", o.seq_code or o.tracking_code, o.amount_toman)
+    items.sort(key=lambda x: x[0] or _dt.datetime.min, reverse=True)
+    ok = [i for i in items if i[1] == "✅"]
+    pending = [i for i in items if i[1] == "⏳"]
+    uname = f"@{u.username}" if u.username else "—"
+    head = (f"🔎 <b>فاکتورهای کاربر</b>\n👤 {_hesc(u.full_name or '—')} · {uname} · <code>{u.telegram_id}</code>\n"
+            f"┈┅━━⊷⊰✨⊱⊶━━┅┈\n✅ پرداخت‌شده: <b>{len(ok)}</b> ({int(sum(i[5] for i in ok)):,} تومان)\n"
+            f"⏳ پرداخت‌نشده/در انتظار: <b>{len(pending)}</b>\n❌ ناموفق/رد‌شده: <b>{len(items) - len(ok) - len(pending)}</b>\n"
+            "┈┅━━⊷⊰✨⊱⊶━━┅┈")
+    if not items:
+        body = "\nهنوز فاکتوری ندارد."
+    else:
+        lines = []
+        for ts, e, lbl, kind, code, amt, _oid in items[:limit]:
+            d, _t = _jalali_date_time(ts) if ts else ("—", "")
+            lines.append(f"{e} {kind} <code>{code}</code> — {int(amt):,} ت — {d} — {lbl}")
+        body = "\n" + "\n".join(lines)
+        if len(items) > limit:
+            body += f"\n… و {len(items) - limit} فاکتورِ قدیمی‌تر"
+    btns = [[InlineKeyboardButton(text=f"{e} {code} — {int(amt):,} ت", callback_data=f"tadm:order_detail:{oid}",
+                                  style=ButtonStyle.PRIMARY)]
+            for _ts, e, _l, _k, code, amt, oid in items[:10] if oid]
+    btns.append([InlineKeyboardButton(text="🔍 جستجوی دیگر", callback_data="tadm:order_search", style=ButtonStyle.PRIMARY)])
+    btns.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:orders", style=ButtonStyle.DANGER)])
+    return head + body, InlineKeyboardMarkup(inline_keyboard=btns)
 
 
 @tenant_router.message(_OrderSearchFSM.waiting)
@@ -29269,7 +29357,12 @@ async def tadm_order_search_exec(msg: Message, bot: Bot, state: FSMContext):
                                      InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:orders",
                                                           style=ButtonStyle.DANGER)]]))
                 return
-            await msg.answer(f"❌ سفارشی با کد «{q}» یافت نشد.")
+            # === PATCH_ORDER_SEARCH_BY_USER_V1 === کد پیدا نشد ⇒ شاید آیدیِ عددی/یوزرنیمِ کاربر است
+            _uv = await _user_invoices_view(s, row.id, (msg.text or "").strip())
+            if _uv:
+                await msg.answer(_uv[0][:4000], reply_markup=_uv[1], parse_mode="HTML")
+                return
+            await msg.answer(f"❌ سفارش یا کاربری با «{_hesc(q)}» یافت نشد.")
             return
         u = await s.get(BotUser, o.user_id)
     vol = "نامحدود" if o.volume_gb == 0 else f"{o.volume_gb} گیگ"
