@@ -83,8 +83,10 @@ async def test_by_numeric_id_lists_all_statuses_and_types_as_buttons(env):
     assert "&lt;b&gt;" in text                                     # نامِ کاربر escape شده
     cbs = [c for _t, c in _btns(kb)]
     assert "tadm:orders" in cbs and "tadm:order_search" in cbs
-    assert any(c.startswith("tadm:order_detail:") for c in cbs)
-    assert any(c.startswith("tadm:ud:s:") for c in cbs) and any(c.startswith("tadm:ud:g:") for c in cbs)
+    assert any(c.startswith("tadm:uinvd:o:") for c in cbs)
+    assert any(c.startswith("tadm:uinvd:s:") for c in cbs) and any(c.startswith("tadm:uinvd:g:") for c in cbs)
+    # هیچ دکمه‌ای با پیشوندِ قدیمیِ «لیستِ اعضا» (tadm:ulist) ساخته نشود — تداخل «نامعتبر» می‌داد
+    assert not any(c.startswith("tadm:ulist") for c in cbs)
 
 
 @pytest.mark.asyncio
@@ -96,13 +98,13 @@ async def test_pagination(env):
                                tracking_code=f"P{i:02d}", created_at=dt.datetime(2026, 11, 1) + dt.timedelta(minutes=i)))
         await s.commit()
     t1, k1 = await _view(env, str(UID))
-    assert "صفحهٔ 1 از" in t1 and any(c.startswith("tadm:ulist:") and c.endswith(":1") for _t, c in _btns(k1))
+    assert "صفحهٔ 1 از" in t1 and any(c.startswith("tadm:uinv:") and c.endswith(":1") for _t, c in _btns(k1))
     async with env() as s:
         u = await s.scalar(select(models.BotUser).where(models.BotUser.telegram_id == UID))
-    cb = _CB(f"tadm:ulist:{u.id}:1")
+    cb = _CB(f"tadm:uinv:{u.id}:1")
     await tenant.tadm_user_invoices_page(cb, NS())
     assert cb.edited and "صفحهٔ 2" in cb.edited[0][0]
-    assert sum(1 for _t, c in _btns(cb.edited[0][1]) if c and (c.startswith("tadm:order_detail") or c.startswith("tadm:ud:") or c.startswith("tadm:bpl"))) <= 10
+    assert sum(1 for _t, c in _btns(cb.edited[0][1]) if c and c.startswith("tadm:uinvd:")) <= 10
 
 
 @pytest.mark.asyncio
@@ -167,6 +169,11 @@ async def test_detail_pages_for_smm_gift_and_product_have_back_to_list(env, monk
         u = await s.scalar(select(models.BotUser).where(models.BotUser.telegram_id == UID))
         smm_o = await s.scalar(select(models.SmmOrder))
         gift_o = await s.scalar(select(models.GiftOrder))
+        ord_o = await s.scalar(select(models.Order).where(models.Order.tracking_code == "T-PAID"))
+        s.add(models.BluPalCharge(bot_id=1, user_telegram_id=UID, order_id="bp-1", amount_toman=250000, status="paid",
+                                  tracking_code="BP-TRK", seq_code="21250", created_at=dt.datetime(2026, 11, 9)))
+        await s.flush()
+        bp = await s.scalar(select(models.BluPalCharge))
         prod = models.Product(bot_id=1, title="محصول تون", price=1000, category="x")
         s.add(prod)
         await s.flush()
@@ -174,14 +181,28 @@ async def test_detail_pages_for_smm_gift_and_product_have_back_to_list(env, monk
                                  status="paid", tracking_code="P-1", created_at=dt.datetime(2026, 11, 10))
         s.add(po)
         await s.commit()
-        upk, sid, gid, pid = u.id, smm_o.id, gift_o.id, po.id
+        upk, sid, gid, pid, oid_, bid_ = u.id, smm_o.id, gift_o.id, po.id, ord_o.id, bp.id
     import tenant.bots.virtual_service.smm as smm_mod
     monkeypatch.setattr(smm_mod, "Session", env)
-    for kind, oid in (("s", sid), ("g", gid), ("p", pid)):
-        cb = _CB(f"tadm:ud:{kind}:{oid}:{upk}")
+    for kind, oid in (("s", sid), ("g", gid), ("p", pid), ("o", oid_), ("b", bid_)):
+        cb = _CB(f"tadm:uinvd:{kind}:{oid}:{upk}")
         await tenant.tadm_user_invoice_detail(cb, NS())
         assert cb.edited, kind
         text, kb = cb.edited[0]
-        assert f"tadm:ulist:{upk}:0" in [c for _t, c in _btns(kb)], kind            # بازگشت به همان لیستِ کاربر
-        assert UNAME in text or "555001" in text, kind                              # یوزرنیم/آیدیِ کاربر در مشخصات
-    assert "محصول تون" in cb.edited[0][0] and "4,000" in cb.edited[0][0]
+        assert f"tadm:uinv:{upk}:0" in [c for _t, c in _btns(kb)], kind            # بازگشت به همان لیستِ کاربر
+        if kind != "b":
+            assert UNAME in text or "555001" in text, kind                          # یوزرنیم/آیدیِ کاربر در مشخصات
+        if kind == "p":
+            assert "محصول تون" in text and "4,000" in text
+
+
+def test_no_other_handler_claims_the_new_callbacks():
+    """باگِ «نامعتبر»: پیشوندِ قدیمیِ tadm:ulist لیستِ اعضا را می‌گرفت. پیشوندهایِ تازه نباید با هیچ هندلرِ دیگری هم‌پوشانی داشته باشد."""
+    import re
+    import inspect
+    src = inspect.getsource(tenant)
+    hits = re.findall(r'callback_query\(F\.data(?:\.startswith\("([^"]+)"\)| == "([^"]+)")', src)
+    prefixes = [a or b for a, b in hits]
+    for data in ("tadm:uinv:5:1", "tadm:uinvd:s:3:5"):
+        claimers = [p for p in prefixes if data.startswith(p)]
+        assert len(claimers) == 1, (data, claimers)

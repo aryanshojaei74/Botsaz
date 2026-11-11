@@ -14258,7 +14258,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "553"
+BUILD_ID = "554"
 
 
 @tenant_router.message(Command("version"))
@@ -29137,19 +29137,12 @@ async def tadm_orders(cb: CallbackQuery, bot: Bot):
             await cb.message.answer(cap, reply_markup=kb2)
 
 
-@tenant_router.callback_query(F.data.startswith("tadm:order_detail:"))
-async def tadm_order_detail(cb: CallbackQuery, bot: Bot):
-    """نمایشِ مشخصاتِ کاملِ یک سفارش (خریدار + بسته) — با زدن روی هرکدام از
-    دکمه‌های «آخرین فروش‌ها» در tadm_orders باز می‌شود."""
-    row = await _owner_ok(cb, bot)
-    if not row:
-        return
-    oid = int(cb.data.split(":")[2])
+async def _order_detail_text(row_id: int, oid: int) -> str | None:
+    """متنِ مشخصاتِ کاملِ یک سفارش (خریدار + بسته)؛ None اگر سفارش مالِ این ربات نبود."""
     async with Session() as s:
         order = await s.get(Order, oid)
-        if not order or order.bot_id != row.id:
-            await cb.answer("سفارش یافت نشد.", show_alert=True)
-            return
+        if not order or order.bot_id != row_id:
+            return None
         buyer_block = "👤 خریدار: —"
         u = await s.get(BotUser, order.user_id)
         if u:
@@ -29184,7 +29177,7 @@ async def tadm_order_detail(cb: CallbackQuery, bot: Bot):
     inv = order.invoice_no or "—"
     trk = order.tracking_code or "—"
     disc_line = f"\n🏷 کدِ تخفیف: {_html.escape(order.discount_code)}" if order.discount_code else ""
-    text_out = (
+    return (
         f"🧾 <b>جزئیاتِ سفارش</b>\n\n"
         f"🧾 شناسه سفارش: <code>{_html.escape(str(trk if trk != '—' else inv))}</code>\n"
         f"🕒 تاریخ: {jdate} — ساعت: {jtime}\n"
@@ -29192,6 +29185,20 @@ async def tadm_order_detail(cb: CallbackQuery, bot: Bot):
         f"{buyer_block}\n\n"
         f"{pkg_block}"
     )
+
+
+@tenant_router.callback_query(F.data.startswith("tadm:order_detail:"))
+async def tadm_order_detail(cb: CallbackQuery, bot: Bot):
+    """نمایشِ مشخصاتِ کاملِ یک سفارش (خریدار + بسته) — با زدن روی هرکدام از
+    دکمه‌های «آخرین فروش‌ها» در tadm_orders باز می‌شود."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    oid = int(cb.data.split(":")[2])
+    text_out = await _order_detail_text(row.id, oid)
+    if text_out is None:
+        await cb.answer("سفارش یافت نشد.", show_alert=True)
+        return
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⬅️ بازگشت به لیست", callback_data="tadm:orders", style=ButtonStyle.DANGER)],
     ])
@@ -29269,20 +29276,20 @@ async def _collect_user_invoices(s, bot_id: int, u) -> list[tuple]:
     for o in (await s.scalars(select(Order).where(Order.bot_id == bot_id, Order.user_id == u.id)
                               .order_by(Order.id.desc()).limit(80))).all():
         add(o.created_at, o.status, "💳 شارژ" if o.pay_method == "card_charge" else "📦 سرویس", o.tracking_code, o.amount,
-            f"tadm:order_detail:{o.id}")
+            f"tadm:uinvd:o:{o.id}:{u.id}")
     for o in (await s.scalars(select(SmmOrder).where(SmmOrder.bot_id == bot_id, SmmOrder.user_telegram_id == u.telegram_id)
                               .order_by(SmmOrder.id.desc()).limit(80))).all():
-        add(o.created_at, o.status, "🛰 خدمات", o.tracking_code, o.price_toman, f"tadm:ud:s:{o.id}:{u.id}")
+        add(o.created_at, o.status, "🛰 خدمات", o.tracking_code, o.price_toman, f"tadm:uinvd:s:{o.id}:{u.id}")
     for o in (await s.scalars(select(GiftOrder).where(GiftOrder.bot_id == bot_id, GiftOrder.buyer_user_id == u.id)
                               .order_by(GiftOrder.id.desc()).limit(80))).all():
-        add(o.created_at, o.status, "🎁 گیفت/استارز", o.tracking_code, o.price_toman, f"tadm:ud:g:{o.id}:{u.id}")
+        add(o.created_at, o.status, "🎁 گیفت/استارز", o.tracking_code, o.price_toman, f"tadm:uinvd:g:{o.id}:{u.id}")
     for o in (await s.scalars(select(ProductOrder).where(ProductOrder.bot_id == bot_id, ProductOrder.user_id == u.id)
                               .order_by(ProductOrder.id.desc()).limit(80))).all():
-        add(o.created_at, o.status, "🛍 محصول", o.tracking_code, o.amount, f"tadm:ud:p:{o.id}:{u.id}")
+        add(o.created_at, o.status, "🛍 محصول", o.tracking_code, o.amount, f"tadm:uinvd:p:{o.id}:{u.id}")
     for o in (await s.scalars(select(BluPalCharge).where(BluPalCharge.bot_id == bot_id,
                                                          BluPalCharge.user_telegram_id == u.telegram_id)
                               .order_by(BluPalCharge.id.desc()).limit(80))).all():
-        add(o.created_at, o.status, "💳 بلوپال", o.seq_code or o.tracking_code, o.amount_toman, f"tadm:bpl:{o.id}")
+        add(o.created_at, o.status, "💳 بلوپال", o.seq_code or o.tracking_code, o.amount_toman, f"tadm:uinvd:b:{o.id}:{u.id}")
     items.sort(key=lambda x: x[0] or _dt.datetime.min, reverse=True)
     return items
 
@@ -29307,9 +29314,9 @@ def _render_user_invoices(u, items: list[tuple], page: int = 0) -> tuple[str, In
                                           style=ButtonStyle.PRIMARY)])
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="◀️ قبلی", callback_data=f"tadm:ulist:{u.id}:{page - 1}"))
+        nav.append(InlineKeyboardButton(text="◀️ قبلی", callback_data=f"tadm:uinv:{u.id}:{page - 1}"))
     if page < pages - 1:
-        nav.append(InlineKeyboardButton(text="بعدی ▶️", callback_data=f"tadm:ulist:{u.id}:{page + 1}"))
+        nav.append(InlineKeyboardButton(text="بعدی ▶️", callback_data=f"tadm:uinv:{u.id}:{page + 1}"))
     if nav:
         btns.append(nav)
     btns.append([InlineKeyboardButton(text="🔍 جستجوی دیگر", callback_data="tadm:order_search", style=ButtonStyle.PRIMARY)])
@@ -29325,7 +29332,7 @@ async def _user_invoices_view(s, bot_id: int, raw: str, page: int = 0):
     return _render_user_invoices(u, await _collect_user_invoices(s, bot_id, u), page)
 
 
-@tenant_router.callback_query(F.data.startswith("tadm:ulist:"))
+@tenant_router.callback_query(F.data.startswith("tadm:uinv:"))
 async def tadm_user_invoices_page(cb: CallbackQuery, bot: Bot):
     row = await _owner_ok(cb, bot)
     if not row:
@@ -29344,7 +29351,7 @@ async def tadm_user_invoices_page(cb: CallbackQuery, bot: Bot):
     await cb.answer()
 
 
-@tenant_router.callback_query(F.data.startswith("tadm:ud:"))
+@tenant_router.callback_query(F.data.startswith("tadm:uinvd:"))
 async def tadm_user_invoice_detail(cb: CallbackQuery, bot: Bot):
     """مشخصاتِ کاملِ یک فاکتورِ خدمات/گیفت/محصول از لیستِ فاکتورهایِ کاربر (با دکمهٔ بازگشت به همان لیست)."""
     row = await _owner_ok(cb, bot)
@@ -29355,8 +29362,22 @@ async def tadm_user_invoice_detail(cb: CallbackQuery, bot: Bot):
         oid, upk = int(oid), int(upk)
     except ValueError:
         return await cb.answer()
-    back = f"tadm:ulist:{upk}:0"
-    if kind == "s":
+    back = f"tadm:uinv:{upk}:0"
+    if kind == "o":
+        text = await _order_detail_text(row.id, oid)
+        if text is None:
+            return await cb.answer("سفارش یافت نشد.", show_alert=True)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ بازگشت", callback_data=back, style=ButtonStyle.DANGER)]])
+    elif kind == "b":
+        from models import BluPalCharge
+        from tenant.gateways.blupal_admin import _detail_text as _bp_detail
+        async with Session() as s:
+            ch = await s.get(BluPalCharge, oid)
+        if not ch or ch.bot_id != row.id:
+            return await cb.answer("پیدا نشد.", show_alert=True)
+        text = _bp_detail(ch)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ بازگشت", callback_data=back, style=ButtonStyle.DANGER)]])
+    elif kind == "s":
         from tenant.bots.virtual_service.smm import _smm_vs_order_detail_content
         text, kb = await _smm_vs_order_detail_content(row.id, oid, back)
     elif kind == "g":

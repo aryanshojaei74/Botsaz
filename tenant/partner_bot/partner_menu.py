@@ -582,6 +582,8 @@ _PARTNER_ALLOWED_TADM = {
     "tadm:users",       # مدیریت کاربران
     "tadm:broadcast",   # ارسال همگانی
     "tadm:order_search",
+    "tadm:uinv",          # PATCH_ORDER_SEARCH_BY_USER_V1: لیستِ فاکتورهایِ یک کاربر (صفحه‌بندی)
+    "tadm:uinvd",         # و مشخصاتِ هر فاکتور
     "tadm:tickets",
     # === PATCH_PARTNER_V15 === صفحاتِ بخشِ مالی
     "tadm:bulkwallet",
