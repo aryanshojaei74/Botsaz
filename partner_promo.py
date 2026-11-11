@@ -27,7 +27,8 @@ from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
 
 KEYS = ("ppromo_on", "ppromo_start", "ppromo_end", "ppromo_pro_buy", "ppromo_pro_free",
-        "ppromo_growth_buy", "ppromo_growth_free")
+        "ppromo_growth_buy", "ppromo_growth_free",
+        "ppromo_channel", "ppromo_notify", "ppromo_sent_start", "ppromo_sent_soon", "ppromo_sent_end")
 MAX_BUY = 100
 MAX_FREE = 20
 
@@ -102,7 +103,39 @@ async def load(session=None) -> dict:
         "pro_free": _int(raw.get("ppromo_pro_free", "1"), 1, 0, MAX_FREE),
         "growth_buy": _int(raw.get("ppromo_growth_buy", "0"), 0, 0, MAX_BUY),
         "growth_free": _int(raw.get("ppromo_growth_free", "0"), 0, 0, MAX_FREE),
+        "channel": (raw.get("ppromo_channel", "") or "").strip(),
+        "notify": raw.get("ppromo_notify", "1") != "0",
+        "sent": {k: raw.get(f"ppromo_sent_{k}", "") for k in ("start", "soon", "end")},
     }
+
+
+def round_id(cfg: dict) -> str:
+    """شناسهٔ این دورهٔ جشنواره؛ با عوض‌شدنِ شروع/پایان، اعلام‌هایِ قبلی دوباره مجاز می‌شوند."""
+    return f"{cfg['start']:%Y%m%d%H%M}-{cfg['end']:%Y%m%d%H%M}" if cfg.get("start") and cfg.get("end") else ""
+
+
+SOON_HOURS = 2
+
+
+def due_kinds(cfg: dict, now: _dt.datetime) -> list[str]:
+    """کدام اعلام‌ها الان باید برود (هر کدام برایِ هر دوره فقط یک‌بار). نوبتِ از دست‌رفته دیرتر هم جبران می‌شود، ولی بعد از پایان فقط «پایان»."""
+    if not cfg.get("on") or not cfg.get("start") or not cfg.get("end"):
+        return []
+    rid = round_id(cfg)
+    sent = cfg.get("sent") or {}
+    out = []
+    if now >= cfg["end"]:
+        # فقط اگر در همین دوره چیزی اعلام شده بود (یعنی واقعاً جشنواره‌ای در جریان بود) پایان را بگو
+        if sent.get("end") != rid and (sent.get("start") == rid or sent.get("soon") == rid):
+            out.append("end")
+        return out
+    if now >= cfg["start"]:
+        if sent.get("start") != rid:
+            out.append("start")
+        soon_at = cfg["end"] - _dt.timedelta(hours=SOON_HOURS)
+        if now >= soon_at and sent.get("soon") != rid and (cfg["end"] - cfg["start"]) > _dt.timedelta(hours=SOON_HOURS):
+            out.append("soon")
+    return out
 
 
 def is_active(cfg: dict, at: _dt.datetime | None = None) -> bool:
@@ -154,3 +187,25 @@ def rule_text(cfg: dict) -> str:
     if cfg["growth_buy"] and cfg["growth_free"]:
         lines.append(f"🚀 به‌ازای هر {cfg['growth_buy']} ربات رشد، {cfg['growth_free']} ربات رشد هدیه")
     return "\n".join(lines) or "هیچ قاعده‌ای تنظیم نشده"
+
+
+def _j(dt) -> str:
+    from partner_rules import jalali
+    return jalali(dt, with_time=True) if dt else "—"
+
+
+def announcement_text(kind: str, cfg: dict) -> str:
+    rules = rule_text(cfg)
+    if kind == "start":
+        return ("🎁 <b>جشنوارهٔ خرید عمده شروع شد!</b>\n\n"
+                f"از <b>{_j(cfg['start'])}</b> تا <b>{_j(cfg['end'])}</b> فرصت داری:\n\n{rules}\n\n"
+                "هدیه خودکار و بلافاصله بعد از تأییدِ خرید به انبارت اضافه می‌شود و خریدهایِ این بازه با هم جمع می‌شوند.\n"
+                "از پنل ربات همکارت دکمهٔ «🛒 خرید ربات جهت فروش» را بزن.")
+    if kind == "soon":
+        return (f"⏰ <b>فقط {SOON_HOURS} ساعت تا پایانِ جشنوارهٔ خرید عمده!</b>\n\n"
+                "فرصت را از دست نده؛ هنوز می‌توانی با خریدِ عمده هدیه بگیری:\n\n"
+                f"{rules}\n\n⏳ پایان: <b>{_j(cfg['end'])}</b>\n"
+                "از پنل ربات همکارت دکمهٔ «🛒 خرید ربات جهت فروش» را بزن.")
+    return ("🏁 <b>جشنوارهٔ خرید عمده به پایان رسید.</b>\n\n"
+            "از همراهی‌ات ممنونیم. هدیه‌هایِ خریدهایِ این بازه به انبارِ همکارانی که خرید کردند اضافه شده است.\n"
+            "جشنوارهٔ بعدی را در همین‌جا اعلام می‌کنیم.")

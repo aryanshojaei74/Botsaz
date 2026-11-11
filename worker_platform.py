@@ -71,6 +71,7 @@ from platform_msg_tickets import ticket_reminder_loop
 # === PATCH_OFFSITE_BACKUP_V1 ===
 from platform_offsite_backup import offsite_backup_loop
 from platform_server_backup import server_backup_loop   # PATCH_SERVER_BACKUP_V1
+from platform_partner_promo import partner_promo_loop   # PATCH_PARTNER_PROMO_V1
 # === PATCH_PLATFORM_SADMIN_V1 ===
 from platform_sadmin import sadmin_loop
 from platform_selfsaz_pro import selfsaz_watch_loop
@@ -121,6 +122,8 @@ async def _worker_startup():
         offsite_backup_loop(mp.platform_bot),
         # === PATCH_SERVER_BACKUP_V1 === زیپِ انتقالِ سرور (دیتابیس + فایل‌ها + سرویس‌ها)
         server_backup_loop(mp.platform_bot),
+        # === PATCH_PARTNER_PROMO_V1 === اطلاعیهٔ شروع / ۲ ساعتِ مانده / پایانِ جشنوارهٔ خرید عمده
+        partner_promo_loop(mp.platform_bot),
         # === PATCH_PLATFORM_SADMIN_V1 === پنلِ مدیریت در سروش (ورود با کدِ تلگرام)
         sadmin_loop(mp.platform_bot),
         # === PATCH_SELFSAZ_WATCH_V1 === یادآور انقضا، هشدار قطعیِ سرویس و خطای حساب‌ها

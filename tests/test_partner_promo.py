@@ -115,3 +115,55 @@ def test_bonus_text_and_rule_text():
     assert "حرفه‌ای: +2" in t and "رشد: +1" in t
     r = PP.rule_text({"pro_buy": 2, "pro_free": 1, "growth_buy": 0, "growth_free": 0})
     assert "هر 2 ربات حرفه‌ای" in r and "رشد" not in r
+
+
+# ───────── اطلاعیه‌ها: شروع / ۲ ساعتِ مانده / پایان ─────────
+
+def _cfg_n(**kw):
+    c = {"on": True, "start": START, "end": END, "pro_buy": 2, "pro_free": 1, "growth_buy": 0, "growth_free": 0,
+         "channel": "", "notify": True, "sent": {"start": "", "soon": "", "end": ""}}
+    c.update(kw)
+    return c
+
+
+def test_due_kinds_sequence():
+    c = _cfg_n()
+    rid = PP.round_id(c)
+    assert PP.due_kinds(c, START - dt.timedelta(minutes=1)) == []
+    assert PP.due_kinds(c, START + dt.timedelta(minutes=1)) == ["start"]
+    c["sent"]["start"] = rid
+    assert PP.due_kinds(c, START + dt.timedelta(hours=5)) == []
+    assert PP.due_kinds(c, END - dt.timedelta(hours=1, minutes=59)) == ["soon"]
+    c["sent"]["soon"] = rid
+    assert PP.due_kinds(c, END - dt.timedelta(minutes=5)) == []
+    assert PP.due_kinds(c, END + dt.timedelta(minutes=1)) == ["end"]
+    c["sent"]["end"] = rid
+    assert PP.due_kinds(c, END + dt.timedelta(days=3)) == []
+
+
+def test_due_kinds_edge_cases():
+    c = _cfg_n()
+    # لودِ دیرهنگام (ربات خاموش بود و وسطِ ۲ ساعتِ آخر روشن شد): هر دو با هم
+    assert PP.due_kinds(c, END - dt.timedelta(minutes=30)) == ["start", "soon"]
+    # بعد از پایان، فقط اگر در همین دوره چیزی اعلام شده بود «پایان» می‌رود؛ دورهٔ ازدست‌رفتهٔ کامل ساکت می‌ماند
+    assert PP.due_kinds(c, END + dt.timedelta(hours=1)) == []
+    c["sent"]["start"] = PP.round_id(c)
+    assert PP.due_kinds(c, END + dt.timedelta(hours=1)) == ["end"]
+    # جشنوارهٔ کوتاه‌تر از ۲ ساعت: «۲ ساعتِ مانده» معنا ندارد
+    short = _cfg_n(end=START + dt.timedelta(hours=1))
+    assert "soon" not in PP.due_kinds(short, START + dt.timedelta(minutes=50))
+    # خاموش بودن یا نبودنِ تاریخ
+    assert PP.due_kinds(_cfg_n(on=False), START + dt.timedelta(hours=1)) == []
+    assert PP.due_kinds(_cfg_n(end=None), START + dt.timedelta(hours=1)) == []
+    # دورهٔ جدید (تاریخِ تازه) اعلام‌هایِ قبلی را بی‌اثر می‌کند
+    new = _cfg_n(end=END + dt.timedelta(days=2))
+    new["sent"] = {"start": PP.round_id(_cfg_n()), "soon": "", "end": ""}
+    assert PP.due_kinds(new, START + dt.timedelta(hours=1)) == ["start"]
+
+
+def test_announcement_texts():
+    c = _cfg_n()
+    s, so, e = (PP.announcement_text(k, c) for k in ("start", "soon", "end"))
+    assert "شروع شد" in s and "🛒 خرید ربات جهت فروش" in s and "هر 2 ربات حرفه‌ای" in s
+    assert "فقط 2 ساعت" in so and "فرصت را از دست نده" in so
+    assert "پایان رسید" in e and "هر 2 ربات" not in e

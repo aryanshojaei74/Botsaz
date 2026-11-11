@@ -138,3 +138,90 @@ async def test_wallet_purchase_adds_bonus_and_message(env, monkeypatch):
     await st.update_data(pp_g=0, pp_p=1, pp_total=250_000, pp_pb=env.pid)
     await PPN.pp_pay_wallet(_CB(), NS(), st)
     assert (await _pb(env)).stock_pro == 4                           # ۳ + ۱ خرید، بدونِ هدیه
+
+
+# ───────── ارسالِ اطلاعیه‌ها (شروع / ۲ ساعتِ مانده / پایان) ─────────
+import platform_partner_promo as PPR  # noqa: E402
+
+
+class _FakeBot:
+    def __init__(self, fail_for=()):
+        self.sent = []
+        self.fail_for = set(fail_for)
+
+    async def send_message(self, chat_id, text, **kw):
+        if chat_id in self.fail_for:
+            raise RuntimeError("blocked")
+        self.sent.append((chat_id, text, kw))
+
+    async def get_me(self):
+        return NS(username="botsaz_bot")
+
+
+async def _promo_env(env, monkeypatch, *, channel="@promo_ch", notify="1"):
+    monkeypatch.setattr(PPR, "Session", env.mk)
+    monkeypatch.setattr(PPR, "PLATFORM_ADMIN_ID", 999)
+    async with env.mk() as s:                      # یک همکارِ دومِ فعال
+        b2 = models.Bot(owner_id=888, token="2:T", username="p2", field="partner", plan="partner", status="active")
+        s.add(b2)
+        await s.flush()
+        s.add(models.PartnerBot(bot_id=b2.id, owner_id=888, status="active"))
+        await s.commit()
+    start, end = dt.datetime(2026, 11, 20, 10, 0), dt.datetime(2026, 11, 21, 10, 0)
+    for k, v in {"ppromo_start": start.strftime("%Y-%m-%dT%H:%M"), "ppromo_end": end.strftime("%Y-%m-%dT%H:%M"),
+                 "ppromo_channel": channel, "ppromo_notify": notify, "ppromo_on": "1"}.items():
+        await PP.set_value(k, v)
+    return start, end
+
+
+@pytest.mark.asyncio
+async def test_start_soon_end_announcements_go_out_once_each(env, monkeypatch):
+    start, end = await _promo_env(env, monkeypatch)
+    bot = _FakeBot()
+    async def kinds(now):
+        return [k for k, _r in await PPR.run_due(bot, now=now)]
+    assert await kinds(start - dt.timedelta(minutes=1)) == []
+    assert await kinds(start + dt.timedelta(minutes=1)) == ["start"]
+    owners = sorted({c for c, _t, _k in bot.sent if c in (OWNER, 888)})
+    assert owners == [OWNER, 888]
+    ch = [m for m in bot.sent if m[0] == "@promo_ch"]
+    assert len(ch) == 1 and ch[0][2]["reply_markup"].inline_keyboard[0][0].url == "https://t.me/botsaz_bot"
+    assert any(c == 999 and "همکاران: 2 از 2" in t for c, t, _k in bot.sent)               # گزارش به مدیر
+    assert await kinds(start + dt.timedelta(minutes=2)) == []                              # تکرار نمی‌شود
+    assert await kinds(end - dt.timedelta(hours=1)) == ["soon"]
+    assert await kinds(end - dt.timedelta(minutes=10)) == []
+    assert await kinds(end + dt.timedelta(minutes=1)) == ["end"]
+    assert await kinds(end + dt.timedelta(hours=9)) == []
+    texts = [t for c, t, _k in bot.sent if c == OWNER]
+    assert "شروع شد" in texts[0] and "فقط 2 ساعت" in texts[1] and "به پایان رسید" in texts[2]
+
+
+@pytest.mark.asyncio
+async def test_notify_off_still_posts_to_channel_and_failures_are_counted(env, monkeypatch):
+    start, _end = await _promo_env(env, monkeypatch, notify="0")
+    bot = _FakeBot()
+    await PPR.run_due(bot, now=start + dt.timedelta(minutes=1))
+    assert not [m for m in bot.sent if m[0] in (OWNER, 888)]
+    assert [m for m in bot.sent if m[0] == "@promo_ch"]
+    # فرستادن به یک همکار شکست بخورد: بقیه می‌روند و در گزارش شمرده می‌شود
+    await PP.set_value("ppromo_notify", "1")
+    await PP.set_value("ppromo_sent_start", "")
+    bot2 = _FakeBot(fail_for={OWNER})
+    res = await PPR.run_due(bot2, now=start + dt.timedelta(minutes=2))
+    assert res[0][1]["sent"] == 1 and res[0][1]["failed"] == 1
+    assert any(c == 888 for c, _t, _k in bot2.sent)
+    assert any(c == 999 and "ناموفق: 1" in t for c, t, _k in bot2.sent)
+
+
+@pytest.mark.asyncio
+async def test_no_channel_and_bad_channel_do_not_break(env, monkeypatch):
+    start, _end = await _promo_env(env, monkeypatch, channel="")
+    bot = _FakeBot()
+    res = await PPR.run_due(bot, now=start + dt.timedelta(minutes=1))
+    assert res[0][1]["channel"] is None and res[0][1]["sent"] == 2
+    await PP.set_value("ppromo_channel", "@bad_channel")
+    await PP.set_value("ppromo_sent_soon", "")
+    bot3 = _FakeBot(fail_for={"@bad_channel"})
+    res = await PPR.run_due(bot3, now=start + dt.timedelta(hours=23, minutes=5))
+    assert res[0][0] == "soon" and res[0][1]["channel"] is False and res[0][1]["sent"] == 2
+    assert any(c == 999 and "ادمینِ کانال" in t for c, t, _k in bot3.sent)
