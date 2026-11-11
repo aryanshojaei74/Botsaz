@@ -106,6 +106,16 @@ async def _save_json_setting(bot_id: int, key: str, value) -> None:
     await set_setting(bot_id, key, json.dumps(value, ensure_ascii=False))
 
 
+async def _oz_default_category_pk(bot_id: int) -> int | None:
+    """دستهٔ پیش‌فرضِ «شمارهٔ مجازی» از «دسته‌بندیِ سرویس‌هایِ مستقل» برایِ کشورهایِ تازه‌همگام‌شده."""
+    raw = await _json_setting(bot_id, "smm_special_manual_categories", {})
+    try:
+        cid = raw.get("vnum") if isinstance(raw, dict) else None
+        return int(cid) if cid else None
+    except (TypeError, ValueError):
+        return None
+
+
 async def _oz_price_overrides(bot_id: int) -> dict[str, int]:
     raw = await _json_setting(bot_id, "ozvinoo_price_overrides", {})
     if not isinstance(raw, dict):
@@ -709,7 +719,8 @@ async def _sync_tnumber_locked(bot_id: int, provider: dict) -> tuple[bool, str, 
                 SmmService.bot_id == bot_id, SmmService.service_id == service_id))
             if not svc:
                 s.add(SmmService(bot_id=bot_id, service_id=service_id, name=it["name"],
-                                 category=_OZ_CATEGORY, panel_rate=price, sell_rate=sell,
+                                 category=_OZ_CATEGORY, category_pk=await _oz_default_category_pk(bot_id),   # PATCH_VNUM_CATEGORY_APPLY_V1
+                                 panel_rate=price, sell_rate=sell,
                                  min_qty=1, max_qty=1, is_active=active, is_manual=False,
                                  platform_key="telegram", type_key="virtual_number",
                                  provider_desc=desc))
@@ -808,7 +819,8 @@ async def _sync_provider_locked(bot_id: int, provider: dict) -> tuple[bool, str,
                 SmmService.bot_id == bot_id, SmmService.service_id == service_id))
             if not svc:
                 svc = SmmService(bot_id=bot_id, service_id=service_id, name=name,
-                                 category=_OZ_CATEGORY, panel_rate=price, sell_rate=sell,
+                                 category=_OZ_CATEGORY, category_pk=await _oz_default_category_pk(bot_id),   # PATCH_VNUM_CATEGORY_APPLY_V1
+                                 panel_rate=price, sell_rate=sell,
                                  min_qty=1, max_qty=1, is_active=bool(provider.get("active") and available) and service_id not in disabled_services,
                                  is_manual=False, platform_key="telegram", type_key="virtual_number")
                 s.add(svc)

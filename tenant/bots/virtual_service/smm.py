@@ -9042,6 +9042,31 @@ async def _save_special_manual_category_map(bot_id: int, mapping: dict[str, int]
     await _set_setting(bot_id, "smm_special_manual_categories", json.dumps(mapping, ensure_ascii=False))
 
 
+# === PATCH_VNUM_CATEGORY_APPLY_V1 === (ARTAVPN) «دسته‌بندی سرویس‌هایِ مستقل ← شمارهٔ مجازی» فقط یک تنظیم ذخیره می‌کرد و
+# هیچ‌جا خوانده نمی‌شد؛ پس دسته‌ای که ادمین انتخاب می‌کرد خالی می‌ماند («سرویسی تو این دسته نیست»). حالا رویِ همهٔ
+# کشورهایِ شمارهٔ مجازی (دستی، SMSPool، OzVinoo) اعمال می‌شود، و کشورهایِ تازه هم همان دسته را می‌گیرند.
+async def _vnum_default_category_pk(bot_id: int) -> int | None:
+    try:
+        cid = (await _special_manual_category_map(bot_id)).get("vnum")
+        return int(cid) if cid else None
+    except Exception:
+        logger.exception("vnum: خواندنِ دستهٔ پیش‌فرضِ شمارهٔ مجازی ناموفق بود")
+        return None
+
+
+async def _apply_vnum_category(bot_id: int, cid: int | None) -> int:
+    """دستهٔ همهٔ کشورهایِ شمارهٔ مجازیِ این ربات را cid می‌کند (None = بدونِ دسته). تعدادِ تغییرکرده را برمی‌گرداند."""
+    async with Session() as s:
+        rows = (await s.scalars(select(SmmService).where(SmmService.bot_id == bot_id))).all()
+        n = 0
+        for v in rows:
+            if _is_vnum_service(v) and v.category_pk != cid:
+                v.category_pk = cid
+                n += 1
+        await s.commit()
+    return n
+
+
 async def _special_manual_categories_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     mapping = await _special_manual_category_map(bot_id)
     ids = [int(v) for v in mapping.values()]
@@ -9052,6 +9077,7 @@ async def _special_manual_categories_content(bot_id: int) -> tuple[str, InlineKe
     lines = [
         "📂 <b>دسته‌بندی سرویس‌های مستقل</b>\n",
         "برای هر سرویس دستیِ مستقل یک دسته انتخاب کنید. این تنظیم فقط برای نظم‌دهی است و روند فروش و تأیید سفارش را تغییر نمی‌دهد.\n",
+        "ℹ️ دستهٔ «شمارهٔ مجازی» رویِ همهٔ کشورها اعمال می‌شود (دستی، SMSPool و OzVinoo)؛ هر کشور را جدا هم می‌شود دسته داد.",
     ]
     rows = []
     for key, label in _SPECIAL_MANUAL_PRODUCTS:
@@ -9144,7 +9170,11 @@ async def smm_special_manual_category_set(cb: CallbackQuery, bot: Bot):
             return
         mapping[key] = cid
     await _save_special_manual_category_map(row.id, mapping)
-    await cb.answer("✅ دسته ذخیره شد")
+    _note = ""
+    if key == "vnum":                                   # PATCH_VNUM_CATEGORY_APPLY_V1
+        _n = await _apply_vnum_category(row.id, mapping.get("vnum"))
+        _note = f" ({_n} کشور)" if _n else ""
+    await cb.answer("✅ دسته ذخیره شد" + _note)
     text, kb = await _special_manual_categories_content(row.id)
     try:
         await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -15782,6 +15812,7 @@ async def vnum_add_price_in(msg: Message, bot: Bot, state: FSMContext):
     async with Session() as s:
         s.add(SmmService(
             bot_id=row.id, service_id=sid, name=f"📱 {name}", category=_VNUM_CATEGORY,
+            category_pk=await _vnum_default_category_pk(row.id),   # PATCH_VNUM_CATEGORY_APPLY_V1
             panel_rate=0, sell_rate=price * 1000,  # قیمت‌گذاریِ داخلی هر ۱۰۰۰ است؛ تعداد همیشه ۱
             min_qty=1, max_qty=1, is_active=True, is_manual=True))
         await s.commit()
@@ -16170,6 +16201,7 @@ async def vnum_auto_add_price_save(msg: Message, bot: Bot, state: FSMContext):
     async with Session() as s:
         s.add(SmmService(
             bot_id=row.id, service_id=sid, name=f"📱 {name}", category=_VNUM_CATEGORY,
+            category_pk=await _vnum_default_category_pk(row.id),   # PATCH_VNUM_CATEGORY_APPLY_V1
             panel_rate=0, sell_rate=price * 1000,
             min_qty=1, max_qty=1, is_active=True, is_manual=False))
         await s.commit()
