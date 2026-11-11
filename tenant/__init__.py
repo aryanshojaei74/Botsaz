@@ -6397,7 +6397,7 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
     _HEADER_AWARE_ACTIONS = {
         "buy_config", "buy_unlimited", "buy_vpn",
         "buy_vpn_sanai", "buy_vpn_pasargad", "buy_vpn_pasarguard", "buy_vpn_marzban",
-        "buy_vpn_marzneshin", "buy_vpn_hiddify", "buy_vpn_rebecca", "buy_vpn_alireza", "buy_vpn_upanel_mizban", "buy_vpn_nodex", "buy_vpn_degeris", "buy_vpn_eylan", "buy_vpn_heimdall", "buy_vpn_rickpanel", "buy_vpn_solidlayer", "buy_vpn_wgres",
+        "buy_vpn_marzneshin", "buy_vpn_hiddify", "buy_vpn_rebecca", "buy_vpn_alireza", "buy_vpn_upanel_mizban", "buy_vpn_nodex", "buy_vpn_degeris", "buy_vpn_eylan", "buy_vpn_heimdall", "buy_vpn_rickpanel", "buy_vpn_solidlayer", "buy_vpn_wgres", "buy_vpn_hmpanel",
         "buy_vpn_shahan",   # === PATCH_SHAHAN_BUY_BUTTON_V1 ===
         "buy_bundle",   # === PATCH_BUNDLE_BUTTON_V1 ===
         "buy_panel_market",   # === PATCH_PANEL_SHOP_ACTION_V1 ===
@@ -8242,7 +8242,7 @@ async def _vpn_panel_off_text(bot_id: int, panel_key: str, panel, *, staff: bool
     _panel_names = {
         "sanai": "سنایی", "pasargad": "پاسارگاد", "pasarguard": "PasarGuard",
         "marzban": "مرزبان", "marzneshin": "مرزنشین", "hiddify": "هیدیفای", "rebecca": "ربکا", "alireza": "علیرضا",
-        "upanel_mizban": "یوپنل (مرزبان)", "nodex": "نودکس", "degeris": "DEGERIS", "eylan": "ایلان", "heimdall": "HEIMDALL", "rickpanel": "RickPanel", "solidlayer": "SolidLayer", "wgres": "وایرگارد",
+        "upanel_mizban": "یوپنل (مرزبان)", "nodex": "نودکس", "degeris": "DEGERIS", "eylan": "ایلان", "heimdall": "HEIMDALL", "rickpanel": "RickPanel", "solidlayer": "SolidLayer", "wgres": "وایرگارد", "hmpanel": "HMPanel",
     }
     pname = _PLBL.get(panel_key) or _panel_names.get(panel_key, panel_key)
     if panel is not None:                       # وصل است، فقط فروشش خاموش شده
@@ -14223,7 +14223,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "538"
+BUILD_ID = "539"
 
 
 @tenant_router.message(Command("version"))
@@ -15755,6 +15755,7 @@ def _thb_action_label(mb) -> str:
         "buy_vpn_rickpanel": "🟥 خرید از پنل RickPanel",
         "buy_vpn_solidlayer": "🧱 خرید از پنل SolidLayer",
         "buy_vpn_wgres": "🐉 خرید از پنل وایرگارد",
+        "buy_vpn_hmpanel": "🟦 خرید از پنل HMPanel",
         "buy_bundle": "🧩 خرید ترکیبی (چند دسته/پنل)",  # === PATCH_BUNDLE_BUTTON_V1 ===
         "referral_gate": "دسترسیِ شرطی (گیت زیرمجموعه)",
         "web_app": "🌐 ورود به لینک دلخواه (وب‌اپ)",
@@ -15780,7 +15781,7 @@ def _thb_action_label(mb) -> str:
 _VPN_PLAN_ACTIONS = frozenset({
     "buy_vpn", "buy_vpn_sanai", "buy_vpn_pasargad", "buy_vpn_pasarguard",
     "buy_vpn_marzban", "buy_vpn_marzneshin", "buy_vpn_hiddify",
-    "buy_vpn_rebecca", "buy_vpn_alireza", "buy_vpn_upanel_mizban", "buy_vpn_nodex", "buy_vpn_degeris", "buy_vpn_eylan", "buy_vpn_heimdall", "buy_vpn_rickpanel", "buy_vpn_solidlayer", "buy_vpn_wgres",
+    "buy_vpn_rebecca", "buy_vpn_alireza", "buy_vpn_upanel_mizban", "buy_vpn_nodex", "buy_vpn_degeris", "buy_vpn_eylan", "buy_vpn_heimdall", "buy_vpn_rickpanel", "buy_vpn_solidlayer", "buy_vpn_wgres", "buy_vpn_hmpanel",
 })
 
 
@@ -15900,7 +15901,7 @@ async def _thb_kb_support(mb) -> InlineKeyboardMarkup:
 _EXDISC_SALE_ACTIONS = {
     "buy_config", "buy_unlimited", "buy_vpn",
     "buy_vpn_sanai", "buy_vpn_pasargad", "buy_vpn_pasarguard", "buy_vpn_marzban",
-    "buy_vpn_marzneshin", "buy_vpn_hiddify", "buy_vpn_rebecca", "buy_vpn_alireza", "buy_vpn_upanel_mizban", "buy_vpn_nodex", "buy_vpn_degeris", "buy_vpn_eylan", "buy_vpn_heimdall", "buy_vpn_rickpanel", "buy_vpn_solidlayer", "buy_vpn_wgres",
+    "buy_vpn_marzneshin", "buy_vpn_hiddify", "buy_vpn_rebecca", "buy_vpn_alireza", "buy_vpn_upanel_mizban", "buy_vpn_nodex", "buy_vpn_degeris", "buy_vpn_eylan", "buy_vpn_heimdall", "buy_vpn_rickpanel", "buy_vpn_solidlayer", "buy_vpn_wgres", "buy_vpn_hmpanel",
     "buy_bundle",  # === PATCH_BUNDLE_BUTTON_V1 ===
 }
 
@@ -16479,6 +16480,7 @@ def _thb_text(mb, is_disabled: bool) -> str:
             "buy_vpn_rickpanel":     "🟥 خرید از پنل RickPanel",
             "buy_vpn_solidlayer":    "🧱 خرید از پنل SolidLayer",
             "buy_vpn_wgres":         "🐉 خرید از پنل وایرگارد",
+            "buy_vpn_hmpanel":       "🟦 خرید از پنل HMPanel",
         }
         # === PATCH_MULTI_PANEL_INSTANCES_V1 ===
         _lbl = _panel_action_labels_text.get(mb.action)
@@ -20475,6 +20477,7 @@ _VPN_PANEL_ACTION_LABELS = {
     "buy_vpn_rickpanel": "🟥 خرید کانفیگ از پنل RickPanel",
     "buy_vpn_solidlayer": "🧱 خرید کانفیگ از پنل SolidLayer",
     "buy_vpn_wgres": "🐉 خرید کانفیگ از پنل وایرگارد",
+    "buy_vpn_hmpanel": "🟦 خرید کانفیگ از پنل HMPanel",
 }
 
 
@@ -21223,6 +21226,7 @@ async def thb_set_vpn_panel_choose(cb: CallbackQuery, bot: Bot):
         "rickpanel":     ("buy_vpn_rickpanel",      "🟥 پنل RickPanel"),
         "solidlayer":    ("buy_vpn_solidlayer",     "🧱 پنل SolidLayer"),
         "wgres":         ("buy_vpn_wgres",          "🐉 پنل وایرگارد"),
+        "hmpanel":       ("buy_vpn_hmpanel",        "🟦 پنل HMPanel"),
     }
     # === PATCH_MULTI_PANEL_INSTANCES_V1 ===
     # پنل‌هایِ نمونه‌دار (pasargad#2 و ...) در panel_map نیستند چون آن نگاشت

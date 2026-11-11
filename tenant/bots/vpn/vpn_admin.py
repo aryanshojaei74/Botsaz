@@ -97,6 +97,8 @@ PANEL_LABELS = _PanelLabels({
     "solidlayer":     "🧱 پنل SolidLayer",
     # === PATCH_WGRES_PANEL_V1 === فقط پلنِ حرفه‌ای
     "wgres":          "🐉 پنل وایرگارد (نماینده/API)",
+    # === PATCH_HMPANEL_PANEL_V1 === فقط پلنِ حرفه‌ای
+    "hmpanel":        "🟦 پنل HMPanel",
 })
 PANEL_KEYS = list(PANEL_LABELS.keys())
 
@@ -108,7 +110,7 @@ PANEL_KEYS = list(PANEL_LABELS.keys())
 _PANEL_EXTRA_FEATURE_GATE = {"nodex": Feature.NODEX_PANEL, "degeris": Feature.DEGERIS_PANEL,
                              "eylan": Feature.EYLAN_PANEL, "heimdall": Feature.HEIMDALL_PANEL,
                              "rickpanel": Feature.RICKPANEL_PANEL, "solidlayer": Feature.SOLIDLAYER_PANEL,
-                             "wgres": Feature.WGRES_PANEL}
+                             "wgres": Feature.WGRES_PANEL, "hmpanel": Feature.HMPANEL_PANEL}
 
 
 def _panel_labels_for_plan(plan) -> dict:
@@ -1443,6 +1445,13 @@ async def vpn_setup(cb: CallbackQuery, bot: Bot, state: FSMContext):
             "<code>https://panel.example.com:2053</code>\n\n"
             "⚠️ این پنل با «کلیدِ API» کار می‌کند نه یوزرنیم/رمز؛ در مرحلهٔ بعد توضیح می‌دهم."
         )
+    elif _bk(key) == "hmpanel":      # === PATCH_HMPANEL_PANEL_V1 ===
+        step1_body = (
+            "۱/۵ — آدرسِ پنلِ HMPanel را با https (همان آدرسی که پنل روی آن باز می‌شود، "
+            "بدونِ /api در انتها) بفرست، مثل:\n"
+            "<code>https://panel.example.com</code>\n\n"
+            "⚠️ این پنل با «کلیدِ API» کار می‌کند نه یوزرنیم/رمز؛ در مرحلهٔ بعد توضیح می‌دهم."
+        )
     elif _bk(key) == "wgres":      # === PATCH_WGRES_PANEL_V1 ===
         step1_body = (
             "۱/۵ — آدرسِ پنلِ وایرگارد را با https و پورت (همان آدرسی که داشبورد روی آن باز می‌شود، "
@@ -1485,6 +1494,12 @@ async def vpn_setup_base(msg: Message, bot: Bot, state: FSMContext):
     if _bk(data.get("panel_key") or "") == "eylan":      # === PATCH_EYLAN_PANEL_V1 === (پنلِ دوم کلیدِ «eylan#2» دارد)
         await msg.answer(
             "۲/۵ — پنلِ ایلان یوزرنیم/رمز ندارد و فقط با «کلیدِ API» وصل می‌شود؛ "
+            "این مرحله استفاده نمی‌شود. فقط «-» بفرست:",
+            reply_markup=cancel_kb())
+        return
+    if _bk(data.get("panel_key") or "") == "hmpanel":      # === PATCH_HMPANEL_PANEL_V1 ===
+        await msg.answer(
+            "۲/۵ — پنلِ HMPanel یوزرنیم/رمز ندارد و فقط با «کلیدِ API» وصل می‌شود؛ "
             "این مرحله استفاده نمی‌شود. فقط «-» بفرست:",
             reply_markup=cancel_kb())
         return
@@ -1537,6 +1552,12 @@ async def vpn_setup_user(msg: Message, bot: Bot, state: FSMContext):
             "ادمینِ اصلی یا نماینده). کلیدِ نماینده فقط کاربرانِ همان نماینده را می‌بیند:",
             reply_markup=cancel_kb(), parse_mode="HTML")
         return
+    if _bk(data.get("panel_key") or "") == "hmpanel":      # === PATCH_HMPANEL_PANEL_V1 ===
+        await msg.answer(
+            "۳/۵ — <b>کلیدِ API</b> را بفرست (در پنل: تنظیمات ← API ← ساختِ کلید، دسترسی «همه (*)»؛ کلید با <code>hmp_</code> شروع می‌شود "
+            "و فقط یک‌بار نشان داده می‌شود). کلید دقیقاً جایِ همان ادمین کار می‌کند؛ نماینده فقط کاربرانِ خودش را می‌بیند:",
+            reply_markup=cancel_kb(), parse_mode="HTML")
+        return
     if _bk(data.get("panel_key") or "") == "wgres":      # === PATCH_WGRES_PANEL_V1 ===
         await msg.answer(
             "۳/۵ — <b>کلیدِ API</b> نماینده را بفرست (در داشبوردِ پنل: بخشِ «API توسعه‌دهنده» ← تولیدِ کلید). "
@@ -1575,7 +1596,7 @@ async def vpn_setup_user(msg: Message, bot: Bot, state: FSMContext):
 #   • هیدیفای → این فیلد proxy_path است، معنیِ واقعی دارد؛ می‌ماند.
 _SUB_BASE_AUTO = frozenset({
     "marzban", "rebecca", "pasargad", "pasarguard",
-    "upanel_mizban", "marzneshin", "shahan", "eylan", "rickpanel", "solidlayer", "wgres",
+    "upanel_mizban", "marzneshin", "shahan", "eylan", "rickpanel", "solidlayer", "wgres", "hmpanel",
 })
 
 
@@ -1730,6 +1751,11 @@ async def _vpn_setup_step5_prompt(msg: Message, key: str) -> None:
             "۵/۵ — در پنل SolidLayer «سرویس‌ها» جایگزینِ inbound هستند. برایِ اتصالِ خودکارِ هر کاربر به همهٔ سرویس‌هایِ "
             "ادمین فقط «-» بفرست؛ یا شناسهٔ عددیِ سرویس‌ها را با کاما بفرست (مثلاً <code>1,3</code>):",
             reply_markup=cancel_kb(), parse_mode="HTML")
+    elif _bk(key) == "hmpanel":      # === PATCH_HMPANEL_PANEL_V1 ===
+        await msg.answer(
+            "۵/۵ — در HMPanel هر کاربر روی inboundهایی ساخته می‌شود که این کلید اجازهٔ ساخت روی آن‌ها را دارد؛ "
+            "برایِ استفادهٔ خودکار از همهٔ آن‌ها فقط «-» بفرست تا تنظیمات ذخیره شود:",
+            reply_markup=cancel_kb())
     elif _bk(key) == "wgres":      # === PATCH_WGRES_PANEL_V1 ===
         await msg.answer(
             "۵/۵ — پنلِ وایرگارد مفهومِ inbound ندارد (اینترفیسِ شبکه را خودِ پنل برایِ نماینده تعیین می‌کند)؛ "
@@ -1814,7 +1840,7 @@ async def vpn_setup_inbounds(msg: Message, bot: Bot, state: FSMContext):
     # شاهان/هیدیفای اصلاً مفهومِ inbound/گروه ندارند — هرچه ادمین اینجا بفرستد
     # نادیده گرفته می‌شود (بدونِ این میان‌بر، فرستادنِ «همه» چون پنل همیشه
     # لیستِ خالی برمی‌گرداند، ادمین را تو یه پیامِ خطا-و-دوباره‌بفرست گیر می‌انداخت).
-    if key in ("shahan", "hiddify", "rickpanel") or _bk(key) == "wgres" or (_bk(key) == "eylan" and fetch_all) \
+    if key in ("shahan", "hiddify", "rickpanel") or _bk(key) in ("wgres", "hmpanel") or (_bk(key) == "eylan" and fetch_all) \
             or (_bk(key) == "solidlayer" and (fetch_all or raw == "-")):
         fetch_all = False      # ایلان + «همه» = پیش‌فرضِ خودِ کلاینت (inbound خالی) — PATCH_EYLAN_PANEL_V1
         inbound = ""
@@ -2367,6 +2393,16 @@ async def vpn_test(cb: CallbackQuery, bot: Bot):
     try:
         res = await client.test_connection()
         ids = ", ".join(str(i) for i in res["inbounds"])
+        if _bk(key) == "hmpanel":      # === PATCH_HMPANEL_PANEL_V1 ===
+            import html as _h
+            await cb.message.answer(
+                f"✅ اتصال به <b>{label}</b> موفق بود (ادمین: {_h.escape(str(res.get('username') or '—'))} · نقش: {_h.escape(str(res.get('role') or '—'))}).\n"
+                f"inboundهای قابلِ استفاده: <b>{len(res.get('inbounds') or [])}</b> ({_h.escape(ids) or '—'})\n"
+                f"کاربران: {res.get('clients') or 0}"
+                + (f" از {res.get('max_clients')}" if res.get('max_clients') else "")
+                + (f" · موجودی: {res.get('balance')}" if res.get('balance') is not None else ""),
+                parse_mode="HTML")
+            return
         if _bk(key) == "wgres":      # === PATCH_WGRES_PANEL_V1 ===
             import html as _h
             _cap = res.get("capacity_gb")
@@ -2685,7 +2721,7 @@ async def vpn_refresh_subs(cb: CallbackQuery, bot: Bot):
                     # ساب‌لینکِ همهٔ کاربرانِ این پنل با «sub_base تنظیم نشده»
                     # شکست بخورد (چون در ادامه از مسیرِ sub_id+sub_base استفاده
                     # می‌شد که برایِ این پنل بی‌معناست).
-                    if _bk(key) in ("marzban", "rebecca", "pasargad", "pasarguard", "marzneshin", "upanel_mizban", "rickpanel", "solidlayer", "wgres"):
+                    if _bk(key) in ("marzban", "rebecca", "pasargad", "pasarguard", "marzneshin", "upanel_mizban", "rickpanel", "solidlayer", "wgres", "hmpanel"):
                         # مرزبان/ربکا/پاسارگاد/PasarGuard/مرزنشین لینک ساب را خودشان
                         # برمی‌گردانند؛ از روی sub_id قابل بازسازی نیست — همیشه از پنل می‌خوانیم.
                         # PATCH_RELINK_RATE_LIMIT_V1: فاصله + صبر روی ۴۲۹ی پنل (RickPanel و …)
@@ -2986,7 +3022,7 @@ async def vpn_custom_count_save(msg: Message, bot: Bot, state: FSMContext):
 # محدودیتِ تعدادِ کاربرِ هم‌زمان (IP) رویِ خودِ پنل. تا امروز فقط «پلن»
 # می‌توانست محدودیت داشته باشد، پس خریدِ «حجم/روزِ دلخواه» — که پلنی ندارد —
 # همیشه بدونِ محدودیت ساخته می‌شد.
-_IP_LIMIT_PANELS = {"pasargad", "pasarguard", "rebecca", "shahan", "sanai", "alireza", "degeris", "eylan", "heimdall"}   # rickpanel: limit_ip پشتیبانی نمی‌شود
+_IP_LIMIT_PANELS = {"pasargad", "pasarguard", "rebecca", "shahan", "sanai", "alireza", "degeris", "eylan", "heimdall", "hmpanel"}   # rickpanel: limit_ip پشتیبانی نمی‌شود
 
 
 @vpn_admin_router.callback_query(F.data.startswith("tvpn:panel_iplimit:"))
@@ -3546,7 +3582,7 @@ async def vpn_srvname_apply(cb: CallbackQuery, bot: Bot):
         return
 
     # پنل‌های مرزبان‌بنیان: تغییر نام روی اکانت موجود ممکن نیست
-    if _bk(panel_key) in ("marzban", "rebecca", "pasargad", "pasarguard", "marzneshin", "rickpanel", "solidlayer", "wgres"):
+    if _bk(panel_key) in ("marzban", "rebecca", "pasargad", "pasarguard", "marzneshin", "rickpanel", "solidlayer", "wgres", "hmpanel"):
         await cb.answer()
         await cb.message.answer(
             f"ℹ️ در <b>{label}</b> نام کاربری همان شناسهٔ یکتای اکانت است و روی "

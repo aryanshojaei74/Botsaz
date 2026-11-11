@@ -38,6 +38,7 @@ from tenant.shared.panel_clients.heimdall_panel import HeimdallPanelClient  # ==
 from tenant.shared.panel_clients.rickpanel_panel import RickPanelClient  # === PATCH_RICKPANEL_PANEL_V1 ===
 from tenant.shared.panel_clients.solidlayer_panel import SolidLayerPanelClient  # === PATCH_SOLIDLAYER_PANEL_V1 ===
 from tenant.shared.panel_clients.wgres_panel import WgResellerPanelClient  # === PATCH_WGRES_PANEL_V1 ===
+from tenant.shared.panel_clients.hmpanel_panel import HMPanelClient  # === PATCH_HMPANEL_PANEL_V1 ===
 
 # پنل‌هایی که inbound_ids آن‌ها به‌صورت رشتهٔ تگ هستند (نه عدد)
 # نکته: پاسارگاد/PasarGuard واقعاً «گروه» عددی دارند نه تگ، اما چون فرم ورودی
@@ -46,7 +47,7 @@ from tenant.shared.panel_clients.wgres_panel import WgResellerPanelClient  # ===
 # tenant/pasargad_panel.py و tenant/pasarguard_panel.py). ربکا هم مثل مرزبان
 # واقعاً تگ‌محور است (نه فقط برای سازگاری فرم).
 _TAG_BASED_PANELS = frozenset({"marzban", "rebecca", "pasargad", "pasarguard", "upanel_mizban",
-                               "eylan"})   # ایلان: پروتکل/تگ‌هایِ رشته‌ای
+                               "eylan", "hmpanel"})   # ایلان: پروتکل/تگ‌هایِ رشته‌ای
 
 _CLIENT_BY_PANEL_KEY = {
     "sanai":         SanaiPanelClient,
@@ -64,6 +65,7 @@ _CLIENT_BY_PANEL_KEY = {
     "heimdall":      HeimdallPanelClient,  # HEIMDALL (نسلِ جدیدِ ۳X-UI، RBAC+CSRF) — PATCH_HEIMDALL_PANEL_V1
     "rickpanel":     RickPanelClient,      # RickPanel (مرزبان‌سازگار، بدونِ inbound) — PATCH_RICKPANEL_PANEL_V1
     "solidlayer":    SolidLayerPanelClient,  # SolidLayer (Management API، /api/subscriptions) — PATCH_SOLIDLAYER_PANEL_V1
+    "hmpanel":       HMPanelClient,        # HMPanel (کلیدِ API ادمین) — PATCH_HMPANEL_PANEL_V1
     "wgres":         WgResellerPanelClient,  # پنلِ وایرگاردِ نماینده (X-API-Key) — PATCH_WGRES_PANEL_V1
     "shahan":        ShahanPanelClient,    # شاهان — endpoint واحد + توکنِ ثابت (shahanpanel.com)
 }
