@@ -343,8 +343,15 @@ async def _panel() -> tuple[str, InlineKeyboardMarkup]:
          InlineKeyboardButton(text="✏️ بازهٔ دلخواه", callback_data="svb:hours")],
         [InlineKeyboardButton(text=f"{'✅' if inc_env else '⬜️'} همراهِ .env", callback_data="svb:env"),
          InlineKeyboardButton(text="📍 مقصد", callback_data="svb:chat")],
+        [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="adm:bots", style=ButtonStyle.DANGER)],
     ]
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _back_kb() -> InlineKeyboardMarkup:
+    """زیرِ پیام‌هایِ «عدد/آیدی بفرست»: برگشت به پنل (و پاک‌شدنِ وضعیتِ انتظار)."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="svb:menu", style=ButtonStyle.DANGER)]])
 
 
 def server_backup_button() -> list:
@@ -388,12 +395,12 @@ async def svb_cb(cb: CallbackQuery, state: FSMContext):
         await state.set_state(SvbFSM.hours)
         await cb.message.answer("هر چند ساعت یک‌بار بفرستم؟ یک عدد بین ۱ تا ۷۲۰ بفرست.\n"
                                 "مثلاً <code>12</code> = هر ۱۲ ساعت، <code>48</code> = هر ۲ روز، <code>168</code> = هر هفته.\n"
-                                "لغو: /serverbackup", parse_mode="HTML")
+                                "لغو: /serverbackup", parse_mode="HTML", reply_markup=_back_kb())
         return await cb.answer()
     if act == "chat":
         await state.set_state(SvbFSM.chat)
         await cb.message.answer("آیدیِ عددیِ چت/کانالِ مقصد را بفرست (ربات باید آنجا اجازهٔ ارسال داشته باشد)،\n"
-                                "یا «پیش‌فرض» تا به پی‌ویِ خودت برود. لغو: /serverbackup")
+                                "یا «پیش‌فرض» تا به پی‌ویِ خودت برود. لغو: /serverbackup", reply_markup=_back_kb())
         return await cb.answer()
     if act == "toggle":
         await _set(K_EN, "0" if (await _get(K_EN, "0")) == "1" else "1")
@@ -414,7 +421,7 @@ async def svb_hours_in(msg: Message, state: FSMContext):
         return
     val = val.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789"))
     if not val.isdigit() or not (1 <= int(val) <= 720):
-        return await msg.answer("❌ یک عدد بین ۱ تا ۷۲۰ بفرست (ساعت).")
+        return await msg.answer("❌ یک عدد بین ۱ تا ۷۲۰ بفرست (ساعت).", reply_markup=_back_kb())
     await _set(K_HOURS, str(int(val)))
     await state.clear()
     text, kb = await _panel()
@@ -432,7 +439,7 @@ async def svb_chat_in(msg: Message, state: FSMContext):
     elif val.lstrip("-").isdigit():
         await _set(K_CHAT, val)
     else:
-        return await msg.answer("❌ فقط آیدیِ عددی (مثل -1001234567890) یا «پیش‌فرض».")
+        return await msg.answer("❌ فقط آیدیِ عددی (مثل -1001234567890) یا «پیش‌فرض».", reply_markup=_back_kb())
     await state.clear()
     text, kb = await _panel()
     await msg.answer("✅ مقصد ذخیره شد.\n\n" + text, reply_markup=kb, parse_mode="HTML")

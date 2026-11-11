@@ -148,3 +148,13 @@ async def test_due_logic(monkeypatch):
 
 def test_interval_text():
     assert SB._fmt_interval(24) == "1 روز" and SB._fmt_interval(48) == "2 روز" and SB._fmt_interval(12) == "12 ساعت"
+
+
+@pytest.mark.asyncio
+async def test_every_screen_has_back_button(monkeypatch):
+    async def _get(k, d=""):
+        return d
+    monkeypatch.setattr(SB, "_get", _get)
+    _text, kb = await SB._panel()
+    assert "adm:bots" in [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert [b.callback_data for r in SB._back_kb().inline_keyboard for b in r] == ["svb:menu"]
