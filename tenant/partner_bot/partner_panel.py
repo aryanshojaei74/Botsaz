@@ -450,15 +450,25 @@ async def pp_pay_wallet(cb: CallbackQuery, bot: Bot, state: FSMContext):
         if not pb or pb.id != ok[1].id:
             await cb.answer("سفارش نامعتبر است؛ دوباره شروع کن", show_alert=True)
             return
-        pb.stock_growth += g
-        pb.stock_pro += p
+        # === PATCH_PARTNER_PROMO_V1 === هدیهٔ جشنوارهٔ خرید (محاسبه قبل از ثبتِ همین سفارش)
+        import partner_promo as _PP
+        _now = _PP.now_local()
+        bg, bp = await _PP.bonus_for_order(s, pb_id, g, p, _now)
+        pb.stock_growth += g + bg
+        pb.stock_pro += p + bp
         pb.bought_growth += g
         pb.bought_pro += p
+        if bg:
+            from partner_rules import log_stock as _log_stock
+            await _log_stock(s, pb.id, "growth", bg, "promo", "هدیهٔ جشنوارهٔ خرید عمده", pb.stock_growth)
+        if bp:
+            from partner_rules import log_stock as _log_stock
+            await _log_stock(s, pb.id, "pro", bp, "promo", "هدیهٔ جشنوارهٔ خرید عمده", pb.stock_pro)
 
         s.add(PartnerStockOrder(
             partner_bot_id=pb_id, qty_growth=g, qty_pro=p, amount=total,
             method="wallet", status="approved",
-            decided_at=datetime.datetime.now()))
+            decided_at=_now, created_at=_now))
         s.add(PlatformTxn(user_telegram_id=uid, amount=-total, kind="purchase",
                           note=f"خرید عمده ربات همکار: {g} رشد + {p} حرفه‌ای"))
         await s.commit()
@@ -477,14 +487,16 @@ async def pp_pay_wallet(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await state.clear()
     await cb.message.edit_text(
         "✅ <b>پرداخت انجام شد</b>\n\n"
-        f"مبلغ {total:,} تومان از کیف پولت کسر شد.\n\n"
+        f"مبلغ {total:,} تومان از کیف پولت کسر شد."
+        + _PP.bonus_text(bg, bp) + "\n\n"
         f"📦 موجودی جدید:\n🚀 رشد: <b>{new_g}</b>\n💎 حرفه‌ای: <b>{new_p}</b>",
         reply_markup=_back_kb())
     await cb.answer()
     await _notify_platform_admin(
         f"🛒 <b>خرید عمدهٔ همکار (کیف پول)</b>\n\n"
         f"👤 همکار: <code>{uid}</code>\n"
-        f"🚀 رشد: {g} | 💎 حرفه‌ای: {p}\n"
+        f"🚀 رشد: {g} | 💎 حرفه‌ای: {p}"
+        + _PP.bonus_text(bg, bp) + "\n"
         f"💰 مبلغ: {total:,} تومان")
 
 

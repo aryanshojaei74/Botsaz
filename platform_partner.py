@@ -1048,6 +1048,10 @@ async def pp_order_auto_approve(order_id: int, method_text: str = "📲 کارت
             return False
         owner = pb.owner_id
         g, p = o.qty_growth, o.qty_pro
+        # === PATCH_PARTNER_PROMO_V1 === هدیهٔ جشنوارهٔ خرید (قبل از تغییرِ وضعیتِ همین سفارش محاسبه می‌شود)
+        import partner_promo as _PP
+        bg, bp = await _PP.bonus_for_order(s, pb.id, g, p, o.created_at or _PP.now_local(),
+                                           exclude_order_id=o.id)
         o.status = "approved"
         pb.stock_growth += g
         pb.stock_pro += p
@@ -1059,6 +1063,12 @@ async def pp_order_auto_approve(order_id: int, method_text: str = "📲 کارت
                             log_note, pb.stock_pro)
         pb.bought_growth += g
         pb.bought_pro += p
+        if bg:
+            pb.stock_growth += bg
+            await log_stock(s, pb.id, "growth", bg, "promo", "هدیهٔ جشنوارهٔ خرید عمده", pb.stock_growth)
+        if bp:
+            pb.stock_pro += bp
+            await log_stock(s, pb.id, "pro", bp, "promo", "هدیهٔ جشنوارهٔ خرید عمده", pb.stock_pro)
         new_g, new_p = pb.stock_growth, pb.stock_pro
         o.decided_at = datetime.datetime.now()
         # === PATCH_PARTNER_PURCHASE_IN_FIN_REPORT_V1 ===
@@ -1073,7 +1083,8 @@ async def pp_order_auto_approve(order_id: int, method_text: str = "📲 کارت
         await _pp_send_platform(
             owner,
             "✅ <b>پرداختت خودکار تایید شد!</b>\n\n"
-            f"🚀 رشد: +{g}\n💎 حرفه‌ای: +{p}\n\n"
+            f"🚀 رشد: +{g}\n💎 حرفه‌ای: +{p}"
+            + _PP.bonus_text(bg, bp) + "\n\n"
             f"📦 موجودیِ جدید:\n🚀 رشد: <b>{new_g}</b>\n💎 حرفه‌ای: <b>{new_p}</b>\n\n"
             f"🧾 روش: {method_text}")
     except Exception:
@@ -1085,7 +1096,8 @@ async def pp_order_auto_approve(order_id: int, method_text: str = "📲 کارت
                 PLATFORM_ADMIN_ID,
                 "📲 <b>خریدِ عمدهٔ همکار خودکار تایید شد</b>\n\n"
                 f"👤 همکار: <code>{owner}</code>\n"
-                f"🚀 رشد: {g} | 💎 حرفه‌ای: {p}\n"
+                f"🚀 رشد: {g} | 💎 حرفه‌ای: {p}"
+                + _PP.bonus_text(bg, bp) + "\n"
                 f"💰 مبلغ: {int(o.amount or 0):,} تومان\n"
                 f"🧾 سفارش #{order_id}\n"
                 f"🧾 روش: {method_text}")
@@ -1186,8 +1198,13 @@ async def partner_stock_order_decide(cb: CallbackQuery, bot: Bot):
 
         owner = pb.owner_id
         g, p, amount = o.qty_growth, o.qty_pro, int(o.amount or 0)
+        bg = bp = 0
 
         if verdict == "y":
+            # === PATCH_PARTNER_PROMO_V1 ===
+            import partner_promo as _PP
+            bg, bp = await _PP.bonus_for_order(s, pb.id, g, p, o.created_at or _PP.now_local(),
+                                               exclude_order_id=o.id)
             o.status = "approved"
             pb.stock_growth += g
             pb.stock_pro += p
@@ -1200,6 +1217,12 @@ async def partner_stock_order_decide(cb: CallbackQuery, bot: Bot):
                                 "خرید عمده", pb.stock_pro)
             pb.bought_growth += g
             pb.bought_pro += p
+            if bg:
+                pb.stock_growth += bg
+                await log_stock(s, pb.id, "growth", bg, "promo", "هدیهٔ جشنوارهٔ خرید عمده", pb.stock_growth)
+            if bp:
+                pb.stock_pro += bp
+                await log_stock(s, pb.id, "pro", bp, "promo", "هدیهٔ جشنوارهٔ خرید عمده", pb.stock_pro)
             new_g, new_p = pb.stock_growth, pb.stock_pro
             # === PATCH_PARTNER_PURCHASE_IN_FIN_REPORT_V1 ===
             s.add(PlatformTxn(user_telegram_id=owner, amount=float(amount),
@@ -1214,9 +1237,11 @@ async def partner_stock_order_decide(cb: CallbackQuery, bot: Bot):
     if verdict == "y":
         user_txt = (
             "✅ <b>پرداخت شما تایید شد</b>\n\n"
-            f"🚀 رشد: +{g}\n💎 حرفه‌ای: +{p}\n\n"
+            f"🚀 رشد: +{g}\n💎 حرفه‌ای: +{p}"
+            + _PP.bonus_text(bg, bp) + "\n\n"
             f"📦 موجودی جدید:\n🚀 رشد: <b>{new_g}</b>\n💎 حرفه‌ای: <b>{new_p}</b>")
-        admin_txt = f"✅ سفارش #{order_id} تایید شد ({g} رشد + {p} حرفه‌ای)."
+        admin_txt = (f"✅ سفارش #{order_id} تایید شد ({g} رشد + {p} حرفه‌ای)."
+                     + (f" 🎁 هدیه: {bp} حرفه‌ای + {bg} رشد." if (bg or bp) else ""))
     else:
         user_txt = (
             "❌ <b>رسید شما تایید نشد.</b>\n\n"

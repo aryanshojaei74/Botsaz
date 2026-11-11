@@ -224,8 +224,10 @@ router.include_router(market_router)
 # شده‌اند تا این فایل بیش از این بزرگ نشود.
 from platform_partner import partner_router
 from platform_partner_admin import partner_admin_router
+from platform_partner_promo import partner_promo_router   # PATCH_PARTNER_PROMO_V1
 router.include_router(partner_router)
 router.include_router(partner_admin_router)
+router.include_router(partner_promo_router)
 
 # === PATCH_PARTNER_MANAGE_V1 ===
 from platform_partner_manage import partner_manage_router

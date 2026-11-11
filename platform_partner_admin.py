@@ -159,6 +159,8 @@ async def pa_home(cb: CallbackQuery):
     _term_on = await partner_term_enabled()   # PATCH_PARTNER_NO_TERM_EXPIRY_V1
     b.button(text="🏷 تخفیف همگانی روی همهٔ همکاران", callback_data="pa:discall:start",
              style=ButtonStyle.PRIMARY)
+    # === PATCH_PARTNER_PROMO_V1 === جشنوارهٔ خرید عمده (به‌ازای هر N ربات M ربات هدیه، در بازهٔ زمانی)
+    b.button(text="🎁 جشنوارهٔ خرید عمده (هدیه)", callback_data="ppr:menu", style=ButtonStyle.SUCCESS)
     # === PATCH_PARTNER_MIN_ACTIVE_SETTING_V1 ===
     b.button(text=f"🎯 تعیین حد نصاب (الان: {_min_now})",
              callback_data="pa:minactive:start", style=ButtonStyle.PRIMARY)
