@@ -2588,6 +2588,41 @@ def normalize_link_url(raw: str) -> str | None:
     return t if _is_valid_webapp_url(t) else None
 
 
+# === PATCH_GATE_SETTINGS_V1 ===
+# وقتی دکمه «گیتِ زیرمجموعه» می‌گیرد، action = "referral_gate" می‌شود و عملکردِ اصلی در config.keep_action می‌ماند.
+# تنظیماتِ همان عملکرد (حالتِ خرید، دسته، تست، لینک، ...) باید از رویِ keep_action کار کند و گیت را پاک نکند.
+def _gate_keep(mb) -> str | None:
+    if getattr(mb, "action", None) != "referral_gate" or not getattr(mb, "config", None):
+        return None
+    try:
+        return ((json.loads(mb.config) or {}).get("keep_action")) or None
+    except Exception:
+        logger.exception("خواندنِ keep_action از configِ دکمهٔ گیت‌شده ناموفق بود")
+        return None
+
+
+def _act(mb):
+    """عملکردِ واقعیِ دکمه: برایِ دکمهٔ گیت‌شده همان keep_action."""
+    return _gate_keep(mb) or getattr(mb, "action", None)
+
+
+def _set_act(mb, action: str) -> None:
+    """عملکرد را می‌گذارد؛ ولی گیت را برنمی‌دارد (فقط configِ همان عملکرد به‌روز می‌شود)."""
+    if getattr(mb, "action", None) != "referral_gate":
+        mb.action = action
+
+
+class _EffBtn:
+    """نمای یک دکمهٔ گیت‌شده با action = keep_action (برایِ رسمِ همان صفحهٔ تنظیمات)."""
+
+    def __init__(self, mb, action):
+        self._mb = mb
+        self.action = action
+
+    def __getattr__(self, name):
+        return getattr(self._mb, name)
+
+
 def _link_url(b) -> str | None:
     if getattr(b, "action", None) != "channel_link" or not getattr(b, "config", None):
         return None
@@ -14223,7 +14258,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "545"
+BUILD_ID = "546"
 
 
 @tenant_router.message(Command("version"))
@@ -16059,6 +16094,13 @@ def _thb_kb_action(mb, bot_field: str = "", plan: str = "") -> InlineKeyboardMar
     امکاناتی که اصلاً برایِ پلنِ همکار وجود ندارند. حالا هرجا این گزینه‌ها
     مخصوصِ یک زمینهٔ خاص‌اند، اول چک می‌شود که ربات همکار نباشد.
     """
+    _gk = _gate_keep(mb)
+    if _gk:
+        # دکمهٔ گیت‌شده: صفحهٔ تنظیماتِ همان عملکردِ اصلی؛ ردیف‌هایِ «حذفِ عملکرد» حذف می‌شوند (حذفِ گیت از «قوانین و دسترسی» است)
+        _inner = _thb_kb_action(_EffBtn(mb, _gk), bot_field, plan)
+        _kept = [r for r in _inner.inline_keyboard
+                 if not any(str(getattr(b, "callback_data", "") or "").startswith("thb:unset") for b in r)]
+        return InlineKeyboardMarkup(inline_keyboard=_kept)
     _is_partner = (plan == "partner")
     rows = []
     _gated_keep = None
@@ -18082,7 +18124,7 @@ async def _trial_top_render(cb: CallbackQuery, bot: Bot, mb_id: int):
     await _trial_prune_panel_keys(mb_id, row.id)      # PATCH_TRIAL_STALE_PANEL_KEYS_V1
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-    if not mb or mb.bot_id != row.id or mb.action != "free_trial":
+    if not mb or mb.bot_id != row.id or _act(mb) != "free_trial":
         await cb.answer("یافت نشد", show_alert=True)
         return
     cfg = _trial_cfg_of(mb)
@@ -18132,7 +18174,7 @@ async def thb_trial_category_pick(cb: CallbackQuery, bot: Bot):
     src = parts[3] if len(parts) > 3 else "top"
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-        if not mb or mb.bot_id != row.id or mb.action != "free_trial":
+        if not mb or mb.bot_id != row.id or _act(mb) != "free_trial":
             await cb.answer("یافت نشد", show_alert=True)
             return
         _cc = (await s.execute(
@@ -18170,7 +18212,7 @@ async def thb_trial_category_set(cb: CallbackQuery, bot: Bot):
     cat = parts[4] if len(parts) > 4 else "_all_"
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-        if not mb or mb.bot_id != row.id or mb.action != "free_trial":
+        if not mb or mb.bot_id != row.id or _act(mb) != "free_trial":
             await cb.answer("یافت نشد", show_alert=True)
             return
     cfg = await _trial_cfg_update(mb_id, trial_category=None if cat == "_all_" else cat)
@@ -18191,7 +18233,7 @@ async def thb_trial_clear(cb: CallbackQuery, bot: Bot):
     mb_id = int(cb.data.split(":")[2])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-        if not mb or mb.bot_id != row.id or mb.action != "free_trial":
+        if not mb or mb.bot_id != row.id or _act(mb) != "free_trial":
             await cb.answer("یافت نشد", show_alert=True)
             return
         mb.config = None
@@ -18475,7 +18517,7 @@ async def thb_trial_auto_panels(cb: CallbackQuery, bot: Bot, _override_mb_id: in
     from tenant.bots.vpn.vpn_admin import PANEL_LABELS
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-        if not mb or mb.bot_id != row.id or mb.action != "free_trial":
+        if not mb or mb.bot_id != row.id or _act(mb) != "free_trial":
             await cb.answer("یافت نشد", show_alert=True)
             return
         panels = (await s.scalars(select(VpnPanel).where(
@@ -18525,7 +18567,7 @@ async def thb_trial_panel_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
     action, mb_id = parts[2], int(parts[3])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-        if not mb or mb.bot_id != row.id or mb.action != "free_trial":
+        if not mb or mb.bot_id != row.id or _act(mb) != "free_trial":
             await cb.answer("یافت نشد", show_alert=True)
             return
     cfg = _trial_cfg_of(mb)
@@ -18571,7 +18613,7 @@ async def thb_trial_ready_pick(cb: CallbackQuery, bot: Bot):
     mb_id = int(cb.data.split(":")[3])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-        if not mb or mb.bot_id != row.id or mb.action != "free_trial":
+        if not mb or mb.bot_id != row.id or _act(mb) != "free_trial":
             await cb.answer("یافت نشد", show_alert=True)
             return
     rows = [
@@ -18597,7 +18639,7 @@ async def thb_trial_set_mode(cb: CallbackQuery, bot: Bot):
         return
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-        if not mb or mb.bot_id != row.id or mb.action != "free_trial":
+        if not mb or mb.bot_id != row.id or _act(mb) != "free_trial":
             await cb.answer("یافت نشد", show_alert=True)
             return
     await _trial_cfg_update(mb_id, trial_mode=mode, trial_panel_key=None)
@@ -18628,7 +18670,7 @@ async def thb_trial_set_select(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-        if not mb or mb.bot_id != row.id or mb.action != "free_trial":
+        if not mb or mb.bot_id != row.id or _act(mb) != "free_trial":
             await cb.answer("یافت نشد", show_alert=True)
             return
     cfg = await _trial_cfg_update(mb_id, trial_select=sel)
@@ -18738,7 +18780,7 @@ async def _trial_fix_mb(cb: CallbackQuery, bot: Bot, mb_id: int):
         return None
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-    if not mb or mb.bot_id != row.id or mb.action != "free_trial":
+    if not mb or mb.bot_id != row.id or _act(mb) != "free_trial":
         await cb.answer("یافت نشد", show_alert=True)
         return None
     return mb
@@ -19124,7 +19166,7 @@ async def thb_buyconfig_ask_change(cb: CallbackQuery, bot: Bot):
     mb_id = int(cb.data.split(":")[2])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-    if not mb or mb.bot_id != row.id or mb.action != "buy_config":
+    if not mb or mb.bot_id != row.id or _act(mb) != "buy_config":
         await cb.answer("یافت نشد", show_alert=True)
         return
     await _ask_buyconfig_mode(cb, mb_id)
@@ -19151,7 +19193,7 @@ async def thb_cfgmode_set(cb: CallbackQuery, bot: Bot):
                 except Exception:
                     cfg = {}
             cfg["config_mode"] = mode
-            mb.action = "buy_config"
+            _set_act(mb, "buy_config")
             mb.config = json.dumps(cfg, ensure_ascii=False)
             await s.commit()
         mb = await s.get(MainButton, mb_id)
@@ -19198,7 +19240,7 @@ async def thb_cfgkind_open(cb: CallbackQuery, bot: Bot):
     mb_id = int(cb.data.split(":")[2])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-    if not mb or mb.bot_id != row.id or mb.action != "buy_config":
+    if not mb or mb.bot_id != row.id or _act(mb) != "buy_config":
         await cb.answer("یافت نشد", show_alert=True)
         return
     cur = None
@@ -19226,7 +19268,7 @@ async def thb_unlikind_open(cb: CallbackQuery, bot: Bot):
     mb_id = int(cb.data.split(":")[2])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-    if not mb or mb.bot_id != row.id or mb.action != "buy_unlimited":
+    if not mb or mb.bot_id != row.id or _act(mb) != "buy_unlimited":
         await cb.answer("یافت نشد", show_alert=True)
         return
     cur = None
@@ -19326,7 +19368,7 @@ async def thb_cfgcat_open(cb: CallbackQuery, bot: Bot):
     mb_id = int(cb.data.split(":")[2])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-    if not mb or mb.bot_id != row.id or mb.action != "buy_config":
+    if not mb or mb.bot_id != row.id or _act(mb) != "buy_config":
         await cb.answer("یافت نشد", show_alert=True)
         return
     kb = await _thb_cat_kb(row.id, "buy_config", mb_id)
@@ -19350,7 +19392,7 @@ async def thb_unlicat_open(cb: CallbackQuery, bot: Bot):
     mb_id = int(cb.data.split(":")[2])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-    if not mb or mb.bot_id != row.id or mb.action != "buy_unlimited":
+    if not mb or mb.bot_id != row.id or _act(mb) != "buy_unlimited":
         await cb.answer("یافت نشد", show_alert=True)
         return
     kb = await _thb_cat_kb(row.id, "buy_unlimited", mb_id)
@@ -19379,7 +19421,7 @@ async def thb_allcat(cb: CallbackQuery, bot: Bot):
         return
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-        if not mb or mb.bot_id != row.id or mb.action != action_type:
+        if not mb or mb.bot_id != row.id or _act(mb) != action_type:
             await cb.answer("یافت نشد", show_alert=True)
             return
         cfg = {}
@@ -19415,7 +19457,7 @@ async def thb_togglecat(cb: CallbackQuery, bot: Bot):
         return
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-        if not mb or mb.bot_id != row.id or mb.action != action_type:
+        if not mb or mb.bot_id != row.id or _act(mb) != action_type:
             await cb.answer("یافت نشد", show_alert=True)
             return
         cfg = {}
@@ -19486,7 +19528,7 @@ def _mcat_load_cfg(mb) -> dict:
 async def _mcat_screen(cb: CallbackQuery, bot_id: int, mb_id: int):
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-    if not mb or mb.bot_id != bot_id or mb.action not in ("buy_config", "buy_unlimited"):
+    if not mb or mb.bot_id != bot_id or _act(mb) not in ("buy_config", "buy_unlimited"):
         await cb.answer("دکمه پیدا نشد.", show_alert=True)
         return
     is_cfg = (mb.action == "buy_config")
@@ -19560,7 +19602,7 @@ async def thb_mcat_toggle(cb: CallbackQuery, bot: Bot):
     mb_id, idx = int(parts[2]), int(parts[3])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-        if not mb or mb.bot_id != row.id or mb.action not in ("buy_config", "buy_unlimited"):
+        if not mb or mb.bot_id != row.id or _act(mb) not in ("buy_config", "buy_unlimited"):
             await cb.answer("دکمه پیدا نشد.", show_alert=True)
             return
         cats = await _mcat_all_categories(row.id, mb.action)
@@ -19598,7 +19640,7 @@ async def thb_mcat_unl(cb: CallbackQuery, bot: Bot):
     mb_id = int(cb.data.split(":")[2])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-        if not mb or mb.bot_id != row.id or mb.action != "buy_config":
+        if not mb or mb.bot_id != row.id or _act(mb) != "buy_config":
             await cb.answer("دکمه پیدا نشد.", show_alert=True)
             return
         cfg = _mcat_load_cfg(mb)
@@ -19623,7 +19665,7 @@ async def thb_mcat_all(cb: CallbackQuery, bot: Bot):
     mb_id = int(cb.data.split(":")[2])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-        if not mb or mb.bot_id != row.id or mb.action not in ("buy_config", "buy_unlimited"):
+        if not mb or mb.bot_id != row.id or _act(mb) not in ("buy_config", "buy_unlimited"):
             await cb.answer("دکمه پیدا نشد.", show_alert=True)
             return
         cfg = _mcat_load_cfg(mb)
@@ -19708,7 +19750,7 @@ async def thb_unlimited_ask_change(cb: CallbackQuery, bot: Bot):
     mb_id = int(cb.data.split(":")[2])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-    if not mb or mb.bot_id != row.id or mb.action != "buy_unlimited":
+    if not mb or mb.bot_id != row.id or _act(mb) != "buy_unlimited":
         await cb.answer("یافت نشد", show_alert=True)
         return
     await _ask_unlimited_mode(cb, mb_id)
@@ -19728,7 +19770,7 @@ async def thb_unlimode_set(cb: CallbackQuery, bot: Bot):
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
         if mb and mb.bot_id == row.id:
-            mb.action = "buy_unlimited"
+            _set_act(mb, "buy_unlimited")
             mb.config = json.dumps({"unlimited_mode": mode})
             await s.commit()
         mb = await s.get(MainButton, mb_id)
@@ -20158,7 +20200,7 @@ async def thb_set_webapp(cb: CallbackQuery, bot: Bot, state: FSMContext):
     mb_id = int(cb.data.split(":")[2])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-    if not mb or mb.bot_id != row.id or mb.action not in (None, "web_app"):
+    if not mb or mb.bot_id != row.id or _act(mb) not in (None, "web_app"):
         await cb.answer("یافت نشد", show_alert=True)
         return
     await state.set_state(HomeBtnFSM.set_webapp_url)
@@ -20228,7 +20270,7 @@ async def thb_set_webapp_url_save(msg: Message, bot: Bot, state: FSMContext):
                 cfg = {}
         cfg["webapp_url"] = url
         mb.config = json.dumps(cfg, ensure_ascii=False)
-        mb.action = "web_app"
+        _set_act(mb, "web_app")
         _lbl = mb.label
         await s.commit()
     await state.clear()
@@ -20250,7 +20292,7 @@ async def thb_set_link(cb: CallbackQuery, bot: Bot, state: FSMContext):
     mb_id = int(cb.data.split(":")[2])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-    if not mb or mb.bot_id != row.id or mb.action not in (None, "channel_link"):
+    if not mb or mb.bot_id != row.id or _act(mb) not in (None, "channel_link"):
         await cb.answer("یافت نشد", show_alert=True)
         return
     await state.set_state(HomeBtnFSM.set_link_url)
@@ -20301,7 +20343,7 @@ async def thb_set_link_url_save(msg: Message, bot: Bot, state: FSMContext):
                 cfg = {}
         cfg["link_url"] = url
         mb.config = json.dumps(cfg, ensure_ascii=False)
-        mb.action = "channel_link"
+        _set_act(mb, "channel_link")
         _lbl = mb.label
         await s.commit()
     await state.clear()
@@ -20349,7 +20391,7 @@ async def thb_webapp_inline_toggle(cb: CallbackQuery, bot: Bot):
     mb_id = int(cb.data.split(":")[2])
     async with Session() as s:
         mb = await s.get(MainButton, mb_id)
-        if not mb or mb.bot_id != row.id or mb.action != "web_app":
+        if not mb or mb.bot_id != row.id or _act(mb) != "web_app":
             await cb.answer("دکمه پیدا نشد.", show_alert=True)
             return
         try:
