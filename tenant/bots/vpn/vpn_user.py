@@ -5999,7 +5999,8 @@ async def show_reseller_configs(bot: Bot, msg: Message, bot_id: int, tg_id: int)
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
-async def show_my_services(bot: Bot, msg: Message, bot_id: int, tg_id: int):
+async def show_my_services(bot: Bot, msg: Message, bot_id: int, tg_id: int, header: str = ""):
+    """PATCH_MY_SVCS_HEADER_V1: header = متنِ دکمه (اگر دارد)؛ در *همان* پیامِ فهرست می‌آید، نه پیامِ جدا."""
     from models import Config
     from tenant import get_setting, set_setting
     # === PATCH_NO_DUPLICATE_LIST_MESSAGES_V1 ===
@@ -6046,7 +6047,7 @@ async def show_my_services(bot: Bot, msg: Message, bot_id: int, tg_id: int):
         else:
             from tenant import inline_back_kb
             _kb0 = await inline_back_kb(bot_id)
-        sent = await msg.answer("📡 هنوز سرویس یا کانفیگی نساختی.",
+        sent = await msg.answer(f"{header}📡 هنوز سرویس یا کانفیگی نساختی.",
                                 reply_markup=_kb0)
         try:
             await set_setting(bot_id, prev_key, str(sent.message_id))
@@ -6065,7 +6066,7 @@ async def show_my_services(bot: Bot, msg: Message, bot_id: int, tg_id: int):
     if _br:
         rows.append(_br)
     sent = await msg.answer(  # === PATCH_VPN_EDITABLE_TITLES_V1 ===
-        f"📡 <b>{await _get_page_title(bot_id, 'my_svcs')}</b>\n\nبرای دیدن جزئیات، انتخاب کن:",
+        f"{header}📡 <b>{await _get_page_title(bot_id, 'my_svcs')}</b>\n\nبرای دیدن جزئیات، انتخاب کن:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     try:
         await set_setting(bot_id, prev_key, str(sent.message_id))

@@ -6439,6 +6439,7 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
         "buy_metered",   # === PATCH_METERED_BTN_ACTION_V1 ===
         "submenu", "web_app", "channel_link",
         "wallet",
+        "my_services",   # === PATCH_MY_SVCS_HEADER_V1 === متنِ دکمه در همان پیامِ فهرستِ سرویس‌ها می‌آید (نه پیامِ جدا)
     }
     # اگر دکمه «اکشن» دارد، متنِ دکمه به‌صورت پیام جدا ارسال نمی‌شود؛ بلکه به‌عنوان
     # سرتیتر (توضیح) بالای صفحهٔ همان اکشن (مثل صفحهٔ خرید) نشان داده می‌شود.
@@ -6740,7 +6741,7 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
                                   support_enabled=support_enabled,
                                   support_contact=support_contact, btn=btn)
     elif action == "my_services":
-        await show_my_services(bot, msg, bot_id, msg.from_user.id)
+        await show_my_services(bot, msg, bot_id, msg.from_user.id, header=action_header)
     # === PATCH_RENEW_SERVICE_PICKER_V1 ===
     elif action == "renew_service":
         from tenant.bots.vpn.vpn_user import show_renew_services
@@ -14258,7 +14259,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "556"
+BUILD_ID = "557"
 
 
 @tenant_router.message(Command("version"))

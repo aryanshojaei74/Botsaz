@@ -499,13 +499,25 @@ class MarzbanPanelClient:
                 logger.warning('پنلِ کند: %s %s | %.1fs | %s',
                                method, path, _d, getattr(self, 'base_url', '?'))
 
+    # === PATCH_PASARGUARD_APIKEY_HEADER_V1 ===
+    # PasarGuard (سورسِ رسمی: app/routers/authentication.py) «API Key» را فقط از هدرِ «X-Api-Key» یا
+    # «Authorization: ApiKey <key>» می‌پذیرد؛ «Bearer <key>» را به‌عنوانِ JWT می‌خواند و ۴۰۱ می‌دهد. قبلاً کلید را
+    # Bearer می‌فرستادیم، برای همین اتصال با API Key «خطا» می‌داد. پنل‌هایِ دیگرِ این خانواده (که رفتارشان تأیید نشده)
+    # برایِ سازگاریِ قبلی همچنان Bearer هم می‌گیرند، ولی X-Api-Key هم فرستاده می‌شود.
+    _APIKEY_SCHEME = "Bearer"
+
+    def _auth_headers(self) -> dict:
+        if self.api_key:
+            return {"X-Api-Key": self.api_key, "Authorization": f"{self._APIKEY_SCHEME} {self.api_key}"}
+        return {"Authorization": f"Bearer {self._token}"}
+
     async def _request_timed(self, method, path, **kwargs):
         s = await self._ensure_session()
         if not self._logged_in:
             await self.login()
         headers = dict(kwargs.pop("headers", {}) or {})
         headers.setdefault("Accept", "application/json")
-        headers["Authorization"] = f"Bearer {self._token}"
+        headers.update(self._auth_headers())
         kwargs["headers"] = headers
         url = f"{self.base_url}{path}"
         # === PATCH_CONN_RETRY_BACKOFF_V1 ===
@@ -527,7 +539,7 @@ class MarzbanPanelClient:
                 s = await self._ensure_session()
                 if not self._logged_in:
                     await self.login()
-                    kwargs["headers"]["Authorization"] = f"Bearer {self._token}"
+                    kwargs["headers"].update(self._auth_headers())
             try:
                 async with s.request(method, url, **kwargs) as r:
                     text = await r.text()
@@ -548,7 +560,7 @@ class MarzbanPanelClient:
                         _TOKEN_CACHE.pop((self.base_url, self.username), None)
                         self._logged_in = False
                         await self.login(force=True)
-                        kwargs["headers"]["Authorization"] = f"Bearer {self._token}"
+                        kwargs["headers"].update(self._auth_headers())
                         continue
                     if r.status == 429:
                         # === PATCH_HONEST_429_V1 ===
@@ -687,7 +699,7 @@ class MarzbanPanelClient:
         s = await self._ensure_session()
         if not self._logged_in:
             await self.login()
-        headers = {"Authorization": f"Bearer {self._token}"}
+        headers = self._auth_headers()
         url = f"{self.base_url}{p}"
         try:
             async with s.get(url, headers=headers) as r:

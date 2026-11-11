@@ -50,6 +50,8 @@ __all__ = ["PasarGuardPanelClient"]
 class PasarGuardPanelClient(MarzbanPanelClient):
     """کلاینت پنل پاسارگاد (PasarGuard) — مبتنی بر گروه (group_ids)."""
 
+    _APIKEY_SCHEME = "ApiKey"        # PATCH_PASARGUARD_APIKEY_HEADER_V1: «Authorization: ApiKey <key>» + «X-Api-Key»
+
     def __init__(self, base_url, username, password, sub_base="",
                  inbound_ids=None, verify_ssl=False, timeout=8, api_key=None):
         # === PATCH_PANEL_TIMEOUT_REDUCE_V1 ===
