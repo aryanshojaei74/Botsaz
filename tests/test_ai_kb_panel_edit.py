@@ -23,7 +23,7 @@ def test_prompt_forbids_made_up_paths_and_names_the_fake_one():
     a = KB.ALWAYS
     assert "جلوگیری از جواب ساختگی" in a
     assert "تنظیمات ربات ← آدرس پنل" in a                      # به‌عنوانِ مسیرِ ممنوع
-    assert "فقط وقتی بگو که تو دانش اومده" in a
+    assert "مسیر و شرط پلن رو فقط عینا" in a                    # شرطِ پلن را از خودش نسازد
 
 
 def test_topic_says_the_fake_path_does_not_exist():

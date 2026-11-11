@@ -2566,11 +2566,9 @@ def _reply_context(msg: Message) -> str:
         kind = ("عکس" if r.photo else "ویدیو" if r.video else
                 "فایل" if r.document else "پیامِ بدونِ متن")
         return f"[کاربر رویِ یک {kind} ریپلای کرده که متنی ندارد.]"
-    who = ""
-    if r.from_user:
-        who = r.from_user.full_name or ""
-        if r.from_user.is_bot:
-            who += " (ربات)"
+    # PATCH_AI_NO_NAMES_V1: نامِ نمایشیِ فرستنده (مثلاً «ARTAVPN | SUPPORT») به مدل نمی‌رود؛ مدل آن را «تیمِ پشتیبانی» می‌پنداشت
+    # و کاربر را به آن ارجاع می‌داد. فقط می‌گوییم فرستنده ربات بوده یا نه.
+    who = "یک ربات" if (r.from_user and r.from_user.is_bot) else ""
     return (f"پیامی که کاربر رویش ریپلای کرده"
             + (f" — از طرفِ {who}" if who else "") + ":\n"
             f"«{body[:_REPLY_CTX_MAX]}»")
