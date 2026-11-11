@@ -344,8 +344,26 @@ class HMPanelClient:
         await self._request("DELETE", f"/v1/clients/{quote(str(c['id']), safe='')}")
         return True
 
+    async def _diagnose_404(self) -> str:
+        """وقتی /v1/account ۴۰۴ می‌دهد معلوم کن آدرس غلط است یا نسخه/نوعِ کلیدِ پنل."""
+        health = await self._request("GET", "/v1/health", ok404=True)
+        if health is None:
+            return ("آدرس درست نیست: مسیرِ /api/v1/health هم در این آدرس پیدا نشد؛ مطمئن شو آدرس همان دامنه‌ای است که پنل با آن باز می‌شود "
+                    "(مثلاً https://panel.example.com، بدونِ /api و بدونِ مسیرِ اضافه) و nginxِ پنل مسیرِ /api را به بک‌اند می‌دهد.")
+        me = await self._request("GET", "/v1/me", ok404=True)
+        if isinstance(me, dict) and me.get("id"):
+            return ("پنل در دسترس است ولی این کلید از نوعِ «API کلاینتِ بات» (کلیدِ قدیمیِ سوپرادمین) است و /v1/account را ندارد. "
+                    "کلیدِ ادمین بساز: پنل ← تنظیمات ← API (یا «دسترسی API»)، نه بخشِ API clients.")
+        return ("پنل در دسترس است (health درست جواب می‌دهد) ولی /v1/account در این نسخه نیست؛ احتمالاً نسخهٔ پنل قدیمی است. "
+                "پنل HMPanel را به آخرین نسخه آپدیت کن (حداقل نسخه‌ای که «تنظیمات ← API» و /api/v1/docs دارد) و دوباره امتحان کن.")
+
     async def test_connection(self):
-        acc = await self._request("GET", "/v1/account")
+        try:
+            acc = await self._request("GET", "/v1/account")
+        except PanelError as e:
+            if "(HTTP 404)" in str(e):
+                raise PanelError(f"{e}\n\n🔎 {await self._diagnose_404()}") from e
+            raise
         if not isinstance(acc, dict) or not acc.get("id"):
             raise PanelError("پاسخِ HMPanel شبیهِ API نبود؛ آدرسِ پنل را (بدونِ /api) بررسی کن.")
         inbs = await self.list_inbounds()

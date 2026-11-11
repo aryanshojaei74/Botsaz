@@ -159,3 +159,24 @@ def test_factory_and_name():
     assert _hm_name("user_12") == "user_12"
     n = _hm_name("کاربر ۱")
     assert n == _hm_name("کاربر ۱") and n.replace("-", "").replace("_", "").isalnum()
+
+
+@pytest.mark.asyncio
+async def test_404_gives_actionable_diagnosis():
+    async def health(request):
+        return web.json_response({"ok": True, "api": "v1"})
+
+    app_old = web.Application()                      # پنلِ قدیمی: health هست، account نیست
+    app_old.router.add_get("/api/v1/health", health)
+    app_wrong = web.Application()                    # آدرسِ غلط: هیچ‌چیز نیست
+    for app, expect in ((app_old, "قدیمی"), (app_wrong, "آدرس درست نیست")):
+        server = TestServer(app)
+        await server.start_server()
+        try:
+            cl = HMPanelClient(f"http://{server.host}:{server.port}", "-", KEY)
+            with pytest.raises(PanelError) as ei:
+                await cl.test_connection()
+            assert expect in str(ei.value)
+            await cl.close()
+        finally:
+            await server.close()
