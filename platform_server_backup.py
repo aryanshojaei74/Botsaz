@@ -21,6 +21,7 @@ import datetime
 import glob
 import html as _html
 import os
+import shutil
 import tempfile
 import zipfile
 
@@ -203,6 +204,19 @@ def collect_system_files() -> list[tuple[str, str]]:
     return out
 
 
+_ZIP_MIN_TS = 315532800   # 1980-01-01؛ زیپ زمانِ قبل از آن را نمی‌پذیرد (فایل‌هایِ کپی‌شده/ساخته‌شده با mtime صفر)
+
+
+def _zip_add(z: zipfile.ZipFile, full: str, arc: str) -> None:
+    import time
+    st = os.stat(full)
+    zi = zipfile.ZipInfo(arc, date_time=time.localtime(max(st.st_mtime, _ZIP_MIN_TS))[:6])
+    zi.compress_type = zipfile.ZIP_DEFLATED
+    zi.external_attr = (st.st_mode & 0xFFFF) << 16
+    with open(full, "rb") as src, z.open(zi, "w", force_zip64=True) as dst:
+        shutil.copyfileobj(src, dst, 1024 * 1024)
+
+
 def _build_zip(dump_path: str, out_zip: str, include_env: bool, root: str = BASE_DIR) -> tuple[int, int]:
     """(تعدادِ فایل، حجمِ خامِ فایل‌ها)."""
     files, total = collect_app_files(root, include_env)
@@ -211,11 +225,11 @@ def _build_zip(dump_path: str, out_zip: str, include_env: bool, root: str = BASE
     sysf = collect_system_files()
     n = 0
     with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as z:
-        z.write(dump_path, "db/" + os.path.basename(dump_path))
+        _zip_add(z, dump_path, "db/" + os.path.basename(dump_path))
         n += 1
         for full, arc in files + sysf:
             try:
-                z.write(full, arc)
+                _zip_add(z, full, arc)
                 n += 1
             except OSError:
                 logger.warning("server backup: خواندنِ فایل ممکن نشد: %s", full)

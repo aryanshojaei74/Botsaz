@@ -50,6 +50,23 @@ def test_zip_contains_db_app_and_restore_files(tmp_path):
     assert count == len([n for n in names if n not in ("restore.sh", "RESTORE.txt")])
 
 
+def test_files_with_epoch_mtime_do_not_break_zip(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    _tree(root)
+    old = root / "tenant" / "a.py"
+    os.utime(old, (0, 0))
+    dump = tmp_path / "d.dump"
+    dump.write_bytes(b"x")
+    os.utime(dump, (0, 0))
+    out = tmp_path / "s.zip"
+    SB._build_zip(str(dump), str(out), True, root=str(root))
+    with zipfile.ZipFile(out) as z:
+        assert z.read("app/tenant/a.py") == b"print(1)"
+        assert z.getinfo("app/tenant/a.py").date_time[0] >= 1980
+        assert z.testzip() is None
+
+
 def test_restore_script_is_valid_bash(tmp_path):
     p = tmp_path / "restore.sh"
     p.write_text(SB.RESTORE_SH)
