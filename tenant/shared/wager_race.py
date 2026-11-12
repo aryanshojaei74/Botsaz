@@ -36,7 +36,7 @@ logger = _get_logger(__name__)
 
 wager_race_router = Router(name="wager_race")
 
-_NO_AMOUNT = re.compile(r"^(?:شرط\s*بندی|بازی)\s+(حدس\s*عدد|سرعت|ریاضی|الگو)$")
+_NO_AMOUNT = re.compile(r"^(?:شرط\s*بندی|بازی)\s+(حدس\s*عدد|سرعت|ریاضی|الگو|کلمه[\s‌]*سازی|درهم)$")
 
 
 def _is_create(m: Message) -> bool:
@@ -79,8 +79,8 @@ async def twr_hint(msg: Message, bot: Bot):
     row, _adm = await _gate(msg, bot)
     if not row:
         return
-    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی", "الگو": "الگو"}[
-        re.sub(r"\s+", "", _NO_AMOUNT.match(core._norm(msg.text)).group(1))]
+    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی", "الگو": "الگو", "کلمهسازی": "کلمه‌سازی", "درهم": "درهم"}[
+        re.sub(r"[\s‌]+", "", _NO_AMOUNT.match(core._norm(msg.text)).group(1))]
     cfg = await core.load_cfg(row.id)
     ex = core.example_amount(cfg)
     lim = (f"از {_rial(cfg['min'])} تا {_rial(cfg['max'])}" if cfg.get("max") else f"حداقل {_rial(cfg['min'])}")
@@ -168,6 +168,7 @@ async def twr_join(cb: CallbackQuery, bot: Bot):
         st = core._st(r.w)
         R.LIVE[r.w.id] = {"wid": r.w.id, "chat": r.w.chat_id, "bot": row.id, "kind": r.w.game,
                           "players": {r.w.creator_id, r.w.opponent_id}, "answer": st.get("a"), "n": st.get("n"),
+                          "st": st, "alts": st.get("alts"),       # PATCH_WORD_GAMES_V1
                           "until": time.monotonic() + R.SECS[r.w.game] + 5}
         await R._edit(bot, r.w)
         asyncio.create_task(R._expire_later(bot, r.w.id, R.SECS[r.w.game]))
@@ -219,6 +220,9 @@ async def twr_answer(msg: Message, bot: Bot):
             return
         R._LAST_GUESS[(msg.chat.id, uid)] = now
         if await R.guess_step(bot, msg, live) != "win":
+            return
+    elif live["kind"] == "word":                              # PATCH_WORD_GAMES_V1
+        if await R.word_step(bot, msg, live) != "win":
             return
     w = await R.settle_to(live["wid"], uid)
     if w is None:

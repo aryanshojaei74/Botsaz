@@ -43,10 +43,10 @@ logger = _get_logger(__name__)
 
 platform_wager_race_router = Router(name="platform_wager_race")
 
-RACE_GAMES = ("guess", "speed", "math", "pattern")
+RACE_GAMES = ("guess", "speed", "math", "pattern", "word", "scramble")        # PATCH_WORD_GAMES_V1: کلمه‌سازی + درهم
 TENANT_RACE_GAMES = RACE_GAMES                         # ربات‌هایِ مشتری هم (فقط اگر افزونهٔ «بازی‌هایِ گروهی» را خریده باشند؛ گیتِ آن در addon_active است)
-RACE_FA = {"guess": "حدس عدد", "speed": "سرعت", "math": "ریاضی", "pattern": "الگو"}
-SECS = {"guess": 180, "speed": 45, "math": 45, "pattern": 60}      # فقط «حدس عدد» نوبتی است (مهلتِ هر نوبت ۳ دقیقه)؛ الگو هم‌زمان و سریع (ضدِ تقلب با چت‌بات: نوبتِ طولانی نداریم)
+RACE_FA = {"guess": "حدس عدد", "speed": "سرعت", "math": "ریاضی", "pattern": "الگو", "word": "کلمه‌سازی", "scramble": "درهم"}
+SECS = {"guess": 180, "speed": 45, "math": 45, "pattern": 60, "word": 120, "scramble": 45}      # فقط «حدس عدد» نوبتی است (مهلتِ هر نوبت ۳ دقیقه)؛ الگو هم‌زمان و سریع (ضدِ تقلب با چت‌بات: نوبتِ طولانی نداریم)
 KEY_ON = "pgr_on"
 GUESS_GAP = 1.2
 _AMT = r"([۰-۹0-9,،]+)"
@@ -56,6 +56,8 @@ _PATTERNS = (
     ("speed", re.compile(rf"^{_PREFIX}سرعت\s+{_AMT}$")),
     ("math", re.compile(rf"^{_PREFIX}ریاضی\s+{_AMT}$")),
     ("pattern", re.compile(rf"^{_PREFIX}الگو\s+{_AMT}$")),
+    ("word", re.compile(rf"^{_PREFIX}کلمه[\s‌]*سازی\s+{_AMT}$")),        # PATCH_WORD_GAMES_V1
+    ("scramble", re.compile(rf"^{_PREFIX}درهم\s+{_AMT}$")),
 )
 _AR = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 
@@ -146,6 +148,19 @@ def new_question(kind: str, scope: tuple = (0, 0)) -> dict:
     if kind == "pattern":
         q, a = make_pattern()
         return {"q": q, "a": a}
+    if kind == "word":                                  # PATCH_WORD_GAMES_V1
+        import word_bank as WB
+        pz = None
+        for _ in range(5):
+            pz = WB.make_word_puzzle()
+            if pz:
+                break
+        pz = pz or {"letters": list("ابریم"), "need": [2, 3], "total": 2}
+        return {"q": " ".join(pz["letters"]), "letters": pz["letters"], "need": pz["need"]}
+    if kind == "scramble":
+        import word_bank as WB
+        pz = WB.make_scramble()
+        return {"q": pz["q"], "a": norm_answer(pz["a"]), "w": pz["a"], "alts": [norm_answer(x) for x in pz["alts"]]}
     from platform_group_game import make_math
     q, a = make_math()
     return {"q": q, "a": a}
@@ -165,7 +180,7 @@ async def game_on(game: str) -> bool:
     master = await enabled()
     v = (await core._pset(_game_key(game), "")).strip().lower()
     if not v:
-        return master and game != "pattern"      # بازیِ تازه تا مدیر روشنش نکند خودکار فعال نمی‌شود
+        return master and game not in ("pattern", "word", "scramble")      # بازیِ تازه تا مدیر روشنش نکند خودکار فعال نمی‌شود
     return v in ("on", "1", "true") and master
 
 
@@ -186,7 +201,10 @@ def _rule(w: PlatformWager) -> str:
             "speed": "ربات یک کلمه می‌فرستد؛ اولین نفری که دقیقاً همان را بنویسد برنده است.",
             "math": "ربات یک محاسبه می‌فرستد؛ اولین جوابِ درست برنده است.",
             "pattern": "ربات یک دنبالهٔ عددی می‌فرستد؛ <b>هم‌زمان</b> هر دو می‌نویسید و اولین نفری که عددِ بعدیِ دنباله را درست بنویسد برنده است "
-                       "(مهلتِ کوتاه)."}[w.game]
+                       "(مهلتِ کوتاه).",
+            "word": "ربات چند حرف می‌دهد و می‌گوید چند کلمه با آن‌ها بسازید (مثلاً یکی ۲ حرفی و دو تا ۳ حرفی). <b>هم‌زمان</b> کلمه‌ها را "
+                    "در گروه می‌نویسید؛ اولین نفری که همهٔ کلمه‌هایِ خواسته‌شده را درست پیدا کند برنده است (فقط کلماتِ رایجِ فارسی پذیرفته می‌شود).",
+            "scramble": "ربات حروفِ یک کلمه را درهم می‌فرستد؛ اولین نفری که کلمهٔ درست را بنویسد برنده است."}[w.game]
 
 
 def _kb_pending(w: PlatformWager) -> InlineKeyboardMarkup:
@@ -203,6 +221,15 @@ def _kb_pending(w: PlatformWager) -> InlineKeyboardMarkup:
 def hx_btn(text: str, cb: str, style):
     from premium_emoji import hx_button
     return hx_button(text, callback_data=cb, style=style)
+
+
+def _need_text(need: list) -> str:
+    """«۳ کلمه: یکی ۲ حرفی و دو تا ۳ حرفی»."""
+    from collections import Counter
+    fa = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+    nums = {1: "یکی", 2: "دو تا", 3: "سه تا", 4: "چهار تا"}
+    parts = [f"{nums.get(n, str(n))} {str(L).translate(fa)} حرفی" for L, n in sorted(Counter(need).items())]
+    return f"{str(len(need)).translate(fa)} کلمهٔ درست: " + "، ".join(parts)
 
 
 def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
@@ -225,6 +252,11 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
             q = f"✍️ این را دقیقاً بنویس:\n\n👉 <b>{_html.escape(str(st.get('q', '')))}</b>"
         elif w.game == "pattern":
             q = f"🧩 عددِ بعدیِ دنباله چیست؟\n\n👉 <b>{_html.escape(str(st.get('q', '')))}</b>"
+        elif w.game == "word":                                    # PATCH_WORD_GAMES_V1
+            q = ("🔤 با این حروف کلمه بسازید:\n\n👉 <b>" + _html.escape(str(st.get("q", ""))) + "</b>\n\n"
+                 f"🎯 هدف: {_need_text(st.get('need') or [])}\n(هم‌زمان در گروه بنویسید؛ هر حرف را فقط به‌اندازهٔ تعدادش می‌شود به کار برد.)")
+        elif w.game == "scramble":
+            q = f"🔀 حروفِ این کلمه درهم شده؛ کلمه را بنویس:\n\n👉 <b>{_html.escape(str(st.get('q', '')))}</b>"
         else:
             q = f"🧮 جواب چیست؟\n\n👉 <b>{_html.escape(str(st.get('q', '')))} = ؟</b>"
         foot = ("⏱ هر نوبت ۳ دقیقه مهلت دارد؛ در مهلت حدس نزنی می‌بازی." if w.game == "guess" and w.turn_id
@@ -240,8 +272,13 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
     lines.append(f"{core._who(w, w.creator_id)}  ⚔️  {core._who(w, w.opponent_id)}")
     if w.status == "settled":
         ans = st.get("n") if w.game == "guess" else st.get("q")
-        shown = f"عدد: <b>{ans}</b>" if w.game == "guess" else (f"جواب: <b>{_html.escape(str(st.get('a', '')))}</b>"
-                                                              if w.game in ("math", "pattern") else f"کلمه: <b>{_html.escape(str(ans))}</b>")
+        if w.game == "word":                                       # PATCH_WORD_GAMES_V1
+            shown = f"حروف: <b>{_html.escape(str(ans))}</b> — {_need_text(st.get('need') or [])}"
+        elif w.game == "scramble":
+            shown = f"کلمه: <b>{_html.escape(str(st.get('w') or st.get('a') or ''))}</b>"
+        else:
+            shown = f"عدد: <b>{ans}</b>" if w.game == "guess" else (f"جواب: <b>{_html.escape(str(st.get('a', '')))}</b>"
+                                                                  if w.game in ("math", "pattern") else f"کلمه: <b>{_html.escape(str(ans))}</b>")
         if w.end_reason == "forfeit":
             loser = w.opponent_id if w.winner_id == w.creator_id else w.creator_id
             lines += [f"⏰ <b>{core._who(w, loser)}</b> در مهلتِ نوبتش حدس نزد."]
@@ -356,6 +393,37 @@ async def guess_step(bot: Bot, msg: Message, live: dict) -> str:
     return "done"
 
 
+_WORD_NOTE: dict[tuple[int, int], float] = {}
+
+
+async def word_step(bot: Bot, msg: Message, live: dict) -> str:
+    """یک تلاشِ «کلمه‌سازی». خروجی: «win» (همهٔ کلمه‌ها کامل شد؛ فراخوان تسویه کند) یا «done».
+    پیشرفتِ هر نفر فقط در حافظه است (ری‌استارت ⇒ بازی با مهلتش تمام و مبلغ برمی‌گردد)."""
+    import word_bank as WB
+    st = live.get("st") or {}
+    letters, need = st.get("letters") or [], st.get("need") or []
+    uid, now = msg.from_user.id, time.monotonic()
+    found = live.setdefault("prog", {}).setdefault(uid, [])
+    code, w = WB.check_word(msg.text, letters, need, found)
+    if code == "ok":
+        found.append(w)
+        if len(found) >= len(need):
+            return "win"
+        fa = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+        await msg.reply(f"✅ «{_html.escape(w)}» ثبت شد — {str(len(found)).translate(fa)} از {str(len(need)).translate(fa)} کلمه.",
+                        parse_mode="HTML")
+        return "done"
+    if now - _WORD_NOTE.get((msg.chat.id, uid), -1e9) < 4:
+        return "done"
+    _WORD_NOTE[(msg.chat.id, uid)] = now
+    note = {"dup": "ℹ️ این کلمه را قبلاً گفتی.",
+            "not_in_dict": "⛔️ این کلمه در فرهنگِ بازی نیست (فقط کلماتِ رایج پذیرفته می‌شود).",
+            "slots_full": "ℹ️ برایِ این تعداد حرف دیگر کلمه لازم نداری؛ سراغِ بقیه برو."}.get(code)
+    if note:
+        await msg.reply(note)
+    return "done"
+
+
 async def restore_live(chat_id: int, uid: int, bot_id: int = 0) -> dict | None:
     """بعد از ری‌استارتِ ربات، بازیِ حدس عددِ جاری از DB دوباره ساخته می‌شود (عددِ مخفی در state ذخیره است)."""
     key, now = (chat_id, uid, bot_id), time.monotonic()
@@ -388,7 +456,7 @@ def _is_create(m: Message) -> bool:
     return parse_race_command(m.text) is not None
 
 
-_NO_AMOUNT = re.compile(r"^شرط\s*بندی\s+(حدس\s*عدد|سرعت|ریاضی|الگو)$")
+_NO_AMOUNT = re.compile(r"^شرط\s*بندی\s+(حدس\s*عدد|سرعت|ریاضی|الگو|کلمه[\s‌]*سازی|درهم)$")
 
 
 def _is_paid_hint(m: Message) -> bool:
@@ -412,8 +480,8 @@ async def race_paid_hint(msg: Message):
         raise SkipHandler
     if not await _group_allowed(msg.chat.id) or not await enabled() or not await _bet_enabled():
         raise SkipHandler
-    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی", "الگو": "الگو"}[
-        re.sub(r"\s+", "", _NO_AMOUNT.match(core._norm(msg.text)).group(1))]
+    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی", "الگو": "الگو", "کلمهسازی": "کلمه‌سازی", "درهم": "درهم"}[
+        re.sub(r"[\s‌]+", "", _NO_AMOUNT.match(core._norm(msg.text)).group(1))]
     cfg = await core.load_cfg()
     ex = core.example_amount(cfg)
     lim = (f"از {_rial(cfg['min'])} تا {_rial(cfg['max'])}" if cfg.get("max") else f"حداقل {_rial(cfg['min'])}")
@@ -515,7 +583,7 @@ async def race_join(cb: CallbackQuery):
         st = core._st(r.w)
         LIVE[r.w.id] = {"wid": r.w.id, "chat": r.w.chat_id, "bot": 0, "kind": r.w.game,
                         "players": {r.w.creator_id, r.w.opponent_id},
-                        "answer": st.get("a"), "n": st.get("n"),
+                        "answer": st.get("a"), "n": st.get("n"), "st": st, "alts": st.get("alts"),
                         "until": time.monotonic() + SECS[r.w.game] + 5}
         await _edit(cb.bot, r.w)
         asyncio.create_task(_expire_later(cb.bot, r.w.id, SECS[r.w.game]))
@@ -586,6 +654,11 @@ def _match(m: Message, bot_id: int = 0) -> dict | None:
         return None
     if lv["kind"] == "guess":
         return lv if (t.isdigit() and len(t) <= 3 and 1 <= int(t) <= 100) else None
+    if lv["kind"] == "word":                                   # PATCH_WORD_GAMES_V1: فقط تلاش‌هایی که با حروفِ داده‌شده ساختنی‌اند
+        import word_bank as WB
+        return lv if (WB.is_word_shape(m.text) and WB.can_build(m.text, (lv.get("st") or {}).get("letters") or [])) else None
+    if lv["kind"] == "scramble":
+        return lv if (t == lv["answer"] or t in set(lv.get("alts") or [])) else None
     return lv if t == lv["answer"] else None
 
 
@@ -606,6 +679,9 @@ async def race_answer(msg: Message):
             return
         _LAST_GUESS[(msg.chat.id, uid)] = now
         if await guess_step(msg.bot, msg, live) != "win":
+            return
+    elif live["kind"] == "word":                              # PATCH_WORD_GAMES_V1
+        if await word_step(msg.bot, msg, live) != "win":
             return
     w = await settle_to(live["wid"], uid)
     if w is None:
@@ -654,6 +730,9 @@ async def help_section() -> str:
         "math": f"🧮 <b>ریاضی</b>: «شرطبندی ریاضی {ex}» — اولین جوابِ درست برنده است.",
         "pattern": f"🧩 <b>الگو</b>: «شرطبندی الگو {ex}» — ربات یک دنبالهٔ عددی می‌فرستد؛ <b>هم‌زمان</b> می‌نویسید و اولین جوابِ درستِ "
                    "عددِ بعدی برنده است (مهلتِ کوتاه).",
+        "word": f"🔤 <b>کلمه‌سازی</b>: «شرطبندی کلمه‌سازی {ex}» — ربات چند حرف می‌دهد (مثلاً «۳ کلمه: یکی ۲ حرفی و دو تا ۳ حرفی»)؛ "
+                "<b>هم‌زمان</b> بنویسید و اولین نفری که همهٔ کلمه‌ها را درست پیدا کند برنده است (کلماتِ رایج).",
+        "scramble": f"🔀 <b>درهم</b>: «شرطبندی درهم {ex}» — حروفِ یک کلمه درهم می‌آید؛ اولین نفری که کلمهٔ درست را بنویسد برنده است.",
     }
     return "\n".join([
         "💰 <b>مسابقه‌هایِ پولیِ دونفره (با کیف پول)</b>",
