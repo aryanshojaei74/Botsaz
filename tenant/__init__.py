@@ -5661,6 +5661,7 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
     # و حالا کلِ لیستِ متغیرها هم کار می‌کند؛ رجوع کنید به tenant/shared/text_vars.py)
     from tenant.shared.text_vars import render_text as _render_vars
     txt = await _render_vars(txt, bot_id=row.id, tg_user=msg.from_user)
+    await _start_cleanup_prev(msg, row.id)           # PATCH_START_CLEAN_PREV_V1
     mode = await get_setting(row.id, "menu_mode", "reply")
     # === PATCH_PARTNER_MENU_MODE_HOME_FIX_V1 ===
     # قبلاً این‌جا صفحهٔ خانهٔ ربات‌هایِ پلنِ همکار همیشه اجباراً اینلاین
@@ -5687,6 +5688,7 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
             # حذف کیبوردِ پایینِ احتمالی از قبل + منوی شیشه‌ای
             _welcome_msg = await _send_welcome_media(msg, txt, welcome_media_id, welcome_media_type,
                                                      reply_markup=ReplyKeyboardRemove())
+        await _start_remember(msg, row.id, _welcome_msg)    # PATCH_START_CLEAN_PREV_V1
         if ikb and not _merged:
             # === PATCH_HOME_KB_SEND_GUARD_V1 ===
             # اگه یکی از دکمه‌های منو (مثلاً لینکِ مینی‌اپِ ذخیره‌شده‌ی قبلی که با
@@ -5775,8 +5777,8 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
     # محافظی داشت (PATCH_HOME_KB_SEND_GUARD_V1)؛ این پچ همان الگو را برایِ
     # حالتِ کیبوردی هم تکرار می‌کند.
     try:
-        await _send_welcome_media(msg, txt, welcome_media_id, welcome_media_type,
-                                  reply_markup=kb or ReplyKeyboardRemove())
+        await _start_remember(msg, row.id, await _send_welcome_media(
+            msg, txt, welcome_media_id, welcome_media_type, reply_markup=kb or ReplyKeyboardRemove()))
     except TelegramBadRequest as e:
         logger.error("[reply_kb_send_guard] bot_id=%s BUTTON_URL_INVALID احتمالاً به‌خاطر "
                     "لینکِ خرابِ یکی از دکمه‌ها — پیام بدونِ کیبورد ارسال شد: %s",
@@ -6016,6 +6018,34 @@ async def reset_kb_cleared(bot_id: int) -> None:
             await s.commit()
     except Exception:
         logger.exception("reset_kb_cleared failed")
+
+
+# === PATCH_START_CLEAN_PREV_V1 === (YOUxsell: «وقتی استارت جدید می‌زند متنِ قبلی پاک شود»)
+async def _start_cleanup_prev(msg: Message, bot_id: int) -> None:
+    """اگر مالک «پاک‌کردنِ پیامِ استارتِ قبلی» را روشن کرده باشد، پیامِ خوش‌آمدِ قبلیِ همین کاربر را حذف می‌کند."""
+    try:
+        if await get_setting(bot_id, "start_clean_prev", "0") != "1" or not msg.from_user:
+            return
+        key = f"last_welcome_msg:{msg.from_user.id}"
+        prev = await get_setting(bot_id, key, "")
+        if prev:
+            try:
+                await msg.bot.delete_message(msg.chat.id, int(prev))
+            except Exception:
+                logger.debug("start clean: پیامِ قبلی پاک نشد (قدیمی/حذف‌شده)")
+            await set_setting(bot_id, key, "")
+    except Exception:
+        logger.exception("start clean: پاک‌کردنِ پیامِ استارتِ قبلی ناموفق بود")
+
+
+async def _start_remember(msg: Message, bot_id: int, sent) -> None:
+    """شناسهٔ پیامِ خوش‌آمدِ تازه را نگه می‌دارد تا /startِ بعدی پاکش کند (فقط وقتی قابلیت روشن است)."""
+    try:
+        mid = getattr(sent, "message_id", None)
+        if mid and msg.from_user and await get_setting(bot_id, "start_clean_prev", "0") == "1":
+            await set_setting(bot_id, f"last_welcome_msg:{msg.from_user.id}", str(mid))
+    except Exception:
+        logger.exception("start clean: ذخیرهٔ شناسهٔ پیامِ خوش‌آمد ناموفق بود")
 
 
 # === PATCH_WELCOME_MEDIA_V1 ===
@@ -14309,7 +14339,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "578"
+BUILD_ID = "579"
 
 
 @tenant_router.message(Command("version"))
@@ -34113,6 +34143,11 @@ async def set_homemenutext_start(cb: CallbackQuery, bot: Bot, state: FSMContext)
                               callback_data="set:homemenutext:kb", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text=f"✏️ اسمِ دکمهٔ پایینِ چت: «{await home_kb_label(row.id)}»",
                               callback_data="set:homemenutext:kblabel", style=ButtonStyle.PRIMARY)],
+        # === PATCH_START_CLEAN_PREV_V1 ===
+        [InlineKeyboardButton(text=("🧹 پاک‌کردنِ پیامِ استارتِ قبلی با /startِ جدید: 🟢 روشن — بزن خاموش شود"
+                                    if await get_setting(row.id, "start_clean_prev", "0") == "1"
+                                    else "🧹 پاک‌کردنِ پیامِ استارتِ قبلی با /startِ جدید: 🔴 خاموش — بزن روشن شود"),
+                              callback_data="set:homemenutext:clean", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="♻️ بازگشت به پیش‌فرض", callback_data="set:homemenutext:reset", style=ButtonStyle.DANGER)],
         [InlineKeyboardButton(text="❌ انصراف", callback_data="tadm:sec:settings", style=ButtonStyle.DANGER)],
     ])
@@ -34180,6 +34215,18 @@ async def set_homemenutext_bw_toggle(cb: CallbackQuery, bot: Bot, state: FSMCont
 
 class HomeKbLabelFSM(StatesGroup):
     label = State()
+
+
+@tenant_router.callback_query(F.data == "set:homemenutext:clean")
+async def set_start_clean_toggle(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """PATCH_START_CLEAN_PREV_V1 — روشن/خاموشِ پاک‌کردنِ پیامِ خوش‌آمدِ قبلی هنگامِ /startِ جدید."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    on = await get_setting(row.id, "start_clean_prev", "0") == "1"
+    await set_setting(row.id, "start_clean_prev", "0" if on else "1")
+    await cb.answer("🔴 خاموش شد" if on else "🟢 روشن شد — از /startِ بعدی پیامِ قبلی پاک می‌شود", show_alert=not on)
+    await set_homemenutext_start(cb, bot, state)
 
 
 @tenant_router.callback_query(F.data == "set:homemenutext:kb")
