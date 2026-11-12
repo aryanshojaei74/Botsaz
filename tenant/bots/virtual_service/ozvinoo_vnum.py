@@ -593,6 +593,24 @@ async def _pv_fetch_code(provider: dict, order_ref) -> tuple[str, str, str]:
     return ("ok", code, "") if code else ("pending", "", "")
 
 
+async def _pv_logout(provider: dict, order_ref) -> tuple[str, str]:
+    """PATCH_VNUM_LOGOUT_V1 — خروجِ ربات (نشستِ ارائه‌دهنده) از اکانتِ شمارهٔ مجازی.
+    OzVinoo: POST /telegram-numbers/number-services/ با order_id (مستنداتِ رسمی). 200=خروج انجام شد،
+    202=هنوز در انتظارِ کد (خروج انجام نمی‌شود)، 404=سفارش پیدا نشد، 422=وضعیتِ ناشناخته/خطا.
+    TNumber مستنداتِ خروج ندارد ⇒ پشتیبانی نمی‌شود.
+    برمی‌گرداند: (ok | pending | missing | unsupported | error, پیام)."""
+    if _is_tnumber(provider):
+        return "unsupported", "این ارائه‌دهنده قابلیتِ خروج ندارد."
+    status, payload = await _oz_request(provider, "POST", _OZ_SERVICES, body={"order_id": _norm_int(order_ref, 0)})
+    if status == 200:
+        return "ok", ""
+    if status == 202:
+        return "pending", "هنوز در انتظارِ کد است؛ خروج فقط بعد از دریافتِ کد ممکن است."
+    if status == 404:
+        return "missing", _api_message(status, payload)
+    return "error", _api_message(status, payload)
+
+
 def _extract_country_id(item: dict):
     for key in ("country_id", "id", "service_id", "country", "range"):
         value = item.get(key)
@@ -1575,7 +1593,7 @@ async def _process_code(bot: Bot, order: SmmOrder, provider: dict, api_order_id:
     try:
         # === PATCH_VNUM_RECODE_V1 === پیامِ کد + دکمه‌هایِ کپی و «دریافت مجدد کد»
         await bot.send_message(order.user_telegram_id, _code_message(code, order.link),
-                               reply_markup=_code_kb(order.id, code), parse_mode="HTML")
+                               reply_markup=_code_kb(order.id, code, logout=not _is_tnumber(provider)), parse_mode="HTML")
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     return "completed"
@@ -1604,13 +1622,17 @@ def _code_message(code: str, phone: str | None) -> str:
     )
 
 
-def _code_kb(order_id: int, code: str) -> InlineKeyboardMarkup:
+def _code_kb(order_id: int, code: str, logout: bool = True) -> InlineKeyboardMarkup:
     from aiogram.types import CopyTextButton
-    return InlineKeyboardMarkup(inline_keyboard=[
+    rows = [
         [InlineKeyboardButton(text="📋 کپی کد ورود", copy_text=CopyTextButton(text=str(code)[:256]))],
         [InlineKeyboardButton(text="🔄 دریافت مجدد کد", callback_data=f"vnum:ozre:{order_id}",
                               style=ButtonStyle.PRIMARY)],
-    ])
+    ]
+    if logout:      # PATCH_VNUM_LOGOUT_V1
+        rows.append([InlineKeyboardButton(text="🚪 خروج ربات از حساب", callback_data=f"vnum:ozlout:{order_id}",
+                                          style=ButtonStyle.DANGER)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @ozvinoo_router.callback_query(F.data.startswith("vnum:ozre:"))
@@ -1667,7 +1689,95 @@ async def ozv_recode(cb: CallbackQuery, bot: Bot):
             await s.commit()
     await cb.answer("✅ کد جدید رسید")
     await cb.message.answer(_code_message(code, order.link),
-                            reply_markup=_code_kb(order.id, code), parse_mode="HTML")
+                            reply_markup=_code_kb(order.id, code, logout=not _is_tnumber(provider)), parse_mode="HTML")
+
+
+# === PATCH_VNUM_LOGOUT_V1 === (Nexivo) «🚪 خروج ربات از حساب» — بعد از ورود به اکانت، نشستِ ربات/ارائه‌دهنده بسته شود
+_LOGGED_OUT_MARK = "خروج ربات انجام شد"
+
+
+async def _logout_order(cb: CallbackQuery, bot: Bot):
+    """(row, order, provider) یا None (پیامِ خطا داده شده)."""
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    if not row:
+        await cb.answer()
+        return None
+    local_id = _norm_int(cb.data.split(":")[-1], 0)
+    async with Session() as s:
+        order = await s.get(SmmOrder, local_id)
+    if (not order or order.bot_id != row.id or order.user_telegram_id != cb.from_user.id
+            or not str(order.service_id).startswith("ozv:")):
+        await cb.answer("سفارش پیدا نشد.", show_alert=True)
+        return None
+    if order.status != "completed":
+        await cb.answer("اول باید کد ورود را دریافت کنید.", show_alert=True)
+        return None
+    provider, _ = await _service_provider(row.id, await _service_from_order(order))
+    if not provider or _is_tnumber(provider):
+        await cb.answer("این شماره قابلیتِ خروج ندارد.", show_alert=True)
+        return None
+    return row, order, provider
+
+
+@ozvinoo_router.callback_query(F.data.startswith("vnum:ozlout:"))
+async def ozv_logout_ask(cb: CallbackQuery, bot: Bot):
+    got = await _logout_order(cb, bot)
+    if not got:
+        return
+    _row, order, _prov = got
+    if _LOGGED_OUT_MARK in (order.note or ""):
+        await cb.answer("ℹ️ خروج ربات قبلاً انجام شده است.", show_alert=True)
+        return
+    await cb.message.answer(
+        "🚪 <b>خروج ربات از حساب</b>\n\n"
+        "این کار را <b>بعد از اینکه با شمارهٔ مجازی واردِ تلگرامِ خودت شدی</b> بزن. با آن، نشستِ رباتِ ارائه‌دهنده "
+        "که برایِ گرفتنِ کد واردِ این اکانت شده بود بسته می‌شود.\n\n"
+        "⚠️ بعد از خروج دیگر نمی‌توانی با دکمهٔ «🔄 دریافت مجدد کد» کدِ جدید بگیری. مطمئنی؟",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ بله، خارج شو", callback_data=f"vnum:ozlgo:{order.id}", style=ButtonStyle.DANGER)],
+            [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="vnum:ozlb", style=ButtonStyle.PRIMARY)],
+        ]))
+    await cb.answer()
+
+
+@ozvinoo_router.callback_query(F.data == "vnum:ozlb")
+async def ozv_logout_back(cb: CallbackQuery):
+    try:
+        await cb.message.delete()
+    except Exception:
+        logger.debug("vnum logout: پاک‌کردنِ پیامِ تأیید ممکن نشد")
+    await cb.answer()
+
+
+@ozvinoo_router.callback_query(F.data.startswith("vnum:ozlgo:"))
+async def ozv_logout_go(cb: CallbackQuery, bot: Bot):
+    got = await _logout_order(cb, bot)
+    if not got:
+        return
+    _row, order, provider = got
+    if _LOGGED_OUT_MARK in (order.note or ""):
+        await cb.answer("ℹ️ خروج ربات قبلاً انجام شده است.", show_alert=True)
+        return
+    kind, why = await _pv_logout(provider, order.panel_order_id)
+    logger.info("[ozv-logout] order=%s api_order=%s kind=%s %s", order.id, order.panel_order_id, kind, why)
+    if kind == "ok":
+        async with Session() as s:
+            cur = await s.get(SmmOrder, order.id, with_for_update=True)
+            if cur:
+                cur.note = ((cur.note or "") + f" — {_LOGGED_OUT_MARK}")[-2000:]
+                await s.commit()
+        try:
+            await cb.message.edit_text("✅ خروج ربات از حساب انجام شد. دیگر نشستِ ربات روی این اکانت باز نیست.",
+                                       reply_markup=None)
+        except Exception:
+            await cb.message.answer("✅ خروج ربات از حساب انجام شد.")
+        await cb.answer("✅ انجام شد")
+        return
+    msg = {"pending": "⏳ " + why, "missing": "❌ سفارش در ارائه‌دهنده پیدا نشد؛ به پشتیبانی پیام بدهید.",
+           "unsupported": "❌ " + why}.get(kind, "❌ خروج انجام نشد؛ کمی بعد دوباره امتحان کنید.")
+    await cb.answer(msg[:190], show_alert=True)
 
 
 @ozvinoo_router.callback_query(F.data == "vnum:ozinfo")
