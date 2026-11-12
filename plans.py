@@ -43,6 +43,7 @@ class Feature(str, Enum):
     GATEWAY_ABANGATEWAY  = "gateway_abangateway"     # درگاهِ آبان گیت‌وی
     # === PATCH_HOOSHPAY_GATEWAY_V1 === مثلِ یونیک‌پی/آبان گیت‌وی: رشد و حرفه‌ای.
     GATEWAY_HOOSHPAY     = "gateway_hooshpay"        # درگاهِ هوش‌پی (کارت‌به‌کارتِ آنی)
+    GATEWAY_FRENZYEX     = "gateway_frenzyex"        # PATCH_FRENZYEX_GATEWAY_V1: درگاهِ فرنزی‌اکس — فقط حرفه‌ای
     # === PATCH_BLUPAL_TENANT_V1 === مثلِ هوش‌پی: رشد و حرفه‌ای.
     GATEWAY_BLUPAL       = "gateway_blupal"          # درگاهِ بلوپال (کارت‌به‌کارتِ خودکار)
     GATEWAY_STARS        = "gateway_stars"          # پرداخت با استارزِ تلگرام
@@ -239,6 +240,7 @@ FEATURE_LABELS = {
     Feature.GATEWAY_APAY: "💳 درگاه آپی (کارت‌به‌کارت آنی)",
     Feature.GATEWAY_ABANGATEWAY: "💳 درگاه آبان گیت‌وی",
     Feature.GATEWAY_HOOSHPAY: "💳 درگاه هوش‌پی (کارت‌به‌کارت آنی)",   # PATCH_HOOSHPAY_GATEWAY_V1
+    Feature.GATEWAY_FRENZYEX: "💳 درگاه فرنزی‌اکس (کارت‌به‌کارت + کریپتو)",   # PATCH_FRENZYEX_GATEWAY_V1
     Feature.GATEWAY_BLUPAL: "💳 درگاه بلوپال (کارت‌به‌کارت خودکار)",     # PATCH_BLUPAL_TENANT_V1
     Feature.GATEWAY_STARS: "⭐ پرداخت با استارز تلگرام",
     Feature.GATEWAY_HESABPAY: "🇦🇫 درگاه حساب‌پی",
@@ -472,6 +474,7 @@ _PRO_EXTRA = {
     Feature.PLAN_TABLE_VIEW,   # PATCH_PLAN_TABLE_VIEW_V1
     Feature.PLAN_INVOICE_NOTE,   # PATCH_PLAN_CUSTOM_TEXT_V1
     Feature.PREMIUM_PRO_PRICING,   # PATCH_PREMIUM_PRO_PRICING_V1
+    Feature.GATEWAY_FRENZYEX,      # PATCH_FRENZYEX_GATEWAY_V1 — فقط حرفه‌ای
     # === PATCH_VPN_PANEL_MARKET_V1 === طبقِ خواستهٔ ادمین: فقط پلنِ حرفه‌ای.
     Feature.VPN_PANEL_MARKET,
     # === PATCH_PANEL_YAR_MOVE_V1 === طبقِ خواستهٔ ادمین: فقط پلنِ حرفه‌ای.

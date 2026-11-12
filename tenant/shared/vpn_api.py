@@ -698,7 +698,7 @@ async def _do_apikey(ctx: AuthCtx, user: BotUser) -> JSONResponse:
                          "allowed": await user_api_allowed(user)})
 
 
-_PAYMENT_KINDS = ("charge", "apay_charge", "swap_charge", "hooshpay_charge", "blupal_charge")
+_PAYMENT_KINDS = ("charge", "apay_charge", "swap_charge", "hooshpay_charge", "blupal_charge", "frenzyex_charge")
 
 
 async def _do_history(ctx: AuthCtx, user: BotUser, action: str, p: dict) -> JSONResponse:

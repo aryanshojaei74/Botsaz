@@ -220,6 +220,9 @@ tenant_router.include_router(uniquepay_router)
 # === PATCH_HOOSHPAY_GATEWAY_V1 ===
 from tenant.gateways.hooshpay_admin import hooshpay_router
 tenant_router.include_router(hooshpay_router)
+# === PATCH_FRENZYEX_GATEWAY_V1 ===
+from tenant.gateways.frenzyex_admin import frenzyex_router
+tenant_router.include_router(frenzyex_router)
 # === PATCH_BLUPAL_TENANT_V1 ===
 from tenant.gateways.blupal_admin import blupal_router
 tenant_router.include_router(blupal_router)
@@ -4080,6 +4083,7 @@ GATEWAY_LABELS: dict[str, tuple[str, str]] = {
     "zibal":     ("زیبال",            "zibal_display_name"),
     "uniquepay": ("یونیک‌پی",         "uniquepay_display_name"),
     "hooshpay":  ("هوش‌پی",           "hooshpay_display_name"),     # PATCH_HOOSHPAY_GATEWAY_V1
+    "frenzyex":  ("فرنزی‌اکس",        "frenzyex_display_name"),     # PATCH_FRENZYEX_GATEWAY_V1
     "blupal":    ("بلوپال",           "blupal_display_name"),       # PATCH_BLUPAL_TENANT_V1
     "apay":      ("آپی",              "apay_display_name"),
     "swap":      ("سواپ‌ولت",         "swap_display_name"),
@@ -4097,6 +4101,7 @@ GATEWAY_LABELS: dict[str, tuple[str, str]] = {
 WALLET_FULL_LABELS: dict[str, str] = {
     "blupal":   "💳 شارژ با بلوپال (کارت‌به‌کارت خودکار)",
     "hooshpay": "💳 شارژ با هوش‌پی (کارت‌به‌کارت آنی)",
+    "frenzyex": "💳 شارژ با فرنزی‌اکس (کارت‌به‌کارت)",     # PATCH_FRENZYEX_GATEWAY_V1
 }
 
 
@@ -4307,6 +4312,15 @@ async def wallet_topup_rows(bot_id: int, colored: bool = False,
                 text=await gw_btn(bot_id, 'hooshpay', 'شارژ با', '💳'), callback_data="w:hooshpay", style=succ)])
     except Exception:
         logger.exception("بررسیِ دسترسیِ هوش‌پی ناموفق بود")
+    # === PATCH_FRENZYEX_GATEWAY_V1 ===
+    try:
+        from tenant.gateways.frenzyex import is_available as _fx_ok
+        _fx_show = (not in_purchase) or await get_setting(bot_id, "frenzyex_show_purchase", "1") == "1"
+        if _fx_show and await _fx_ok(bot_id):
+            rows.append([InlineKeyboardButton(
+                text=await gw_btn(bot_id, 'frenzyex', 'شارژ با', '💳'), callback_data="w:frenzyex", style=succ)])
+    except Exception:
+        logger.exception("بررسیِ دسترسیِ فرنزی‌اکس ناموفق بود")
     # === PATCH_BLUPAL_TENANT_V1 ===
     try:
         from tenant.gateways.blupal import is_available as _bp_ok
@@ -4435,6 +4449,14 @@ async def pay_method_kb_full(bot_id: int, oid: int) -> InlineKeyboardMarkup:
                 text=await gw_btn(bot_id, 'hooshpay', 'پرداخت با', '💳'), callback_data="w:hooshpay")])
     except Exception:
         logger.exception("بررسیِ دسترسیِ هوش‌پی ناموفق بود")
+    # === PATCH_FRENZYEX_GATEWAY_V1 ===
+    try:
+        from tenant.gateways.frenzyex import is_available as _fx_ok2
+        if await get_setting(bot_id, "frenzyex_show_purchase", "1") == "1" and await _fx_ok2(bot_id):
+            rows.append([InlineKeyboardButton(
+                text=await gw_btn(bot_id, 'frenzyex', 'پرداخت با', '💳'), callback_data="w:frenzyex")])
+    except Exception:
+        logger.exception("بررسیِ دسترسیِ فرنزی‌اکس ناموفق بود")
     # === PATCH_BLUPAL_TENANT_V1 ===
     try:
         from tenant.gateways.blupal import is_available as _bp_ok2
@@ -7292,6 +7314,14 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         await _ho_menu(_FakeCb(msg), bot, state)
         return
 
+    # === PATCH_FRENZYEX_GATEWAY_V1 ===
+    if (msg.text and msg.text.strip().startswith("💳 درگاهِ فرنزی")
+            and await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id)):
+        from tenant.gateways.frenzyex_admin import fx_menu as _fx_menu
+        await state.clear()
+        await _fx_menu(_FakeCb(msg), bot, state)
+        return
+
     # === PATCH_BLUPAL_TENANT_V1 ===
     if (msg.text and msg.text.strip().startswith("💳 درگاهِ بلوپال")
             and await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id)):
@@ -7993,6 +8023,12 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         from tenant.gateways.hooshpay_admin import hou_start
         await hou_start(_FakeCb(msg), bot, state)
         return
+    # === PATCH_FRENZYEX_GATEWAY_V1 ===
+    if msg.text and (msg.text == WALLET_FULL_LABELS["frenzyex"]
+                     or msg.text in await gw_label_set(bot_id, "frenzyex", "💳 شارژ با")):
+        from tenant.gateways.frenzyex_admin import fxu_start
+        await fxu_start(_FakeCb(msg), bot, state)
+        return
     # === PATCH_BLUPAL_TENANT_V1 ===
     if msg.text and (msg.text == WALLET_FULL_LABELS["blupal"]
                      or msg.text in await gw_label_set(bot_id, "blupal", "💳 شارژ با")):
@@ -8484,6 +8520,15 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
                             "w:hooshpay", succ))
     except Exception:
         logger.exception("بررسیِ دسترسیِ هوش‌پی ناموفق بود")
+    # === PATCH_FRENZYEX_GATEWAY_V1 ===
+    try:
+        from tenant.gateways.frenzyex import is_available as _fx_ok3
+        if await _fx_ok3(bot_id) and await get_setting(bot_id, "frenzyex_show_wallet", "1") == "1":
+            from tenant.gateways.gateway_layout import gw_custom_label as _gwcl_fx
+            options.append((await _gwcl_fx(bot_id, "frenzyex", WALLET_FULL_LABELS["frenzyex"]),
+                            "w:frenzyex", succ))
+    except Exception:
+        logger.exception("بررسیِ دسترسیِ فرنزی‌اکس ناموفق بود")
     # === PATCH_BLUPAL_TENANT_V1 ===
     try:
         from tenant.gateways.blupal import is_available as _bp_ok3
@@ -12507,6 +12552,11 @@ async def _sec_finance_opts(bot_id: int, plan: str) -> list[tuple[str, str]]:
     if ok(Feature.GATEWAY_HOOSHPAY):
         opts.append(("💳 درگاهِ هوش‌پی (کارت‌به‌کارت آنی): " + ("✅ فعال" if _hp_on else "❌ خاموش"),
                      "set:hooshpay"))
+    # === PATCH_FRENZYEX_GATEWAY_V1 === (فقط حرفه‌ای)
+    _fx_on = await get_setting(bot_id, "frenzyex_enabled", "0") == "1"
+    if ok(Feature.GATEWAY_FRENZYEX):
+        opts.append(("💳 درگاهِ فرنزی‌اکس (کارت‌به‌کارت + کریپتو): " + ("✅ فعال" if _fx_on else "❌ خاموش"),
+                     "set:frenzyex"))
     # === PATCH_BLUPAL_TENANT_V1 ===
     _bp_on = await get_setting(bot_id, "blupal_enabled", "0") == "1"
     if ok(Feature.GATEWAY_BLUPAL):
@@ -14259,7 +14309,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "567"
+BUILD_ID = "568"
 
 
 @tenant_router.message(Command("version"))
@@ -23025,7 +23075,7 @@ async def tadm_stats(cb: CallbackQuery, bot: Bot):
                 "charge", "aqp_charge", "swap_charge", "crypto_charge", "nowpay_charge",
                 "tonpays_charge", "zarinpal_charge", "zibal_charge", "idpay_charge",
                 "hesabpay_charge", "abangateway_charge", "abangateway_manual_admin", "abangw_manual",
-                "uniquepay_charge", "apay_charge", "hooshpay_charge", "blupal_charge", "ton_direct", "tron_direct", "admin",
+                "uniquepay_charge", "apay_charge", "hooshpay_charge", "blupal_charge", "frenzyex_charge", "ton_direct", "tron_direct", "admin",
             ]))) or 0
         # کل تخفیفِ استفاده‌شده (تعداد کاربر یکتا + مجموع مبلغ صرفه‌جویی‌شده)
         discount_users = await s.scalar(
@@ -36347,6 +36397,7 @@ _ADMIN_MODULE_SECTION = {
     "tenant.gateways.swap_admin": "finance",
     "tenant.gateways.uniquepay_admin": "finance",
     "tenant.gateways.hooshpay_admin": "finance",
+    "tenant.gateways.frenzyex_admin": "finance",
     "tenant.gateways.blupal_admin": "finance",
     "tenant.gateways.apay_admin": "finance",
     "tenant.gateways.abangateway_admin": "finance",

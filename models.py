@@ -1687,6 +1687,25 @@ class BluPalCharge(Base):
     msg_id: Mapped[int | None] = mapped_column(BigInteger)
 
 
+# === PATCH_FRENZYEX_GATEWAY_V1 ===
+class FrenzyExCharge(Base):
+    """شارژ کیف پول با درگاهِ «فرنزی‌اکس» (FrenzyEx؛ کارت‌به‌کارت + کریپتو، مخصوصِ پلنِ حرفه‌ای)."""
+    __tablename__ = "frenzyex_charges"
+    __table_args__ = (UniqueConstraint("order_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bot_id: Mapped[int] = mapped_column(ForeignKey("bots.id"), index=True)
+    user_telegram_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    order_id: Mapped[str] = mapped_column(String(40), index=True)         # order_ref ما
+    request_id: Mapped[str | None] = mapped_column(String(64), index=True)   # request_id از فرنزی‌اکس
+    amount_toman: Mapped[int] = mapped_column(Integer, default=0)         # مبلغی که کیف پول شارژ می‌شود (= amount فاکتور)
+    method: Mapped[str | None] = mapped_column(String(10))               # auto | standard
+    tracking_code: Mapped[str | None] = mapped_column(String(80))        # tx_hash / custody:…
+    status: Mapped[str] = mapped_column(String(20), default="waiting")    # waiting/paid/cancelled/expired
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
 # === PATCH_APAY_GATEWAY_V1 ===
 class ApayCharge(Base):
     """شارژ کیف پول با درگاهِ کارت‌به‌کارتِ آنیِ «آپی» (apaygate.shop)."""
@@ -3789,7 +3808,7 @@ TENANT_OWNED_MODELS += [
     Bet, BetLedger,                        # شرط‌بندیِ گروهی
     KycRequest, RefPointWallet,
     SmmPanel, SmmCategory,
-    HesabPayCharge, TonDirectCharge, UniquePayCharge, ApayCharge, AbanGatewayCharge, HooshPayCharge, BluPalCharge,
+    HesabPayCharge, TonDirectCharge, UniquePayCharge, ApayCharge, AbanGatewayCharge, HooshPayCharge, FrenzyExCharge, BluPalCharge,
     CommunityChat, BotCustomDomain, TenantPremiumEmoji,
     TenantGroupBan, TenantGroupWarn, TenantGroupEvent, TenantGroupCaptcha,
     AdminWebSession, ResellerTrialLog, VpnPartner,
