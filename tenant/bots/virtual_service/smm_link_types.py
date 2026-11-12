@@ -30,6 +30,8 @@ TYPES: dict[str, list[tuple[str, str, str, str]]] = {
         ("at",      "@ شروع با @",   "یوزرنیم باید با @ شروع شود", "@channel"),
         ("post",    "📋 لینک پست",  "لینکِ مستقیمِ پست‌ها", "https://t.me/channel/123"),
         ("boost",   "🚀 لینک بوست", "لینکِ بوستِ کانال", "https://t.me/boost/channel"),
+        # PATCH_SMM_TEXT_LINK_TYPE_V1 (SINA): نامِ ساده، بدونِ لینک — حروف و عددِ فارسی و انگلیسی
+        ("text",    "📝 متنِ ساده", "حروف و عددِ فارسی و انگلیسی (بدونِ لینک)", "کانال من 123"),
     ],
     "instagram": [
         ("profile", "👤 لینک پروفایل", "لینکِ صفحهٔ پروفایل", "https://instagram.com/username"),
@@ -103,8 +105,19 @@ def _split(url: str) -> tuple[str, list[str]] | None:
     return host, segs
 
 
+# PATCH_SMM_TEXT_LINK_TYPE_V1 — فقط حرف/رقمِ فارسی و انگلیسی + فاصله/_ (بدونِ لینک و علامت)
+_TEXT_ONLY = re.compile(r"^[A-Za-z0-9_\u0600-\u06FF\u200c ]{1,64}$")
+
+
+def is_plain_text(s: str) -> bool:
+    s = (s or "").strip()
+    return bool(_TEXT_ONLY.match(s)) and any(ch.isalnum() for ch in s)
+
+
 def _classify_telegram(link: str) -> set[str]:
     u = (link or "").strip()
+    if is_plain_text(u):
+        return {"text"}
     if u.startswith("@"):
         return {"at"} if _TG_USER.match(u[1:]) else set()
     parsed = _split(u)

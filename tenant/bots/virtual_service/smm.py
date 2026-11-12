@@ -256,6 +256,7 @@ class SmmFSM(StatesGroup):
     cat_desc = State()          # PATCH_SMM_CATEGORY_DESC_V1: ادمین توضیحات مشترک دسته را می‌نویسد
     # === PATCH_SMM_CATEGORY_LINK_PATTERN_V1 ===
     cat_linkpattern = State()  # ادمین نمونه‌لینکِ این دسته را می‌نویسد
+    svc_linkpattern = State()  # PATCH_SMM_PRODUCT_LINK_RULE_V1: نمونه‌لینکِ مخصوصِ یک محصول
     # === PATCH_SMM_PLATFORM_RENAME_V1 ===
     plat_rename = State()       # ادمین اسمِ دلخواهِ جدیدِ یک پلتفرم را می‌نویسد
     man_name = State()
@@ -5302,6 +5303,7 @@ async def _smm_myservice_detail_content(bot_id: int, svc_id: int, back_page: int
             InlineKeyboardButton(text="🔽 پایین‌تر", callback_data=f"smm:svc:movedown:{v.id}:{back_page}"),
         ])
     # === PATCH_SMM_MANUAL_PRO_V1 ===
+    rows.append([InlineKeyboardButton(text="🔗 نوع/نمونهٔ لینکِ این محصول", callback_data=f"smm:svl:{v.id}:{back_page}", style=ButtonStyle.PRIMARY)])   # PATCH_SMM_PRODUCT_LINK_RULE_V1
     rows.append([InlineKeyboardButton(text="🔌 اتصال به دکمهٔ منو / زیرمنو", callback_data=f"smm:manbtn:{v.id}", style=ButtonStyle.SUCCESS)])
     rows.append([InlineKeyboardButton(
         text=("⏸ غیرفعال کن (مخفی از مشتری)" if v.is_active else "▶️ فعال کن"),
@@ -8245,6 +8247,52 @@ async def _check_links_for_category(cat, links: list[str]) -> tuple[list[str], s
     return [], ""
 
 
+# === PATCH_SMM_PRODUCT_LINK_RULE_V1 === (SINA) نمونه/نوعِ لینک برایِ «یک محصول» جدا از دسته
+def _svc_links_key(vid: int) -> str:
+    return f"smm_svc_links:{vid}"
+
+
+def _svc_pattern_key(vid: int) -> str:
+    return f"smm_svc_pattern:{vid}"
+
+
+async def _svc_link_types(v, cat) -> set[str]:
+    """نوع‌هایِ لینکِ مخصوصِ خودِ محصول (خالی = از دسته ارث می‌برد)."""
+    if not v or not cat or not smm_link_types.supported(cat.platform):
+        return set()
+    return smm_link_types.parse_keys(await _get_setting(v.bot_id, _svc_links_key(v.id), ""), cat.platform)
+
+
+async def _svc_link_pattern(v) -> str:
+    return (await _get_setting(v.bot_id, _svc_pattern_key(v.id), "") or "").strip() if v else ""
+
+
+async def _effective_link_types(v, cat) -> set[str]:
+    return (await _svc_link_types(v, cat)) or (await _cat_link_types(cat))
+
+
+async def _check_links_for_service(v, cat, links: list[str]) -> tuple[list[str], str]:
+    """اولویت: نوعِ لینکِ محصول ← نمونه‌لینکِ محصول ← قاعدهٔ دسته (نوع/نمونه) ← بدونِ چک."""
+    stypes = await _svc_link_types(v, cat)
+    if stypes:
+        wrong = [ln for ln in links if not (smm_link_types.classify(cat.platform, ln) & stypes)]
+        return wrong, smm_link_types.hint_html(cat.platform, stypes)
+    spat = await _svc_link_pattern(v)
+    if spat:
+        wrong = [ln for ln in links if not _link_matches_sample(ln, spat)]
+        return wrong, f"نمونهٔ لینکِ درست: <code>{_html_escape(spat)}</code>"
+    return await _check_links_for_category(cat, links)
+
+
+async def _plain_text_allowed(v, cat) -> bool:
+    """آیا نوعِ «📝 متنِ ساده» (بدونِ لینک) برایِ این محصول/دسته فعال است؟"""
+    try:
+        return "text" in await _effective_link_types(v, cat)
+    except Exception:
+        logger.exception("[SMM] بررسیِ نوعِ متنِ سادهٔ لینک ناموفق")
+        return False
+
+
 async def smm_categories_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     async with Session() as s:
         cats = (await s.scalars(select(SmmCategory).where(
@@ -8751,6 +8799,145 @@ async def smm_cat_linkpattern_in(msg: Message, bot: Bot, state: FSMContext):
             c.link_pattern = sample[:300]
             await s.commit()
     text, kb = await smm_cat_detail_content(row.id, cid)
+    await msg.answer(f"✅ ذخیره شد؛ دامنهٔ موردِقبول: <code>{_html_escape(_link_domain(sample))}</code>\n\n" + text,
+                     reply_markup=kb, parse_mode="HTML")
+
+
+# === PATCH_SMM_PRODUCT_LINK_RULE_V1 === (SINA) تنظیمِ نوع/نمونهٔ لینک برایِ یک محصول، جدا از دسته
+async def _svc_link_screen(bot_id: int, vid: int, back: int) -> tuple[str, InlineKeyboardMarkup] | None:
+    async with Session() as s:
+        v = await s.get(SmmService, vid)
+        cat = await s.get(SmmCategory, v.category_pk) if v and v.category_pk else None
+    if not v or v.bot_id != bot_id:
+        return None
+    own = await _svc_link_types(v, cat)
+    pat = await _svc_link_pattern(v)
+    cat_types = await _cat_link_types(cat) if cat else set()
+    lines = [f"🔗 <b>لینکِ محصولِ «{_html_escape(v.name)}»</b>", "",
+             "هرچه اینجا تنظیم کنی <b>فقط برایِ همین محصول</b> است و روی تنظیمِ دسته اولویت دارد. "
+             "اگر چیزی تنظیم نشود، همان تنظیمِ دسته اعمال می‌شود.", ""]
+    if cat:
+        lines.append("تنظیمِ دسته: " + (smm_link_types.short_labels(cat.platform, cat_types) if cat_types
+                                      else (f"نمونه‌لینک «{_html_escape(cat.link_pattern)}»" if cat.link_pattern else "بدونِ چک")))
+    lines.append("نوعِ لینکِ این محصول: " + (smm_link_types.short_labels(cat.platform, own) if own else "از دسته"))
+    lines.append("نمونه‌لینکِ این محصول: " + (f"<code>{_html_escape(pat)}</code>" if pat else "از دسته"))
+    rows = []
+    if cat and smm_link_types.supported(cat.platform):
+        for key, label, _d, _ex in smm_link_types.type_defs(cat.platform):
+            on = key in own
+            rows.append([InlineKeyboardButton(text=f"{label} {'✅' if on else '❌'}",
+                                              callback_data=f"smm:svt:{vid}:{key}:{back}",
+                                              style=ButtonStyle.SUCCESS if on else ButtonStyle.PRIMARY)])
+    else:
+        lines.append("\n(برایِ انتخابِ «نوعِ لینک» باید دستهٔ این محصول تلگرام یا اینستاگرام باشد؛ نمونه‌لینک همیشه می‌شود.)")
+    rows.append([InlineKeyboardButton(text="✏️ ثبتِ نمونه‌لینکِ این محصول", callback_data=f"smm:svp:{vid}:{back}")])
+    if pat:
+        rows.append([InlineKeyboardButton(text="🗑 حذفِ نمونه‌لینکِ محصول", callback_data=f"smm:svpc:{vid}:{back}", style=ButtonStyle.DANGER)])
+    if own or pat:
+        rows.append([InlineKeyboardButton(text="♻️ برگشت به تنظیمِ دسته", callback_data=f"smm:svr:{vid}:{back}", style=ButtonStyle.DANGER)])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"smm:svcview:{vid}:{back}", style=ButtonStyle.DANGER)])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _svc_link_show(cb: CallbackQuery, bot_id: int, vid: int, back: int) -> None:
+    content = await _svc_link_screen(bot_id, vid, back)
+    if not content:
+        return await cb.answer("محصول پیدا نشد.", show_alert=True)
+    text, kb = content
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await cb.answer()
+
+
+@smm_router.callback_query(F.data.startswith("smm:svl:"))
+async def smm_svl(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return await cb.answer()
+    _, _, vid, back = cb.data.split(":")
+    await _svc_link_show(cb, row.id, int(vid), int(back))
+
+
+@smm_router.callback_query(F.data.startswith("smm:svt:"))
+async def smm_svt(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return await cb.answer()
+    _, _, vid, key, back = cb.data.split(":")
+    async with Session() as s:
+        v = await s.get(SmmService, int(vid))
+        cat = await s.get(SmmCategory, v.category_pk) if v and v.category_pk else None
+    if not v or v.bot_id != row.id or not cat or key not in smm_link_types.valid_keys(cat.platform):
+        return await cb.answer("نامعتبر.", show_alert=True)
+    keys = await _svc_link_types(v, cat)
+    keys ^= {key}
+    await _set_setting(row.id, _svc_links_key(v.id), smm_link_types.dump_keys(keys, cat.platform))
+    await _svc_link_show(cb, row.id, v.id, int(back))
+
+
+@smm_router.callback_query(F.data.startswith("smm:svr:"))
+async def smm_svr(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return await cb.answer()
+    _, _, vid, back = cb.data.split(":")
+    async with Session() as s:
+        v = await s.get(SmmService, int(vid))
+    if not v or v.bot_id != row.id:
+        return await cb.answer("نامعتبر.", show_alert=True)
+    await _set_setting(row.id, _svc_links_key(v.id), "")
+    await _set_setting(row.id, _svc_pattern_key(v.id), "")
+    await _svc_link_show(cb, row.id, v.id, int(back))
+
+
+@smm_router.callback_query(F.data.startswith("smm:svpc:"))
+async def smm_svpc(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return await cb.answer()
+    _, _, vid, back = cb.data.split(":")
+    async with Session() as s:
+        v = await s.get(SmmService, int(vid))
+    if not v or v.bot_id != row.id:
+        return await cb.answer("نامعتبر.", show_alert=True)
+    await _set_setting(row.id, _svc_pattern_key(v.id), "")
+    await _svc_link_show(cb, row.id, v.id, int(back))
+
+
+@smm_router.callback_query(F.data.startswith("smm:svp:"))
+async def smm_svp(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return await cb.answer()
+    _, _, vid, back = cb.data.split(":")
+    await state.set_state(SmmFSM.svc_linkpattern)
+    await state.update_data(svlp_id=int(vid), svlp_back=int(back))
+    await cb.message.answer(
+        "🔗 یک <b>نمونه لینکِ درست</b> برایِ همین محصول بفرست (مثلاً <code>https://t.me/yourchannel/123</code>).\n"
+        "فقط لینک‌هایی که دامنه‌شان با همین نمونه یکی باشد قبول می‌شود.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="❌ لغو", callback_data=f"smm:svl:{vid}:{back}", style=ButtonStyle.DANGER)]]))
+    await cb.answer()
+
+
+@smm_router.message(SmmFSM.svc_linkpattern, F.text)
+async def smm_svp_in(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner(msg, bot)
+    data = await state.get_data()
+    await state.clear()
+    if not row:
+        return
+    vid, back = data.get("svlp_id"), int(data.get("svlp_back") or 0)
+    sample = (msg.text or "").strip()
+    async with Session() as s:
+        v = await s.get(SmmService, vid) if vid else None
+    if not v or v.bot_id != row.id or not sample:
+        return
+    await _set_setting(row.id, _svc_pattern_key(v.id), sample[:300])
+    text, kb = await _svc_link_screen(row.id, v.id, back)
     await msg.answer(f"✅ ذخیره شد؛ دامنهٔ موردِقبول: <code>{_html_escape(_link_domain(sample))}</code>\n\n" + text,
                      reply_markup=kb, parse_mode="HTML")
 
@@ -11299,7 +11486,7 @@ async def send_smm_product_page(msg_or_cb, bot: Bot, vid: int, state: FSMContext
         if v.category_pk:
             async with Session() as s:
                 _cat = await s.get(SmmCategory, v.category_pk)
-            _lk = await _cat_link_types(_cat)
+            _lk = await _effective_link_types(v, _cat)     # PATCH_SMM_PRODUCT_LINK_RULE_V1
             if _lk:
                 _link_prompt = (f"لینک هدف را بفرست ({smm_link_types.short_labels(_cat.platform, _lk)}):")
     except Exception:
@@ -11547,7 +11734,14 @@ async def smmu_bulk_links_in(msg: Message, bot: Bot, state: FSMContext):
         await msg.answer(f"حداکثر {_MAX_BULK_LINKS} لینک در هر بار مجاز است "
                          f"(الان {len(lines)} خط فرستادی). دوباره بفرست:")
         return
-    bad = [ln for ln in lines if not _looks_like_link(ln)]
+    _bd = await state.get_data()
+    _bv = _bcat = None
+    if _bd.get("smmu_svc_id"):
+        async with Session() as s:
+            _bv = await s.get(SmmService, _bd.get("smmu_svc_id"))
+            _bcat = await s.get(SmmCategory, _bv.category_pk) if _bv and _bv.category_pk else None
+    _txt_ok = await _plain_text_allowed(_bv, _bcat)     # PATCH_SMM_TEXT_LINK_TYPE_V1
+    bad = [ln for ln in lines if not _looks_like_link(ln) and not (_txt_ok and smm_link_types.is_plain_text(ln))]
     if bad:
         preview = "\n".join(f"• {_html_escape(b)}" for b in bad[:10])
         await msg.answer(
@@ -11561,7 +11755,7 @@ async def smmu_bulk_links_in(msg: Message, bot: Bot, state: FSMContext):
         _v0 = await s.get(SmmService, _data0.get("smmu_svc_id"))
         _cat0 = await s.get(SmmCategory, _v0.category_pk) if _v0 and _v0.category_pk else None
     # === PATCH_SMM_CATEGORY_LINK_TYPES_V1 === (نوعِ لینکِ مجازِ دسته، وگرنه نمونه‌لینک)
-    _wrong, _hint = await _check_links_for_category(_cat0, lines)
+    _wrong, _hint = await _check_links_for_service(_v0, _cat0, lines)
     if _wrong:
         preview = "\n".join(f"• {_html_escape(w)}" for w in _wrong[:10])
         await msg.answer(
@@ -11893,7 +12087,13 @@ async def smmu_link_in(msg: Message, bot: Bot, state: FSMContext):
             + f"\n\n<code>{_html_escape(val)}</code>\n\nآیا درست است؟",
             parse_mode="HTML", reply_markup=_smm_link_confirm_kb(_kind))
         return
-    if not (link.startswith("http://") or link.startswith("https://") or link.startswith("@")
+    _cat_txt = None
+    if data_svc_id_for_text := (await state.get_data()).get("smmu_svc_id"):
+        async with Session() as s:
+            _tv = await s.get(SmmService, int(data_svc_id_for_text))
+            _tc = await s.get(SmmCategory, _tv.category_pk) if _tv and _tv.category_pk else None
+        _cat_txt = await _plain_text_allowed(_tv, _tc) and smm_link_types.is_plain_text(link)   # PATCH_SMM_TEXT_LINK_TYPE_V1
+    if not _cat_txt and not (link.startswith("http://") or link.startswith("https://") or link.startswith("@")
 
             or "t.me/" in link):
         cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -11915,7 +12115,7 @@ async def smmu_link_in(msg: Message, bot: Bot, state: FSMContext):
                 v = None
             cat = await s.get(SmmCategory, v.category_pk) if v and v.category_pk else None
         # === PATCH_SMM_CATEGORY_LINK_TYPES_V1 === (نوعِ لینکِ مجازِ دسته، وگرنه نمونه‌لینک)
-        _wrong1, _hint1 = await _check_links_for_category(cat, [link])
+        _wrong1, _hint1 = await _check_links_for_service(v, cat, [link])
         if _wrong1:
             cancel_kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🏠 منوی اصلی", callback_data="mbtn:home", style=ButtonStyle.DANGER)]])

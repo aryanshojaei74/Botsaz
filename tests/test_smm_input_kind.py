@@ -59,6 +59,9 @@ async def env(monkeypatch):
     maker = async_sessionmaker(engine, expire_on_commit=False)
     monkeypatch.setattr(config, "Session", maker)
     monkeypatch.setattr(smm, "Session", maker)
+    import tenant      # _get_setting (قاعدهٔ لینکِ محصول) از Sessionِ tenant می‌خواند
+    monkeypatch.setattr(tenant, "Session", maker)
+    tenant._SETTING_CACHE.clear()
     async with maker() as s:
         s.add(models.Bot(id=BOT_ID, owner_id=1, token="3:T", username="b", field="virtual_service", plan="pro", status="active"))
         await s.flush()
