@@ -294,6 +294,8 @@ class SmmFSM(StatesGroup):
     # === PATCH_TELEGRAM_PREMIUM_V1 ===
     premium_rate = State()      # ادمین نرخِ تومان به‌ازایِ هر استارز (پرمیوم) را می‌نویسد
     premium_margin = State()    # ادمین درصدِ سود (پرمیوم) را می‌نویسد
+    premium_fixed = State()     # PATCH_PREMIUM_PRO_PRICING_V1: مبلغِ ثابتِ سود (تومان)
+    premium_cost1 = State()     # PATCH_PREMIUM_PRO_PRICING_V1: قیمتِ خریدِ پلنِ ۱ ماهه (تومان)
     premium_dest_username = State()  # مشتری یوزرنیمِ مقصد را می‌نویسد
     # === PATCH_PREMIUM_CUSTOM_PRICE_V1 ===
     premium_custom_price = State()   # ادمین قیمتِ شخصیِ تومانیِ یک پلن را می‌نویسد
@@ -16676,12 +16678,84 @@ async def _premium_frag_price(bot_id: int, months: int, margin_pct: float) -> in
     return max(1, int(round(usd_price * usd * (1 + float(margin_pct) / 100.0))))
 
 
+async def _premium_pro_ok(bot_id: int) -> bool:
+    """PATCH_PREMIUM_PRO_PRICING_V1 — سودِ مبلغی و پلنِ ۱ ماهه ویژهٔ پلنِ حرفه‌ای‌اند."""
+    try:
+        from tenant import get_bot_row_by_id
+        from plans import has_feature, Feature
+        r = await get_bot_row_by_id(bot_id)
+        return bool(r and has_feature(r.plan, Feature.PREMIUM_PRO_PRICING))
+    except Exception:
+        logger.exception("premium: خواندنِ پلنِ ربات ناموفق")
+        return False
+
+
+async def _premium_fixed_profit(bot_id: int) -> int | None:
+    """مبلغِ ثابتِ سود (تومان) اگر حالتِ «مبلغی» روشن و پلن حرفه‌ای باشد؛ وگرنه None (⇒ درصدی)."""
+    if (await _get_setting(bot_id, "premium_margin_mode", "pct")) != "fixed":
+        return None
+    if not await _premium_pro_ok(bot_id):
+        return None
+    try:
+        return max(0, int(float(await _get_setting(bot_id, "premium_margin_fixed", "0") or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _premium_m1_cost(bot_id: int) -> int | None:
+    """قیمتِ خریدِ پلنِ ۱ ماهه (تومان) — اگر تنظیم نشده None."""
+    try:
+        v = int(float(await _get_setting(bot_id, "premium_cost_1", "0") or 0))
+    except (TypeError, ValueError):
+        v = 0
+    return v if v > 0 else None
+
+
+async def _premium_m1_on(bot_id: int) -> bool:
+    """پلنِ ۱ ماهه: فقط پرو + تحویلِ دستی روشن + قیمتِ خرید ثبت‌شده. (تلگرام/Fragment/TGTools ۱ ماهه ندارند)"""
+    return ((await _get_setting(bot_id, "premium_m1", "0")) == "1"
+            and (await _get_setting(bot_id, "premium_manual_delivery", "0")) == "1"
+            and await _m1_ok(bot_id))
+
+
+async def _m1_ok(bot_id: int) -> bool:
+    return await _premium_pro_ok(bot_id) and (await _premium_m1_cost(bot_id)) is not None
+
+
+async def _premium_tiers_for(bot_id: int) -> list[tuple[int, int]]:
+    """پلن‌هایِ قابل‌فروش: سه بستهٔ ثابتِ تلگرام + (اختیاری) ۱ ماههٔ دستی."""
+    tiers = list(_PREMIUM_TIERS)
+    if await _premium_m1_on(bot_id):
+        tiers.insert(0, (1, 0))
+    return tiers
+
+
+async def _premium_cost_price(bot_id: int, months: int, stars: int, rate: float) -> int:
+    """قیمتِ خریدِ (بدونِ سود) هر پلن."""
+    if months == 1:
+        return int(await _premium_m1_cost(bot_id) or 0)
+    if await _premium_auto_mode(bot_id) == "fragment":
+        _fp = await _premium_frag_price(bot_id, months, 0.0)
+        if _fp:
+            return _fp
+    _tp = await _tgt_premium_price(bot_id, months, 0.0)
+    if _tp:
+        return _tp
+    return _premium_price(stars, rate, 0.0)
+
+
 async def _premium_effective_price(bot_id: int, months: int, stars: int,
                                     rate: float, margin_pct: float) -> tuple[int, bool]:
     """برمی‌گرداند: (قیمتِ نهایی، آیا قیمتِ شخصی است؟)"""
     custom = await _premium_get_custom_price(bot_id, months)
     if custom is not None:
         return custom, True
+    fixed = await _premium_fixed_profit(bot_id)          # PATCH_PREMIUM_PRO_PRICING_V1
+    if months == 1:
+        cost = await _premium_cost_price(bot_id, 1, 0, rate)
+        return (cost + fixed if fixed is not None else max(1, int(round(cost * (1 + float(margin_pct) / 100.0))))), False
+    if fixed is not None:
+        return max(1, await _premium_cost_price(bot_id, months, stars, rate) + fixed), False
     if await _premium_auto_mode(bot_id) == "fragment":   # PATCH_PREMIUM_FRAGMENT_PRICE_V1
         _fp = await _premium_frag_price(bot_id, months, margin_pct)
         if _fp:
@@ -16726,13 +16800,16 @@ async def premium_admin_content(bot_id: int, bot: "Bot | None" = None) -> tuple[
     # نباید در آن حالت اعمال شود، وگرنه با اینکه حالتِ دستی روشن است،
     # همه‌چیز همچنان به‌خاطرِ کمبودِ استارزِ ربات ❌ نشان داده می‌شود.
     balance = await _bot_star_balance(bot) if (bot is not None and not manual_mode and await _premium_uses_bot_stars(bot_id)) else None
-    for months, stars in _PREMIUM_TIERS:
+    for months, stars in await _premium_tiers_for(bot_id):
         price, is_custom = await _premium_effective_price(bot_id, months, stars, rate, margin)  # PATCH_PREMIUM_CUSTOM_PRICE_V1
-        mark = ""
+        mark = "" if stars == 0 else ""
         if balance is not None:
             mark = " ✅" if stars <= balance else " ❌ (موجودیِ ربات کافی نیست)"
         custom_tag = " 🖊️(شخصی)" if is_custom else ""  # PATCH_PREMIUM_CUSTOM_PRICE_V1
-        lines.append(f"• {months} ماهه ({stars:,} استارز) — {price:,} تومان{mark}{custom_tag}")
+        _cost = await _premium_cost_price(bot_id, months, stars, rate)    # PATCH_PREMIUM_PRO_PRICING_V1
+        _star_txt = f" ({stars:,} استارز)" if stars else " (تحویلِ دستی)"
+        _profit_txt = (f"\n    خرید {_cost:,} + سود {price - _cost:,} = <b>{price:,}</b>" if (_cost and not is_custom) else "")
+        lines.append(f"• {months} ماهه{_star_txt} — {price:,} تومان{mark}{custom_tag}{_profit_txt}")
     if balance is not None:
         lines.append(f"\n⭐ موجودیِ فعلیِ استارزِ ربات: <b>{balance:,}</b>")
     if _pmode == "fragment":   # PATCH_PREMIUM_FRAGMENT_PRICE_V1
@@ -16755,7 +16832,7 @@ async def premium_admin_content(bot_id: int, bot: "Bot | None" = None) -> tuple[
         lines.append("\n⚠️ این هم مثلِ گیفت از موجودیِ استارزِ خودِ ربات کم می‌شود. "
                     "پلن‌هایی که موجودیِ کافی ندارند، خودکار در فروشگاهِ مشتری هم پنهان می‌شوند.")
     custom_rows = []  # === PATCH_PREMIUM_CUSTOM_PRICE_V1 ===
-    for _cm, _cs in _PREMIUM_TIERS:
+    for _cm, _cs in await _premium_tiers_for(bot_id):
         _cval = await _premium_get_custom_price(bot_id, _cm)
         if _cval is not None:
             custom_rows.append([InlineKeyboardButton(
@@ -16784,10 +16861,122 @@ async def premium_admin_content(bot_id: int, bot: "Bot | None" = None) -> tuple[
             callback_data="prm:fragusd")]] if _pmode == "fragment" else []),
         [InlineKeyboardButton(text="⚙️ قیمتِ پایهٔ ⭐/نرخِ دلار", callback_data="sauto:base")],
         [InlineKeyboardButton(text=f"📈 درصدِ سود ({margin:.0f}٪)", callback_data="prm:setmargin")],
+        *await _premium_pro_rows(bot_id),   # PATCH_PREMIUM_PRO_PRICING_V1
         *custom_rows,  # === PATCH_PREMIUM_CUSTOM_PRICE_V1 ===
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="smm:manlist", style=ButtonStyle.DANGER)],
     ]
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _premium_pro_rows(bot_id: int) -> list:
+    """PATCH_PREMIUM_PRO_PRICING_V1 — دکمه‌هایِ ویژهٔ حرفه‌ای: سودِ مبلغی + پلنِ ۱ ماهه."""
+    if not await _premium_pro_ok(bot_id):
+        return [[InlineKeyboardButton(text="🔒 سودِ مبلغی و پلنِ ۱ ماهه (ویژهٔ حرفه‌ای)", callback_data="prm:prolock")]]
+    fixed_mode = (await _get_setting(bot_id, "premium_margin_mode", "pct")) == "fixed"
+    try:
+        fixed_val = int(float(await _get_setting(bot_id, "premium_margin_fixed", "0") or 0))
+    except (TypeError, ValueError):
+        fixed_val = 0
+    m1_on = (await _get_setting(bot_id, "premium_m1", "0")) == "1"
+    c1 = await _premium_m1_cost(bot_id)
+    rows = [[InlineKeyboardButton(
+        text="🧮 نوعِ سود: " + ("💵 مبلغِ ثابت" if fixed_mode else "٪ درصدی"),
+        callback_data="prm:modetoggle", style=ButtonStyle.SUCCESS if fixed_mode else ButtonStyle.PRIMARY)]]
+    if fixed_mode:
+        rows.append([InlineKeyboardButton(text=f"💵 مبلغِ سودِ ثابت ({fixed_val:,} تومان)", callback_data="prm:setfixed")])
+    rows.append([InlineKeyboardButton(
+        text="1️⃣ پلنِ ۱ ماهه (دستی): " + ("🟢 روشن" if m1_on else "⚪️ خاموش"),
+        callback_data="prm:m1toggle", style=ButtonStyle.SUCCESS if m1_on else ButtonStyle.PRIMARY)])
+    rows.append([InlineKeyboardButton(
+        text=f"💰 قیمتِ خریدِ ۱ ماهه ({c1:,} تومان)" if c1 else "💰 ثبتِ قیمتِ خریدِ ۱ ماهه",
+        callback_data="prm:setcost1")])
+    return rows
+
+
+@smm_router.callback_query(F.data == "prm:prolock")
+async def prm_prolock(cb: CallbackQuery):
+    from plans import upgrade_hint, Feature
+    await cb.answer(upgrade_hint(Feature.PREMIUM_PRO_PRICING), show_alert=True)
+
+
+@smm_router.callback_query(F.data == "prm:modetoggle")
+async def prm_mode_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    if not await _premium_pro_ok(row.id):
+        return await prm_prolock(cb)
+    cur = await _get_setting(row.id, "premium_margin_mode", "pct")
+    await _set_setting(row.id, "premium_margin_mode", "pct" if cur == "fixed" else "fixed")
+    await prm_menu(cb, bot)
+
+
+@smm_router.callback_query(F.data == "prm:m1toggle")
+async def prm_m1_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    if not await _premium_pro_ok(row.id):
+        return await prm_prolock(cb)
+    cur = (await _get_setting(row.id, "premium_m1", "0")) == "1"
+    if not cur:
+        if (await _get_setting(row.id, "premium_manual_delivery", "0")) != "1":
+            return await cb.answer("⚠️ پلنِ ۱ ماهه فقط با «حالتِ تحویلِ دستی» کار می‌کند (تلگرام/فرگمنت ۱ ماهه ندارند). اول تحویلِ دستی را روشن کن.", show_alert=True)
+        if await _premium_m1_cost(row.id) is None:
+            return await cb.answer("⚠️ اول «قیمتِ خریدِ ۱ ماهه» را ثبت کن.", show_alert=True)
+    await _set_setting(row.id, "premium_m1", "0" if cur else "1")
+    await prm_menu(cb, bot)
+
+
+async def _prm_ask_number(cb: CallbackQuery, bot: Bot, state: FSMContext, st, text: str):
+    row = await _owner(cb, bot)
+    if not row:
+        return None
+    if not await _premium_pro_ok(row.id):
+        await prm_prolock(cb)
+        return None
+    from tenant import smart_cancel_kb
+    await state.set_state(st)
+    await cb.message.answer(text, reply_markup=await smart_cancel_kb(bot))
+    await cb.answer()
+
+
+@smm_router.callback_query(F.data == "prm:setfixed")
+async def prm_setfixed_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    await _prm_ask_number(cb, bot, state, SmmFSM.premium_fixed,
+                          "💵 چند تومان سودِ ثابت روی قیمتِ خریدِ هر پلن اضافه شود؟ (فقط عدد، مثلاً 50000)")
+
+
+@smm_router.callback_query(F.data == "prm:setcost1")
+async def prm_setcost1_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    await _prm_ask_number(cb, bot, state, SmmFSM.premium_cost1,
+                          "💰 قیمتِ خریدِ پرمیومِ ۱ ماهه چند تومان است؟ (فقط عدد). سود روی همین اضافه می‌شود.")
+
+
+async def _prm_save_number(msg: Message, bot: Bot, state: FSMContext, key: str, label: str):
+    row = await _owner(msg, bot)
+    await state.clear()
+    if not row:
+        return
+    from tenant import fa_to_int
+    val = fa_to_int(msg.text)
+    if val is None or val < 0 or not await _premium_pro_ok(row.id):
+        await msg.answer("عددِ نامعتبر (یا این قابلیت ویژهٔ پلنِ حرفه‌ای است). دوباره از منو امتحان کن.")
+        return
+    await _set_setting(row.id, key, str(val))
+    text, kb = await premium_admin_content(row.id, bot)
+    await msg.answer(f"✅ {label} ذخیره شد.")
+    await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@smm_router.message(SmmFSM.premium_fixed, F.text)
+async def prm_setfixed_save(msg: Message, bot: Bot, state: FSMContext):
+    await _prm_save_number(msg, bot, state, "premium_margin_fixed", "مبلغِ سودِ ثابت")
+
+
+@smm_router.message(SmmFSM.premium_cost1, F.text)
+async def prm_setcost1_save(msg: Message, bot: Bot, state: FSMContext):
+    await _prm_save_number(msg, bot, state, "premium_cost_1", "قیمتِ خریدِ ۱ ماهه")
 
 
 @smm_router.callback_query(F.data == "prm:menu")
@@ -16810,7 +16999,7 @@ async def prm_setcustom_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if not row:
         return
     months = int(cb.data.split(":", 2)[2])
-    if months not in dict(_PREMIUM_TIERS):
+    if months not in dict(await _premium_tiers_for(row.id)):
         await cb.answer("این پلن نامعتبر است.", show_alert=True)
         return
     from tenant import smart_cancel_kb
@@ -16837,7 +17026,7 @@ async def prm_setcustom_save(msg: Message, bot: Bot, state: FSMContext):
         await msg.answer("لغو شد.")
         return
     await state.clear()
-    if not row or months not in dict(_PREMIUM_TIERS):
+    if not row or months not in dict(await _premium_tiers_for(row.id)):
         return
     from tenant import fa_to_int
     val = fa_to_int(raw)
@@ -16988,7 +17177,7 @@ async def show_premium_shop_to_user(bot: Bot, target: Message, bot_id: int) -> N
     manual_mode = await _get_setting(bot_id, "premium_manual_delivery", "0") == "1"
     balance = await _bot_star_balance(bot) if (not manual_mode and await _premium_uses_bot_stars(bot_id)) else None
     rows = []
-    for months, stars in _PREMIUM_TIERS:
+    for months, stars in await _premium_tiers_for(bot_id):
         if balance is not None and stars > balance:
             continue
         price, _is_custom = await _premium_effective_price(bot_id, months, stars, rate, margin)  # PATCH_PREMIUM_CUSTOM_PRICE_V1
@@ -17023,7 +17212,7 @@ async def prm_pick(cb: CallbackQuery, bot: Bot):
         await cb.answer()
         return
     months = int(cb.data.split(":", 2)[2])
-    if months not in dict(_PREMIUM_TIERS):
+    if months not in dict(await _premium_tiers_for(row.id)):
         await cb.answer("این پلن نامعتبر است.", show_alert=True)
         return
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -17052,7 +17241,7 @@ async def prm_back_shop(cb: CallbackQuery, bot: Bot):
 
 async def _premium_show_invoice(target: Message, bot_id: int, months: int,
                                 dest_id: int, dest_label: str) -> None:
-    stars = dict(_PREMIUM_TIERS)[months]
+    stars = dict(await _premium_tiers_for(bot_id))[months]
     rate, margin = await _premium_settings(bot_id)
     price, _is_custom = await _premium_effective_price(bot_id, months, stars, rate, margin)  # PATCH_PREMIUM_CUSTOM_PRICE_V1
     from tenant.shared import vs_pay as _vp   # PATCH_VS_PAY_V1 — تیک‌هایِ مالک + شارژ حساب
@@ -17065,7 +17254,7 @@ async def _premium_show_invoice(target: Message, bot_id: int, months: int,
     ])
     await target.answer(
         f"🧾 <b>فاکتورِ خرید</b>\n\n"
-        f"کالا: پرمیومِ تلگرام {months} ماهه ({stars:,} استارز)\n"
+        f"کالا: پرمیومِ تلگرام {months} ماهه" + (f" ({stars:,} استارز)" if stars else "") + "\n"
         f"مقصد: {dest_label}\n"
         f"قیمت: {price:,} تومان\n\n"
         f"مبلغِ قابل‌پرداخت: {price:,} تومان" + ("" if _pay_rows else _vp.NO_METHOD_NOTE),
@@ -17126,10 +17315,11 @@ async def prm_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
     _, _, months_s, dest_id_str = cb.data.split(":")
     months = int(months_s)
     dest_id = int(dest_id_str)
-    if months not in dict(_PREMIUM_TIERS):
+    if months not in dict(await _premium_tiers_for(row.id)):
         await cb.answer("این پلن نامعتبر است.", show_alert=True)
         return
-    stars = dict(_PREMIUM_TIERS)[months]
+    stars = dict(await _premium_tiers_for(row.id))[months]
+    _force_manual = months == 1          # PATCH_PREMIUM_PRO_PRICING_V1 — ۱ ماهه همیشه دستی
     rate, margin = await _premium_settings(row.id)
     price, _is_custom = await _premium_effective_price(row.id, months, stars, rate, margin)  # PATCH_PREMIUM_CUSTOM_PRICE_V1
 
@@ -17190,7 +17380,7 @@ async def prm_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await vsd_clear(state)   # PATCH_VS_DISCOUNT_V1
 
     # === PATCH_FRAGAPI_V1 === پرمیومِ خودکار با Fragment API (اگر TGTools-premium روشن نیست)
-    if not await _tgt_premium_on(row.id) and await _fapi.premium_on(row.id):
+    if not _force_manual and not await _tgt_premium_on(row.id) and await _fapi.premium_on(row.id):
         async with Session() as s:
             o = await s.get(GiftOrder, order_id)
             if o is not None and await _is_foreign(o, bot):
@@ -17212,7 +17402,7 @@ async def prm_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return
 
     # === PATCH_TGTOOLS_PREMIUM_V1 === خریدِ خودکار با TGTools (اگر روشن و کلید ثبت باشد)
-    if await _tgt_premium_on(row.id):
+    if not _force_manual and await _tgt_premium_on(row.id):
         async with Session() as s:
             o = await s.get(GiftOrder, order_id)
             if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
@@ -17235,7 +17425,7 @@ async def prm_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
     # === PATCH_PREMIUM_MANUAL_DELIVERY_V1 ===
     manual_mode = await _get_setting(row.id, "premium_manual_delivery", "0") == "1"
-    if manual_mode:
+    if manual_mode or _force_manual:
         async with Session() as s:
             o = await s.get(GiftOrder, order_id)
             if o is not None and await _is_foreign(o, bot):   # PATCH_TENANT_SCOPE_V1
@@ -17251,7 +17441,7 @@ async def prm_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
         await _notify_manual_order(
             bot, row,
             f"🌟 سفارشِ پرمیوم (تحویلِ دستی) — #{await order_no(GiftOrder, order_id)}\n"
-            f"پلن: {months} ماهه ({stars:,} استارز)\n💰 {price:,} تومان\n"
+            f"پلن: {months} ماهه" + (f" ({stars:,} استارز)" if stars else "") + f"\n💰 {price:,} تومان\n"
             f"🎯 مقصد: {dest_label}\n🔖 کد: {trk}\n\n"
             f"این پرمیوم را باید خودت با اکانتِ شخصی‌ات هدیه بدهی، "
             f"بعد «✅ انجام شد» را بزن.", admin_kb)
