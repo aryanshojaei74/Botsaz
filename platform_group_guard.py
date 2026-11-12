@@ -429,6 +429,67 @@ _TME_INVITE_RE = re.compile(r"(?:https?://)?t\.me/(?:joinchat/|\+)", re.IGNORECA
 _TME_LINK_RE = re.compile(r"(?:https?://)?t\.me/([A-Za-z][\w]{3,31})", re.IGNORECASE)
 
 
+# === PATCH_GROUP_GUARD_ANTISCAM_V1 === (گزارش: «I have a gift for you» — تصویرِ شامپاین؛ اسپمِ کلاهبرداریِ هدیه)
+# پیام‌هایی (متن یا کپشنِ عکس/ویدیو) که عبارت‌هایِ رایجِ کلاهبرداریِ «هدیه/جایزه» را دارند فوراً پاک می‌شوند و فرستنده بن می‌شود
+# (ادمین‌ها مستثنا). عبارت‌ها عمداً انگلیسی و دقیق‌اند تا گروهِ فارسی‌زبانِ فروشگاهی قاطی نشود.
+_SCAM_RE = re.compile(
+    r"(?:i\s*(?:have|got)\s+(?:a\s+)?(?:gift|surprise|present)\s+for\s+(?:you|u)"
+    r"|(?:gift|surprise|present)\s+for\s+(?:you|u)\b"
+    r"|claim\s+(?:your|ur|the)\s+(?:free\s+)?(?:gift|prize|reward|bonus|airdrop)"
+    r"|you(?:'|’)?(?:ve|\s+have)\s+(?:won|been\s+selected|received\s+a\s+gift)"
+    r"|congratulations?\W+you\s+(?:won|are\s+(?:the\s+)?winner)"
+    r"|free\s+(?:gift|stars|premium|usdt|ton|airdrop)\b.*\b(?:click|link|dm|claim)\b"
+    r"|(?:dm|message|text)\s+me\s+(?:now\s+)?(?:to\s+)?(?:get|receive|claim)\s+(?:your|a)\s+(?:gift|prize|reward))",
+    re.I | re.S)
+
+
+def looks_like_gift_scam(text: str | None) -> bool:
+    t = " ".join((text or "").replace("\u200c", " ").split())
+    return bool(t) and bool(_SCAM_RE.search(t))
+
+
+async def _check_antiscam(msg: Message, bot: Bot) -> bool:
+    """پیام را (متن یا کپشن) با عبارت‌هایِ اسپمِ «هدیه/جایزه» می‌سنجد؛ در صورتِ تطابق: حذف + بنِ فوریِ فرستنده."""
+    if (await get_pset("group_guard_antiscam", "on")) == "off":
+        return False
+    if _is_spam_bot_message(msg) or not msg.from_user:
+        return False
+    text = f"{msg.text or ''} {msg.caption or ''}"
+    if not looks_like_gift_scam(text):
+        return False
+    if await _is_authorized(msg, bot):
+        return False
+    try:
+        await bot.delete_message(msg.chat.id, msg.message_id)
+    except Exception:
+        logger.exception("antiscam: پاک‌کردنِ پیام ناموفق بود")
+    u = msg.from_user
+    ban_ok, ban_error = await _ban_and_verify(bot, msg.chat.id, u.id)
+    if ban_ok:
+        async with Session() as s:
+            row = await s.scalar(select(GroupGuardBan).where(
+                GroupGuardBan.chat_id == msg.chat.id, GroupGuardBan.user_id == u.id))
+            if not row:
+                row = GroupGuardBan(chat_id=msg.chat.id, user_id=u.id)
+                s.add(row)
+            row.full_name, row.username = u.full_name, u.username
+            row.reason = "اسپمِ کلاهبرداریِ هدیه/جایزه (خودکار)"
+            row.banned_by = 0
+            row.banned_at = datetime.datetime.now()
+            await s.commit()
+    else:
+        logger.error("antiscam: بن تأیید نشد chat=%s user=%s: %s", msg.chat.id, u.id, ban_error)
+    try:
+        await msg.answer(f"🛡 پیامِ اسپمِ هدیه/جایزه از {_html.escape(u.full_name)} حذف شد"
+                         + (" و فرستنده بن شد." if ban_ok else "؛ بن خودکار انجام نشد (دسترسیِ ربات را چک کنید)."))
+    except Exception:
+        logger.exception("antiscam: اطلاعِ گروه ارسال نشد")
+    await _log_action(
+        f"🛡 <b>ضدِ اسپمِ هدیه/جایزه</b>\n👤 {_html.escape(u.full_name)} (<code>{u.id}</code>)\n{_evidence(msg)}"
+        + ("\n🚫 بن شد" if ban_ok else "\n⚠️ بن تأیید نشد"))
+    return True
+
+
 async def _check_promo_links(msg: Message, bot: Bot) -> bool:
     if (await get_pset("group_guard_antipromo_enabled", "off")) != "on":
         return False
@@ -847,6 +908,8 @@ async def group_guard_command_router(msg: Message, bot: Bot):
         return
     # === PATCH_GROUP_GUARD_FLOOD_V1 ===
     if await _check_flood(msg, bot):
+        return
+    if await _check_antiscam(msg, bot):          # PATCH_GROUP_GUARD_ANTISCAM_V1
         return
     # === PATCH_GROUP_GUARD_CONTENT_RESTRICT_V1 ===
     if await _check_content_restrictions(msg, bot):
