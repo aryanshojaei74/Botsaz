@@ -338,6 +338,7 @@ _VC_DEF = {
     "vc_max_count": "5", "vc_price_gb": "1000", "vc_price_day": "500",
     # === PATCH_VC_SIMPLE_MODE_V1 === (کلیدها باید با vpn_admin._VC_DEFAULTS یکی باشند؛ تست دارد)
     "vc_simple": "0", "vc_simple_days": "30",
+    "vc_wizard": "0",     # PATCH_VC_WIZARD_V1
     # === PATCH_RESELLER_GB_PRICING_V1 === خالی یعنی «تنظیم نشده»
     "rs_price_gb": "0", "rs_price_day": "0",
     # حالتِ فروش: "general" (بازهٔ عمومیِ بالا) یا "tiers" (تعرفه‌های مدت‌دار)
@@ -356,7 +357,7 @@ _VC_PANEL_KEYS_U = [
     "vc_enabled", "vc_min_gb", "vc_max_gb", "vc_step_gb",
     "vc_min_days", "vc_max_days", "vc_step_days",
     "vc_max_count", "vc_price_gb", "vc_price_day", "vc_pricing_mode",
-    "vc_simple", "vc_simple_days",   # === PATCH_VC_SIMPLE_MODE_V1 ===
+    "vc_simple", "vc_simple_days", "vc_wizard",   # === PATCH_VC_SIMPLE_MODE_V1 / PATCH_VC_WIZARD_V1 ===
     "renew_enabled", "renew_price_gb", "renew_price_day",
     "renew_min_gb", "renew_max_gb", "renew_step_gb",
     "renew_min_days", "renew_max_days", "renew_step_days",
@@ -1846,6 +1847,10 @@ async def show_vpn_plans(bot: Bot, msg: Message, bot_id: int, state=None, panel_
                 await state.update_data(vc_manual_prompt_id=sent.message_id, vc_manual_orig_id=sent.message_id)
                 return
         cfg   = await _vc_all_for_user(bot_id, msg.from_user.id, cur_panel_key)
+        # === PATCH_VC_WIZARD_V1 === حالتِ مرحله‌ای (وقتی پلنِ ثابت نیست)
+        if state is not None and cfg.get("vc_wizard") == "1":
+            await _wiz_begin(msg, bot_id, msg.from_user.id, cfg, cur_panel_key, state)
+            return
         gb    = int(cfg["vc_min_gb"])
         days  = int(cfg["vc_min_days"])
         count = 1
@@ -4895,6 +4900,140 @@ async def _vc_simple_start(bot_id: int, telegram_id: int, panel_key: str, state)
     return txt, kb
 
 
+# === PATCH_VC_WIZARD_V1 === (تیکت #936) خریدِ مرحله‌ایِ پیام‌به‌پیام: حجم ← مدت ← تعداد ← نامِ سرویس ← پیش‌فاکتور
+class _VcWizardFSM(StatesGroup):
+    gb = State()
+    days = State()
+    count = State()
+
+
+def _wiz_back_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 بازگشت", callback_data="vc:back")]])
+
+
+async def _wiz_parse(msg: Message) -> int | None:
+    raw = "".join(ch for ch in (msg.text or "").translate(_VC_MANUAL_FA_DIGITS) if ch.isdigit())
+    return int(raw) if raw else None
+
+
+async def _wiz_ask(target, bot_id: int, tg_id: int, field: str, state: FSMContext, notice: str = "") -> None:
+    data = await state.get_data()
+    pk = data.get("vc_panel_key", "")
+    gb, days = data.get("vc_gb"), data.get("vc_days")
+    cfg = await _vc_all_for_user(bot_id, tg_id, pk, days=days, gb=gb)
+    if field == "gb":
+        mn, mx, st = int(cfg["vc_min_gb"]), int(cfg["vc_max_gb"]), int(cfg["vc_step_gb"])
+        txt = (f"📦 <b>حجمِ بسته</b> چند گیگابایت باشد؟\n\n🔔 بین {mn} تا {mx} گیگ"
+               + (f" (به‌صورتِ {mn}، {mn + st}، {mn + 2 * st} و …)" if st > 1 else "")
+               + f"\n💰 قیمتِ هر گیگ: {int(cfg['vc_price_gb']):,} تومان\n\nفقط عدد بفرست:")
+    elif field == "days":
+        mn, mx, st = int(cfg["vc_min_days"]), int(cfg["vc_max_days"]), int(cfg["vc_step_days"])
+        txt = (f"📅 <b>مدتِ بسته</b> چند روز باشد؟\n\n🔔 بین {mn} تا {mx} روز"
+               + (f" (به‌صورتِ {mn}، {mn + st}، {mn + 2 * st} و …)" if st > 1 else "")
+               + f"\n\nفقط عدد بفرست:")
+    else:
+        mx = int(cfg["vc_max_count"])
+        txt = f"🔢 <b>تعدادِ سفارش</b> چندتا باشد؟\n\n🔔 بین ۱ تا {mx}\n\nفقط عدد بفرست:"
+    await target.answer((notice + "\n\n" if notice else "") + txt, parse_mode="HTML", reply_markup=_wiz_back_kb())
+
+
+async def _wiz_begin(target, bot_id: int, tg_id: int, cfg: dict, panel_key: str, state: FSMContext) -> None:
+    await state.update_data(vc_gb=int(cfg["vc_min_gb"]), vc_days=int(cfg["vc_min_days"]), vc_count=1,
+                            vc_bot_id=bot_id, vc_panel_key=panel_key, vc_disc_code=None, vc_stage=None,
+                            vcustom_label=None)
+    await state.set_state(_VcWizardFSM.gb)
+    await _wiz_ask(target, bot_id, tg_id, "gb", state)
+
+
+async def _wiz_start(bot: Bot, cb: CallbackQuery, row, cfg: dict, panel_key: str, state: FSMContext) -> None:
+    await cb.answer()
+    await _wiz_begin(cb.message, row.id, cb.from_user.id, cfg, panel_key, state)
+
+
+async def _wiz_row(bot: Bot):
+    async with Session() as s:
+        return await s.scalar(select(BotRow).where(BotRow.token == bot.token))
+
+
+async def _wiz_value(msg: Message, row, state: FSMContext, field: str):
+    """مقدارِ عددیِ معتبر (با گردکردن به گام) یا None؛ در خطا پیامِ مناسب می‌دهد."""
+    txt = (msg.text or "").strip()
+    if txt.lower() in ("/cancel", "لغو", "انصراف"):
+        await state.clear()
+        await msg.answer("❌ لغو شد.")
+        return None
+    v = await _wiz_parse(msg)
+    data = await state.get_data()
+    cfg = await _vc_all_for_user(row.id, msg.from_user.id, data.get("vc_panel_key", ""),
+                                 days=data.get("vc_days"), gb=data.get("vc_gb"))
+    if field == "gb":
+        mn, mx, st = int(cfg["vc_min_gb"]), int(cfg["vc_max_gb"]), int(cfg["vc_step_gb"])
+    elif field == "days":
+        mn, mx, st = int(cfg["vc_min_days"]), int(cfg["vc_max_days"]), int(cfg["vc_step_days"])
+    else:
+        mn, mx, st = 1, int(cfg["vc_max_count"]), 1
+    if v is None or v < mn or v > mx:
+        await msg.answer(f"❌ عددِ معتبر بفرست؛ باید بین {mn} تا {mx} باشد. (یا «لغو»)")
+        return None
+    if st > 1:
+        v = max(mn, min(mn + round((v - mn) / st) * st, mx))
+    return v
+
+
+@vpn_user_router.message(_VcWizardFSM.gb, F.text)
+async def vc_wiz_gb(msg: Message, bot: Bot, state: FSMContext):
+    row = await _wiz_row(bot)
+    if not row:
+        return
+    v = await _wiz_value(msg, row, state, "gb")
+    if v is None:
+        return
+    await state.update_data(vc_gb=v)
+    await state.set_state(_VcWizardFSM.days)
+    await _wiz_ask(msg, row.id, msg.from_user.id, "days", state, notice=f"✅ حجم: {v} گیگ")
+
+
+@vpn_user_router.message(_VcWizardFSM.days, F.text)
+async def vc_wiz_days(msg: Message, bot: Bot, state: FSMContext):
+    row = await _wiz_row(bot)
+    if not row:
+        return
+    v = await _wiz_value(msg, row, state, "days")
+    if v is None:
+        return
+    data = await state.get_data()
+    # با تغییرِ مدت ممکن است بازهٔ مجازِ حجم (تعرفه‌هایِ مدت‌دار) عوض شود؛ مثلِ ورودیِ دستی هماهنگ می‌شود
+    cfg2 = await _vc_all_for_user(row.id, msg.from_user.id, data.get("vc_panel_key", ""), days=v, gb=data.get("vc_gb"))
+    gb = max(int(cfg2["vc_min_gb"]), min(int(data.get("vc_gb") or 0), int(cfg2["vc_max_gb"])))
+    await state.update_data(vc_days=v, vc_gb=gb)
+    if int(cfg2["vc_max_count"]) <= 1:                       # تعداد فقط ۱ ⇒ مرحلهٔ تعداد را رد کن
+        await state.update_data(vc_count=1)
+        await _wiz_to_name(msg, bot, row, state, f"✅ مدت: {v} روز")
+        return
+    await state.set_state(_VcWizardFSM.count)
+    await _wiz_ask(msg, row.id, msg.from_user.id, "count", state, notice=f"✅ مدت: {v} روز")
+
+
+@vpn_user_router.message(_VcWizardFSM.count, F.text)
+async def vc_wiz_count(msg: Message, bot: Bot, state: FSMContext):
+    row = await _wiz_row(bot)
+    if not row:
+        return
+    v = await _wiz_value(msg, row, state, "count")
+    if v is None:
+        return
+    await state.update_data(vc_count=v)
+    await _wiz_to_name(msg, bot, row, state, f"✅ تعداد: {v}")
+
+
+async def _wiz_to_name(msg: Message, bot: Bot, row, state: FSMContext, notice: str) -> None:
+    """مرحلهٔ آخر: «نامِ سرویس چی باشد؟» (همان مرحلهٔ نامِ دلخواهِ موجود؛ رد‌کردنش خودکار انتخاب می‌کند) ← پیش‌فاکتور."""
+    await state.update_data(vcustom_label=None)
+    await state.set_state(_VpnNameFSM.naming_vc)
+    await msg.answer(notice)
+    await _ask_custom_name(msg, 0, "vc", row.id)
+
+
 @vpn_user_router.callback_query(F.data.startswith("vc:open"))
 async def vc_open(cb: CallbackQuery, bot: Bot, state: FSMContext):
     """باز کردن رابط +/− خرید آنلاین — panel_key از callback می‌آید."""
@@ -4922,6 +5061,10 @@ async def vc_open(cb: CallbackQuery, bot: Bot, state: FSMContext):
         except Exception:
             sent = await bot.send_message(cb.message.chat.id, txt, reply_markup=kb)
             await state.update_data(vc_manual_prompt_id=sent.message_id, vc_manual_orig_id=sent.message_id)
+        return
+    # === PATCH_VC_WIZARD_V1 === حالتِ مرحله‌ایِ پیام‌به‌پیام (حالتِ ساده اولویت دارد)
+    if cfg.get("vc_wizard") == "1":
+        await _wiz_start(bot, cb, row, cfg, cur_panel_key, state)
         return
     await state.set_state(VpnConfiguratorFSM.selecting)
     await state.update_data(vc_gb=gb, vc_days=days, vc_count=count,
