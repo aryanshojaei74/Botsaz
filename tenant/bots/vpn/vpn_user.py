@@ -2220,7 +2220,7 @@ async def _render_bundle_bucket(bot: Bot, msg: Message, bot_id: int, plans: list
     if _br:
         rows.append(_br)
     icon = (cat.icon if cat else icon_override) or "🧩"
-    title = _with_icon(await _cat_icons_on(bot_id), icon, f"<b>{bucket_title}</b>") + "\n\nیکی را انتخاب کن:"
+    title = _with_icon(await _cat_icons_on(bot_id), icon, f"<b>{bucket_title}</b>") + await _pick_suffix(bot_id, "یکی را انتخاب کن:")
     await msg.answer(_with_btn_header(title, header),
                      reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
@@ -2228,6 +2228,18 @@ async def _render_bundle_bucket(bot: Bot, msg: Message, bot_id: int, plans: list
 # === PATCH_VPN_CAT_ICONS_TOGGLE_V1 ===
 # درخواستِ مشتری (#854): آیکنِ کنارِ دکمهٔ دسته‌ها (🛰 / 🏷 / 🧩 …) ظاهرِ دکمه‌ها را خراب می‌کند و در بعضی
 # گوشی‌ها شبیهِ پوشه نمایش داده می‌شود. مالک می‌تواند خاموشش کند؛ پیش‌فرض روشن (بدونِ تغییرِ رفتارِ ربات‌هایِ فعلی).
+# === PATCH_VPN_PICK_LINE_V1 === (VikingVPN: «یکی را انتخاب کن:» تکراری است؛ مالک بتواند حذفش کند)
+async def _pick_suffix(bot_id: int, text: str) -> str:
+    """خطِ راهنمایِ ثابتِ پایینِ تیترِ صفحه‌هایِ دسته/پلن («یکی را انتخاب کن:»). مالک می‌تواند خاموشش کند؛ پیش‌فرض روشن."""
+    try:
+        from tenant import get_setting
+        if (await get_setting(bot_id, "vpn_pick_line", "1")) == "0":
+            return ""
+    except Exception:
+        logger.exception("vpn: خواندنِ تنظیمِ خطِ راهنما ناموفق بود")
+    return "\n\n" + text
+
+
 async def _cat_icons_on(bot_id: int) -> bool:
     from tenant import get_setting
     return (await get_setting(bot_id, "vpn_cat_icons", "1")) != "0"
@@ -2343,7 +2355,7 @@ async def show_bundle_hub(bot: Bot, msg: Message, bot_id: int, cat_id: int, stat
     if _br:
         rows.append(_br)
     text = _with_btn_header(
-        _with_icon(await _cat_icons_on(bot_id), cat.icon or '🧩', f"<b>{cat.title}</b>") + "\n\nیک دسته را انتخاب کن:", header)
+        _with_icon(await _cat_icons_on(bot_id), cat.icon or '🧩', f"<b>{cat.title}</b>") + await _pick_suffix(bot_id, "یک دسته را انتخاب کن:"), header)
     await msg.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
@@ -2478,7 +2490,7 @@ async def show_bundle_all_categories(bot: Bot, msg: Message, bot_id: int, state=
     if _br:
         rows.append(_br)
     text = _with_btn_header(  # === PATCH_VPN_EDITABLE_TITLES_V1 ===
-        _with_icon(_ico_on, "🌐", f"<b>{await _get_page_title(bot_id, 'all_cats')}</b>") + "\n\nیک دسته را انتخاب کن:", header)
+        _with_icon(_ico_on, "🌐", f"<b>{await _get_page_title(bot_id, 'all_cats')}</b>") + await _pick_suffix(bot_id, "یک دسته را انتخاب کن:"), header)
     await msg.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
@@ -2554,7 +2566,7 @@ async def show_bundle_all_services(bot: Bot, msg: Message, bot_id: int, state=No
     if _br:
         rows.append(_br)
     text = _with_btn_header(  # === PATCH_VPN_EDITABLE_TITLES_V1 ===
-        _with_icon(_ico_on, "📦", f"<b>{await _get_page_title(bot_id, 'all_svcs')}</b>") + "\n\nیک دسته را انتخاب کن:", header)
+        _with_icon(_ico_on, "📦", f"<b>{await _get_page_title(bot_id, 'all_svcs')}</b>") + await _pick_suffix(bot_id, "یک دسته را انتخاب کن:"), header)
     await msg.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
@@ -2900,6 +2912,22 @@ async def _build_buy_summary(bot: Bot, bot_id: int, plan_id: int,
     return text, await _with_home_row(InlineKeyboardMarkup(inline_keyboard=kb_rows), bot_id)
 
 
+# === PATCH_CFG_NAME_SKIP_LABEL_V1 === (VikingVPN: اسمِ دکمهٔ «بدون نام (ادامه)» قابلِ تغییر باشد)
+CFG_NAME_SKIP_DEFAULT = "⏭ بدون نام (ادامه)"
+
+
+async def _cfg_name_skip_label(bot_id: int) -> str:
+    if not bot_id:
+        return CFG_NAME_SKIP_DEFAULT
+    try:
+        from tenant import get_setting
+        v = (await get_setting(bot_id, "cfg_name_skip_label", "") or "").strip()
+        return v[:40] or CFG_NAME_SKIP_DEFAULT
+    except Exception:
+        logger.exception("vpn: خواندنِ نامِ دکمهٔ «بدون نام» ناموفق بود")
+        return CFG_NAME_SKIP_DEFAULT
+
+
 async def _ask_custom_name(target, plan_id: int, kind: str = "plan",
                            bot_id: int = 0):  # === PATCH_CFG_NAME_PROMPT_EDIT_V1 ===
     """صفحهٔ پرسیدن اسم دلخواه (اختیاری) قبل از پیش‌فاکتور.
@@ -2908,7 +2936,7 @@ async def _ask_custom_name(target, plan_id: int, kind: str = "plan",
     skip_cb = f"vname:skip:{plan_id}" if kind == "plan" else "vcname:skip"
     back_cb = "vbuyback" if kind == "plan" else "vc:back"
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⏭ بدون نام (ادامه)", callback_data=skip_cb,
+        [InlineKeyboardButton(text=await _cfg_name_skip_label(bot_id), callback_data=skip_cb,
                               style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="⬅️ بازگشت به منوی قبل", callback_data=back_cb,
                               style=ButtonStyle.DANGER)],

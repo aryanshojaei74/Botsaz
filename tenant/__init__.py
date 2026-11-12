@@ -14309,7 +14309,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "571"
+BUILD_ID = "572"
 
 
 @tenant_router.message(Command("version"))
@@ -35934,6 +35934,7 @@ async def _edit_guides_show(target, bot_id: int, *, edit: bool = False):
 # === PATCH_CFG_NAME_PROMPT_EDIT_V1 ===
 class _CfgNamePromptFSM(StatesGroup):
     waiting = State()
+    label = State()      # PATCH_CFG_NAME_SKIP_LABEL_V1
 
 
 @tenant_router.callback_query(F.data == "tadm:cfgnameprompt")
@@ -35954,7 +35955,48 @@ async def tadm_cfg_name_prompt(cb: CallbackQuery, bot: Bot, state: FSMContext):
         "متنِ جدید را بفرست (قالب‌بندیِ تلگرام پشتیبانی می‌شود).\n"
         "برایِ برگشت به متنِ پیش‌فرض، یک خطِ تیره (-) بفرست.",
         reply_markup=await smart_cancel_kb(bot))
+    # === PATCH_CFG_NAME_SKIP_LABEL_V1 === نامِ دکمهٔ «بدون نام (ادامه)» هم قابلِ تغییر است
+    from tenant.bots.vpn.vpn_user import _cfg_name_skip_label
+    await cb.message.answer(
+        f"🏷 نامِ فعلیِ دکمهٔ رد‌کردنِ نام: <b>{_html.escape(await _cfg_name_skip_label(row.id))}</b>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="✏️ تغییرِ نامِ دکمهٔ «بدون نام»", callback_data="cfgname:skiplabel", style=ButtonStyle.PRIMARY)]]))
     await cb.answer()
+
+
+@tenant_router.callback_query(F.data == "cfgname:skiplabel")
+async def tadm_cfg_name_skip_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await state.set_state(_CfgNamePromptFSM.label)
+    await cb.message.answer(
+        "✏️ نامِ جدیدِ دکمه را بفرست (حداکثر ۴۰ کاراکتر؛ ایموجی هم می‌شود)، مثلاً: <code>خودکار انتخاب کن!</code>\n"
+        "برایِ برگشت به پیش‌فرض (⏭ بدون نام (ادامه)) یک خطِ تیره (-) بفرست.\n\n"
+        "ℹ️ وقتی مشتری این دکمه را بزند، سرور با نامِ خودکار ساخته می‌شود و همان نامِ داخلِ پنل در «سرویس‌های من» "
+        "نمایش داده می‌شود (اگر «دکمهٔ سرویس‌هایِ من: نامِ داخلِ پنل» روشن باشد).",
+        parse_mode="HTML", reply_markup=await smart_cancel_kb(bot))
+    await cb.answer()
+
+
+@tenant_router.message(_CfgNamePromptFSM.label, F.text)
+async def tadm_cfg_name_skip_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await get_bot_row(bot)
+    if not row or not await is_owner_or_admin(row.id, msg.from_user.id, row.owner_id):
+        await state.clear()
+        return
+    raw = (msg.text or "").strip()
+    if raw in ("❌ لغو", "❌ لغو / بازگشت"):
+        return
+    await state.clear()
+    if raw == "-":
+        await set_setting(row.id, "cfg_name_skip_label", "")
+        return await msg.answer("♻️ به نامِ پیش‌فرض برگشت.", reply_markup=await tadmin_kb(row.id))
+    if len(raw) > 40 or not raw:
+        return await msg.answer("⚠️ نام باید حداکثر ۴۰ کاراکتر باشد؛ دوباره از همان صفحه امتحان کن.",
+                                reply_markup=await tadmin_kb(row.id))
+    await set_setting(row.id, "cfg_name_skip_label", raw)
+    await msg.answer(f"✅ نامِ دکمه شد «{_html.escape(raw)}».", reply_markup=await tadmin_kb(row.id))
 
 
 @tenant_router.message(_CfgNamePromptFSM.waiting, F.text)

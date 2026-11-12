@@ -5937,6 +5937,11 @@ async def _titles_screen(bot_id: int):
     rows.append([InlineKeyboardButton(
         text="📡 دکمهٔ «سرویس‌های من»: " + ("نامِ داخلِ پنل" if _sn else "حجم و روز"),
         callback_data="vtl:svcn", style=ButtonStyle.SUCCESS if _sn else ButtonStyle.PRIMARY)])
+    # === PATCH_VPN_PICK_LINE_V1 === خطِ «یکی را انتخاب کن:» زیرِ تیترِ صفحه‌هایِ دسته/پلن
+    _pk = (await _gs_sn(bot_id, "vpn_pick_line", "1")) != "0"
+    rows.append([InlineKeyboardButton(
+        text="💬 خطِ «یکی را انتخاب کن:»: " + ("✅ نمایش" if _pk else "⛔️ پنهان"),
+        callback_data="vtl:pick", style=ButtonStyle.SUCCESS if _pk else ButtonStyle.DANGER)])
     # === PATCH_VC_PAGE_TEMPLATE_V1 ===
     rows.append([InlineKeyboardButton(text="📝 متنِ کاملِ صفحهٔ «خرید سرویس جدید»",
                                       callback_data="vtl:tpl", style=ButtonStyle.SUCCESS)])
@@ -5965,6 +5970,18 @@ async def vpn_svc_btn_name_toggle(cb: CallbackQuery, bot: Bot, state: FSMContext
     from tenant import get_setting as _gs, set_setting as _ss
     cur = (await _gs(row.id, "svc_btn_name", "0")) == "1"
     await _ss(row.id, "svc_btn_name", "0" if cur else "1")
+    await vpn_titles_menu(cb, bot, state)
+
+
+@vpn_admin_router.callback_query(F.data == "vtl:pick")
+async def vpn_pick_line_toggle(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """PATCH_VPN_PICK_LINE_V1 — نمایش/پنهان‌کردنِ خطِ «یکی را انتخاب کن:» (VikingVPN)."""
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    from tenant import get_setting as _gs, set_setting as _ss
+    cur = (await _gs(row.id, "vpn_pick_line", "1")) != "0"
+    await _ss(row.id, "vpn_pick_line", "0" if cur else "1")
     await vpn_titles_menu(cb, bot, state)
 
 
