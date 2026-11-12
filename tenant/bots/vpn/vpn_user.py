@@ -1224,7 +1224,25 @@ def _connection_status_line(usage: dict) -> str:
     return "\n".join(lines)
 
 
-def _usage_block(usage: dict, fallback_expiry: "_dt.datetime | None" = None) -> str:
+def _remaining_days_text(expiry: "_dt.datetime | None" = None, expiry_ms: int = 0) -> str:
+    """PATCH_SVC_REMAINING_DAYS_V1 — «۱۲ روز» به‌جایِ تاریخِ انقضا (VikingVPN)."""
+    try:
+        if expiry_ms:
+            exp = _dt.datetime.utcfromtimestamp(int(expiry_ms) / 1000)
+        else:
+            exp = expiry
+        if not exp:
+            return "بی‌انقضا"
+        secs = (exp - _dt.datetime.utcnow()).total_seconds()
+        if secs <= 0:
+            return "منقضی شده"
+        days = int(-(-secs // 86400))
+        return f"{days} روز"
+    except Exception:
+        return "—"
+
+
+def _usage_block(usage: dict, fallback_expiry: "_dt.datetime | None" = None, remaining: bool = False) -> str:
     """بلوک کامل وضعیت زنده با نوار پیشرفت، مثل ربات سوپرا.
 
     fallback_expiry: تاریخ انقضای ذخیره‌شده در DB محلی (PanelAccount.expires_at)؛
@@ -1232,10 +1250,13 @@ def _usage_block(usage: dict, fallback_expiry: "_dt.datetime | None" = None) -> 
     شبکه) از همین استفاده می‌شود تا تاریخ انقضا هیچ‌وقت خالی/گمراه‌کننده نشود.
     """
     fallback_str = _jalali(fallback_expiry) if fallback_expiry else "بدون انقضا"
+    if remaining:                                    # PATCH_SVC_REMAINING_DAYS_V1: «⏳ باقی‌مانده: N روز» به‌جایِ تاریخ
+        fallback_str = _remaining_days_text(fallback_expiry)
+    _exp_label = "باقی‌مانده" if remaining else "انقضا"
     if not usage:
         if fallback_expiry:
             return (f"⚠️ <i>اطلاعات زنده در دسترس نیست</i>\n"
-                    f"⏳ انقضا (طبق ثبت خرید): <b>{fallback_str}</b>")
+                    f"⏳ {_exp_label} (طبق ثبت خرید): <b>{fallback_str}</b>")
         return "⚠️ <i>اطلاعات زنده در دسترس نیست</i>"
     up = int(usage.get("up", 0) or 0)
     down = int(usage.get("down", 0) or 0)
@@ -1243,7 +1264,8 @@ def _usage_block(usage: dict, fallback_expiry: "_dt.datetime | None" = None) -> 
     used = up + down
     used_gb = round(used / _GB, 2)
     raw_expiry_ms = int(usage.get("expiryTime", 0) or 0)
-    expiry = _jalali_from_ms(raw_expiry_ms) if raw_expiry_ms else fallback_str
+    expiry = ((_remaining_days_text(None, raw_expiry_ms) if remaining else _jalali_from_ms(raw_expiry_ms))
+              if raw_expiry_ms else fallback_str)
     # === PATCH_ONHOLD_DISPLAY_V1 === سرویسِ «از اولین اتصال»: هنوز انقضایی ثبت نشده، ولی بی‌انقضا هم نیست
     _oh = int(usage.get("on_hold_seconds", 0) or 0)
     if _oh and not raw_expiry_ms:
@@ -1264,14 +1286,14 @@ def _usage_block(usage: dict, fallback_expiry: "_dt.datetime | None" = None) -> 
             f"💾 باقی‌مانده: <b>{left_gb} GB</b>\n"
             f"📦 کل حجم: <b>{cap_gb} GB</b>\n"
             f"{bar}  {percent}٪\n"
-            f"⏳ انقضا: <b>{expiry}</b>"
+            f"⏳ {_exp_label}: <b>{expiry}</b>"
             f"{conn_line}"
         )
     return (
         "📊 <b>وضعیت زنده (از سرور)</b>\n"
         f"✅ مصرف‌شده: <b>{used_gb} GB</b>\n"
         "📦 حجم: <b>نامحدود</b>\n"
-        f"⏳ انقضا: <b>{expiry}</b>"
+        f"⏳ {_exp_label}: <b>{expiry}</b>"
         f"{conn_line}"
     )
 
@@ -6255,12 +6277,17 @@ async def vpn_service(cb: CallbackQuery, bot: Bot):
         web_url = await _web_info_url(s, a)
         await s.commit()
     await cb.answer("در حال دریافت مصرف…")
-    usage_blk = _usage_block(None, fallback_expiry)
+    # === PATCH_SVC_PAGE_OPTIONS_V1 === (VikingVPN) نمایشِ «روزهایِ باقی‌مانده» به‌جایِ تاریخِ خرید/انقضا؛ پنهان‌کردنِ «افزایش حجم»؛ تمدیدِ ساده
+    from tenant import get_setting as _gs_so
+    _remaining_mode = (await _gs_so(row.id, "svc_info_mode", "full")) == "remaining"
+    _hide_addvol = (await _gs_so(row.id, "svc_addvol_btn", "1")) == "0"
+    _renew_simple = (await _gs_so(row.id, "svc_renew_simple", "0")) == "1"
+    usage_blk = _usage_block(None, fallback_expiry, _remaining_mode)
     if panel:
         client = await _panel_client(panel)
         try:
             usage = await client.get_usage(email)
-            usage_blk = _usage_block(usage, fallback_expiry)
+            usage_blk = _usage_block(usage, fallback_expiry, _remaining_mode)
         except Exception as _ue:
             # PATCH_LOG_THROTTLE_PERSIST_V1 — پنلِ قطع/اکانتِ ادمینِ غیرفعال (PanelError) باگِ ما نیست:
             # یک WARNINGِ یک‌خطی، هر پنل حداکثر ساعتی یک‌بار؛ فقط خطایِ غیرمنتظره traceback می‌گیرد.
@@ -6308,12 +6335,13 @@ async def vpn_service(cb: CallbackQuery, bot: Bot):
             # نام‌هایِ قبلی («تمدید / افزایش حجم» و «افزایش حجم (بدون
             # تمدید)») از دیدِ کاربر تفاوتشان معلوم نبود و هر دو شبیهِ هم
             # می‌خواندند. حالا صریح می‌گوییم هرکدام چه چیزی را زیاد می‌کند.
-            [InlineKeyboardButton(text="♻️ تمدید مجدد سرویس (زمان + حجم)",
+            [InlineKeyboardButton(text=("♻️ تمدید سرویس" if _renew_simple else "♻️ تمدید مجدد سرویس (زمان + حجم)"),
                                   callback_data=f"vren:{aid}",
                                   style=await _ibs(_bid, "ibtn:renew") or ButtonStyle.SUCCESS)],
-            [InlineKeyboardButton(text="📈 فقط افزایش حجم (بدون تغییر زمان)",
-                                  callback_data=f"vadd:{aid}",
-                                  style=await _ibs(_bid, "ibtn:add_volume"))],
+            *([] if _hide_addvol else [
+                [InlineKeyboardButton(text="📈 فقط افزایش حجم (بدون تغییر زمان)",
+                                      callback_data=f"vadd:{aid}",
+                                      style=await _ibs(_bid, "ibtn:add_volume"))]]),
         ]
     # === PATCH_VPN_AUTORENEW_V1 === دکمهٔ «تمدیدِ خودکار» فقط اگر مالک قابلیت را روشن کرده
     try:
@@ -6331,11 +6359,12 @@ async def vpn_service(cb: CallbackQuery, bot: Bot):
                                            callback_data=f"vwgcfg:{aid}",
                                            style=await _ibs(_bid, "ibtn:wg_cfg")))
     if sub_link:
-        _small.append(InlineKeyboardButton(text="📱 نمایش QR", callback_data=f"vsvcqr:{aid}"))
+        _small.append(InlineKeyboardButton(text="📱 نمایش QR", callback_data=f"vsvcqr:{aid}",
+                                           style=ButtonStyle.PRIMARY))       # PATCH_SVC_PAGE_OPTIONS_V1: رنگِ پیش‌فرض
     _small += [
         InlineKeyboardButton(text="🔄 تغییر لینک اتصال",
                              callback_data=f"vreset:{aid}",
-                             style=await _ibs(_bid, "ibtn:reset_link")),
+                             style=await _ibs(_bid, "ibtn:reset_link") or ButtonStyle.PRIMARY),
         InlineKeyboardButton(
             text=("✅ فعال‌سازی سرویس" if acc_status == "disabled" else "⛔️ غیرفعال کردن سرویس"),
             callback_data=(f"vsvcon:{aid}" if acc_status == "disabled" else f"vsvcoff:{aid}"),
@@ -6349,7 +6378,7 @@ async def vpn_service(cb: CallbackQuery, bot: Bot):
         _small.append(InlineKeyboardButton(text="💸 برگشت وجه", callback_data=f"vrf:{aid}",
                                            style=ButtonStyle.DANGER))
     _small.append(InlineKeyboardButton(text="🧩 آموزش اتصال", callback_data="vhelp:menu",
-                                       style=await _ibs(_bid, "ibtn:help_conn")))
+                                       style=await _ibs(_bid, "ibtn:help_conn") or ButtonStyle.PRIMARY))
     kb_rows += [_small[i:i + 2] for i in range(0, len(_small), 2)]
     # === PATCH_METERED_PLAN_V1 === خطِ توضیحِ بستهٔ اعتباری در صفحهٔ سرویس
     _mtr_line = ""
@@ -6380,8 +6409,8 @@ async def vpn_service(cb: CallbackQuery, bot: Bot):
         f"🛰 سرویس: <b>{title}</b>\n"
         f"🗂 کد سرویس: <code>{svc_code}</code>\n"
         f"👤 نام کاربری پنل: <code>{email}</code>\n"
-        f"📅 تاریخ خرید: {bought}\n"
-        f"{_mtr_line}"
+        + ("" if _remaining_mode else f"📅 تاریخ خرید: {bought}\n")
+        + f"{_mtr_line}"
         "┈┅━━⊷⊰✨⊱⊶━━┅┈\n"
         f"{usage_blk}"
     )
@@ -7573,6 +7602,13 @@ async def vpn_renew_menu(cb: CallbackQuery, bot: Bot):
                 callback_data=f"vrend:{aid}:{d}", style=_renew_style)])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"vsvc:{aid}",
                                       style=_back_style)])
+    # === PATCH_SVC_PAGE_OPTIONS_V1 === «تمدیدِ ساده»: بدونِ توضیحاتِ اضافه (VikingVPN: «قسمتِ تمدید نیاز به جزئیات اضافه نیست»)
+    from tenant import get_setting as _gs_rs
+    if (await _gs_rs(row.id, "svc_renew_simple", "0")) == "1":
+        await _safe_edit(cb, "♻️ <b>تمدید سرویس</b>\n\nگزینهٔ موردنظر را انتخاب کن:",
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+        await cb.answer()
+        return
     await _safe_edit(
         cb,
 # === PATCH_RENEW_CLARITY_V1 ===

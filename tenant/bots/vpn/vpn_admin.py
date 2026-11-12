@@ -5937,6 +5937,19 @@ async def _titles_screen(bot_id: int):
     rows.append([InlineKeyboardButton(
         text="📡 دکمهٔ «سرویس‌های من»: " + ("نامِ داخلِ پنل" if _sn else "حجم و روز"),
         callback_data="vtl:svcn", style=ButtonStyle.SUCCESS if _sn else ButtonStyle.PRIMARY)])
+    # === PATCH_SVC_PAGE_OPTIONS_V1 === (VikingVPN) صفحهٔ هر سرویس: تاریخ‌ها / افزایشِ حجم / تمدیدِ ساده
+    _im = (await _gs_sn(bot_id, "svc_info_mode", "full")) == "remaining"
+    _av = (await _gs_sn(bot_id, "svc_addvol_btn", "1")) != "0"
+    _rsm = (await _gs_sn(bot_id, "svc_renew_simple", "0")) == "1"
+    rows.append([InlineKeyboardButton(
+        text="📅 صفحهٔ سرویس: " + ("روزهایِ باقی‌مانده (بدونِ تاریخِ خرید/انقضا)" if _im else "تاریخِ خرید و انقضا"),
+        callback_data="vtl:sinfo", style=ButtonStyle.SUCCESS if _im else ButtonStyle.PRIMARY)])
+    rows.append([InlineKeyboardButton(
+        text="📈 دکمهٔ «فقط افزایشِ حجم»: " + ("✅ نمایش" if _av else "⛔️ پنهان"),
+        callback_data="vtl:saddv", style=ButtonStyle.SUCCESS if _av else ButtonStyle.DANGER)])
+    rows.append([InlineKeyboardButton(
+        text="♻️ تمدیدِ ساده (نامِ «تمدید سرویس» و بدونِ توضیح): " + ("✅ روشن" if _rsm else "⚪️ خاموش"),
+        callback_data="vtl:srens", style=ButtonStyle.SUCCESS if _rsm else ButtonStyle.PRIMARY)])
     # === PATCH_VPN_PICK_LINE_V1 === خطِ «یکی را انتخاب کن:» زیرِ تیترِ صفحه‌هایِ دسته/پلن
     _pk = (await _gs_sn(bot_id, "vpn_pick_line", "1")) != "0"
     rows.append([InlineKeyboardButton(
@@ -5970,6 +5983,24 @@ async def vpn_svc_btn_name_toggle(cb: CallbackQuery, bot: Bot, state: FSMContext
     from tenant import get_setting as _gs, set_setting as _ss
     cur = (await _gs(row.id, "svc_btn_name", "0")) == "1"
     await _ss(row.id, "svc_btn_name", "0" if cur else "1")
+    await vpn_titles_menu(cb, bot, state)
+
+
+# === PATCH_SVC_PAGE_OPTIONS_V1 ===
+_SVC_PAGE_TOGGLES = {"vtl:sinfo": ("svc_info_mode", "full", "remaining"),
+                     "vtl:saddv": ("svc_addvol_btn", "1", "0"),
+                     "vtl:srens": ("svc_renew_simple", "0", "1")}
+
+
+@vpn_admin_router.callback_query(F.data.in_(set(_SVC_PAGE_TOGGLES)))
+async def vpn_svc_page_toggle(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    key, a, b = _SVC_PAGE_TOGGLES[cb.data]
+    from tenant import get_setting as _gs, set_setting as _ss
+    cur = await _gs(row.id, key, a)
+    await _ss(row.id, key, b if cur == a else a)
     await vpn_titles_menu(cb, bot, state)
 
 
