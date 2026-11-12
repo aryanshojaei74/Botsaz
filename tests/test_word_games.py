@@ -162,3 +162,44 @@ async def test_main_bot_new_games_default_on_with_master_pattern_still_off(monke
     assert await R.game_on("quiz") is False
     store["pgr_on"] = "0"
     assert await R.game_on("word") is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("game", ["word", "scramble", "quiz", "emoji"])
+async def test_new_games_in_customer_bots_require_the_purchased_addon(monkeypatch, game):
+    """فقط خریدارانِ افزونهٔ «بازی‌هایِ گروهی» (و بات‌سازِ اصلی که افزونه نمی‌خواهد)؛ حتی ربات حرفه‌ای بدونِ خرید نه."""
+    import tenant.shared.wager_race as WR
+    from aiogram.dispatcher.event.bases import SkipHandler
+
+    async def ra(bot, uid):
+        return NS(id=5, field="vpn_sales", plan="pro"), False                 # پلنِ حرفه‌ای ولی غیرِ ادمین
+    replies = []
+
+    class Msg:
+        from_user = NS(id=9, is_bot=False)
+        sender_chat = None
+
+        async def reply(self, text, **k):
+            replies.append(text)
+
+    async def no_addon(bot_id, addon=None):
+        return False
+    monkeypatch.setattr(WR, "_row_and_admin", ra)
+    monkeypatch.setattr(WR, "addon_active", no_addon)
+    with pytest.raises(SkipHandler):
+        await WR._gate(Msg(), NS(), game)
+    assert replies == []                                                    # عضوِ عادی: سکوت (بازی وجود ندارد)
+
+    async def yes(bot_id, addon=None):
+        return True
+
+    async def master(bot_id=0):
+        return True
+
+    async def ge(g, bot_id=0):
+        return True
+    monkeypatch.setattr(WR, "addon_active", yes)
+    monkeypatch.setattr(WR.core, "master_enabled", master)
+    monkeypatch.setattr(WR.core, "game_enabled", ge)
+    row, _adm = await WR._gate(Msg(), NS(), game)
+    assert row is not None                                                  # با خریدِ افزونه باز می‌شود
