@@ -22,6 +22,7 @@ vpn_api.py — APIِ فروشِ VPN برایِ رباتِ «فروش VPN» (PATC
     charge    فاکتورِ شارژِ کیف‌پول با آپی (amount) ← pay_url؛  charge_status (order_id)
     trial     دریافتِ تستِ رایگان (طبقِ تنظیماتِ سراسریِ تست؛ هر کاربر یک‌بار)
     withdraw_info / withdraw (amount, destination) / withdraws   برداشتِ وجه از کیف‌پول (اگر مالک روشن کرده باشد)
+    renew_info / renew (service + days[,gb] یا plan_id[, ref])   تمدیدِ سرویس از کیف‌پول
     transfer_info / transfer (to, amount)   انتقالِ موجودی به کاربرِ دیگرِ همین ربات (اگر مالک روشن کرده باشد)
     ticket    ثبتِ تیکت (text[, subject])؛  tickets فهرستِ تیکت‌ها (+ پاسخ‌ها)؛  ticket_reply (ticket_id, text)
 
@@ -896,6 +897,13 @@ async def dispatch(ctx: AuthCtx, action: str, p: dict) -> JSONResponse:
         await _with_tmp_bot(ctx.bot_id, _tell)
         return JSONResponse({"ok": True, "request": {"id": w.id, "amount": int(w.amount), "status": "pending"}})
 
+    if action in ("renew", "renew_info"):          # PATCH_API_RENEW_V1 (Weirdnet: «تمدید از راهِ API»)
+        if user is None:
+            return _err("telegram_id_required" if ctx.full_access else "user_not_found")
+        if action == "renew" and not _rate_ok(f"renew:{ctx.bot_id}:{user.id}", _BUY_PER_MIN):
+            return _err("rate_limited")
+        return await _do_renew(ctx, user, action, p)
+
     if action in ("transfer_info", "transfer"):      # PATCH_API_TRANSFER_V1 (Weirdnet: «انتقال موجودی هم به API اضافه شود»)
         if user is None:
             return _err("telegram_id_required" if ctx.full_access else "user_not_found")
@@ -951,6 +959,140 @@ async def dispatch(ctx: AuthCtx, action: str, p: dict) -> JSONResponse:
         return JSONResponse({"ok": True, "service": out})
 
     return _err("incorrect_action")
+
+
+async def _renew_ctx(ctx: AuthCtx, user: BotUser, p: dict):
+    """(acc, panel, rc, pk) یا (None, ..., JSONResponse خطا). فقط سرویسِ خودِ همین کاربر و پنلِ فعال."""
+    from tenant.bots.vpn import vpn_user as V
+    acc = await _find_account(ctx, user, p.get("service") or p.get("email") or p.get("code") or "")
+    if not acc or acc.reseller_made or acc.status in ("hidden", "refunded", "refunding", "deleted"):
+        return None, None, None, _err("service_not_found")
+    async with Session() as s:
+        panel = await V._panel_for_account(s, ctx.bot_id, acc)
+    if not panel or not panel.enabled:
+        return None, None, None, _err("panel_unavailable")
+    rc = await V._renew_cfg(ctx.bot_id, user.telegram_id, panel.panel_key)
+    return acc, panel, rc, None
+
+
+async def _do_renew(ctx: AuthCtx, user: BotUser, action: str, p: dict) -> JSONResponse:
+    """PATCH_API_RENEW_V1 — تمدیدِ سرویس از کیف‌پول، با همان قیمت/قاعدهٔ داخلِ ربات.
+    renew_info: service ← گزینه‌هایِ مجازِ days و بازهٔ gb + قیمتِ هر ترکیب.
+    renew: service + (days [+ gb]) یا plan_id؛ ref اختیاری (جلوگیری از تمدیدِ تکراری با تکرارِ درخواست)."""
+    from tenant.bots.vpn import vpn_user as V
+    acc, panel, rc, err = await _renew_ctx(ctx, user, p)
+    if err:
+        return err
+    pk = panel.panel_key
+    days_opts = V._renew_day_options(rc)
+    gb_opts = V._renew_gb_options(rc)
+
+    if action == "renew_info":
+        opts = []
+        for d in days_opts:
+            for g in [0] + gb_opts:
+                q = await V._renew_quote(ctx.bot_id, user.telegram_id, pk, rc, d, g)
+                if q <= 0:
+                    continue
+                pr = q if rc.mirror else await V._renew_partner_price(ctx.bot_id, user.telegram_id, q, pk, "custom")
+                opts.append({"days": d, "gb": g, "price": int(pr)})
+        return JSONResponse({"ok": True, "service": _svc_payload(acc), "days_options": days_opts,
+                             "gb_min": max(rc.mn_g, 1) if rc.mx_g > 0 else 0, "gb_max": rc.mx_g if rc.mx_g > 0 else 0,
+                             "options": opts})
+
+    ref = (p.get("ref") or "").strip()[:40]
+    if ref:                                                       # تکرارِ همان ref ⇒ دوباره پول نگیر
+        async with Session() as s:
+            prev = await s.scalar(select(WalletTxn).where(
+                WalletTxn.bot_id == ctx.bot_id, WalletTxn.user_id == user.id,
+                WalletTxn.note.like(f"%[ref:{ref}]%")).order_by(WalletTxn.id.desc()))
+        if prev and prev.kind in ("renew", "refund") and "[ref:" in (prev.note or ""):
+            if prev.kind == "renew":
+                return JSONResponse({"ok": True, "duplicate": True, "service": _svc_payload(acc)})
+
+    # ── مشخصاتِ تمدید: پلن یا روز/حجم ──
+    plan_id = _int_or_none(p.get("plan_id"))
+    title = ""
+    if plan_id:
+        async with Session() as s:
+            plan = await s.get(VpnPlan, plan_id)
+        if (not plan or plan.bot_id != ctx.bot_id or not plan.active or plan.panel_key != pk
+                or not await V._plan_allowed_for(plan, ctx.bot_id, user.telegram_id)):
+            return _err("plan_not_found")
+        add_days, add_gb, title = int(plan.days or 0), int(plan.volume_gb or 0), plan.title
+        price = int(await V._renew_partner_price(ctx.bot_id, user.telegram_id, float(plan.price), pk, "plans",
+                                                 plan.volume_gb))
+    else:
+        add_days = _int_or_none(p.get("days")) or 0
+        add_gb = _int_or_none(p.get("gb")) or 0
+        if add_days <= 0 or add_days not in days_opts:
+            return _err("invalid_days", allowed=days_opts)
+        if add_gb < 0 or not V._renew_gb_allowed(rc, add_gb):
+            return _err("invalid_gb", min=max(rc.mn_g, 1) if rc.mx_g > 0 else 0, max=rc.mx_g if rc.mx_g > 0 else 0)
+        q = await V._renew_quote(ctx.bot_id, user.telegram_id, pk, rc, add_days, add_gb)
+        if q <= 0:
+            return _err("not_available")
+        price = int(q if rc.mirror else await V._renew_partner_price(ctx.bot_id, user.telegram_id, q, pk, "custom"))
+        title = f"+{add_days} روز" + (f" +{add_gb}G" if add_gb else "")
+    if price <= 0:
+        return _err("not_available")
+
+    # ── کسرِ اتمیکِ موجودی ──
+    async with Session() as s:
+        u = await s.scalar(select(BotUser).where(BotUser.id == user.id).with_for_update())
+        if not u or u.is_banned:
+            return _err("banned" if u else "user_not_found")
+        if float(u.balance) < price:
+            return _err("insufficient_balance", balance=float(u.balance), price=price)
+        u.balance = float(u.balance) - price
+        s.add(WalletTxn(bot_id=ctx.bot_id, user_id=u.id, amount=-price, kind="renew",
+                        note=f"تمدید VPN از راهِ API: {title[:40]}" + (f" [ref:{ref}]" if ref else "")))
+        await s.commit()
+        user_db_id = u.id
+        pd = (panel.panel_key, panel.base_url, panel.username, panel.password, panel.sub_base or "",
+              panel.inbound_ids, panel.api_key)
+
+    # ── اعمال روی پنل؛ خطا ⇒ عودتِ کامل ──
+    from tenant.shared.panel_clients import panel_pool as _pool
+    client = _pool.get_sync(pd[0], pd[1], pd[2], pd[3], sub_base=pd[4], inbound_ids_str=pd[5], api_key=pd[6])
+    try:
+        if add_days:
+            await asyncio.wait_for(client.renew(acc.email, add_days), timeout=45)
+        if add_gb:
+            await asyncio.wait_for(client.add_traffic(acc.email, add_gb), timeout=45)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("API: تمدید ناموفق (bot=%s svc=%s): %s", ctx.bot_id, acc.email, e)
+        async with Session() as s:
+            u2 = await s.scalar(select(BotUser).where(BotUser.id == user_db_id).with_for_update())
+            if u2:
+                u2.balance = float(u2.balance) + price
+                s.add(WalletTxn(bot_id=ctx.bot_id, user_id=u2.id, amount=price, kind="refund",
+                                note="عودت: خطای تمدید (API)"))
+            await s.commit()
+        return _err("panel_error", message=str(e)[:200], refunded=True)
+
+    # ── به‌روزرسانیِ سرویسِ محلی (مثلِ تمدیدِ داخلِ ربات) ──
+    import datetime as _dt
+    async with Session() as s:
+        a2 = await s.get(PanelAccount, acc.id)
+        if a2:
+            a2.expiry_notice = None
+            a2.expiry_warn_count = 0
+            a2.status = "active"
+            if add_days:
+                base = a2.expires_at if a2.expires_at and a2.expires_at > _dt.datetime.utcnow() else _dt.datetime.utcnow()
+                a2.expires_at = base + _dt.timedelta(days=add_days)
+                a2.days = (a2.days or 0) + add_days
+            if add_gb:
+                a2.volume_gb = (a2.volume_gb or 0) + add_gb
+                a2.traffic_out_at = None
+            await s.commit()
+            await s.refresh(a2)
+        bal = await s.scalar(select(BotUser.balance).where(BotUser.id == user_db_id))
+        payload = _svc_payload(a2 or acc)
+    asyncio.ensure_future(_notify_sale(ctx.bot_id, user_db_id, f"تمدید: {title}", price, acc.svc_code))
+    return JSONResponse({"ok": True, "charged": price, "balance": float(bal or 0), "service": payload,
+                         "renewed": {"days": add_days, "gb": add_gb}})
 
 
 async def _do_transfer(ctx: AuthCtx, user: BotUser, action: str, p: dict) -> JSONResponse:

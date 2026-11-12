@@ -891,6 +891,8 @@ td,th{{border:1px solid #d0d7de;padding:6px 10px;text-align:right}} .note{{backg
 <tr><td><code>apikey</code></td><td>کلیدِ APIِ شخصیِ کاربر (<code>api_key</code>، <code>has_key</code>، <code>allowed</code>)</td></tr>
 <tr><td><code>transactions</code></td><td>تراکنش‌هایِ کیف‌پول (جدید به قدیم): <code>limit</code> (حداکثر ۱۰۰)، <code>offset</code>، <code>kind</code> اختیاری</td></tr>
 <tr><td><code>payments</code></td><td>تاریخچهٔ شارژها/واریزهایِ موفق (همان پارامترهایِ <code>transactions</code>)</td></tr>
+<tr><td><code>renew_info</code></td><td>گزینه‌هایِ تمدیدِ یک سرویس: <code>service</code> ← <code>days_options</code>، بازهٔ حجم (<code>gb_min</code>/<code>gb_max</code>) و فهرستِ <code>options</code> (<code>days</code>، <code>gb</code>، <code>price</code>) با قیمتِ نهایی برایِ همین کاربر</td></tr>
+<tr><td><code>renew</code></td><td>تمدیدِ سرویس از کیف‌پول: <code>service</code> (کد/نامِ کاربری) + یا <code>days</code> (+ اختیاری <code>gb</code>) یا <code>plan_id</code>؛ اختیاری <code>ref</code> برایِ جلوگیری از تمدیدِ تکراری. همان قیمتِ داخلِ ربات (تخفیفِ نمایندگی هم اعمال می‌شود). خطا از پنل ⇒ <code>panel_error</code> و مبلغ کاملاً برمی‌گردد. خطاها: <code>service_not_found</code> · <code>panel_unavailable</code> · <code>invalid_days</code> (با <code>allowed</code>) · <code>invalid_gb</code> (با <code>min</code>/<code>max</code>) · <code>plan_not_found</code> · <code>not_available</code> · <code>insufficient_balance</code> · <code>rate_limited</code></td></tr>
 <tr><td><code>withdraw_info</code></td><td>وضعیتِ برداشتِ وجه: <code>enabled</code>، <code>min_amount</code>، <code>balance</code>، <code>withdrawable</code> (قابلِ برداشت) و <code>label</code> (اگر مالک «برداشت وجه» را روشن کرده باشد)</td></tr>
 <tr><td><code>withdraw</code></td><td>ثبتِ درخواستِ برداشت: <code>amount</code> (تومان) + <code>destination</code> (شمارهٔ کارت/مقصد). مبلغ از موجودی کسر و درخواست به ادمین‌ها اعلام می‌شود ← <code>request.id</code> و <code>status=pending</code>. خطاها: <code>withdraw_disabled</code> · <code>invalid_amount</code> · <code>below_minimum</code> · <code>invalid_destination</code> · <code>insufficient_withdrawable</code> · <code>insufficient_balance</code> · <code>rate_limited</code></td></tr>
 <tr><td><code>withdraws</code></td><td>فهرستِ درخواست‌هایِ برداشتِ کاربر و وضعیتِ هرکدام</td></tr>
@@ -909,12 +911,13 @@ curl -d "key=API_KEY&amp;action=custom&amp;gb=50&amp;days=30" {api_vpn}
 curl -d "key=API_KEY&amp;action=buy&amp;gb=50&amp;days=30&amp;discount_code=OFF10&amp;ref=order-1002" {api_vpn}
 curl -d "key=API_KEY&amp;action=delete&amp;service=123456789" {api_vpn}
 curl -d "key=API_KEY&amp;action=charge&amp;amount=200000" {api_vpn}
+curl -d "key=API_KEY&amp;action=renew_info&amp;service=123456789" {api_vpn}
+curl -d "key=API_KEY&amp;action=renew&amp;service=123456789&amp;days=30&amp;gb=20&amp;ref=renew-1001" {api_vpn}
 curl -d "key=API_KEY&amp;action=withdraw_info" {api_vpn}
 curl -d "key=API_KEY&amp;action=withdraw&amp;amount=500000&amp;destination=6037991234567890" {api_vpn}
 curl -d "key=API_KEY&amp;action=transfer&amp;to=@username&amp;amount=100000" {api_vpn}</pre>
 <p>خطاهایِ رایج: <code>insufficient_balance</code> · <code>plan_not_found</code> · <code>invalid_api_key</code> ·
 <code>panel_error</code> (پنل جواب نداد؛ مبلغ خودکار برگشت داده می‌شود) · <code>rate_limited</code> · <code>invalid_discount</code> · <code>gb_out_of_range</code> / <code>days_out_of_range</code> (با <code>min</code>/<code>max</code>) · <code>panel_required</code> · <code>open_invoice</code>.</p>
-<p class="note">تمدید از راهِ API هنوز فعال نیست؛ از داخلِ ربات انجام می‌شود.</p>
 <p class="note">⚠️ کلید را با کسی به اشتراک نگذار. اگر لو رفت، از داخلِ ربات «تغییر کلید» را بزن؛ کلیدِ قبلی همان لحظه باطل می‌شود.</p>
 </body></html>"""
 
