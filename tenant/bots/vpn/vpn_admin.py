@@ -5931,6 +5931,12 @@ async def _titles_screen(bot_id: int):
         lines.append(f"• {desc}\n   ← <b>{shown}</b>" + ("" if raw else " <i>(پیش‌فرض)</i>"))
         rows.append([InlineKeyboardButton(text=f"✏️ {desc}", callback_data=f"vtl:e:{key}",
                                           style=ButtonStyle.PRIMARY)])
+    # === PATCH_SVC_BTN_NAME_V1 === (پیشنهاد #209) دکمهٔ هر سرویس در «سرویس‌های من»: مشخصات یا نامِ داخلِ پنل
+    from tenant import get_setting as _gs_sn
+    _sn = (await _gs_sn(bot_id, "svc_btn_name", "0")) == "1"
+    rows.append([InlineKeyboardButton(
+        text="📡 دکمهٔ «سرویس‌های من»: " + ("نامِ داخلِ پنل" if _sn else "حجم و روز"),
+        callback_data="vtl:svcn", style=ButtonStyle.SUCCESS if _sn else ButtonStyle.PRIMARY)])
     # === PATCH_VC_PAGE_TEMPLATE_V1 ===
     rows.append([InlineKeyboardButton(text="📝 متنِ کاملِ صفحهٔ «خرید سرویس جدید»",
                                       callback_data="vtl:tpl", style=ButtonStyle.SUCCESS)])
@@ -5948,6 +5954,18 @@ async def _titles_screen(bot_id: int):
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=_back,
                                       style=ButtonStyle.DANGER)])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@vpn_admin_router.callback_query(F.data == "vtl:svcn")
+async def vpn_svc_btn_name_toggle(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """PATCH_SVC_BTN_NAME_V1 — روشن/خاموش: نامِ سرویس (همان که داخلِ پنل است) به‌جای حجم و روز."""
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    from tenant import get_setting as _gs, set_setting as _ss
+    cur = (await _gs(row.id, "svc_btn_name", "0")) == "1"
+    await _ss(row.id, "svc_btn_name", "0" if cur else "1")
+    await vpn_titles_menu(cb, bot, state)
 
 
 @vpn_admin_router.callback_query(F.data == "vtl:menu")

@@ -1922,6 +1922,7 @@ async def show_vpn_plans(bot: Bot, msg: Message, bot_id: int, state=None, panel_
                     else:
                         _vtxt = f"♾ {_ul}" if not _v else f"{_ul} · {_vtxt}"
                 _dtxt = "♾ بی‌انقضا" if not p.days else f"{p.days} روز"
+                _vtxt = _table_title_cell(p, _vtxt)
                 _cbd = f"vbuy:{p.id}"
                 rows.append([
                     InlineKeyboardButton(text=_tbl_price, callback_data=_cbd, style=btn_style),
@@ -2056,6 +2057,22 @@ def _bundle_back_row(back_cb: str | None):
                                  style=ButtonStyle.DANGER)]
 
 
+def _table_title_cell(p, cell: str) -> str:
+    """PATCH_TABLE_TITLE_EMOJI_V1 (پیشنهاد #210) — جدولِ پلن‌ها عنوان را نشان نمی‌داد، پس شکلکِ ابتدایِ
+    عنوان هم دیده نمی‌شد. حالا: اگر مالک «حجم و مدتِ خودکار» را پنهان کرده، خودِ عنوان در خانهٔ سوم می‌آید؛
+    وگرنه فقط ایموجیِ ابتدایِ عنوان جلوی خانه گذاشته می‌شود."""
+    title = (getattr(p, "title", "") or "").strip()
+    if not title:
+        return cell
+    if getattr(p, "hide_spec", False):
+        return title
+    from tenant import _split_leading_emoji
+    emo, _rest = _split_leading_emoji(title)
+    if emo and not cell.startswith(emo):
+        return f"{emo} {cell}"
+    return cell
+
+
 def _plan_table_row(p, show_users: bool = True, show_volume: bool = True) -> list:
     """یک ردیفِ جدولِ پلن‌ها [قیمت | زمان | حجم] — برایِ صفحهٔ دسته‌هایِ خریدِ ترکیبی
     (PATCH_BUNDLE_TABLE_VIEW_V1). همان قالبِ جدولِ صفحهٔ پنل."""
@@ -2075,6 +2092,7 @@ def _plan_table_row(p, show_users: bool = True, show_volume: bool = True) -> lis
         else:
             vtxt = f"♾ {ul}" if not v else f"{ul} · {vtxt}"
     dtxt = "♾ بی‌انقضا" if not p.days else f"{p.days} روز"
+    vtxt = _table_title_cell(p, vtxt)
     cbd = f"vbuy:{p.id}"
     st = ButtonStyle.SUCCESS
     return [InlineKeyboardButton(text=rial(p.price), callback_data=cbd, style=st),
@@ -2144,7 +2162,7 @@ async def _render_bundle_bucket(bot: Bot, msg: Message, bot_id: int, plans: list
         title = (p.title or "").strip()
         already_has = ("گیگ" in title or "GB" in title.upper()) and \
                       ("روز" in title or " D" in title.upper())
-        spec = "" if already_has else f" — {vol}، {dur}"
+        spec = "" if (already_has or getattr(p, "hide_spec", False)) else f" — {vol}، {dur}"   # PATCH_PLAN_CUSTOM_TEXT_V1
         rows.append([InlineKeyboardButton(
             text=f"{title}{spec} — {fa_digits(rial(p.price))}",
             callback_data=f"vbuy:{p.id}", style=ButtonStyle.SUCCESS)])
@@ -6046,7 +6064,10 @@ async def show_my_services(bot: Bot, msg: Message, bot_id: int, tg_id: int, head
             # === PATCH_VPN_DELETE_HIDE_ONLY_V1 ===
             PanelAccount.status.notin_(("hidden", "refunded", "refunding")))   # PATCH_VPN_REFUND_V1
             .order_by(PanelAccount.id.desc()))).all()
-        items = [(a.id, _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb, _acc_hours(a)), a.status) for a in accts]
+        # === PATCH_SVC_BTN_NAME_V1 === اگر مالک خواسته باشد، به‌جایِ حجم/روز نامِ سرویس (همان که داخلِ پنل است) نشان داده می‌شود
+        _by_name = (await get_setting(bot_id, "svc_btn_name", "0")) == "1"
+        items = [(a.id, ((a.email or "").strip() if (_by_name and (a.email or "").strip())
+                         else _svc_label(a.plan_title, a.volume_gb, a.days, a.volume_mb, _acc_hours(a))), a.status) for a in accts]
         # کانفیگ‌های خریداری‌شده از انبار دستی را هم نشان بده
         u = await s.scalar(select(BotUser).where(
             BotUser.bot_id == bot_id, BotUser.telegram_id == tg_id))
@@ -6074,7 +6095,8 @@ async def show_my_services(bot: Bot, msg: Message, bot_id: int, tg_id: int, head
     rows = []
     for aid, title, status in items:
         mark = "🟢" if status == "active" else "🔴"
-        rows.append([InlineKeyboardButton(text=f"{mark} {title}", callback_data=f"vsvc:{aid}")])
+        rows.append([InlineKeyboardButton(text=f"{mark} {title}", callback_data=f"vsvc:{aid}",
+                                          style=ButtonStyle.SUCCESS if status == "active" else ButtonStyle.DANGER)])
     for cid, vol, days, code in manual:
         rows.append([InlineKeyboardButton(
             text=f"📦 کانفیگ {fmt_vol(vol)}/{days}روز (کد {code})", callback_data=f"mcfg:{cid}", style=ButtonStyle.PRIMARY)])

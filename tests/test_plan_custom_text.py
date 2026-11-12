@@ -181,3 +181,40 @@ async def test_pro_can_set_and_clear_the_invoice_note_growth_cannot(env, monkeyp
     assert p.invoice_note is None                                     # بلندتر از ۳۰۰ ⇒ رد
     m, p = await _edit(env, monkeypatch, "note", "متن", plan="growth")
     assert p.invoice_note is None and "حرفه‌ای" in m.answers[0]
+
+
+# ── پیشنهاد #209 / #210 ──
+def test_table_cell_shows_leading_emoji_or_whole_title_when_spec_hidden():
+    p = NS(title="🔥 نامحدود", hide_spec=False)
+    assert VU._table_title_cell(p, "30GB") == "🔥 30GB"
+    assert VU._table_title_cell(NS(title="نامحدود", hide_spec=False), "30GB") == "30GB"
+    assert VU._table_title_cell(NS(title="🔥 ویژه", hide_spec=True), "30GB") == "🔥 ویژه"
+    assert "🔥" in VU._plan_table_row(NS(id=1, title="🔥 x", hide_spec=False, volume_gb=30, days=30, price=1000,
+                                          limit_ip=0))[2].text
+
+
+@pytest.mark.asyncio
+async def test_my_services_button_uses_panel_name_when_enabled(env):
+    import tenant
+    async with env() as s:
+        s.add(models.PanelAccount(id=1, bot_id=1, user_telegram_id=5, email="vik_ab12", panel_key="pasarguard",
+                                  volume_gb=30, days=30, plan_title="پلن", status="active"))
+        await s.commit()
+    sent = []
+
+    class M:
+        chat = NS(id=5)
+
+        async def answer(self, text, reply_markup=None, **k):
+            sent.append(reply_markup)
+            return NS(message_id=2)
+
+    class B:
+        async def delete_message(self, *a, **k):
+            return None
+    await VU.show_my_services(B(), M(), 1, 5)
+    assert "30" in sent[-1].inline_keyboard[0][0].text and "vik_ab12" not in sent[-1].inline_keyboard[0][0].text
+    await tenant.set_setting(1, "svc_btn_name", "1")
+    await VU.show_my_services(B(), M(), 1, 5)
+    b = sent[-1].inline_keyboard[0][0]
+    assert "vik_ab12" in b.text and "30" not in b.text and b.style == "success"
