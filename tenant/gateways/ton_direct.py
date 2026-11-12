@@ -362,6 +362,14 @@ def _uniquify(ton: Decimal) -> Decimal:
         Decimal("0.000001"))
 
 
+def wallet_friendly(ton: Decimal) -> Decimal:
+    """PATCH_TON_WALLET_FRIENDLY_V1 (SINA: «از لینک که وارد تونکیپر می‌شوند مبلغ رند و دقیق نیست»)
+    مبلغِ فاکتور همیشه رو به بالا به ۲ رقمِ اعشار (۰٫۰۱ TON) گرد می‌شود؛ مبلغی که کیف‌پول‌ها موقعِ باز‌شدنِ لینک
+    گرد می‌کنند، همان مبلغِ لینک می‌ماند و تغییری نمی‌کند. چون رو به بالاست، مشتری هرگز کم‌پرداخت نمی‌کند."""
+    from decimal import ROUND_UP
+    return ton.quantize(Decimal("0.01"), rounding=ROUND_UP)
+
+
 def payment_links(address: str, ton: Decimal, memo: str) -> tuple[str, str]:
     """(لینکِ ton://، لینکِ وبِ Tonkeeper) — هر دو مبلغ و کامنت را پر می‌کنند."""
     nano = int((ton * NANO).to_integral_value())
@@ -1523,14 +1531,19 @@ async def tond_amount(msg: Message, bot: Bot, state: FSMContext):
         return
 
     addr = await wallet_address(row.id)
-    ton_final = _uniquify(ton)
+    # === PATCH_TON_WALLET_FRIENDLY_V1 === مبلغِ TON رند (۲ رقمِ اعشار، رو به بالا)؛ شارژِ کیف پول به‌نسبتِ همان مبلغ:
+    # کاربرِ پرداخت‌کننده برایِ اضافهٔ گردکردن هم اعتبار می‌گیرد، پس ضرر نمی‌کند و مبلغِ دقیق با مبلغِ لینک یکی است.
+    ton_final = wallet_friendly(ton)
+    _ratio = ton_final / ton if ton > 0 else Decimal(1)
+    credit_toman = int(Decimal(int(amount)) * _ratio)
+    payable_shown = int(payable_toman * _ratio)
     memo = _new_memo()
     now = _dt.datetime.utcnow()
     async with Session() as s:
         s.add(TonDirectCharge(
             bot_id=row.id, user_telegram_id=msg.from_user.id, memo=memo,
             asset="TON",   # === PATCH_COIN_DIRECT_MULTI_ASSET_V1 ===
-            amount_toman=int(amount), ton_amount=float(ton_final),
+            amount_toman=credit_toman, ton_amount=float(ton_final),
             rate_toman=int(rate), wallet_address=addr, status="waiting",
             expires_at=now + _dt.timedelta(minutes=INVOICE_TTL_MINUTES)))
         await s.commit()
@@ -1560,9 +1573,9 @@ async def tond_amount(msg: Message, bot: Bot, state: FSMContext):
         # توضیحات هم اومده بود، خیلی‌ها همون خطِ اول رو می‌خوندن و رد
         # می‌شدن. حالا از همون خطِ اول مشخصه که این کد باید کجا نوشته بشه.
         f"🧾 کدِ Comment (حتماً موقعِ واریز بفرست): <code>{memo}</code>\n"
-        f"💰 مبلغ شارژ: <b>{amount:,} تومان</b>\n"
-        + (f"➕ کارمزد پرداخت ({fee:g}٪): <b>{int(payable_toman) - amount:,} تومان</b>\n"
-           f"🧮 مجموع قابل پرداخت: <b>{int(payable_toman):,} تومان</b>\n" if fee > 0 else "")
+        f"💰 مبلغ شارژ: <b>{credit_toman:,} تومان</b>\n"
+        + (f"➕ کارمزد پرداخت ({fee:g}٪): <b>{payable_shown - credit_toman:,} تومان</b>\n"
+           f"🧮 مجموع قابل پرداخت: <b>{payable_shown:,} تومان</b>\n" if fee > 0 else "")
         + f"💎 مبلغ دقیق: <code>{ton_final}</code> TON\n"
         f"👛 آدرس مقصد:\n<code>{addr}</code>\n\n"
         "<blockquote>روی دکمهٔ زیر بزن تا کیف پولت با مبلغ و کد آماده باز شود.\n"

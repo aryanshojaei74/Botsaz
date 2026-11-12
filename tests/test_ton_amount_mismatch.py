@@ -132,3 +132,34 @@ async def test_same_tx_never_credits_twice(env, monkeypatch):
     await TD.settle_bot(5, bot)
     await TD.settle_bot(5, bot)
     assert await _bal(maker) == 80_000.0
+
+
+# ── PATCH_TON_WALLET_FRIENDLY_V1: مبلغِ لینک رند (۲ رقمِ اعشار) و اعتبارِ دقیق ──
+def test_wallet_friendly_rounds_up_to_two_decimals_and_never_below():
+    for need, expect in (("0.10194", "0.11"), ("0.101", "0.11"), ("0.10", "0.10"), ("0.0501", "0.06"),
+                         ("1.2301", "1.24"), ("3", "3.00")):
+        out = TD.wallet_friendly(Decimal(need))
+        assert out == Decimal(expect) and out >= Decimal(need), need
+    for _ in range(300):
+        n = Decimal(str(round(0.05 + (secrets_random() * 5), 6)))
+        out = TD.wallet_friendly(n)
+        assert out >= n and out - n < Decimal("0.01") and out == out.quantize(Decimal("0.01"))
+
+
+def secrets_random():
+    import random
+    return random.random()
+
+
+def test_link_carries_the_exact_round_amount_in_nano():
+    deep, web = TD.payment_links("UQabc", TD.wallet_friendly(Decimal("0.10194")), "BS123456")
+    assert "amount=110000000" in deep and "amount=110000000" in web and "text=BS123456" in deep
+
+
+def test_rounded_invoice_credit_matches_exact_payment():
+    ton, amount = Decimal("0.10194"), 32000
+    final = TD.wallet_friendly(ton)
+    credit = int(Decimal(amount) * (final / ton))
+    assert final == Decimal("0.11") and credit > amount                       # برایِ اضافهٔ گردکردن اعتبار می‌گیرد
+    cr, ratio = TD.proportional_credit(credit, final, final)                  # پرداختِ دقیقِ مبلغِ لینک ⇒ همان اعتبار
+    assert cr == credit and ratio == 1
