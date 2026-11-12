@@ -701,25 +701,53 @@ async def _qr_png(bot_id: int, data: str) -> bytes | None:
 # WireGuard (که فقط فایلِ .conf ایمپورت می‌کنند، نه این URI) بتوانند
 # مستقیم از آن استفاده کنند.
 def _parse_wireguard_uri(uri: str) -> str | None:
-    from urllib.parse import urlparse, parse_qs, unquote
+    """wireguard://PRIVATEKEY@host:port?address=…&publickey=…#name ⇒ متنِ .conf.
+
+    === PATCH_WG_URI_BASE64_PLUS_V1 === (Whale Support: «فایل‌هایِ ربات وصل نمی‌شوند ولی فایلِ ساب درست است»)
+    کلیدهایِ WireGuard بیس‌۶۴اند و «+»، «/» و «=» دارند. پنل‌ها (مثلِ مرزبان) آن‌ها را اغلب *بدونِ* percent-encode
+    در URI می‌گذارند. پارسِ قبلی با urlparse/parse_qs هر «+» را به «فاصله» تبدیل می‌کرد و یک «/» خام هم netloc را
+    می‌برید ⇒ PublicKey/PresharedKey خراب می‌شد و تونل هرگز handshake نمی‌کرد (فایل «قطع» بود). الان URI دستی و
+    بدونِ تبدیلِ «+»→فاصله پارس می‌شود؛ مقدارهایِ percent-encodeشده (%2B/%2F/%3D) مثلِ قبل درست decode می‌شوند."""
+    from urllib.parse import unquote
     try:
-        u = urlparse(uri)
-        if u.scheme != "wireguard":
+        raw = (uri or "").strip()
+        if not raw.lower().startswith("wireguard://"):
             return None
-        private_key = unquote(u.username or "")
-        host = u.hostname or ""
-        port = u.port
+        rest = raw[len("wireguard://"):]
+        main, _, frag = rest.partition("#")
+        body, _, query = main.partition("?")
+        userinfo, at, hostport = body.rpartition("@")
+        if not at:
+            return None
+        hostport = hostport.rstrip("/")
+        if hostport.startswith("["):                      # IPv6: [::1]:51820
+            _h, _, _p = hostport[1:].partition("]")
+            host, port_s = f"[{_h}]", _p.lstrip(":")
+        else:
+            host, _, port_s = hostport.rpartition(":")
+        port = int(port_s) if port_s.isdigit() else None
+        # کلیدِ خصوصی: فقط percent-decode (هرگز «+»→فاصله)
+        private_key = unquote(userinfo)
         # === PATCH_HEIMDALL_PANEL_V1 === کلیدهایِ query بدونِ توجه به حروفِ بزرگ/کوچک (HEIMDALL از publicKey/allowedIPs
         # استفاده می‌کند؛ مرزبان از publickey/allowedips) و نام‌هایِ هم‌معنی
         _alias = {"public_key": "publickey", "pbk": "publickey", "preshared_key": "presharedkey", "psk": "presharedkey",
                   "allowed_ips": "allowedips", "persistentkeepalive": "keepalive", "persistent_keepalive": "keepalive"}
         qs: dict = {}
-        for _k, _v in parse_qs(u.query).items():
-            _kl = _k.lower()
-            qs.setdefault(_alias.get(_kl, _kl), _v)
+        for part in query.split("&"):
+            if not part:
+                continue
+            k, _eq, v = part.partition("=")                # فقط روی اولین «=»؛ «=»هایِ انتهایِ کلید حفظ می‌شود
+            kl = unquote(k).lower()
+            qs.setdefault(_alias.get(kl, kl), v)
+        _KEYS = {"publickey", "presharedkey"}
+
         def _q(key, default=""):
             v = qs.get(key)
-            return unquote(v[0]) if v else default
+            if v is None or v == "":
+                return default
+            if key in _KEYS:
+                return unquote(v)                          # کلیدها: «+» همان «+» است
+            return unquote(v).replace("+", " ")            # فیلدهایِ متنی: «+» قدیمیِ فرمِ URL = فاصله
         public_key = _q("publickey")
         address = _q("address")
         mtu = _q("mtu")
@@ -737,12 +765,13 @@ def _parse_wireguard_uri(uri: str) -> str | None:
         # می‌شد. اگه باشه، به‌عنوانِ یه کامنتِ اولِ فایل نگه‌ش می‌داریم
         # تا برایِ اسمِ فایل/کپشن استفاده بشه؛ وایرگارد خطِ # رو
         # نادیده می‌گیره پس ایمپورت شکسته نمی‌شه.
-        _name = unquote(u.fragment or "").strip()
+        _name = unquote(frag or "").strip()
         # === PATCH_WG_SUB_FORMAT_PARITY_V1 === قالبِ خروجی دقیقاً مثلِ فایلِ خودِ ساب:
         # «# Name = X»، و فاصله بعد از ویرگول در DNS/AllowedIPs.
         def _sp(v):
             return ", ".join(x.strip() for x in str(v).split(",") if x.strip())
         dns, allowed_ips = _sp(dns), _sp(allowed_ips)
+        address = _sp(address)
         lines = ["[Interface]", f"PrivateKey = {private_key}", f"Address = {address}"]
         if dns:
             lines.append(f"DNS = {dns}")
