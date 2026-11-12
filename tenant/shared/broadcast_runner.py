@@ -109,6 +109,29 @@ def _now() -> _dt.datetime:
     return _dt.datetime.utcnow()
 
 
+def build_broadcast(*, bot_id: int, text: str, media_id=None, media_type=None, kb_json=None,
+                    chat_id=None, msg_id=None, total_count: int = 0, audience=None, fwd=None) -> Broadcast:
+    """PATCH_BROADCAST_FWD_CRASH_FIX_V1 — ساختِ ردیفِ ارسالِ همگانی.
+
+    باگِ گزارش‌شده (شریف): «در حال ارسال به 764 نفر…» برایِ همیشه می‌ماند. علت: در حالتِ «فوروارد»
+    کلیدِ media_type دو بار به سازنده می‌رفت (یک‌بار صریح، یک‌بار از **{...}) ⇒ TypeError پیش از ذخیرهٔ
+    ردیف؛ پس کاری ساخته نمی‌شد و ورکر هم چیزی برایِ ادامه نداشت."""
+    kw = dict(bot_id=bot_id, text=text, status="sending", media_id=media_id or None,
+              media_type=media_type or None, kb_json=kb_json, chat_id=chat_id, msg_id=msg_id,
+              cursor_uid=0, total_count=total_count, audience=audience)
+    if fwd:
+        kw.update(media_type="forward", fwd_chat_id=int(fwd[0]), fwd_msg_id=int(fwd[1]))
+    return Broadcast(**kw)
+
+
+async def _touch(bc_id: int) -> None:
+    """فقط ضربان (updated_at) را تازه می‌کند تا در انتظارِ طولانیِ تلگرام، اجراکنندهٔ دیگری کارِ را تکراری برندارد."""
+    async with Session() as s:
+        await s.execute(update(Broadcast).where(Broadcast.id == bc_id, Broadcast.status == "sending")
+                        .values(updated_at=_now()))
+        await s.commit()
+
+
 async def _claim(bc_id: int) -> bool:
     """فقط یک اجراکننده: ضربان را به «الان» می‌برد، به شرطی که خالی یا کهنه باشد."""
     cutoff = _now() - _dt.timedelta(seconds=_STALE_SEC)
@@ -206,7 +229,12 @@ async def run_broadcast(bc_id: int) -> None:
                         if was_blocked:
                             await mark_blocked(bc.bot_id, tg_id, False)
                     except TelegramRetryAfter as e:   # محدودیتِ نرخِ تلگرام: صبر و همان نفر دوباره
-                        await asyncio.sleep(float(getattr(e, "retry_after", 5) or 5) + 0.5)
+                        _wait = float(getattr(e, "retry_after", 5) or 5) + 0.5
+                        while _wait > 0:                       # PATCH_BROADCAST_FWD_CRASH_FIX_V1: ضربان در انتظارِ طولانی
+                            _step = min(_wait, 10.0)
+                            await asyncio.sleep(_step)
+                            _wait -= _step
+                            await _touch(bc_id)
                         continue
                     except Exception as e:
                         failed += 1

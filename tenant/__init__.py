@@ -14259,7 +14259,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "564"
+BUILD_ID = "565"
 
 
 @tenant_router.message(Command("version"))
@@ -30098,17 +30098,23 @@ async def bc_send(cb: CallbackQuery, state: FSMContext, bot: Bot):
     from tenant.shared.broadcast_runner import audience_count as _aud_count
     n_users = await _aud_count(row.id, bc_audience)    # PATCH_BROADCAST_AUDIENCE_V1
     await _bc_safe_edit(cb.message, f"📢 در حال ارسال به {n_users:,} نفر...")
-    async with Session() as s:
-        bc = Broadcast(bot_id=row.id, text=text, status="sending",
-                       media_id=bc_photo or None, media_type=(bc_mtype if bc_photo else None),
-                       kb_json=(bc_kb.model_dump_json(exclude_none=True) if bc_kb else None),
-                       chat_id=cb.message.chat.id, msg_id=cb.message.message_id,
-                       cursor_uid=0, total_count=n_users, audience=bc_audience,
-                       **({"media_type": "forward", "fwd_chat_id": int(bc_fwd[0]), "fwd_msg_id": int(bc_fwd[1])}
-                          if bc_fwd else {}))
-        s.add(bc)
-        await s.commit()
-        bc_id = bc.id
+    from tenant.shared.broadcast_runner import build_broadcast as _bc_build   # PATCH_BROADCAST_FWD_CRASH_FIX_V1
+    try:
+        async with Session() as s:
+            bc = _bc_build(bot_id=row.id, text=text, media_id=bc_photo or None,
+                           media_type=(bc_mtype if bc_photo else None),
+                           kb_json=(bc_kb.model_dump_json(exclude_none=True) if bc_kb else None),
+                           chat_id=cb.message.chat.id, msg_id=cb.message.message_id,
+                           total_count=n_users, audience=bc_audience, fwd=bc_fwd)
+            s.add(bc)
+            await s.commit()
+            bc_id = bc.id
+    except Exception:
+        logger.exception("bc_send: ثبتِ ارسالِ همگانی ناموفق بود")
+        await _bc_safe_edit(cb.message, "❌ ثبتِ ارسالِ همگانی ناموفق بود. دوباره از «📣 ارسال پیام همگانی» امتحان کن؛ "
+                                        "اگر تکرار شد به پشتیبانی خبر بده.")
+        await cb.answer()
+        return
     kb_cancel = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🛑 لغو ارسال", callback_data=f"bc:stop:{bc_id}")]
     ])
