@@ -44,6 +44,11 @@ logger = _get_logger(__name__)
 
 __all__ = ["HMPanelClient"]
 
+
+class _AmbiguousError(PanelError):
+    """قطعِ اتصال/تایم‌اوت: درخواست ممکن است در پنل اجرا شده باشد (نباید بی‌خبر دوباره فرستاد)."""
+    ambiguous = True
+
 GB = 1024 ** 3
 
 
@@ -77,6 +82,9 @@ class HMPanelClient:
         self.timeout = timeout
         self._session = None
         self._inb_cache: tuple[float, list] | None = None
+        self.create_timeout = 60          # مهلتِ POSTِ ساختِ کاربر (ثانیه)
+        self.create_wait = 45.0           # بعد از پاسخِ نامشخص/«در حالِ ساخت»، تا چند ثانیه منتظرِ ظاهرشدنِ کاربر بمانیم
+        self.poll_interval = 2.0
 
     # ───────────── HTTP ─────────────
     async def _ensure_session(self):
@@ -90,14 +98,16 @@ class HMPanelClient:
             raise PanelError("کلیدِ API پنلِ HMPanel ثبت نشده است.")
         return True
 
-    async def _request(self, method, path, *, ok404=False, **kwargs):
+    async def _request(self, method, path, *, ok404=False, retry=True, timeout=None, **kwargs):
         s = await self._ensure_session()
+        if timeout:
+            kwargs["timeout"] = aiohttp.ClientTimeout(total=timeout, sock_connect=7)
         await self.login()
         headers = {"Authorization": f"Bearer {self.api_key}", "Accept": "application/json"}
         if method.upper() != "GET":
             headers["Content-Type"] = "application/json"
         url = f"{self.base_url}/api{path}"
-        for attempt in range(2):
+        for attempt in range(2 if retry else 1):
             try:
                 async with s.request(method, url, headers=headers, **kwargs) as r:
                     text = await r.text()
@@ -128,7 +138,7 @@ class HMPanelClient:
             except PanelError:
                 raise
             except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, OSError) as e:
-                if attempt == 0:
+                if attempt == 0 and retry:
                     continue
                 try:
                     if self._session and not self._session.closed:
@@ -136,7 +146,7 @@ class HMPanelClient:
                 except Exception:      # noqa: BLE001
                     logger.exception("hmpanel: بستنِ نشستِ خراب ناموفق بود")
                 self._session = None
-                raise PanelError(
+                raise _AmbiguousError(
                     f"اتصال به HMPanel برقرار نشد یا بیش از حد طول کشید: {str(e) or type(e).__name__} "
                     f"(آدرس/پورتِ پنل و فایروال را بررسی کن؛ timeout={self.timeout}s)") from e
         raise PanelError(f"{method} {path} پس از تلاشِ مجدد ناموفق ماند")
@@ -278,8 +288,26 @@ class HMPanelClient:
                 "remark": str(email)[:64]}
         if limit_ip:
             body["limitIp"] = int(limit_ip)
-        res = await self._request("POST", "/v1/clients", json=body)
+        # PATCH_HMPANEL_CREATE_NO_RETRY_V1: ساختِ کاربر در HMPanel چند ثانیه (گاهی بیشتر) طول می‌کشد چون به پنل‌های ۳X-UI می‌رود و
+        # با قفلِ «هر ایمیل یک ساختِ هم‌زمان» محافظت می‌شود. قبلاً روی تایم‌اوت همان POST دوباره فرستاده می‌شد و پنل
+        # «A client creation operation is already in progress for this email» می‌داد، درحالی‌که کاربر در همان لحظه ساخته می‌شد.
+        # حالا: یک بار POST (با مهلتِ بلندتر)، و اگر جواب نامشخص بود یا پنل گفت «در حالِ ساخت است»، منتظرِ ظاهرشدنِ کاربر می‌مانیم.
+        res = None
+        try:
+            res = await self._request("POST", "/v1/clients", json=body, retry=False, timeout=self.create_timeout)
+        except PanelError as e:
+            if getattr(e, "ambiguous", False) or "already in progress" in str(e).lower():
+                logger.info("hmpanel: ساخت نامشخص/در جریان (%s)؛ منتظرِ ظاهرشدنِ کاربر می‌مانیم", str(e)[:120])
+            else:
+                raise
         c = res if isinstance(res, dict) and res.get("id") and res.get("subscriptionUrl") else None
+        waited = 0.0
+        while not c and waited < self.create_wait:
+            c = await self._lookup(email)
+            if c:
+                break
+            await asyncio.sleep(self.poll_interval)
+            waited += self.poll_interval
         for attempt in range(3):
             if c:
                 break

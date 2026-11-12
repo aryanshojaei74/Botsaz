@@ -11,7 +11,7 @@ from tenant.shared.panel_clients.vpn_panel_factory import make_panel_client_from
 KEY = "hmp_testkey"
 
 
-def _app(state):
+def _app(state, create_override=None):
     def auth(request):
         if request.headers.get("Authorization") != f"Bearer {KEY}":
             raise web.HTTPUnauthorized(text='{"message":"bad"}')
@@ -86,7 +86,7 @@ def _app(state):
     app = web.Application()
     app.router.add_get("/api/v1/account", account)
     app.router.add_get("/api/v1/inbounds", inbounds)
-    app.router.add_post("/api/v1/clients", create)
+    app.router.add_post("/api/v1/clients", create_override or create)
     app.router.add_get("/api/v1/clients/lookup", lookup)
     app.router.add_patch("/api/v1/clients/{cid}", patch)
     app.router.add_delete("/api/v1/clients/{cid}", delete)
@@ -180,3 +180,73 @@ async def test_404_gives_actionable_diagnosis():
             await cl.close()
         finally:
             await server.close()
+
+
+# ───────── PATCH_HMPANEL_CREATE_NO_RETRY_V1: «client creation operation is already in progress» ─────────
+import asyncio  # noqa: E402
+
+
+def _slow_app(state, *, mode):
+    posts = state.setdefault("posts", [])
+
+    async def create(request):
+        b = await request.json()
+        posts.append(b["email"])
+        cid = f"c{len(state['clients']) + 1}"
+        rec = {"id": cid, "email": b["email"], "enable": True, "up": 0, "down": 0, "total": b["total"], "expiryTime": b["expiryTime"]}
+        if mode == "slow":                         # پنل کند است: جوابش دیرتر از مهلتِ کلاینت می‌رسد، ولی کاربر ساخته می‌شود
+            # پنلِ واقعی بعد از قطعِ اتصالِ کلاینت هم کارش را ادامه می‌دهد؛ پس ساخت مستقل از handler زمان‌بندی می‌شود
+            asyncio.get_running_loop().call_later(0.6, lambda: state["clients"].__setitem__(b["email"], rec))
+            await asyncio.sleep(0.6)
+            return web.json_response({"ok": True})
+        if mode == "locked":                       # پنل می‌گوید ساخت در جریان است؛ کاربر کمی بعد ظاهر می‌شود
+            asyncio.get_running_loop().call_later(0.3, lambda: state["clients"].__setitem__(b["email"], rec))
+            raise web.HTTPBadRequest(text='{"message":"A client creation operation is already in progress for this email."}')
+        raise web.HTTPBadRequest(text='{"message":"At least one inbound must be selected"}')
+    return _app(state, create_override=create)
+
+
+async def _client_for(app, **kw):
+    server = TestServer(app)
+    await server.start_server()
+    cl = HMPanelClient(f"http://{server.host}:{server.port}", "-", KEY, **kw)
+    cl.create_timeout, cl.create_wait, cl.poll_interval = 0.25, 5.0, 0.1
+    return server, cl
+
+
+@pytest.mark.asyncio
+async def test_slow_create_is_not_resent_and_succeeds_when_the_client_appears():
+    state = {"clients": {}}
+    server, cl = await _client_for(_slow_app(state, mode="slow"))
+    try:
+        res = await cl.create_account("trial_1", 1, 1)
+        assert res["sub_link"].endswith("/s/c1")
+        assert state["posts"] == ["trial_1"]                       # فقط یک POST (قبلاً دوباره فرستاده می‌شد ⇒ ۴۰۰)
+    finally:
+        await cl.close()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_already_in_progress_error_waits_for_the_client_instead_of_failing():
+    state = {"clients": {}}
+    server, cl = await _client_for(_slow_app(state, mode="locked"))
+    try:
+        res = await cl.create_account("trial_2", 1, 1)
+        assert res["email"] == "trial_2" and state["posts"] == ["trial_2"]
+    finally:
+        await cl.close()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_a_real_400_still_fails_fast():
+    state = {"clients": {}}
+    server, cl = await _client_for(_slow_app(state, mode="bad"))
+    try:
+        with pytest.raises(PanelError) as ei:
+            await cl.create_account("trial_3", 1, 1)
+        assert "inbound" in str(ei.value).lower() and state["posts"] == ["trial_3"]
+    finally:
+        await cl.close()
+        await server.close()
