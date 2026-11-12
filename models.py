@@ -1316,6 +1316,10 @@ class VpnPlan(Base):
     # دسته نگرفته‌اند در بخشِ «همه سرورها»ی مینی‌اپ نمایش داده شوند.
     miniapp_category_id: Mapped[int | None] = mapped_column(
         ForeignKey("miniapp_categories.id"), index=True)
+    # === PATCH_PLAN_CUSTOM_TEXT_V1 === (پیشنهاد #208) مالک خودش تعیین کند حجم/مدتِ خودکار نشان داده شود یا نه،
+    # و برایِ هر پلن متنِ دلخواه در فاکتور بنویسد (مثلاً «مصرف منصفانه ۱۰۰ گیگ»).
+    hide_spec: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    invoice_note: Mapped[str | None] = mapped_column(String(300))
 
 
 # === PATCH_MINIAPP_V1 ===

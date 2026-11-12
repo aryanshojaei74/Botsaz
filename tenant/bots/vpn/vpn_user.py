@@ -1868,10 +1868,10 @@ async def show_vpn_plans(bot: Bot, msg: Message, bot_id: int, state=None, panel_
             # تا متنِ دکمه بی‌خودی طولانی/فشرده نشه.
             already_has = ("گیگ" in title or "GB" in title.upper()) and \
                           ("روز" in title or " D" in title.upper())
-            spec = "" if already_has else f" — {vol}، {dur}"
+            spec = "" if (already_has or getattr(p, "hide_spec", False)) else f" — {vol}، {dur}"   # PATCH_PLAN_CUSTOM_TEXT_V1
             # === PATCH_PLAN_USERS_LABEL_V1 === پلنِ چندکاربره: «تک‌کاربره / دو کاربره» هم نوشته شود
             _ul = _users_lbl(getattr(p, "limit_ip", 0))
-            if _ul and "کاربر" not in title:
+            if _ul and "کاربر" not in title and not getattr(p, "hide_spec", False):
                 spec += f" — {_ul}"
             btn_style = _color_map.get((p.color or "").strip(), _buy_style)
             # === PATCH_PARTNER_PLAN_PRICE_LABEL_V1 ===
@@ -2625,6 +2625,8 @@ async def _build_buy_summary(bot: Bot, bot_id: int, plan_id: int,
         dur = "بی‌انقضا" if plan.days == 0 else f"{plan.days} روز"
         base_price = int(float(plan.price))
         p_title, p_panel = plan.title, plan.panel_key
+        p_hide_spec = bool(getattr(plan, "hide_spec", False))          # PATCH_PLAN_CUSTOM_TEXT_V1
+        p_note = (getattr(plan, "invoice_note", None) or "").strip()
         # === PATCH_VBUYBACK_KEEP_CONTEXT_V2 ===
         # نسخهٔ V1 پنل را از `vbuy_panel_key` می‌خواند که فقط وقتی پر
         # می‌شود که کاربر از مسیرِ show_vpn_plans آمده باشد. ولی وقتی از
@@ -2813,21 +2815,24 @@ async def _build_buy_summary(bot: Bot, bot_id: int, plan_id: int,
     label_line = f"\n🏷 نام کانفیگ: <b>{custom_label}</b>" if custom_label else ""
 
     note_line = ""
+    if p_note:                                          # PATCH_PLAN_CUSTOM_TEXT_V1: توضیحِ اختصاصیِ همین پلن
+        note_line += f"📝 {html.escape(p_note)}\n"
     if p_panel:
         try:
             from tenant.bots.vpn.vpn_admin import get_panel_note
             _note = await get_panel_note(bot_id, p_panel, "invoice")
             if _note:
-                note_line = f"📝 {_note}\n"
+                note_line += f"📝 {_note}\n"
         except Exception:
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+    spec_lines = "" if p_hide_spec else f"📦 حجم: {vol}\n📅 مدت: {dur}\n"
 
     text = (f"🧾 <b>پیش فاکتور</b>\n"
             f"┈┅━━⊷⊰✨⊱⊶━━┅┈\n"
             f"{buyer_lines}\n"
             f"┈┅━━⊷⊰✨⊱⊶━━┅┈\n"
             f"🛰 <b>{p_title}</b>{label_line}\n\n"
-            f"📦 حجم: {vol}\n📅 مدت: {dur}\n{price_block}\n"
+            f"{spec_lines}{price_block}\n"
             f"{note_line}"
             f"💳 موجودی کیف پول: {rial(bal)}{enough}")
     # === PATCH_PRODUCT_RATING_V1 ===
@@ -4047,14 +4052,26 @@ async def _show_card_details(cb: CallbackQuery, bot: Bot, bot_id: int,
     inv_no, trk = await _attach_invoice(oid, bot_id)
     vol  = "نامحدود" if gb == 0 else f"{gb} گیگ"
     dur  = "بی‌انقضا" if days == 0 else f"{days} روز"
+    # === PATCH_PLAN_CUSTOM_TEXT_V1 === تنظیماتِ پلنِ همین سفارش (hide_spec / توضیحِ فاکتور)
+    _plan_hide, _plan_note, _plan_title = False, "", ""
+    try:
+        async with Session() as _sp:
+            _ord = await _sp.get(Order, oid)
+            _pl = await _sp.get(VpnPlan, _ord.plan_id) if (_ord and _ord.plan_id) else None
+        if _pl:
+            _plan_hide = bool(getattr(_pl, "hide_spec", False))
+            _plan_note = (getattr(_pl, "invoice_note", None) or "").strip()
+            _plan_title = _pl.title or ""
+    except Exception:
+        logger.exception("خواندنِ تنظیماتِ پلن برایِ فاکتور ناموفق بود")
     # یادداشت دلخواه ادمین برای این پنل (زیر قیمت در پیش‌فاکتور)
-    note_line = ""
+    note_line = f"📝 {html.escape(_plan_note)}\n" if _plan_note else ""
     if panel_key:
         try:
             from tenant.bots.vpn.vpn_admin import get_panel_note
             _note = await get_panel_note(bot_id, panel_key, "invoice")
             if _note:
-                note_line = f"📝 {_note}\n"
+                note_line += f"📝 {_note}\n"
         except Exception:
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     # اطلاعات کاربریِ خریدار
@@ -4067,7 +4084,7 @@ async def _show_card_details(cb: CallbackQuery, bot: Bot, bot_id: int,
         "┈┅━━⊷⊰✨⊱⊶━━┅┈\n"
         f"{buyer_line}\n"
         "┈┅━━⊷⊰✨⊱⊶━━┅┈\n"
-        f"📦 سرویس: <b>{vol} / {dur}</b>\n"
+        f"📦 سرویس: <b>{(html.escape(_plan_title) if (_plan_hide and _plan_title) else f'{vol} / {dur}')}</b>\n"
         f"🔢 تعداد: <b>{count} عدد</b>\n"
         f"💰 مبلغ قابل پرداخت: <b>{rial(price)}</b>\n"
         f"{note_line}"

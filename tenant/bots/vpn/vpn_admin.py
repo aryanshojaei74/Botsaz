@@ -5012,6 +5012,12 @@ _AUDIENCE_LABEL = {"all": "همه", "users": "فقط مشتری", "resellers": "
 _AUDIENCE_NEXT = {"all": "users", "users": "resellers", "resellers": "all"}
 
 
+def _plan_note_line(p) -> str:
+    """PATCH_PLAN_CUSTOM_TEXT_V1: خطِ «توضیحِ فاکتور» در منویِ پلن (فقط اگر ثبت شده)."""
+    note = (getattr(p, "invoice_note", None) or "").strip()
+    return f"📝 توضیحِ فاکتور: <b>{_html_escape_mod.escape(note[:80])}</b>\n" if note else ""
+
+
 def _plan_menu_view(p: VpnPlan, key: str) -> tuple[str, InlineKeyboardMarkup]:
     vol = "♾️ نامحدود" if p.volume_gb == 0 else f"{p.volume_gb} گیگ"
     dur = "بی‌انقضا" if p.days == 0 else f"{p.days} روز"
@@ -5027,6 +5033,9 @@ def _plan_menu_view(p: VpnPlan, key: str) -> tuple[str, InlineKeyboardMarkup]:
         f"👥 تعداد کاربر: <b>{users}</b>\n"
         f"🎨 رنگ دکمه: <b>{color_label}</b>\n"
         f"🏷 دسته‌بندی: <b>{cat_label}</b>\n"
+        # === PATCH_PLAN_CUSTOM_TEXT_V1 ===
+        f"🔋 حجم/مدتِ خودکار در دکمه و فاکتور: <b>{'⛔ پنهان' if getattr(p, 'hide_spec', False) else '✅ نمایش'}</b>\n"
+        f"{_plan_note_line(p)}"
         # === PATCH_RESELLER_PLANS_V1 ===
         f"👤 مخاطب: <b>{_AUDIENCE_LABEL.get(p.audience or 'all', 'همه')}</b>\n"
         f"وضعیت فروش: <b>{status}</b>\n\n"
@@ -5048,6 +5057,12 @@ def _plan_menu_view(p: VpnPlan, key: str) -> tuple[str, InlineKeyboardMarkup]:
          _b(f"👥 کاربر: {users}", f"tvpn:planedit:{key}:users:{p.id}")],
         [_b(f"🎨 رنگ: {color_label}", f"tvpn:plancolor:{key}:{p.id}"),
          _b(f"🏷 دسته: {cat_label}", f"tvpn:plancat:{key}:{p.id}")],
+        # === PATCH_PLAN_CUSTOM_TEXT_V1 === (پیشنهاد #208)
+        [_b("🔋 حجم/مدتِ خودکار: " + ("⛔ پنهان (فقط عنوان)" if getattr(p, "hide_spec", False) else "✅ نمایش"),
+            f"tvpn:planspec:{key}:{p.id}",
+            style=ButtonStyle.DANGER if getattr(p, "hide_spec", False) else ButtonStyle.SUCCESS)],
+        [_b("📝 توضیحِ فاکتور" + (" ✅" if getattr(p, "invoice_note", None) else " (ثبت نشده)"),
+            f"tvpn:planedit:{key}:note:{p.id}")],
         # === PATCH_RESELLER_PLANS_V1 === چرخشی بینِ همه / مشتری / نماینده
         [_b(f"👤 مخاطب: {_AUDIENCE_LABEL.get(p.audience or 'all', 'همه')}",
             f"tvpn:planaud:{key}:{p.id}")],
@@ -5566,6 +5581,9 @@ _PLAN_EDIT_PROMPTS = {
     "users": "👥 تعداد کاربر مجاز (اتصال هم‌زمان) را بفرست (0 = نامحدود):",
     # === PATCH_VPN_PLAN_CATEGORY_V1 ===
     "category": "🏷 نامِ دستهٔ جدید را بفرست (حداکثر ۲۰ کاراکتر؛ برایِ حذفِ دسته «-» بفرست):",
+    # === PATCH_PLAN_CUSTOM_TEXT_V1 ===
+    "note": ("📝 متنی که در <b>فاکتورِ همین پلن</b> زیرِ قیمت نمایش داده شود را بفرست (حداکثر ۳۰۰ کاراکتر)؛ مثلاً «مصرف منصفانه ۱۰۰ گیگ».\n"
+             "برایِ حذفِ متن «-» بفرست:"),
 }
 
 
@@ -5574,6 +5592,9 @@ async def vpn_plan_edit_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
     _, _, key, field, plan_id = cb.data.split(":")
     row, p = await _plan_get(cb, bot, int(plan_id))
     if not p or field not in _PLAN_EDIT_PROMPTS:
+        return
+    if field == "note" and not has_feature(row.plan, Feature.PLAN_INVOICE_NOTE):     # PATCH_PLAN_CUSTOM_TEXT_V1
+        await cb.answer(upgrade_hint(Feature.PLAN_INVOICE_NOTE), show_alert=True)
         return
     prompt = await cb.message.answer(
         _PLAN_EDIT_PROMPTS[field],
@@ -5600,15 +5621,31 @@ async def vpn_plan_edit_value(msg: Message, bot: Bot, state: FSMContext):
     val = None
     if field == "title":
         if raw:
-            if len(raw) > 20:
+            async with Session() as _sp:            # PATCH_PLAN_CUSTOM_TEXT_V1: وقتی حجم/مدتِ خودکار پنهان است عنوان می‌تواند بلندتر باشد
+                _pl = await _sp.get(VpnPlan, plan_id)
+            _max_title = 40 if (_pl and getattr(_pl, "hide_spec", False)) else 20
+            if len(raw) > _max_title:
                 await msg.answer(
                     "⚠️ عنوان بیش از حد بلند است و روی دکمهٔ فروشگاه فشرده/بریده می‌شود.\n"
-                    "لطفاً عنوانِ کوتاه‌تری (حداکثر ۲۰ کاراکتر) بفرست:",
+                    f"لطفاً عنوانِ کوتاه‌تری (حداکثر {_max_title} کاراکتر) بفرست:",
                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                         [InlineKeyboardButton(text="⬅️ بازگشت / انصراف",
                                               callback_data=f"tvpn:planmenu:{key}:{plan_id}", style=ButtonStyle.DANGER)]]))
                 return
-            val = raw[:20]
+            val = raw[:_max_title]
+    elif field == "note":
+        # === PATCH_PLAN_CUSTOM_TEXT_V1 ===
+        if not has_feature(row.plan, Feature.PLAN_INVOICE_NOTE):
+            await state.clear()
+            await msg.answer(upgrade_hint(Feature.PLAN_INVOICE_NOTE))
+            return
+        if raw in ("-", "حذف"):
+            val = ""
+        elif len(raw) > 300:
+            await msg.answer("⚠️ متن بیش از حد بلند است؛ حداکثر ۳۰۰ کاراکتر بفرست:")
+            return
+        else:
+            val = raw
     elif field == "category":
         # === PATCH_VPN_PLAN_CATEGORY_V1 ===
         if raw in ("-", "بدون دسته", "حذف"):
@@ -5648,6 +5685,8 @@ async def vpn_plan_edit_value(msg: Message, bot: Bot, state: FSMContext):
             p.limit_ip = val
         elif field == "category":  # === PATCH_VPN_PLAN_CATEGORY_V1 ===
             p.category = val or None
+        elif field == "note":      # === PATCH_PLAN_CUSTOM_TEXT_V1 ===
+            p.invoice_note = val or None
         await s.commit()
     # پاک‌کردن پرسش و پاسخ تا چت تمیز بماند
     for mid in (data.get("pe_prompt_id"), msg.message_id):
@@ -5668,6 +5707,25 @@ async def vpn_plan_edit_value(msg: Message, bot: Bot, state: FSMContext):
             await msg.answer(text, reply_markup=kb)
     except Exception:
         await msg.answer(text, reply_markup=kb)
+
+
+# === PATCH_PLAN_CUSTOM_TEXT_V1 === (پیشنهاد #208) روشن/خاموش‌کردنِ حجم/مدتِ خودکار در دکمه و فاکتورِ این پلن
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:planspec:"))
+async def vpn_plan_spec_toggle(cb: CallbackQuery, bot: Bot):
+    _, _, key, plan_id = cb.data.split(":")
+    row, p = await _plan_get(cb, bot, int(plan_id))
+    if not p:
+        return
+    async with Session() as s:
+        p = await s.get(VpnPlan, p.id)
+        p.hide_spec = not bool(getattr(p, "hide_spec", False))
+        await s.commit()
+    await cb.answer("حجم/مدت در دکمه و فاکتور پنهان شد" if p.hide_spec else "حجم/مدتِ خودکار دوباره نمایش داده می‌شود")
+    text, kb = _plan_menu_view(p, key)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb)
 
 
 @vpn_admin_router.callback_query(F.data.startswith("tvpn:plandel2:"))

@@ -166,6 +166,8 @@ class Feature(str, Enum):
     HMPANEL_PANEL = "hmpanel_panel"
     # === PATCH_PLAN_TABLE_VIEW_V1 === نمایشِ جدولیِ پلن‌ها (قیمت|زمان|حجم) — فقط پلنِ حرفه‌ای.
     PLAN_TABLE_VIEW = "plan_table_view"
+    # === PATCH_PLAN_CUSTOM_TEXT_V1 === متنِ دلخواهِ فاکتور برایِ هر پلن + عنوانِ بلندتر — فقط پلنِ حرفه‌ای.
+    PLAN_INVOICE_NOTE = "plan_invoice_note"
     # === PATCH_VPN_PANEL_MARKET_V1 ===
     # ثبت و فروشِ پنل (نه کانفیگِ VPN) — فقط پلنِ حرفه‌ای، فقط ربات‌هایِ فروشِ VPN.
     VPN_PANEL_MARKET = "vpn_panel_market"
@@ -303,6 +305,7 @@ FEATURE_LABELS = {
     Feature.WGRES_PANEL: "🐉 اتصال به پنل وایرگارد (نماینده/API)",   # PATCH_WGRES_PANEL_V1
     Feature.HMPANEL_PANEL: "🟦 اتصال به پنل HMPanel (کلید API)",   # PATCH_HMPANEL_PANEL_V1
     Feature.PLAN_TABLE_VIEW: "📊 نمایشِ جدولیِ پلن‌ها",   # PATCH_PLAN_TABLE_VIEW_V1
+    Feature.PLAN_INVOICE_NOTE: "📝 متنِ دلخواهِ فاکتورِ هر پلن",   # PATCH_PLAN_CUSTOM_TEXT_V1
     # === PATCH_VPN_PANEL_MARKET_V1 ===
     Feature.VPN_PANEL_MARKET: "🏷 ثبت و فروشِ پنل",
     # === PATCH_PANEL_YAR_MOVE_V1 ===
@@ -465,6 +468,7 @@ _PRO_EXTRA = {
     Feature.WGRES_PANEL,       # PATCH_WGRES_PANEL_V1
     Feature.HMPANEL_PANEL,     # PATCH_HMPANEL_PANEL_V1
     Feature.PLAN_TABLE_VIEW,   # PATCH_PLAN_TABLE_VIEW_V1
+    Feature.PLAN_INVOICE_NOTE,   # PATCH_PLAN_CUSTOM_TEXT_V1
     # === PATCH_VPN_PANEL_MARKET_V1 === طبقِ خواستهٔ ادمین: فقط پلنِ حرفه‌ای.
     Feature.VPN_PANEL_MARKET,
     # === PATCH_PANEL_YAR_MOVE_V1 === طبقِ خواستهٔ ادمین: فقط پلنِ حرفه‌ای.
