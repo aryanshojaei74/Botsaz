@@ -16693,6 +16693,22 @@ async def _premium_effective_price(bot_id: int, months: int, stars: int,
     return _premium_price(stars, rate, margin_pct), False
 
 
+async def _premium_uses_bot_stars(bot_id: int) -> bool:
+    """PATCH_PREMIUM_AUTO_NO_STARS_FILTER_V1 — فقط وقتی تحویل با خودِ ربات (giftPremiumSubscription) انجام می‌شود
+    موجودیِ استارزِ ربات مهم است. با Fragment API / TGTools / تحویلِ دستی، پلن‌ها نباید به‌خاطرِ موجودیِ
+    استارزِ ربات پنهان شوند (باگِ ARTAVPN: «هنوز پلنی نیست» با اینکه Fragment وصل بود)."""
+    if await _get_setting(bot_id, "premium_manual_delivery", "0") == "1":
+        return False
+    if await _tgt_premium_on(bot_id):
+        return False
+    try:
+        if await _fapi.premium_on(bot_id):
+            return False
+    except Exception:
+        logger.exception("premium: بررسیِ Fragment API ناموفق (فرضِ تحویلِ با استارزِ ربات)")
+    return True
+
+
 async def premium_admin_content(bot_id: int, bot: "Bot | None" = None) -> tuple[str, InlineKeyboardMarkup]:
     rate, margin = await _premium_settings(bot_id)
     _pmode = await _premium_auto_mode(bot_id)   # PATCH_PREMIUM_FRAGMENT_PRICE_V1
@@ -16709,7 +16725,7 @@ async def premium_admin_content(bot_id: int, bot: "Bot | None" = None) -> tuple[
     # نمی‌شود (ادمین با اکانتِ شخصی‌اش می‌فرستد) — پس این چک/علامتِ ❌
     # نباید در آن حالت اعمال شود، وگرنه با اینکه حالتِ دستی روشن است،
     # همه‌چیز همچنان به‌خاطرِ کمبودِ استارزِ ربات ❌ نشان داده می‌شود.
-    balance = await _bot_star_balance(bot) if (bot is not None and not manual_mode) else None
+    balance = await _bot_star_balance(bot) if (bot is not None and not manual_mode and await _premium_uses_bot_stars(bot_id)) else None
     for months, stars in _PREMIUM_TIERS:
         price, is_custom = await _premium_effective_price(bot_id, months, stars, rate, margin)  # PATCH_PREMIUM_CUSTOM_PRICE_V1
         mark = ""
@@ -16970,7 +16986,7 @@ async def show_premium_shop_to_user(bot: Bot, target: Message, bot_id: int) -> N
     # این موجودی نبود. نتیجه: با اینکه ادمین حالتِ دستی را روشن کرده بود،
     # فروشگاه هنوز خالی نشان داده می‌شد.
     manual_mode = await _get_setting(bot_id, "premium_manual_delivery", "0") == "1"
-    balance = await _bot_star_balance(bot) if not manual_mode else None
+    balance = await _bot_star_balance(bot) if (not manual_mode and await _premium_uses_bot_stars(bot_id)) else None
     rows = []
     for months, stars in _PREMIUM_TIERS:
         if balance is not None and stars > balance:
