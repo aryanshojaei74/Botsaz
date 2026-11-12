@@ -7468,10 +7468,20 @@ def _renew_gb_options(rc: "_RenewCfg") -> list[int]:
     if rc.mx_g <= 0 or (rc.pg <= 0 and not rc.mirror):
         return []
     out, g = [], max(rc.mn_g, 1)
-    while g <= rc.mx_g and len(out) < 6:
+    st = max(rc.st_g, 1)
+    while g <= rc.mx_g and len(out) < 10:        # PATCH_RENEW_GB_CUSTOM_V1: سقفِ ۶ گزینه به ۱۰ رسید (با گام ۱۰ تا ۱۰۰ گیگ دیده می‌شود)
         out.append(g)
-        g += rc.st_g
+        g += st
     return out
+
+
+def _renew_gb_allowed(rc: "_RenewCfg", g: int) -> bool:
+    """PATCH_RENEW_GB_CUSTOM_V1 — حجمِ تمدید مجاز است اگر یکی از گزینه‌هایِ لیست باشد یا (حجمِ دلخواه) درونِ بازهٔ مجازِ مالک."""
+    if g == 0:
+        return True
+    if rc.mx_g <= 0 or (rc.pg <= 0 and not rc.mirror):
+        return False
+    return g in _renew_gb_options(rc) or max(rc.mn_g, 1) <= g <= rc.mx_g
 
 
 @vpn_user_router.callback_query(F.data.startswith("vren:"))
@@ -7552,6 +7562,64 @@ async def vpn_renew_menu(cb: CallbackQuery, bot: Bot):
     await cb.answer()
 
 
+# === PATCH_RENEW_GB_CUSTOM_V1 === (Weirdnet: «حجم دلخواه باشه یا فاصلهٔ حجم‌ها ده گیگ»)
+class _RenewGbFSM(StatesGroup):
+    gb = State()
+
+
+@vpn_user_router.callback_query(F.data.startswith("vrenc:"))
+async def vpn_renew_custom_gb_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    _, aid_s, days_s = cb.data.split(":")
+    aid, add_days = int(aid_s), int(days_s)
+    async with Session() as s:
+        row = await s.scalar(select(BotRow).where(BotRow.token == bot.token))
+        a = await s.get(PanelAccount, aid)
+        panel = await _panel_for_account(s, row.id, a) if (row and a) else None
+        if not row or not a or a.bot_id != row.id or a.user_telegram_id != cb.from_user.id or not panel:
+            return await cb.answer("امکان تمدید نیست.", show_alert=True)
+        rc = await _renew_cfg(row.id, cb.from_user.id, panel.panel_key)
+    if add_days not in set(_renew_day_options(rc)) or rc.mx_g <= 0:
+        return await cb.answer("این گزینه معتبر نیست؛ دوباره از منوی تمدید انتخاب کن.", show_alert=True)
+    await state.set_state(_RenewGbFSM.gb)
+    await state.update_data(rgb_aid=aid, rgb_days=add_days)
+    await cb.message.answer(
+        f"✍️ حجمِ دلخواهِ تمدید را به <b>گیگابایت</b> بفرست (بینِ {max(rc.mn_g, 1)} تا {rc.mx_g}):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="❌ انصراف", callback_data=f"vren:{aid}", style=ButtonStyle.DANGER)]]))
+    await cb.answer()
+
+
+@vpn_user_router.message(_RenewGbFSM.gb, F.text)
+async def vpn_renew_custom_gb_in(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import fa_to_int
+    d = await state.get_data()
+    aid, add_days = int(d.get("rgb_aid") or 0), int(d.get("rgb_days") or 0)
+    g = fa_to_int(msg.text)
+    async with Session() as s:
+        row = await s.scalar(select(BotRow).where(BotRow.token == bot.token))
+        a = await s.get(PanelAccount, aid) if aid else None
+        panel = await _panel_for_account(s, row.id, a) if (row and a) else None
+    if not row or not a or a.bot_id != row.id or a.user_telegram_id != msg.from_user.id or not panel:
+        await state.clear()
+        return await msg.answer("امکان تمدید نیست؛ دوباره از «سرویس‌های من» وارد شو.")
+    rc = await _renew_cfg(row.id, msg.from_user.id, panel.panel_key)
+    if not g or g <= 0 or not _renew_gb_allowed(rc, g):
+        return await msg.answer(f"❌ عدد باید بینِ {max(rc.mn_g, 1)} تا {rc.mx_g} گیگ باشد. دوباره بفرست:")
+    q = await _renew_quote(row.id, msg.from_user.id, panel.panel_key, rc, add_days, g)
+    if q <= 0:
+        return await msg.answer("❌ برای این حجم قیمتی تعریف نشده؛ عددِ دیگری بفرست:")
+    await state.clear()
+    price = q if rc.mirror else await _renew_partner_price(row.id, msg.from_user.id, q, panel.panel_key, "custom")
+    await msg.answer(
+        f"♻️ <b>تمدید {add_days} روز + {g} گیگ</b>\nمبلغ: <b>{rial(price)}</b>\n\nتأیید می‌کنی؟",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ تأیید و تمدید", callback_data=f"vrend:{aid}:{add_days}:{g}",
+                                  style=ButtonStyle.SUCCESS)],
+            [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"vren:{aid}", style=ButtonStyle.DANGER)]]))
+
+
 @vpn_user_router.callback_query(F.data.startswith("vrend:"))
 async def vpn_renew_pay_days(cb: CallbackQuery, bot: Bot):
     """تمدید با مدت دلخواه (بدون پلن ثابت) — قیمت بر اساس renew_price_day."""
@@ -7571,9 +7639,8 @@ async def vpn_renew_pay_days(cb: CallbackQuery, bot: Bot):
         rc = await _renew_cfg(bot_id, cb.from_user.id, _pk_r)
         _ok_days = set(_renew_day_options(rc))
         _gb_opts = _renew_gb_options(rc)
-        _ok_gb = {0} | set(_gb_opts)
         if (add_days <= 0 or add_days not in _ok_days
-                or (add_gb is not None and add_gb not in _ok_gb)):
+                or (add_gb is not None and not _renew_gb_allowed(rc, add_gb))):   # PATCH_RENEW_GB_CUSTOM_V1
             await cb.answer("این گزینهٔ تمدید معتبر نیست؛ دوباره از منوی تمدید انتخاب کن.",
                             show_alert=True)
             return
@@ -7600,6 +7667,10 @@ async def vpn_renew_pay_days(cb: CallbackQuery, bot: Bot):
                 vrows.append([InlineKeyboardButton(
                     text=f"♻️ +{add_days} روز + {g} گیگ — {rial(await _rp(add_days, g))}",
                     callback_data=f"vrend:{aid}:{add_days}:{g}", style=_st)])
+            if rc.mx_g > rc.mn_g:        # PATCH_RENEW_GB_CUSTOM_V1: حجمِ دلخواه درونِ بازهٔ مجاز
+                vrows.append([InlineKeyboardButton(
+                    text=f"✍️ حجمِ دلخواه ({max(rc.mn_g, 1)} تا {rc.mx_g} گیگ)",
+                    callback_data=f"vrenc:{aid}:{add_days}", style=_st)])
             vrows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"vren:{aid}")])
             await _safe_edit(
                 cb, f"♻️ <b>تمدید {add_days} روزه</b>\n\nحجمِ همراهِ تمدید را انتخاب کن "

@@ -22,6 +22,7 @@ vpn_api.py — APIِ فروشِ VPN برایِ رباتِ «فروش VPN» (PATC
     charge    فاکتورِ شارژِ کیف‌پول با آپی (amount) ← pay_url؛  charge_status (order_id)
     trial     دریافتِ تستِ رایگان (طبقِ تنظیماتِ سراسریِ تست؛ هر کاربر یک‌بار)
     withdraw_info / withdraw (amount, destination) / withdraws   برداشتِ وجه از کیف‌پول (اگر مالک روشن کرده باشد)
+    transfer_info / transfer (to, amount)   انتقالِ موجودی به کاربرِ دیگرِ همین ربات (اگر مالک روشن کرده باشد)
     ticket    ثبتِ تیکت (text[, subject])؛  tickets فهرستِ تیکت‌ها (+ پاسخ‌ها)؛  ticket_reply (ticket_id, text)
 
 کلیدِ کاملِ ربات (Bot.api_key) برایِ عملیاتِ کاربری پارامترِ telegram_id می‌خواهد؛ کلیدِ شخصیِ کاربر فقط
@@ -895,6 +896,11 @@ async def dispatch(ctx: AuthCtx, action: str, p: dict) -> JSONResponse:
         await _with_tmp_bot(ctx.bot_id, _tell)
         return JSONResponse({"ok": True, "request": {"id": w.id, "amount": int(w.amount), "status": "pending"}})
 
+    if action in ("transfer_info", "transfer"):      # PATCH_API_TRANSFER_V1 (Weirdnet: «انتقال موجودی هم به API اضافه شود»)
+        if user is None:
+            return _err("telegram_id_required" if ctx.full_access else "user_not_found")
+        return await _do_transfer(ctx, user, action, p)
+
     if action in ("ticket", "tickets", "ticket_reply"):
         if user is None:
             return _err("telegram_id_required" if ctx.full_access else "user_not_found")
@@ -945,6 +951,57 @@ async def dispatch(ctx: AuthCtx, action: str, p: dict) -> JSONResponse:
         return JSONResponse({"ok": True, "service": out})
 
     return _err("incorrect_action")
+
+
+async def _do_transfer(ctx: AuthCtx, user: BotUser, action: str, p: dict) -> JSONResponse:
+    """PATCH_API_TRANSFER_V1 — انتقالِ موجودی بینِ کاربرانِ همین ربات، دقیقاً با همان قاعدهٔ داخلِ ربات
+    (حالتِ «خاموش/با تأییدِ ادمین/خودکار» که مالک تعیین کرده؛ از «مالی و کیف پول ← 🔁 انتقال موجودی»).
+    transfer_info: وضعیت و حداقل مبلغ.  transfer: to (آیدیِ عددی یا @یوزرنیمِ گیرنده) + amount."""
+    from tenant.shared import balance_transfer as BT
+    mode = await BT.get_mode(ctx.bot_id)
+    if action == "transfer_info":
+        return JSONResponse({"ok": True, "enabled": mode != "off", "mode": mode, "min_amount": BT.MIN_AMOUNT,
+                             "needs_admin_approval": mode == "approve"})
+    if mode == "off":
+        return _err("transfer_disabled")
+    if not _rate_ok(f"btr:{ctx.bot_id}:{user.id}", 10):
+        return _err("rate_limited")
+    amt = BT.parse_amount(str(p.get("amount") or "")) or 0
+    if amt < BT.MIN_AMOUNT:
+        return _err("invalid_amount", min_amount=BT.MIN_AMOUNT)
+    to = await BT.find_user(ctx.bot_id, str(p.get("to") or p.get("destination") or p.get("recipient") or ""))
+    if to is None:
+        return _err("recipient_not_found")
+    if to.id == user.id:
+        return _err("same_user")
+    res, t = await BT.do_transfer(ctx.bot_id, user.id, to.id, amt, mode)
+    if res == "no_balance":
+        return _err("insufficient_balance")
+    if res == "invalid" or t is None:
+        return _err("invalid_transfer")
+
+    async def _tell(b):
+        async with Session() as s2:
+            _row = await s2.get(BotRow, ctx.bot_id)
+        if res == "done":
+            await BT._notify_user(b, to.telegram_id, f"💰 <b>{BT.fmt(amt)}</b> از طرفِ کاربرِ دیگری به کیف پولتان منتقل شد.")
+            return
+        from tenant import _notify_admins
+        import html as _h
+        fn_ = _h.escape(user.full_name or "") + (f" (@{user.username})" if user.username else "")
+        tn_ = _h.escape(to.full_name or "") + (f" (@{to.username})" if to.username else "")
+        await _notify_admins(
+            b, _row,
+            f"🔁 <b>درخواستِ انتقالِ موجودی #{t.id}</b> (از طریقِ API)\n\n👤 از: {fn_} (<code>{user.telegram_id}</code>)\n"
+            f"👤 به: {tn_} (<code>{to.telegram_id}</code>)\n💵 مبلغ: <b>{BT.fmt(amt)}</b>",
+            BT._kb([[BT._btn("✅ تأیید", f"btr:ap:{t.id}", BT.ButtonStyle.SUCCESS),
+                     BT._btn("❌ رد", f"btr:rj:{t.id}", BT.ButtonStyle.DANGER)]]))
+    await _with_tmp_bot(ctx.bot_id, _tell)
+    async with Session() as s3:
+        me = await s3.get(BotUser, user.id)
+    return JSONResponse({"ok": True, "status": "done" if res == "done" else "pending",
+                         "transfer": {"id": t.id, "amount": amt, "to": to.telegram_id},
+                         "balance": float(me.balance) if me else None})
 
 
 async def _run(request: Request, action: str | None, header_key: str | None = None) -> JSONResponse:
