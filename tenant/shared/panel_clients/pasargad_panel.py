@@ -22,6 +22,10 @@ from __future__ import annotations
 import re
 import time
 
+from logging_setup import get_logger as _get_logger
+logger = _get_logger(__name__)
+
+_SLOW_CREATE_LOG_SEC = 4.0   # PATCH_PASARGUARD_CREATE_TIMING_V1: ساختِ کندتر از این ⇒ لاگِ تفکیکی
 _GROUPS_CACHE: dict = {}   # PATCH_GROUPS_TTL_CACHE_V1
 # === PATCH_PASARGUARD_HWID_CAP_V1 ===
 # سقفِ hwid_limit که خودِ پنل اعلام کرده (از پیامِ خطا یاد گرفته می‌شود): (base_url, username) → عدد
@@ -188,6 +192,7 @@ class PasarGuardPanelClient(MarzbanPanelClient):
         days=0, hours=2 → تستِ ۲ ساعته. days=1, hours=12 → ۱ روز و ۱۲ ساعت.
         """
         username = _safe_username(email)
+        _t0 = time.monotonic()           # PATCH_PASARGUARD_CREATE_TIMING_V1
         if inbound_ids is not None:
             group_ids = [int(x) for x in inbound_ids if str(x).strip().isdigit()]
         else:
@@ -223,6 +228,7 @@ class PasarGuardPanelClient(MarzbanPanelClient):
                     "لطفاً «آی‌دی اینباندها/گروه‌ها» را در تنظیماتِ این پنل در "
                     "بات‌ساز اصلاح کن.")
 
+        _t_groups = time.monotonic() - _t0
         if mb is not None:
             data_limit = int(mb) * 1024 * 1024
         else:
@@ -386,6 +392,11 @@ class PasarGuardPanelClient(MarzbanPanelClient):
                 "۲) یک نگینکس/پراکسی/WAF جلوی پنل دقیقاً درخواستِ POST به این مسیر "
                 "رو قبل از رسیدن به اپ بلاک یا گم می‌کنه — تنظیماتِ ریورس‌پراکسیِ "
                 "جلوی این پنل رو هم بررسی کن.")
+        # === PATCH_PASARGUARD_CREATE_TIMING_V1 === ساختِ کندِ کانفیگ: معلوم شود وقت در لیستِ گروه‌هاست یا خودِ POSTِ پنل
+        _total = time.monotonic() - _t0
+        if _total > _SLOW_CREATE_LOG_SEC:
+            logger.warning("pasarguard create slow: total=%.1fs groups=%.1fs post=%.1fs auth=%s panel=%s",
+                           _total, _t_groups, _total - _t_groups, "api_key" if self.api_key else "userpass", self.base_url)
         sub_url = res.get("subscription_url") or ""
         return {
             "uuid": uuid_str or gen_uuid(), "sub_id": sub_id or gen_sub_id(),
