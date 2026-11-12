@@ -353,7 +353,11 @@ def _uniquify(ton: Decimal) -> Decimal:
 
     همیشه رو به بالا، تا مبلغِ دریافتی از چیزی که انتظار داریم کمتر نشود.
     """
-    base = ton.quantize(Decimal("0.001"))
+    # === PATCH_TON_AMOUNT_ROUND_UP_V1 === (SINA: «مبلغِ لینک دقیق نیست»)
+    # quantize پیش‌فرض «به نزدیک‌ترین» گرد می‌کرد؛ مثلاً 0.10149 ← 0.101 و بعد +0.000001…0.000999 ممکن بود
+    # *کمتر* از مبلغِ لازم شود (تا ۰٫۵٪ کم‌پرداخت). حالا همیشه رو به بالا گرد می‌شود.
+    from decimal import ROUND_UP
+    base = ton.quantize(Decimal("0.001"), rounding=ROUND_UP)
     return (base + Decimal(random.randint(1, 999)) / Decimal(1_000_000)).quantize(
         Decimal("0.000001"))
 
@@ -395,7 +399,8 @@ async def is_available(bot_id: int) -> bool:
 
 # ═══════════════════ هستهٔ امن: تسویه و شارژ ═══════════════════
 
-async def _credit(bot_id: int, charge_id: int, tx_hash: str) -> int:
+async def _credit(bot_id: int, charge_id: int, tx_hash: str, credit_override: int | None = None,
+                  note: str = "شارژ با واریز مستقیم TON") -> int:
     """شارژِ اتمیِ کیفِ پول برایِ یک فاکتور. خروجی: مبلغِ شارژشده (۰ یعنی نشد).
 
     تنها نقطه‌ای است که موجودی را زیاد می‌کند. با UPDATE شرطی قفل می‌شود تا
@@ -411,7 +416,7 @@ async def _credit(bot_id: int, charge_id: int, tx_hash: str) -> int:
             await s.rollback()
             return 0
         ch = await s.get(TonDirectCharge, charge_id)
-        credit = int(ch.amount_toman or 0)
+        credit = int(credit_override) if credit_override is not None else int(ch.amount_toman or 0)   # PATCH_TON_PROPORTIONAL_V1
         payer = int(ch.user_telegram_id)
         u = await s.scalar(select(BotUser).where(
             BotUser.bot_id == bot_id,
@@ -419,7 +424,7 @@ async def _credit(bot_id: int, charge_id: int, tx_hash: str) -> int:
         if u:
             u.balance = float(u.balance or 0) + credit
             s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=credit,
-                            kind="ton_direct", note="شارژ با واریز مستقیم TON"))
+                            kind="ton_direct", note=note))
         await s.commit()
     return credit
 
@@ -483,6 +488,48 @@ async def _match_charge(bot_id: int, tx: dict) -> int | None:
     return None
 
 
+# === PATCH_TON_PROPORTIONAL_V1 === (SINA: «با لینک می‌روند و مبلغ دقیق نیست؛ شارژ نمی‌شود»)
+# وقتی memo درست است ولی مبلغِ واریزی با فاکتور فرق دارد:
+#   • بیشتر از ۲٪ بالاتر (تا ۳ برابر): شارژ به‌نسبتِ مبلغِ واقعاً پرداخت‌شده (قبلاً فقط مبلغِ فاکتور و بقیه می‌سوخت)
+#   • کمتر از ۹۸٪ ولی ≥ ۵۰٪: شارژ به‌نسبت (قبلاً بی‌صدا رد می‌شد و پول گیر می‌کرد)
+#   • کمتر از ۵۰٪ یا بیشتر از ۳ برابر: خودکار شارژ نمی‌شود و فقط به مالک خبر می‌رسد (بررسیِ دستی)
+PARTIAL_MIN_RATIO = Decimal("0.5")
+OVERPAY_TOL = Decimal("1.02")
+OVERPAY_MAX_RATIO = Decimal("3")
+_OFF_AMOUNT_NOTIFIED: set[str] = set()
+
+
+def proportional_credit(amount_toman: int, expected_ton, paid_ton) -> tuple[int | None, Decimal]:
+    """(مبلغِ شارژ به تومان | None اگر خودکار نباید شارژ شود، نسبتِ پرداخت به انتظار)."""
+    exp = Decimal(str(expected_ton or 0))
+    if exp <= 0:
+        return None, Decimal(0)
+    ratio = Decimal(str(paid_ton)) / exp
+    if AMOUNT_TOLERANCE <= ratio <= OVERPAY_TOL:
+        return int(amount_toman), ratio                      # مبلغِ درست (با ارفاقِ ۲٪)
+    if ratio > OVERPAY_MAX_RATIO or ratio < PARTIAL_MIN_RATIO:
+        return None, ratio
+    return int(Decimal(int(amount_toman)) * ratio), ratio    # کم/زیادِ معقول ⇒ به‌نسبت
+
+
+async def _match_off_amount(bot_id: int, tx: dict):
+    """memo خورده ولی مبلغ از بازهٔ دقیق بیرون است ⇒ (ردیفِ فاکتور، مبلغِ TON) وگرنه None."""
+    comment = (tx.get("comment") or "").strip().upper()
+    if not comment:
+        return None
+    value = Decimal(tx["value_nano"]) / NANO
+    async with Session() as s:
+        _late_from = _dt_late.datetime.utcnow() - _dt_late.timedelta(hours=LATE_GRACE_HOURS)
+        rows = (await s.scalars(select(TonDirectCharge).where(
+            TonDirectCharge.bot_id == bot_id, _ton_only(),
+            (TonDirectCharge.status == "waiting") |
+            ((TonDirectCharge.status == "expired") & (TonDirectCharge.expires_at >= _late_from))))).all()
+    for ch in rows:
+        if memo_in_comment(ch.memo, comment):
+            return ch, value
+    return None
+
+
 async def settle_bot(bot_id: int, tbot: Bot | None = None) -> int:
     """یک دورِ بررسیِ زنجیره برایِ یک ربات. خروجی: تعدادِ فاکتورهایِ تسویه‌شده."""
     addr = await wallet_address(bot_id)
@@ -508,12 +555,49 @@ async def settle_bot(bot_id: int, tbot: Bot | None = None) -> int:
         if seen:
             continue   # این تراکنش قبلاً استفاده شده
         charge_id = await _match_charge(bot_id, tx)
-        if not charge_id:
-            continue
+        credit_override, off_note = None, "شارژ با واریز مستقیم TON"
+        if charge_id:
+            # مبلغِ درست ⇒ همان مبلغِ فاکتور؛ بیشتر از ۲٪ بالاتر ⇒ به‌نسبتِ واقعاً پرداخت‌شده
+            async with Session() as s:
+                _chk = await s.get(TonDirectCharge, charge_id)
+            if _chk is not None and tx.get("comment"):
+                _cr, _ratio = proportional_credit(int(_chk.amount_toman or 0), _chk.ton_amount,
+                                                  Decimal(tx["value_nano"]) / NANO)
+                if _cr is not None and _ratio > OVERPAY_TOL:
+                    credit_override, off_note = _cr, f"شارژ با واریز TON (مبلغِ بیشتر از فاکتور؛ نسبت {float(_ratio):.3f})"
+        else:
+            off = await _match_off_amount(bot_id, tx)
+            if off is None:
+                continue
+            _och, _val = off
+            _cr, _ratio = proportional_credit(int(_och.amount_toman or 0), _och.ton_amount, _val)
+            if _cr is None or _cr <= 0:
+                if tx_hash not in _OFF_AMOUNT_NOTIFIED:        # فقط یک‌بار به مالک خبر بده
+                    _OFF_AMOUNT_NOTIFIED.add(tx_hash)
+                    logger.warning("ton_direct: memo %s با مبلغِ ناجور (%s از %s TON) — نیازمندِ بررسیِ دستی",
+                                   _och.memo, _val, _och.ton_amount)
+                    if tbot is not None:
+                        try:
+                            async with Session() as s:
+                                _b = await s.get(BotRow, bot_id)
+                            if _b and _b.owner_id:
+                                await tbot.send_message(
+                                    _b.owner_id,
+                                    "⚠️ <b>واریزِ TON با مبلغِ نامتناسب</b>\n\n"
+                                    f"🧾 کد فاکتور: <code>{_och.memo}</code>\n"
+                                    f"💎 دریافت‌شده: <code>{_val}</code> TON — انتظار: <code>{_och.ton_amount}</code> TON\n"
+                                    f"🔗 tx: <code>{tx_hash[:24]}…</code>\n\n"
+                                    "این واریز خودکار شارژ نشد (کمتر از ۵۰٪ یا بیشتر از ۳ برابرِ فاکتور). "
+                                    "اگر درست است، از «مالی و کیف پول» دستی شارژش کن.")
+                        except Exception:
+                            logger.exception("ton_direct: اطلاعِ مالک از واریزِ ناجور ارسال نشد")
+                continue
+            charge_id, credit_override = _och.id, _cr
+            off_note = f"شارژ با واریز TON (مبلغِ ناقص/متفاوت؛ نسبت {float(_ratio):.3f})"
         async with Session() as s:
             ch = await s.get(TonDirectCharge, charge_id)
             payer, memo = int(ch.user_telegram_id), ch.memo
-        credit = await _credit(bot_id, charge_id, tx_hash)
+        credit = await _credit(bot_id, charge_id, tx_hash, credit_override, off_note)
         if not credit:
             continue
         settled += 1
@@ -1484,7 +1568,9 @@ async def tond_amount(msg: Message, bot: Bot, state: FSMContext):
         "<blockquote>روی دکمهٔ زیر بزن تا کیف پولت با مبلغ و کد آماده باز شود.\n"
         "اگر دستی واریز می‌کنی، حتماً <b>همین مبلغ دقیق</b> را بفرست و کد "
         f"<code>{memo}</code> را در قسمت <b>Comment/Memo</b> بنویس — با دکمهٔ "
-        "«📋 کپی کدِ Comment» زیرِ همین پیام می‌توانی کدش را کپی کنی.</blockquote>\n\n"
+        "«📋 کپی کدِ Comment» زیرِ همین پیام می‌توانی کدش را کپی کنی.\n"
+        "⚠️ قبل از تأییدِ نهاییِ واریز در کیف پول، چک کن <b>مبلغ</b> و <b>Comment</b> همین‌هایی باشد که بالا نوشته شده؛ "
+        "اگر کیف پول مبلغ را گرد یا تغییر داد، مبلغِ بالا را دستی وارد کن.</blockquote>\n\n"
         f"⏳ این فاکتور تا <b>{INVOICE_TTL_MINUTES} دقیقه</b> اعتبار دارد.\n"
         "بعد از واریز، تایید معمولاً کمتر از یک دقیقه طول می‌کشد و خودم خبرت می‌کنم.\n\n"
         f"🔗 لینک مستقیم: <code>{deep}</code>",
