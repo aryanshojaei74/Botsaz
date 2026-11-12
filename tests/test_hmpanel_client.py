@@ -250,3 +250,10 @@ async def test_a_real_400_still_fails_fast():
     finally:
         await cl.close()
         await server.close()
+
+
+def test_upstream_network_error_gets_a_clear_hint():
+    from tenant.shared.panel_clients.hmpanel_panel import _upstream_hint
+    t = "Failed to provision client on panel: Cannot reach panel: connect ECONNREFUSED 81.27.108.196:2053 [NETWORK_ERROR]"
+    assert "خودِ HMPanel" in _upstream_hint(t) and "فایروال" in _upstream_hint(t)
+    assert _upstream_hint("Invalid inbound") == ""

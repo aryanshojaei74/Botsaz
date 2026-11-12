@@ -45,6 +45,17 @@ logger = _get_logger(__name__)
 __all__ = ["HMPanelClient"]
 
 
+def _upstream_hint(text: str) -> str:
+    """PATCH_HMPANEL_UPSTREAM_HINT_V1 — وقتی خودِ HMPanel به پنلِ پشتِ خودش (3x-ui/…) وصل نمی‌شود
+    (NETWORK_ERROR / ECONNREFUSED / timeout)، مشکل از ربات نیست؛ به ادمین بگو کجا را ببیند."""
+    t = (text or "")
+    if any(k in t for k in ("NETWORK_ERROR", "ECONNREFUSED", "ETIMEDOUT", "Cannot reach panel", "EHOSTUNREACH")):
+        return ("\n\n🔎 این خطا از طرفِ <b>خودِ HMPanel</b> است: HMPanel نمی‌تواند به پنلِ اصلیِ پشتِ خودش وصل شود "
+                "(آدرس/پورتی که داخلِ خطا آمده). ربات مشکلی ندارد. بررسی کن: ۱) پنلِ اصلی روشن و سرور بالا باشد "
+                "۲) آن پورت در فایروالِ سرورِ پنل باز باشد ۳) آدرس/پورتِ پنلِ اصلی در تنظیماتِ HMPanel درست باشد.")
+    return ""
+
+
 class _AmbiguousError(PanelError):
     """قطعِ اتصال/تایم‌اوت: درخواست ممکن است در پنل اجرا شده باشد (نباید بی‌خبر دوباره فرستاد)."""
     ambiguous = True
@@ -133,7 +144,8 @@ class HMPanelClient:
                         except ValueError:
                             data = {"raw": text[:300]}
                     if r.status >= 400:
-                        raise PanelError(f"HMPanel: {method} {path} ناموفق (HTTP {r.status}): {_msg(text)}")
+                        raise PanelError(f"HMPanel: {method} {path} ناموفق (HTTP {r.status}): {_msg(text)}"
+                                         + _upstream_hint(text))
                     return data if data is not None else {}
             except PanelError:
                 raise
