@@ -43,10 +43,10 @@ logger = _get_logger(__name__)
 
 platform_wager_race_router = Router(name="platform_wager_race")
 
-RACE_GAMES = ("guess", "speed", "math", "pattern", "word", "scramble")        # PATCH_WORD_GAMES_V1: کلمه‌سازی + درهم
+RACE_GAMES = ("guess", "speed", "math", "pattern", "word", "scramble", "quiz", "emoji")        # PATCH_WORD_GAMES_V1: کلمه‌سازی + درهم
 TENANT_RACE_GAMES = RACE_GAMES                         # ربات‌هایِ مشتری هم (فقط اگر افزونهٔ «بازی‌هایِ گروهی» را خریده باشند؛ گیتِ آن در addon_active است)
-RACE_FA = {"guess": "حدس عدد", "speed": "سرعت", "math": "ریاضی", "pattern": "الگو", "word": "کلمه‌سازی", "scramble": "درهم"}
-SECS = {"guess": 180, "speed": 45, "math": 45, "pattern": 60, "word": 120, "scramble": 45}      # فقط «حدس عدد» نوبتی است (مهلتِ هر نوبت ۳ دقیقه)؛ الگو هم‌زمان و سریع (ضدِ تقلب با چت‌بات: نوبتِ طولانی نداریم)
+RACE_FA = {"guess": "حدس عدد", "speed": "سرعت", "math": "ریاضی", "pattern": "الگو", "word": "کلمه‌سازی", "scramble": "درهم", "quiz": "کوییز", "emoji": "حدس ایموجی"}
+SECS = {"guess": 180, "speed": 45, "math": 45, "pattern": 60, "word": 120, "scramble": 45, "quiz": 30, "emoji": 45}      # فقط «حدس عدد» نوبتی است (مهلتِ هر نوبت ۳ دقیقه)؛ الگو هم‌زمان و سریع (ضدِ تقلب با چت‌بات: نوبتِ طولانی نداریم)
 KEY_ON = "pgr_on"
 GUESS_GAP = 1.2
 _AMT = r"([۰-۹0-9,،]+)"
@@ -58,6 +58,8 @@ _PATTERNS = (
     ("pattern", re.compile(rf"^{_PREFIX}الگو\s+{_AMT}$")),
     ("word", re.compile(rf"^{_PREFIX}کلمه[\s‌]*سازی\s+{_AMT}$")),        # PATCH_WORD_GAMES_V1
     ("scramble", re.compile(rf"^{_PREFIX}درهم\s+{_AMT}$")),
+    ("quiz", re.compile(rf"^{_PREFIX}(?:کوییز|کویز|کوئیز)\s+{_AMT}$")),        # PATCH_QUIZ_EMOJI_GAMES_V1
+    ("emoji", re.compile(rf"^{_PREFIX}(?:حدس[\s‌]*)?ایموجی\s+{_AMT}$")),
 )
 _AR = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 
@@ -157,6 +159,13 @@ def new_question(kind: str, scope: tuple = (0, 0)) -> dict:
                 break
         pz = pz or {"letters": list("ابریم"), "need": [2, 3], "total": 2}
         return {"q": " ".join(pz["letters"]), "letters": pz["letters"], "need": pz["need"]}
+    if kind == "quiz":                                  # PATCH_QUIZ_EMOJI_GAMES_V1
+        import quiz_bank as QB
+        return QB.make_quiz()
+    if kind == "emoji":
+        import quiz_bank as QB
+        pz = QB.make_emoji()
+        return {"q": pz["q"], "w": pz["w"], "a": norm_answer(pz["accept"][0]), "alts": [norm_answer(x) for x in pz["accept"][1:]]}
     if kind == "scramble":
         import word_bank as WB
         pz = WB.make_scramble()
@@ -180,7 +189,7 @@ async def game_on(game: str) -> bool:
     master = await enabled()
     v = (await core._pset(_game_key(game), "")).strip().lower()
     if not v:
-        return master and game not in ("pattern", "word", "scramble")      # بازیِ تازه تا مدیر روشنش نکند خودکار فعال نمی‌شود
+        return master and game not in ("pattern", "word", "scramble", "quiz", "emoji")      # بازیِ تازه تا مدیر روشنش نکند خودکار فعال نمی‌شود
     return v in ("on", "1", "true") and master
 
 
@@ -204,7 +213,10 @@ def _rule(w: PlatformWager) -> str:
                        "(مهلتِ کوتاه).",
             "word": "ربات چند حرف می‌دهد و می‌گوید چند کلمه با آن‌ها بسازید (مثلاً یکی ۲ حرفی و دو تا ۳ حرفی). <b>هم‌زمان</b> کلمه‌ها را "
                     "در گروه می‌نویسید؛ اولین نفری که همهٔ کلمه‌هایِ خواسته‌شده را درست پیدا کند برنده است (فقط کلماتِ رایجِ فارسی پذیرفته می‌شود).",
-            "scramble": "ربات حروفِ یک کلمه را درهم می‌فرستد؛ اولین نفری که کلمهٔ درست را بنویسد برنده است."}[w.game]
+            "scramble": "ربات حروفِ یک کلمه را درهم می‌فرستد؛ اولین نفری که کلمهٔ درست را بنویسد برنده است.",
+            "quiz": "ربات یک سؤالِ چهارگزینه‌ای می‌فرستد؛ <b>شمارهٔ گزینه</b> (۱ تا ۴) را در گروه بنویس. هر نفر فقط <b>یک</b> فرصت دارد؛ "
+                    "اولین پاسخِ درست برنده است و پاسخِ غلط یعنی حذف.",
+            "emoji": "ربات چند ایموجی می‌فرستد که یک کلمه/عبارت را نشان می‌دهد؛ اولین نفری که جوابِ درست را بنویسد برنده است."}[w.game]
 
 
 def _kb_pending(w: PlatformWager) -> InlineKeyboardMarkup:
@@ -257,6 +269,13 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
                  f"🎯 هدف: {_need_text(st.get('need') or [])}\n(هم‌زمان در گروه بنویسید؛ هر حرف را فقط به‌اندازهٔ تعدادش می‌شود به کار برد.)")
         elif w.game == "scramble":
             q = f"🔀 حروفِ این کلمه درهم شده؛ کلمه را بنویس:\n\n👉 <b>{_html.escape(str(st.get('q', '')))}</b>"
+        elif w.game == "quiz":
+            _nums = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"]
+            q = ("❓ <b>" + _html.escape(str(st.get("q", ""))) + "</b>\n\n"
+                 + "\n".join(f"{_nums[i]} {_html.escape(str(o))}" for i, o in enumerate(st.get("opts") or [])) +
+                 "\n\n✍️ فقط <b>شمارهٔ</b> گزینه را بنویس (هر نفر یک فرصت؛ غلط = حذف).")
+        elif w.game == "emoji":
+            q = f"🤔 این ایموجی‌ها چه چیزی را می‌گویند؟\n\n👉 <b>{_html.escape(str(st.get('q', '')))}</b>"
         else:
             q = f"🧮 جواب چیست؟\n\n👉 <b>{_html.escape(str(st.get('q', '')))} = ؟</b>"
         foot = ("⏱ هر نوبت ۳ دقیقه مهلت دارد؛ در مهلت حدس نزنی می‌بازی." if w.game == "guess" and w.turn_id
@@ -276,6 +295,10 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
             shown = f"حروف: <b>{_html.escape(str(ans))}</b> — {_need_text(st.get('need') or [])}"
         elif w.game == "scramble":
             shown = f"کلمه: <b>{_html.escape(str(st.get('w') or st.get('a') or ''))}</b>"
+        elif w.game == "quiz":
+            shown = f"پاسخِ درست: <b>{_html.escape(str(st.get('a', '')))}) {_html.escape(str(st.get('right', '')))}</b>"
+        elif w.game == "emoji":
+            shown = f"جواب: <b>{_html.escape(str(st.get('w') or st.get('a') or ''))}</b>"
         else:
             shown = f"عدد: <b>{ans}</b>" if w.game == "guess" else (f"جواب: <b>{_html.escape(str(st.get('a', '')))}</b>"
                                                                   if w.game in ("math", "pattern") else f"کلمه: <b>{_html.escape(str(ans))}</b>")
@@ -396,6 +419,44 @@ async def guess_step(bot: Bot, msg: Message, live: dict) -> str:
 _WORD_NOTE: dict[tuple[int, int], float] = {}
 
 
+async def quiz_step(bot: Bot, msg: Message, live: dict) -> str:
+    """پاسخِ «کوییز»: درست ⇒ «win»؛ غلط ⇒ حذفِ همان نفر (اگر هر دو غلط بگویند بازی همان لحظه با برگشتِ مبلغ تمام می‌شود)."""
+    uid = msg.from_user.id
+    locked = live.setdefault("locked", set())
+    if uid in locked:
+        key, now = (msg.chat.id, uid), time.monotonic()
+        if now - _WORD_NOTE.get(key, -1e9) >= 8:
+            _WORD_NOTE[key] = now
+            await msg.reply("⛔️ یک فرصت داشتی و استفاده شد.")
+        return "done"
+    if norm_answer(msg.text) == live["answer"]:
+        return "win"
+    locked.add(uid)
+    await msg.reply("❌ اشتباه بود؛ از بازی حذف شدی.")
+    if locked >= set(live["players"]):
+        await _end_now(bot, live["wid"])
+    return "done"
+
+
+async def _end_now(bot: Bot, wid: int) -> None:
+    """هر دو غلط گفتند ⇒ مهلت را همین الان تمام کن (برگشتِ مبلغِ هر دو) و پیام را به‌روز کن."""
+    try:
+        async with core._wlock(wid):
+            async with Session() as s:
+                w0 = await s.get(PlatformWager, wid, with_for_update=True)
+                if not w0 or w0.status != "playing":
+                    return
+                w0.expires_at = core._now() - timedelta(seconds=1)
+                await s.commit()
+            w = await core.expire_one(wid)
+        if w is not None:
+            LIVE.pop(w.id, None)
+            await _edit(bot, w)
+            await bot.send_message(w.chat_id, "⌛ هر دو نفر اشتباه جواب دادند؛ مبلغِ هر دو نفر برگشت. 👻")
+    except Exception:  # noqa: BLE001
+        logger.exception("quiz end #%s failed", wid)
+
+
 async def word_step(bot: Bot, msg: Message, live: dict) -> str:
     """یک تلاشِ «کلمه‌سازی». خروجی: «win» (همهٔ کلمه‌ها کامل شد؛ فراخوان تسویه کند) یا «done».
     پیشرفتِ هر نفر فقط در حافظه است (ری‌استارت ⇒ بازی با مهلتش تمام و مبلغ برمی‌گردد)."""
@@ -456,7 +517,7 @@ def _is_create(m: Message) -> bool:
     return parse_race_command(m.text) is not None
 
 
-_NO_AMOUNT = re.compile(r"^شرط\s*بندی\s+(حدس\s*عدد|سرعت|ریاضی|الگو|کلمه[\s‌]*سازی|درهم)$")
+_NO_AMOUNT = re.compile(r"^شرط\s*بندی\s+(حدس\s*عدد|سرعت|ریاضی|الگو|کلمه[\s‌]*سازی|درهم|کوییز|کویز|کوئیز|حدس[\s‌]*ایموجی|ایموجی)$")
 
 
 def _is_paid_hint(m: Message) -> bool:
@@ -480,7 +541,8 @@ async def race_paid_hint(msg: Message):
         raise SkipHandler
     if not await _group_allowed(msg.chat.id) or not await enabled() or not await _bet_enabled():
         raise SkipHandler
-    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی", "الگو": "الگو", "کلمهسازی": "کلمه‌سازی", "درهم": "درهم"}[
+    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی", "الگو": "الگو", "کلمهسازی": "کلمه‌سازی", "درهم": "درهم", "کوییز": "کوییز", "کویز": "کوییز", "کوئیز": "کوییز",
+            "حدسایموجی": "حدس ایموجی", "ایموجی": "حدس ایموجی"}[
         re.sub(r"[\s‌]+", "", _NO_AMOUNT.match(core._norm(msg.text)).group(1))]
     cfg = await core.load_cfg()
     ex = core.example_amount(cfg)
@@ -657,8 +719,10 @@ def _match(m: Message, bot_id: int = 0) -> dict | None:
     if lv["kind"] == "word":                                   # PATCH_WORD_GAMES_V1: فقط تلاش‌هایی که با حروفِ داده‌شده ساختنی‌اند
         import word_bank as WB
         return lv if (WB.is_word_shape(m.text) and WB.can_build(m.text, (lv.get("st") or {}).get("letters") or [])) else None
-    if lv["kind"] == "scramble":
+    if lv["kind"] in ("scramble", "emoji"):
         return lv if (t == lv["answer"] or t in set(lv.get("alts") or [])) else None
+    if lv["kind"] == "quiz":                                   # PATCH_QUIZ_EMOJI_GAMES_V1: هر عددِ ۱ تا ۴ از بازیکن‌ها
+        return lv if t in ("1", "2", "3", "4") else None
     return lv if t == lv["answer"] else None
 
 
@@ -682,6 +746,9 @@ async def race_answer(msg: Message):
             return
     elif live["kind"] == "word":                              # PATCH_WORD_GAMES_V1
         if await word_step(msg.bot, msg, live) != "win":
+            return
+    elif live["kind"] == "quiz":                              # PATCH_QUIZ_EMOJI_GAMES_V1
+        if await quiz_step(msg.bot, msg, live) != "win":
             return
     w = await settle_to(live["wid"], uid)
     if w is None:
@@ -733,6 +800,8 @@ async def help_section() -> str:
         "word": f"🔤 <b>کلمه‌سازی</b>: «شرطبندی کلمه‌سازی {ex}» — ربات چند حرف می‌دهد (مثلاً «۳ کلمه: یکی ۲ حرفی و دو تا ۳ حرفی»)؛ "
                 "<b>هم‌زمان</b> بنویسید و اولین نفری که همهٔ کلمه‌ها را درست پیدا کند برنده است (کلماتِ رایج).",
         "scramble": f"🔀 <b>درهم</b>: «شرطبندی درهم {ex}» — حروفِ یک کلمه درهم می‌آید؛ اولین نفری که کلمهٔ درست را بنویسد برنده است.",
+        "quiz": f"❓ <b>کوییز</b>: «شرطبندی کوییز {ex}» — سؤالِ چهارگزینه‌ای؛ شمارهٔ گزینه را بنویس (هر نفر یک فرصت؛ غلط = حذف)، اولین پاسخِ درست برنده است.",
+        "emoji": f"🤔 <b>حدس ایموجی</b>: «شرطبندی ایموجی {ex}» — چند ایموجی می‌آید؛ اولین نفری که کلمه/عبارتِ مربوط را بنویسد برنده است.",
     }
     return "\n".join([
         "💰 <b>مسابقه‌هایِ پولیِ دونفره (با کیف پول)</b>",

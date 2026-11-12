@@ -48,7 +48,7 @@ platform_wager_router = Router(name="platform_wager")
 GAMES = ("xo", "rps", "dice")
 GAME_FA = {"xo": "ایکس‌او", "rps": "سنگ‌کاغذ‌قیچی", "dice": "تاس",
            "guess": "حدس عدد", "speed": "سرعت", "math": "ریاضی", "pattern": "الگو",
-           "word": "کلمه‌سازی", "scramble": "درهم"}   # PATCH_WAGER_RACE_V1: سه مسابقهٔ آخر فقط ربات اصلی‌اند (در GAMES نیستند)
+           "word": "کلمه‌سازی", "scramble": "درهم", "quiz": "کوییز", "emoji": "حدس ایموجی"}   # PATCH_WAGER_RACE_V1: سه مسابقهٔ آخر فقط ربات اصلی‌اند (در GAMES نیستند)
 ACTIVE = ("pending", "playing")
 MAX_ACTIVE = 3                 # شرط هم‌زمان هر کاربر (ساخته‌شده یا پذیرفته‌شده)
 DICE_RECLAIM_SECS = 30         # اگر پرتابی گیر کرد (قطعی پروسه) بعد از این مدت دوباره مجاز است
@@ -819,7 +819,7 @@ def _rps_playing_text(w: PlatformWager, head: str) -> str:
 
 
 def render(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
-    if w.game in ("guess", "speed", "math", "pattern", "word", "scramble"):          # PATCH_WAGER_RACE_V1
+    if w.game in ("guess", "speed", "math", "pattern", "word", "scramble", "quiz", "emoji"):          # PATCH_WAGER_RACE_V1
         from platform_wager_race import render_race
         return render_race(w)
     st = _st(w)
@@ -950,7 +950,11 @@ def help_text(enabled: dict[str, bool], bot_id: int = 0, cfg: dict | None = None
                  ("word", "🔤 <b>کلمه‌سازی</b>: «کلمه‌سازی ۱۰۰۰۰»",
                   "ربات چند حرف می‌دهد و چند کلمهٔ مشخص (مثلاً یکی ۲ حرفی و دو تا ۳ حرفی) می‌خواهد؛ اولین نفری که همه را درست پیدا کند برنده است."),
                  ("scramble", "🔀 <b>درهم</b>: «درهم ۱۰۰۰۰»",
-                  "حروفِ یک کلمه درهم می‌آید؛ اولین نفری که کلمهٔ درست را بنویسد برنده است.")]
+                  "حروفِ یک کلمه درهم می‌آید؛ اولین نفری که کلمهٔ درست را بنویسد برنده است."),
+                 ("quiz", "❓ <b>کوییز</b>: «کوییز ۱۰۰۰۰»",
+                  "سؤالِ چهارگزینه‌ای؛ شمارهٔ گزینه را بنویس (هر نفر یک فرصت؛ غلط = حذف). اولین پاسخِ درست برنده است."),
+                 ("emoji", "🤔 <b>حدس ایموجی</b>: «حدس ایموجی ۱۰۰۰۰»",
+                  "چند ایموجی می‌آید؛ اولین نفری که کلمه/عبارتِ مربوط را بنویسد برنده است.")]
         for g, head, rule in _race:
             if enabled.get(g):
                 lines += [head, rule + " کسی برنده نشد ⇒ پولِ هر دو برمی‌گردد.", ""]

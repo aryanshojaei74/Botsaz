@@ -36,7 +36,7 @@ logger = _get_logger(__name__)
 
 wager_race_router = Router(name="wager_race")
 
-_NO_AMOUNT = re.compile(r"^(?:شرط\s*بندی|بازی)\s+(حدس\s*عدد|سرعت|ریاضی|الگو|کلمه[\s‌]*سازی|درهم)$")
+_NO_AMOUNT = re.compile(r"^(?:شرط\s*بندی|بازی)\s+(حدس\s*عدد|سرعت|ریاضی|الگو|کلمه[\s‌]*سازی|درهم|کوییز|کویز|کوئیز|حدس[\s‌]*ایموجی|ایموجی)$")
 
 
 def _is_create(m: Message) -> bool:
@@ -79,7 +79,8 @@ async def twr_hint(msg: Message, bot: Bot):
     row, _adm = await _gate(msg, bot)
     if not row:
         return
-    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی", "الگو": "الگو", "کلمهسازی": "کلمه‌سازی", "درهم": "درهم"}[
+    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی", "الگو": "الگو", "کلمهسازی": "کلمه‌سازی", "درهم": "درهم", "کوییز": "کوییز", "کویز": "کوییز", "کوئیز": "کوییز",
+            "حدسایموجی": "حدس ایموجی", "ایموجی": "حدس ایموجی"}[
         re.sub(r"[\s‌]+", "", _NO_AMOUNT.match(core._norm(msg.text)).group(1))]
     cfg = await core.load_cfg(row.id)
     ex = core.example_amount(cfg)
@@ -223,6 +224,9 @@ async def twr_answer(msg: Message, bot: Bot):
             return
     elif live["kind"] == "word":                              # PATCH_WORD_GAMES_V1
         if await R.word_step(bot, msg, live) != "win":
+            return
+    elif live["kind"] == "quiz":                              # PATCH_QUIZ_EMOJI_GAMES_V1
+        if await R.quiz_step(bot, msg, live) != "win":
             return
     w = await R.settle_to(live["wid"], uid)
     if w is None:
