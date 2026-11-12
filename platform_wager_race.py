@@ -189,7 +189,7 @@ async def game_on(game: str) -> bool:
     master = await enabled()
     v = (await core._pset(_game_key(game), "")).strip().lower()
     if not v:
-        return master and game not in ("pattern", "word", "scramble", "quiz", "emoji")      # بازیِ تازه تا مدیر روشنش نکند خودکار فعال نمی‌شود
+        return master and game != "pattern"      # «الگو» تا مدیر روشنش نکند خاموش است؛ چهار بازیِ تازه (کلمه‌سازی/درهم/کوییز/ایموجی) به‌درخواستِ مدیر پیش‌فرض روشن‌اند (با کلیدِ کلیِ مسابقه‌ها)
     return v in ("on", "1", "true") and master
 
 

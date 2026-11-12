@@ -497,7 +497,8 @@ async def _settings_screen(kind: str, uid: int | None = None):
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [hx_button("🔴 خاموش‌کردن" if enabled else "🟢 روشن‌کردن", callback_data="pgbset:toggle", style=ButtonStyle.DANGER if enabled else ButtonStyle.SUCCESS)],
             [hx_button(f"{'🔴 خاموش' if flags[g] else '🟢 روشن'}: {GAME_FA[g]}", callback_data=f"pgwset:{g}") for g in GAMES],
-            [hx_button(f"{'🔴 خاموش' if rflags[g] else '🟢 روشن'}: {RACE_FA[g]}", callback_data=f"pgrset:{g}") for g in RACE_GAMES],
+            *[[hx_button(f"{'🔴 خاموش' if rflags[g] else '🟢 روشن'}: {RACE_FA[g]}", callback_data=f"pgrset:{g}")
+               for g in RACE_GAMES[i:i + 2]] for i in range(0, len(RACE_GAMES), 2)],      # دو‌تا در هر ردیف (۸ مسابقه)
             [hx_button("💸 کارمزد شرط‌بندی", callback_data="pgbset:fee")],
             [hx_button("🔢 حداقل شرط", callback_data="pgbset:min"), hx_button("🔢 حداکثر شرط", callback_data="pgbset:max")],
             [hx_button("⏱ زمان انتظار", callback_data="pgbset:ttl")],

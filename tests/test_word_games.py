@@ -146,3 +146,19 @@ async def test_word_step_rejections_are_rate_limited_and_informative():
     m3 = _M("برم")
     await R.word_step(None, m3, lv)
     assert m3.replies and "فرهنگ" in m3.replies[0]
+
+
+@pytest.mark.asyncio
+async def test_main_bot_new_games_default_on_with_master_pattern_still_off(monkeypatch):
+    store = {"pgr_on": "1"}
+
+    async def pset(key, default=""):
+        return store.get(key, default)
+    monkeypatch.setattr(core, "_pset", pset)
+    for g in ("word", "scramble", "quiz", "emoji", "guess", "speed", "math"):
+        assert await R.game_on(g) is True, g
+    assert await R.game_on("pattern") is False
+    store["platform_wager_quiz"] = "off"
+    assert await R.game_on("quiz") is False
+    store["pgr_on"] = "0"
+    assert await R.game_on("word") is False
