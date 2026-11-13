@@ -17414,6 +17414,17 @@ async def _build_bot_detail(bot_id: int, src: str = "bots", viewer_id: int | Non
                                 style=ButtonStyle.SUCCESS)
         miniapp_txt = "🔴 غیرفعال"
 
+    # === PATCH_ADM_WAGER_ADDON_VIEW_V1 === آیا «بازی‌های گروهی» برایِ این ربات خریداری/فعال شده؟
+    try:
+        from bot_addons import WAGER_ADDON as _WA
+        from models import BotAddon as _BA
+        async with Session() as _s_wa:
+            _wa_row = await _s_wa.scalar(select(_BA).where(_BA.bot_id == bot_id, _BA.addon == _WA))
+    except Exception:
+        logger.exception("خواندنِ وضعیتِ افزونهٔ بازی ناموفق بود")
+        _wa_row = None
+    game_txt = "✅ خریداری/فعال" if _wa_row else "❌ نخریده / غیرفعال"
+
     kb = InlineKeyboardMarkup(inline_keyboard=[
         *released_rows,  # === PATCH_RELEASED_TOKEN_TWIN_V1 ===
         [toggle_btn],
@@ -17421,6 +17432,7 @@ async def _build_bot_detail(bot_id: int, src: str = "bots", viewer_id: int | Non
         [hx_button("⚠️ اخطار تخلف", callback_data=f"abotwarn:{bot_id}",
                    style=ButtonStyle.DANGER)],
         [miniapp_btn],
+        [hx_button("🎮 تاریخچهٔ خریدِ بازی گروهی", callback_data=f"abotgame:{bot_id}:{src}")],
         [hx_button("📦 بک‌اپ ربات", callback_data=f"abotbackup:{bot_id}"),
          hx_button("🔁 تعویض توکن", callback_data=f"abotswapreq:{bot_id}")],
         # === PATCH_ADM_INSTANT_TOKEN_SWAP_V1 ===
@@ -17478,7 +17490,8 @@ async def _build_bot_detail(bot_id: int, src: str = "bots", viewer_id: int | Non
         f"پلن: {PLAN_INFO[Plan(plan)]['title']}\nوضعیت: {status_txt}{reason_line}\n"
         f"📅 سررسید پلن: {to_jalali(expires)}\nتاریخ ساخت: {to_jalali(created)}{dur_txt}\n"
         f"🆘 دسترسیِ پشتیبانیِ مدیر: {support_txt}\n"
-        f"🛍 مینی‌اپ فروشگاهی: {miniapp_txt}"
+        f"🛍 مینی‌اپ فروشگاهی: {miniapp_txt}\n"
+        f"🎮 بازی‌هایِ گروهی: {game_txt}"
         f"{maker_line}"
         f"{released_line}"  # === PATCH_RELEASED_TOKEN_TWIN_V1 ===
     )
@@ -17635,6 +17648,110 @@ async def adm_bot_change_log(cb: CallbackQuery):
     except Exception:
         await cb.message.answer(f"📜 <b>تاریخچهٔ تغییراتِ ربات</b> (صفحهٔ {page + 1})\n\n{body}", reply_markup=kb)
     await cb.answer()
+
+
+# === PATCH_ADM_WAGER_ADDON_VIEW_V1 === تاریخچهٔ خریدِ بازی‌هایِ گروهی + فعال/غیرفعال‌کردن توسطِ ادمین
+async def _wager_history_view(bot_id: int, src: str):
+    from bot_addons import WAGER_ADDON
+    from models import BotAddon
+    async with Session() as s:
+        b = await s.get(BotRow, bot_id)
+        if not b:
+            return None
+        addons = (await s.scalars(select(BotAddon).where(
+            BotAddon.bot_id == bot_id, BotAddon.addon == WAGER_ADDON))).all()
+        # افزونه‌هایی که برایِ رباتِ دیگرِ همین مالک ثبت شده (مثلاً قبل از تعویض/ساختِ دوبارهٔ ربات)
+        sib_ids = [r for r in (await s.scalars(select(BotRow.id).where(
+            BotRow.owner_id == b.owner_id, BotRow.id != bot_id))).all()]
+        sib = []
+        if sib_ids:
+            sib = (await s.execute(select(BotAddon, BotRow.username).join(
+                BotRow, BotRow.id == BotAddon.bot_id).where(
+                BotAddon.bot_id.in_(sib_ids), BotAddon.addon == WAGER_ADDON))).all()
+        txns = (await s.scalars(select(PlatformTxn).where(
+            PlatformTxn.kind == "purchase",
+            PlatformTxn.note.like("%بازی‌های گروهی%"),
+            PlatformTxn.note.like(f"%@{b.username}%")).order_by(PlatformTxn.id.desc()).limit(10))).all() if b.username else []
+        uname, owner = b.username, b.owner_id
+    src_fa = {"wallet": "کیف پول", "free": "رایگان", "admin": "ادمین"}
+    lines = [f"🎮 <b>بازی‌هایِ گروهیِ @{uname}</b>", ""]
+    if addons:
+        for a in addons:
+            lines.append(
+                f"✅ <b>فعال</b>\n🕒 {to_jalali(a.created_at)}\n💰 مبلغ: {int(a.amount or 0):,} تومان\n"
+                f"روش: {src_fa.get(a.source, a.source)} · پرداخت‌کننده: <code>{a.paid_by}</code>")
+    else:
+        lines.append("❌ برایِ این ربات افزونهٔ بازی ثبت نشده (نخریده یا غیرفعال شده).")
+    if txns:
+        lines += ["", "🧾 <b>تراکنش‌هایِ خریدِ مرتبط:</b>"]
+        for t in txns:
+            lines.append(f"• {to_jalali(t.created_at)} — {int(t.amount):,} تومان (کاربر <code>{t.user_telegram_id}</code>)")
+    elif not addons:
+        lines += ["", "🧾 تراکنشِ خریدِ مرتبط با این یوزرنیم پیدا نشد."]
+    if sib:
+        lines += ["", "⚠️ <b>برایِ رباتِ دیگرِ همین مالک ثبت شده:</b>"]
+        for a, un in sib:
+            lines.append(f"• @{un} (#{a.bot_id}) — {to_jalali(a.created_at)} — {int(a.amount or 0):,} تومان")
+        lines.append("اگر خریدار همین ربات را قبلاً با ربات دیگری خریده، با «فعال‌سازی» اینجا هم فعال کنید.")
+    kb_rows = []
+    if addons:
+        kb_rows.append([hx_button("⏸ غیرفعال‌کردنِ بازی‌ها", callback_data=f"abotgamet:{bot_id}:{src}",
+                                  style=ButtonStyle.DANGER)])
+    else:
+        kb_rows.append([hx_button("▶️ فعال‌کردنِ بازی‌ها (رایگان، توسطِ ادمین)",
+                                  callback_data=f"abotgamet:{bot_id}:{src}", style=ButtonStyle.SUCCESS)])
+    kb_rows.append([hx_button("⬅️ بازگشت به ربات", callback_data=f"abot:{bot_id}:{src}", style=ButtonStyle.DANGER)])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=kb_rows)
+
+
+@router.callback_query(F.data.startswith("abotgame:"))
+async def adm_bot_game_history(cb: CallbackQuery):
+    if not await has_perm(cb.from_user.id, "adm:bots"):
+        await cb.answer("دسترسی ندارید", show_alert=True)
+        return
+    parts = cb.data.split(":")
+    bot_id, src = int(parts[1]), (parts[2] if len(parts) > 2 else "bots")
+    built = await _wager_history_view(bot_id, src)
+    if not built:
+        await cb.answer("یافت نشد", show_alert=True)
+        return
+    await cb.answer()
+    try:
+        await cb.message.edit_text(built[0], reply_markup=built[1])
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e).lower():
+            raise
+
+
+@router.callback_query(F.data.startswith("abotgamet:"))
+async def adm_bot_game_toggle(cb: CallbackQuery):
+    if not await has_perm(cb.from_user.id, "adm:bots"):
+        await cb.answer("دسترسی ندارید", show_alert=True)
+        return
+    from bot_addons import WAGER_ADDON, invalidate
+    from models import BotAddon
+    parts = cb.data.split(":")
+    bot_id, src = int(parts[1]), (parts[2] if len(parts) > 2 else "bots")
+    async with Session() as s:
+        row = await s.scalar(select(BotAddon).where(
+            BotAddon.bot_id == bot_id, BotAddon.addon == WAGER_ADDON))
+        if row:
+            await s.delete(row)
+            note = "بازی‌ها غیرفعال شد."
+        else:
+            s.add(BotAddon(bot_id=bot_id, addon=WAGER_ADDON, amount=0,
+                           paid_by=cb.from_user.id, source="admin"))
+            note = "بازی‌ها فعال شد."
+        await s.commit()
+    invalidate(bot_id)
+    built = await _wager_history_view(bot_id, src)
+    await cb.answer(note + " (تا ~۱۵ ثانیه تا اعمال در ربات)", show_alert=True)
+    if built:
+        try:
+            await cb.message.edit_text(built[0], reply_markup=built[1])
+        except TelegramBadRequest as e:
+            if "message is not modified" not in str(e).lower():
+                raise
 
 
 @router.callback_query(F.data.startswith("abotminiapp:"))
