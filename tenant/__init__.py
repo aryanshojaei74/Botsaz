@@ -14340,7 +14340,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "586"
+BUILD_ID = "587"
 
 
 @tenant_router.message(Command("version"))
@@ -36007,9 +36007,34 @@ async def tadm_cfg_name_prompt(cb: CallbackQuery, bot: Bot, state: FSMContext):
     from tenant.bots.vpn.vpn_user import _cfg_name_skip_label
     await cb.message.answer(
         f"🏷 نامِ فعلیِ دکمهٔ رد‌کردنِ نام: <b>{_html.escape(await _cfg_name_skip_label(row.id))}</b>",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-            text="✏️ تغییرِ نامِ دکمهٔ «بدون نام»", callback_data="cfgname:skiplabel", style=ButtonStyle.PRIMARY)]]))
+        reply_markup=await _cfg_name_skip_kb(row.id))
     await cb.answer()
+
+
+# === PATCH_CFG_NAME_AUTO_V1 ===
+async def _cfg_name_skip_kb(bot_id: int):
+    _on = (await get_setting(bot_id, "cfg_name_auto", "0")) == "1"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ تغییرِ نامِ دکمهٔ «بدون نام»", callback_data="cfgname:skiplabel",
+                              style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(
+            text="🤖 نامِ خودکار (در فاکتور هم نمایش): " + ("✅ روشن" if _on else "⚪️ خاموش"),
+            callback_data="cfgname:auto", style=ButtonStyle.SUCCESS if _on else ButtonStyle.PRIMARY)]])
+
+
+@tenant_router.callback_query(F.data == "cfgname:auto")
+async def tadm_cfg_name_auto_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    _on = (await get_setting(row.id, "cfg_name_auto", "0")) == "1"
+    await set_setting(row.id, "cfg_name_auto", "0" if _on else "1")
+    try:
+        await cb.message.edit_reply_markup(reply_markup=await _cfg_name_skip_kb(row.id))
+    except Exception:
+        logger.debug("cfgname:auto: ویرایشِ کیبورد ممکن نشد")
+    await cb.answer("نامِ خودکار " + ("خاموش شد." if _on else "روشن شد: مثلاً «آلمان-4821» در فاکتور می‌آید."),
+                    show_alert=True)
 
 
 @tenant_router.callback_query(F.data == "cfgname:skiplabel")

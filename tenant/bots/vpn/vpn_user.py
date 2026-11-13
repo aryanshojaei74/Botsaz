@@ -2979,6 +2979,25 @@ async def _build_buy_summary(bot: Bot, bot_id: int, plan_id: int,
 CFG_NAME_SKIP_DEFAULT = "⏭ بدون نام (ادامه)"
 
 
+async def _auto_cfg_name(bot_id: int, panel_key: str | None) -> str | None:
+    """PATCH_CFG_NAME_AUTO_V1: وقتی مشتری «بدون نام» را می‌زند و مالک «نامِ خودکار» را روشن کرده،
+    ربات خودش یک نام می‌سازد (نامِ سرور + عدد) تا هم در پیش‌فاکتور دیده شود هم همان نام برایِ کانفیگ بماند."""
+    try:
+        from tenant import get_setting
+        if (await get_setting(bot_id, "cfg_name_auto", "0")) != "1":
+            return None
+        base = ""
+        if panel_key:
+            from tenant.bots.vpn.vpn_admin import panel_label
+            base = (await panel_label(bot_id, panel_key) or "").strip()
+        base = base or "VPN"
+        import secrets
+        return f"{base[:40]}-{secrets.randbelow(9000) + 1000}"
+    except Exception:
+        logger.exception("vpn: ساختِ نامِ خودکارِ کانفیگ ناموفق بود")
+        return None
+
+
 async def _cfg_name_skip_label(bot_id: int) -> str:
     if not bot_id:
         return CFG_NAME_SKIP_DEFAULT
@@ -3082,7 +3101,9 @@ async def vpn_name_skip(cb: CallbackQuery, bot: Bot, state: FSMContext):
         await cb.answer()
         return
     await state.set_state(None)
-    await state.update_data(vcustom_label=None)
+    async with Session() as _s_pl:
+        _pl = await _s_pl.get(VpnPlan, plan_id)
+    await state.update_data(vcustom_label=await _auto_cfg_name(row.id, _pl.panel_key if _pl else None))  # PATCH_CFG_NAME_AUTO_V1
     await cb.answer()
     await _show_plan_preinvoice(_EditFirst(cb.message, cb.from_user), bot, row.id, plan_id, cb.from_user.id, state)
 
@@ -5691,7 +5712,13 @@ async def _show_vc_preinvoice(target, bot: Bot, state: FSMContext, telegram_id: 
 
 @vpn_user_router.callback_query(F.data == "vcname:skip")
 async def vc_name_skip(cb: CallbackQuery, bot: Bot, state: FSMContext):
-    await state.update_data(vcustom_label=None)
+    # === PATCH_CFG_NAME_AUTO_V1 ===
+    _auto = None
+    async with Session() as _s_r:
+        _r = await _s_r.scalar(select(BotRow).where(BotRow.token == bot.token))
+    if _r:
+        _auto = await _auto_cfg_name(_r.id, await _vc_recover_panel_key(state, _r.id))
+    await state.update_data(vcustom_label=_auto)
     await state.set_state(VpnConfiguratorFSM.selecting)
     await cb.answer()
     await _show_vc_preinvoice(_EditFirst(cb.message, cb.from_user), bot, state, cb.from_user.id)
