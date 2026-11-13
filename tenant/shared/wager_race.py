@@ -36,7 +36,7 @@ logger = _get_logger(__name__)
 
 wager_race_router = Router(name="wager_race")
 
-_NO_AMOUNT = re.compile(r"^(?:شرط\s*بندی|بازی)\s+(حدس\s*عدد|سرعت|ریاضی|الگو|کلمه[\s‌]*سازی|درهم|کوییز|کویز|کوئیز|حدس[\s‌]*ایموجی|ایموجی)$")
+_NO_AMOUNT = re.compile(r"^(?:شرط\s*بندی|بازی)\s+(حدس\s*عدد|سرعت|ریاضی|الگو|درهم|کوییز|کویز|کوئیز|حدس[\s‌]*ایموجی|ایموجی)$")
 
 
 def _is_create(m: Message) -> bool:
@@ -79,7 +79,7 @@ async def twr_hint(msg: Message, bot: Bot):
     row, _adm = await _gate(msg, bot)
     if not row:
         return
-    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی", "الگو": "الگو", "کلمهسازی": "کلمه‌سازی", "درهم": "درهم", "کوییز": "کوییز", "کویز": "کوییز", "کوئیز": "کوییز",
+    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی", "الگو": "الگو", "درهم": "درهم", "کوییز": "کوییز", "کویز": "کوییز", "کوئیز": "کوییز",
             "حدسایموجی": "حدس ایموجی", "ایموجی": "حدس ایموجی"}[
         re.sub(r"[\s‌]+", "", _NO_AMOUNT.match(core._norm(msg.text)).group(1))]
     cfg = await core.load_cfg(row.id)
@@ -191,6 +191,15 @@ async def twr_cancel(cb: CallbackQuery, bot: Bot):
         R.LIVE.pop(r.w.id, None)
         await R._edit(bot, r.w)
     await cb.answer(r.err or "لغو شد و مبلغ برگشت.", show_alert=bool(r.err))
+
+
+@wager_race_router.callback_query(F.data.startswith("twr:qz:"))
+async def twr_quiz_press(cb: CallbackQuery, bot: Bot):
+    """PATCH_QUIZ_V2: دکمهٔ گزینهٔ کوییز در ربات مستأجر."""
+    row = await _cb_row(cb, bot)
+    if not row:
+        return
+    await R.quiz_press(cb, row.id)
 
 
 def _maybe_answer(m: Message) -> bool:

@@ -357,6 +357,9 @@ async def _map_for_token(token: str) -> dict | None:
 from aiogram.client.session.middlewares.base import BaseRequestMiddleware
 
 
+NO_PREMIUM = "\u2063"   # PATCH_NO_PREMIUM_MARKER_V1
+
+
 class _PremiumEmojiMiddleware(BaseRequestMiddleware):
     async def __call__(self, make_request, bot, method):
         try:
@@ -399,6 +402,13 @@ class _PremiumEmojiMiddleware(BaseRequestMiddleware):
         if isinstance(pm, Default):
             pm = getattr(bot.default, "parse_mode", None)
         if pm not in (None, "HTML"):
+            return
+
+        # === PATCH_NO_PREMIUM_MARKER_V1 === پیام‌هایی که نشانهٔ «بدونِ ایموجیِ پرمیوم» دارند (مثلاً بازیِ حدس ایموجی)
+        # دست‌نخورده می‌مانند؛ خودِ نشانه (U+2063، نامرئی) برداشته می‌شود.
+        _raw0 = getattr(method, field)
+        if NO_PREMIUM in (_raw0 or ""):
+            setattr(method, field, _raw0.replace(NO_PREMIUM, ""))
             return
 
         mapping = await _map_for_token(bot.token)

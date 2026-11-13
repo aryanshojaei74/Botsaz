@@ -48,8 +48,8 @@ def test_normalisation_and_check_word_codes():
 
 # ── دستورها ──
 def test_commands_are_parsed_with_and_without_zwnj():
-    for txt in ("کلمه سازی 10000", "کلمه‌سازی ۱۰۰۰۰", "شرطبندی کلمه‌سازی 10,000", "بازی کلمه سازی 10000"):
-        assert R.parse_race_command(txt) == ("word", 10000), txt
+    for txt in ("کلمه سازی 10000", "کلمه‌سازی ۱۰۰۰۰"):          # PATCH_WORD_REMOVED_V1: کلمه‌سازی حذف شد
+        assert R.parse_race_command(txt) is None, txt
     assert R.parse_race_command("درهم 5000") == ("scramble", 5000)
     assert R.parse_race_command("شرط بندی درهم 5000") == ("scramble", 5000)
     assert R.parse_race_command("سرعت 10000") == ("speed", 10000)               # قبلی‌ها سالم
@@ -57,9 +57,9 @@ def test_commands_are_parsed_with_and_without_zwnj():
 
 
 def test_games_are_registered_and_default_off_helper():
-    assert "word" in R.RACE_GAMES and "scramble" in R.TENANT_RACE_GAMES
-    assert R.SECS["word"] == 120 and R.SECS["scramble"] == 45
-    assert core.GAME_FA["word"] == "کلمه‌سازی" and core.GAME_FA["scramble"] == "درهم"
+    assert "word" not in R.RACE_GAMES and "scramble" in R.TENANT_RACE_GAMES
+    assert R.SECS["scramble"] == 45
+    assert core.GAME_FA["scramble"] == "درهم"
     assert len("scramble") <= 8                                                   # ستونِ game (String(8))
 
 
@@ -70,9 +70,6 @@ def _wager(game, st, status="playing"):
 
 
 def test_render_word_and_scramble_playing_and_settled():
-    st = R.new_question("word")
-    t, _kb = R.render_race(_wager("word", st))
-    assert "با این حروف کلمه بسازید" in t and st["q"] in t and "کلمهٔ درست" in t
     st2 = R.new_question("scramble")
     t, _ = R.render_race(_wager("scramble", st2))
     assert "درهم" in t and st2["q"] in t and st2["w"] not in t.replace(st2["q"], "")      # جواب لو نمی‌رود
@@ -111,41 +108,13 @@ def test_match_scramble_accepts_answer_and_anagram_only():
     assert R._match(_M("ماه")) is None and R._match(_M("سلام"), 0) is None
 
 
-def test_match_word_only_for_buildable_attempts():
-    st = {"q": "ی ا ر ب م", "letters": list("یاربم"), "need": [2, 3]}
-    _live("word", st)
-    assert R._match(_M("ابر")) and R._match(_M("با"))
-    assert R._match(_M("سلام")) is None and R._match(_M("hello")) is None and R._match(_M("ابر ابر")) is None
 
 
-@pytest.mark.asyncio
-async def test_word_step_progress_then_win_per_player_independently():
-    st = {"q": "ی ا ر ب م", "letters": list("یاربم"), "need": [2, 3]}
-    lv = _live("word", st)
-    m1 = _M("با", uid=10)
-    assert await R.word_step(None, m1, lv) == "done" and "۱ از ۲" in m1.replies[0]
-    m2 = _M("بار", uid=20)                                       # بازیکنِ دیگر جدا پیش می‌رود
-    assert await R.word_step(None, m2, lv) == "done" and "۱ از ۲" in m2.replies[0]
-    assert await R.word_step(None, _M("ابر", uid=10), lv) == "win"
-    assert lv["prog"][10] == ["با", "ابر"] and lv["prog"][20] == ["بار"]
 
 
-@pytest.mark.asyncio
-async def test_word_step_rejections_are_rate_limited_and_informative():
-    st = {"q": "ی ا ر ب م", "letters": list("یاربم"), "need": [2, 3]}
-    lv = _live("word", st)
-    R._WORD_NOTE.clear()
-    await R.word_step(None, _M("با"), lv)
-    m = _M("با")
-    await R.word_step(None, m, lv)
-    assert m.replies and "قبلاً" in m.replies[0]
-    m2 = _M("با")
-    await R.word_step(None, m2, lv)                                # کمتر از ۴ ثانیه ⇒ ساکت
-    assert m2.replies == []
-    R._WORD_NOTE.clear()
-    m3 = _M("برم")
-    await R.word_step(None, m3, lv)
-    assert m3.replies and "فرهنگ" in m3.replies[0]
+
+
+
 
 
 @pytest.mark.asyncio
@@ -155,17 +124,17 @@ async def test_main_bot_new_games_default_on_with_master_pattern_still_off(monke
     async def pset(key, default=""):
         return store.get(key, default)
     monkeypatch.setattr(core, "_pset", pset)
-    for g in ("word", "scramble", "quiz", "emoji", "guess", "speed", "math"):
+    for g in ("scramble", "quiz", "emoji", "guess", "speed", "math"):
         assert await R.game_on(g) is True, g
     assert await R.game_on("pattern") is False
     store["platform_wager_quiz"] = "off"
     assert await R.game_on("quiz") is False
     store["pgr_on"] = "0"
-    assert await R.game_on("word") is False
+    assert await R.game_on("scramble") is False
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("game", ["word", "scramble", "quiz", "emoji"])
+@pytest.mark.parametrize("game", ["scramble", "quiz", "emoji"])
 async def test_new_games_in_customer_bots_require_the_purchased_addon(monkeypatch, game):
     """فقط خریدارانِ افزونهٔ «بازی‌هایِ گروهی» (و بات‌سازِ اصلی که افزونه نمی‌خواهد)؛ حتی ربات حرفه‌ای بدونِ خرید نه."""
     import tenant.shared.wager_race as WR

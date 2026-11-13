@@ -44,11 +44,12 @@ def _wager(game, st, status="playing"):
 
 def test_render_quiz_and_emoji():
     st = R.new_question("quiz")
-    t, _ = R.render_race(_wager("quiz", st))
-    assert st["q"] in t and all(o in t for o in st["opts"]) and "فقط" in t
-    assert f"{st['right']}" not in t.split("✍️")[0].split("\n\n")[0]               # جواب جدا از متنِ سؤال نیست ولی علامت نخورده
+    t, kb = R.render_race(_wager("quiz", st))
+    assert st["q"] in t and not any(o in t for o in st["opts"])              # PATCH_QUIZ_V2: در متن فقط سؤال
+    btns = [b for r in kb.inline_keyboard for b in r]
+    assert [b.text for b in btns] == st["opts"] and btns[0].callback_data == "pgr:qz:1:0"   # گزینه‌ها دکمهٔ شیشه‌ای
     t, _ = R.render_race(_wager("emoji", R.new_question("emoji")))
-    assert "ایموجی" in t
+    assert "ایموجی" in t and "\u2063" in t                                  # نشانهٔ «بدونِ پرمیوم»
     w = _wager("quiz", st, "settled")
     w.winner_id, w.payout_amount, w.fee_amount = 10, 19000, 1000
     t, _ = R.render_race(w)
@@ -78,7 +79,7 @@ def test_match_emoji_accepts_variants_and_quiz_only_digits():
     assert R._match(_M("لپ‌تاپ")) and R._match(_M("کامپیوتر")) and R._match(_M("لپ تاپ"))
     assert R._match(_M("موبایل")) is None
     _live("quiz", {"q": "x", "opts": list("abcd"), "a": "3", "right": "c"})
-    assert R._match(_M("۲")) and R._match(_M("4")) and R._match(_M("5")) is None and R._match(_M("سلام")) is None
+    assert R._match(_M("2")) is None and R._match(_M("سلام")) is None          # کوییز فقط با دکمه جواب می‌گیرد
 
 
 @pytest.mark.asyncio
@@ -147,7 +148,7 @@ async def _bal(mk, uid):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("game", ["word", "scramble", "quiz", "emoji"])
+@pytest.mark.parametrize("game", ["scramble", "quiz", "emoji"])
 async def test_new_games_create_join_settle_and_conserve_money(env, game):
     mk = env
     w, err = await W.create_wager(game, CHAT, (1, "u1", None), 10000, None, CFG)
@@ -186,3 +187,52 @@ async def test_quiz_both_wrong_refunds_both_immediately(env):
     async with mk() as s:
         assert (await s.get(models.PlatformWager, w.id)).status == "expired"
     assert any("هر دو" in t for t in FakeBot.sent) and w.id not in R.LIVE
+
+
+def test_emoji_questions_are_two_to_five_emojis():
+    import quiz_bank as QB
+    import re
+    for q, ans in QB.EMOJI:
+        n = len(re.findall(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]", q))
+        assert 2 <= n <= 7, q            # (حدِ بالا برایِ ZWJ/نشانه‌ها)
+        assert ans
+
+
+def test_quiz_pool_is_big_and_has_bio_chem_and_no_repeats_in_a_row():
+    import quiz_bank as QB
+    assert len(QB.QUIZ_ALL) >= 250
+    assert any("یاخته" in q or "DNA" in "".join(o) for q, o in QB.QUIZ_ALL)
+    assert any("شیمیایی" in q for q, _ in QB.QUIZ_ALL)
+    seen = [QB.make_quiz(scope=(9, 9))["q"] for _ in range(200)]
+    assert len(set(seen)) == 200
+
+
+@pytest.mark.asyncio
+async def test_quiz_button_right_wrong_and_single_chance(monkeypatch):
+    from types import SimpleNamespace as NS
+    lv = _live("quiz", {"q": "x", "opts": list("abcd"), "a": "3", "right": "c"})
+    sent, ended = [], []
+
+    class Bot_:
+        async def send_message(self, chat, text, **k): sent.append(text)
+
+    async def end(bot, wid): ended.append(wid)
+    monkeypatch.setattr(R, "_end_now", end)
+    answers = []
+
+    class CB:
+        def __init__(self, uid, idx):
+            self.data = f"pgr:qz:1:{idx}"
+            self.from_user = NS(id=uid, full_name="P")
+            self.message = NS(chat=NS(id=-1))
+            self.bot = Bot_()
+
+        async def answer(self, text="", show_alert=False): answers.append(text)
+    await R.quiz_press(CB(10, 0), 0)                                   # غلط ⇒ حذف + تگ
+    assert 10 in lv["locked"] and "اشتباه زدی و از بازی حذف شدی" in sent[0] and "tg://user?id=10" in sent[0]
+    await R.quiz_press(CB(10, 2), 0)                                   # حذف‌شده دیگر نمی‌تواند
+    assert "یک فرصت" in answers[-1]
+    await R.quiz_press(CB(99, 2), 0)                                   # غیرِ بازیکن
+    assert "فقط دو بازیکن" in answers[-1]
+    await R.quiz_press(CB(20, 1), 0)                                   # دومی هم غلط ⇒ پایانِ زودهنگام
+    assert ended == [1]
