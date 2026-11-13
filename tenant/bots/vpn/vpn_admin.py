@@ -5943,6 +5943,7 @@ async def qrbg_del(cb: CallbackQuery, bot: Bot):
 class VpnTitleFSM(StatesGroup):
     waiting = State()
     waiting_tpl = State()   # PATCH_VC_PAGE_TEMPLATE_V1
+    waiting_inv = State()   # PATCH_VPN_INVOICE_TPL_V1
 
 
 async def _titles_screen(bot_id: int):
@@ -5984,6 +5985,11 @@ async def _titles_screen(bot_id: int):
     # === PATCH_VC_PAGE_TEMPLATE_V1 ===
     rows.append([InlineKeyboardButton(text="📝 متنِ کاملِ صفحهٔ «خرید سرویس جدید»",
                                       callback_data="vtl:tpl", style=ButtonStyle.SUCCESS)])
+    # === PATCH_VPN_INVOICE_TPL_V1 === قالبِ پیش‌فاکتور (فقط حرفه‌ای)
+    _inv_on = bool(((await _gs_sn(bot_id, "vpn_invoice_tpl", "")) or "").strip())
+    rows.append([InlineKeyboardButton(
+        text="🧾 قالبِ پیش‌فاکتور (متغیرها) " + ("✅ فعال" if _inv_on else "⚪️ پیش‌فرض") + " · 💎 حرفه‌ای",
+        callback_data="vtl:inv", style=ButtonStyle.SUCCESS if _inv_on else ButtonStyle.PRIMARY)])
     lines += ["", f"ℹ️ حداکثر {MAX_LEN} کاراکتر. «متنِ دکمه» (توضیحی که زیرِ تیتر می‌آید) "
                   "جداست و از همان جایِ قبلی‌اش تنظیم می‌شود."]
     # === PATCH_VPN_TITLES_IN_SETTINGS_V1 === رباتِ همکار از هابِ عمومی می‌آید، بقیه از «🎛 دکمه‌ها و تنظیمات»
@@ -6219,6 +6225,61 @@ async def vpn_vc_tpl_save(msg: Message, bot: Bot, state: FSMContext):
     await _ss(row.id, "vc_page_template", tpl)
     text, kb = await _titles_screen(row.id)
     await msg.answer("✅ متنِ صفحه ذخیره شد.\n\n" + text, reply_markup=kb, parse_mode="HTML")
+
+
+@vpn_admin_router.callback_query(F.data == "vtl:inv")
+async def vpn_inv_tpl_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    if not has_feature(row.plan, Feature.VPN_INVOICE_TPL):
+        await cb.answer(upgrade_hint(Feature.VPN_INVOICE_TPL), show_alert=True)
+        return
+    from tenant import get_setting as _gs
+    from tenant.bots.vpn import vpn_invoice_tpl as _it
+    cur = (await _gs(row.id, _it.SETTING_KEY, "") or "").strip()
+    await state.set_state(VpnTitleFSM.waiting_inv)
+    extra = ("\n\n📝 متنِ فعلی:\n" + _html_escape_mod.escape(cur)) if cur else "\n\n📝 الان متنِ پیش‌فرض فعال است."
+    await cb.message.answer(_it.help_text() + extra, reply_markup=cancel_kb(), parse_mode="HTML")
+    await cb.answer()
+
+
+@vpn_admin_router.message(VpnTitleFSM.waiting_inv, F.text)
+async def vpn_inv_tpl_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner_msg(msg, bot)
+    if not row:
+        await state.clear()
+        return
+    from tenant import set_setting as _ss
+    from tenant.bots.vpn import vpn_invoice_tpl as _it
+    raw = (msg.text or "").strip()
+    if raw in ("/cancel", "لغو", "❌ لغو", "❌ لغو / بازگشت"):
+        await state.clear()
+        text, kb = await _titles_screen(row.id)
+        return await msg.answer("لغو شد.\n\n" + text, reply_markup=kb, parse_mode="HTML")
+    if raw == "/default":
+        await state.clear()
+        await _ss(row.id, _it.SETTING_KEY, "")
+        text, kb = await _titles_screen(row.id)
+        return await msg.answer("✅ به متنِ پیش‌فرض برگشت.\n\n" + text, reply_markup=kb, parse_mode="HTML")
+    if not has_feature(row.plan, Feature.VPN_INVOICE_TPL):
+        await state.clear()
+        return await msg.answer(upgrade_hint(Feature.VPN_INVOICE_TPL))
+    tpl = msg.html_text or raw
+    if len(tpl) > _it.MAX_LEN:
+        return await msg.answer(f"⚠️ متن بیش از حد طولانی است (حداکثر {_it.MAX_LEN} کاراکتر).")
+    try:
+        await msg.answer("👀 <b>پیش‌نمایش:</b>", parse_mode="HTML")
+        await msg.answer(_it.render(tpl, _it.sample_values()), parse_mode="HTML")
+    except Exception as e:
+        return await msg.answer(
+            "❌ <b>ذخیره نشد.</b> قالب‌بندیِ HTML مشکل دارد:\n"
+            f"<code>{_html_escape_mod.escape(str(e)[:200])}</code>\nاصلاح کن و دوباره بفرست.",
+            parse_mode="HTML")
+    await state.clear()
+    await _ss(row.id, _it.SETTING_KEY, tpl)
+    text, kb = await _titles_screen(row.id)
+    await msg.answer("✅ قالبِ پیش‌فاکتور ذخیره شد.\n\n" + text, reply_markup=kb, parse_mode="HTML")
 
 
 @vpn_admin_router.callback_query(F.data.startswith("vtl:e:"))

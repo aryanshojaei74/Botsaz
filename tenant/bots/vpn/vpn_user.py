@@ -2677,6 +2677,31 @@ async def pay_guide_show(cb: CallbackQuery, bot: Bot):
     await cb.answer()
 
 
+async def _invoice_tpl_text(bot_id: int, telegram_id: int, *, vol, dur, count, label, panel_key, plan_title,
+                            category, price, final, bal, buyer_name, buyer_uname, code, note, warn):
+    """PATCH_VPN_INVOICE_TPL_V1: متنِ نهاییِ پیش‌فاکتور از قالبِ ادمین، یا "" اگر قالبی/دسترسی نیست."""
+    from tenant import get_bot_row_by_id
+    from tenant.bots.vpn import vpn_invoice_tpl as _it
+    br = await get_bot_row_by_id(bot_id)
+    tpl = await _it.get_template(bot_id, br.plan if br else None)
+    if not tpl:
+        return ""
+    server = "—"
+    if panel_key:
+        try:
+            from tenant.bots.vpn.vpn_admin import panel_label
+            server = await panel_label(bot_id, panel_key)
+        except Exception:
+            logger.exception("نامِ سرور برایِ قالبِ پیش‌فاکتور خوانده نشد")
+    price, final = int(price or 0), int(final or 0)
+    return _it.render(tpl, {
+        "server": server, "plan": plan_title or "—", "category": category or "—", "volume": vol, "days": dur,
+        "count": str(count), "label": label or "—", "price": f"{price:,}", "discount": f"{max(0, price - final):,}",
+        "total": f"{final:,}", "balance": f"{int(bal or 0):,}", "buyer": buyer_name or "—",
+        "username": f"@{buyer_uname}" if buyer_uname else "—", "user_id": str(telegram_id),
+        "code": code or "—", "note": note or "", "warn": ("\n" + warn) if warn else ""})
+
+
 async def _build_buy_summary(bot: Bot, bot_id: int, plan_id: int,
                              telegram_id: int, state):
     """متن و کیبورد خلاصهٔ خرید را می‌سازد و کد تخفیفِ ذخیره‌شده در state را
@@ -2711,6 +2736,7 @@ async def _build_buy_summary(bot: Bot, bot_id: int, plan_id: int,
         dur = "بی‌انقضا" if plan.days == 0 else f"{plan.days} روز"
         base_price = int(float(plan.price))
         p_title, p_panel = plan.title, plan.panel_key
+        p_cat = getattr(plan, "category", None) or ""   # PATCH_VPN_INVOICE_TPL_V1
         p_hide_spec = bool(getattr(plan, "hide_spec", False))          # PATCH_PLAN_CUSTOM_TEXT_V1
         p_note = (getattr(plan, "invoice_note", None) or "").strip()
         # === PATCH_VBUYBACK_KEEP_CONTEXT_V2 ===
@@ -2921,6 +2947,16 @@ async def _build_buy_summary(bot: Bot, bot_id: int, plan_id: int,
             f"{spec_lines}{price_block}\n"
             f"{note_line}"
             f"💳 موجودی کیف پول: {rial(bal)}{enough}")
+    # === PATCH_VPN_INVOICE_TPL_V1 === قالبِ دلخواهِ ادمین (فقط پلنِ حرفه‌ای)
+    try:
+        _tpl = await _invoice_tpl_text(
+            bot_id, telegram_id, vol=vol, dur=dur, count=1, label=custom_label, panel_key=p_panel,
+            plan_title=p_title, category=p_cat, price=base_price, final=final_price, bal=bal,
+            buyer_name=buyer_name, buyer_uname=buyer_uname, code=applied_code, note=note_line.strip(), warn=enough.strip())
+        if _tpl:
+            text = _tpl
+    except Exception:
+        logger.exception("قالبِ پیش‌فاکتور اعمال نشد؛ متنِ پیش‌فرض نمایش داده شد")
     # === PATCH_PRODUCT_RATING_V1 ===
     # میانگینِ امتیازِ همین پلن (اگه نظرسنجی روشن باشه و امتیازی ثبت شده باشه)
     # امتیاز بر اساسِ *دستهٔ* پلن ذخیره/نمایش داده می‌شه (نه آیدیِ تکِ پلن)،
@@ -5536,6 +5572,16 @@ async def _vc_preinvoice(bot: Bot, bot_id: int, telegram_id: int, gb: int, days:
             f"📦 حجم: {vol}\n📅 مدت: {dur}\n🔢 تعداد: {count}\n{price_block}\n"
             f"{note_line}"
             f"👛 موجودی کیف پول: {int(bal):,} تومان{enough}")
+    # === PATCH_VPN_INVOICE_TPL_V1 === قالبِ دلخواهِ ادمین (فقط پلنِ حرفه‌ای)
+    try:
+        _tpl = await _invoice_tpl_text(
+            bot_id, telegram_id, vol=vol, dur=dur, count=count, label=custom_label, panel_key=panel_key,
+            plan_title=await _get_page_title(bot_id, 'vc'), category="", price=total, final=final_total, bal=bal,
+            buyer_name=buyer_name, buyer_uname=buyer_uname, code=applied_code, note=note_line.strip(), warn=enough.strip())
+        if _tpl:
+            text = _tpl
+    except Exception:
+        logger.exception("قالبِ پیش‌فاکتور (خرید دلخواه) اعمال نشد؛ متنِ پیش‌فرض نمایش داده شد")
 
     # === PATCH_WALLET_PAY_TOGGLE_V1 ===
     from tenant import wallet_pay_on as _wpay_on2
