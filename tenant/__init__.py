@@ -8496,7 +8496,9 @@ async def show_wallet(msg: Message, bot_id: int, u: BotUser, header: str = ""):
         from tenant.gateways.gateway_layout import gw_custom_label as _gwcl_card   # PATCH_CARD_RENAME_COLOR_V1
         options.append((await _gwcl_card(bot_id, "card", "💳 شارژ کارت‌به‌کارت"), "w:charge", succ))
     if is_free:
-        options.append(("🔒 شارژ با ارز دیجیتال (پلن رشد+)", "w:crypto", None))
+        # === PATCH_FREE_CRYPTO_LOCK_OWNER_ONLY_V1 === (باگ #212) این دکمه یادآوریِ ارتقا برایِ مالک است؛ مشتریِ ربات نباید ببیند.
+        if await is_owner_or_admin(bot_id, u.telegram_id, brow.owner_id if brow else 0):
+            options.append(("🔒 شارژ با ارز دیجیتال (پلن رشد+)", "w:crypto", None))
     else:
         nowpay_key = await get_setting(bot_id, "nowpay_api_key", "")
         nowpay_enabled = await get_setting(bot_id, "nowpay_enabled", "1")
@@ -14342,7 +14344,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "591"
+BUILD_ID = "592"
 
 
 @tenant_router.message(Command("version"))
