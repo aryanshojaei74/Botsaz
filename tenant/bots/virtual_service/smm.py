@@ -22310,6 +22310,16 @@ async def show_vnum_shop_to_user(bot: Bot, target: Message, bot_id: int, page: i
                                             style=ButtonStyle.PRIMARY))
         rows.append(nav)
 
+    # === PATCH_VNUM_TIER_SWITCH_V1 ===
+    # گزارش (شریف): برای دیدنِ شماره‌هایِ ردهٔ دیگر، کاربر باید «بازگشت» می‌زد. حالا دکمهٔ
+    # جابه‌جایی به ردهٔ دیگر همان‌جا هست.
+    if tier in ("nr", "ch"):
+        _o2 = only or "all"
+        _other = "ch" if tier == "nr" else "nr"
+        rows.append([InlineKeyboardButton(
+            text="💸 دیدنِ شماره‌هایِ ارزان" if tier == "nr" else "🛡 دیدنِ شماره‌هایِ بدونِ ریپورت",
+            callback_data=f"vnum:shop:0:{_o2}:{_other}", style=ButtonStyle.PRIMARY)])
+
     # همیشه راهِ بازگشت — آخرین ردیف، بدونِ شرط.
     from tenant import inline_back_row
     br = await inline_back_row(bot_id)
