@@ -163,3 +163,10 @@ def test_rounded_invoice_credit_matches_exact_payment():
     assert final == Decimal("0.11") and credit > amount                       # برایِ اضافهٔ گردکردن اعتبار می‌گیرد
     cr, ratio = TD.proportional_credit(credit, final, final)                  # پرداختِ دقیقِ مبلغِ لینک ⇒ همان اعتبار
     assert cr == credit and ratio == 1
+
+
+def test_invoice_text_has_no_raw_ton_link_and_is_compact():
+    import inspect
+    src = inspect.getsource(TD.tond_amount)
+    assert "لینک مستقیم" not in src and "{deep}" not in src            # لینکِ خام فقط پشتِ دکمهٔ شیشه‌ای
+    assert "💎 پرداخت با Tonkeeper" in src and "callback_data=f\"tond:check:{memo}\"" in src
