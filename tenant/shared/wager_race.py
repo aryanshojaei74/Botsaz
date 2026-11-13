@@ -36,7 +36,7 @@ logger = _get_logger(__name__)
 
 wager_race_router = Router(name="wager_race")
 
-_NO_AMOUNT = re.compile(r"^(?:شرط\s*بندی|بازی)\s+(حدس\s*عدد|سرعت|ریاضی|الگو|درهم|کوییز|کویز|کوئیز|حدس[\s‌]*ایموجی|ایموجی)$")
+_NO_AMOUNT = re.compile(r"^(?:شرط\s*بندی|بازی)\s+(حدس\s*عدد|سرعت|ریاضی|الگو|رندوم|تصادفی|رندم|درهم|کوییز|کویز|کوئیز|حدس[\s‌]*ایموجی|ایموجی)$")
 
 
 def _is_create(m: Message) -> bool:
@@ -51,7 +51,7 @@ async def _gate(msg: Message, bot: Bot, game: str | None = None):
     """(row, is_admin) اگر این ربات اجازهٔ مسابقه در این گروه را دارد؛ وگرنه None یا SkipHandler/پیامِ مناسب."""
     if not msg.from_user or msg.from_user.is_bot:
         raise SkipHandler
-    if game and game not in R.TENANT_RACE_GAMES:
+    if game and game not in R.TENANT_RACE_GAMES and game != "random":
         raise SkipHandler
     row, is_admin = await _row_and_admin(bot, msg.from_user.id)
     if not row or not wager_eligible(row.field, row.plan):
@@ -67,7 +67,11 @@ async def _gate(msg: Message, bot: Bot, game: str | None = None):
     if not await core.master_enabled(row.id):
         await msg.reply("❌ قابلیت بازی در این ربات فعال نیست.")
         return None, is_admin
-    if game and not await core.game_enabled(game, row.id):
+    if game == "random":                                       # PATCH_RANDOM_GAME_V1
+        if not await R.random_pool(row.id):
+            await msg.reply("❌ هیچ بازیِ فعالی برایِ «رندوم» در این ربات نیست.")
+            return None, is_admin
+    elif game and not await core.game_enabled(game, row.id):
         await msg.reply(f"❌ بازی {core.GAME_FA[game]} در این ربات فعال نیست.")
         return None, is_admin
     return row, is_admin
@@ -79,7 +83,7 @@ async def twr_hint(msg: Message, bot: Bot):
     row, _adm = await _gate(msg, bot)
     if not row:
         return
-    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی", "الگو": "الگو", "درهم": "درهم", "کوییز": "کوییز", "کویز": "کوییز", "کوئیز": "کوییز",
+    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی", "الگو": "الگو", "رندوم": "رندوم", "تصادفی": "رندوم", "رندم": "رندوم", "درهم": "درهم", "کوییز": "کوییز", "کویز": "کوییز", "کوئیز": "کوییز",
             "حدسایموجی": "حدس ایموجی", "ایموجی": "حدس ایموجی"}[
         re.sub(r"[\s‌]+", "", _NO_AMOUNT.match(core._norm(msg.text)).group(1))]
     cfg = await core.load_cfg(row.id)
@@ -173,6 +177,8 @@ async def twr_join(cb: CallbackQuery, bot: Bot):
                           "until": time.monotonic() + R.SECS[r.w.game] + 5}
         await R._edit(bot, r.w)
         asyncio.create_task(R._expire_later(bot, r.w.id, R.SECS[r.w.game]))
+        if r.note:                                              # PATCH_RANDOM_GAME_V1
+            await bot.send_message(r.w.chat_id, r.note, parse_mode="HTML")
         await R._announce_turn(bot, r.w)
     elif r.w is not None:
         await R._edit(bot, r.w)

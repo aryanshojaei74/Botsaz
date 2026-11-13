@@ -502,6 +502,7 @@ async def _settings_screen(kind: str, uid: int | None = None):
             [hx_button("💸 کارمزد شرط‌بندی", callback_data="pgbset:fee")],
             [hx_button("🔢 حداقل شرط", callback_data="pgbset:min"), hx_button("🔢 حداکثر شرط", callback_data="pgbset:max")],
             [hx_button("⏱ زمان انتظار", callback_data="pgbset:ttl")],
+            [hx_button("🏅 کارمزد پلکانی و آمار بازیکنان", callback_data="pgrk:menu")],   # PATCH_WAGER_RANK_V1
             [hx_button("🎲 بازی کن پول بگیر (بازی‌های تلگرام)", callback_data="padg:menu@bet")],
             [hx_button(back_label, **back_kw)],
         ])

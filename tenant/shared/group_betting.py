@@ -592,6 +592,8 @@ async def _bet_settings_view(bot_id: int):
         [InlineKeyboardButton(text=f"💸 درصد کارمزد ({fee}٪)", callback_data="gset:bet_fee")],
         [InlineKeyboardButton(text="🔢 حداقل مبلغ", callback_data="gset:bet_min"), InlineKeyboardButton(text="🔢 حداکثر مبلغ", callback_data="gset:bet_max")],
         [InlineKeyboardButton(text=f"⏱ زمان انتظار ({ttl} ثانیه)", callback_data="gset:bet_ttl")],
+        *([[InlineKeyboardButton(text="🏅 کارمزد پلکانی و آمار بازیکنان", callback_data="twrk:menu")]]
+          if extra_rows else []),                                  # PATCH_WAGER_RANK_V1: فقط وقتی افزونهٔ بازی فعال است
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:groupsettings", style=ButtonStyle.DANGER)],
     ])
     return text, kb

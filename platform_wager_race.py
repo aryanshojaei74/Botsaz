@@ -45,8 +45,8 @@ platform_wager_race_router = Router(name="platform_wager_race")
 
 RACE_GAMES = ("guess", "speed", "math", "pattern", "scramble", "quiz", "emoji")        # PATCH_WORD_REMOVED_V1: «کلمه‌سازی» حذف شد (درخواستِ مدیر)؛ «درهم» می‌ماند
 TENANT_RACE_GAMES = RACE_GAMES                         # ربات‌هایِ مشتری هم (فقط اگر افزونهٔ «بازی‌هایِ گروهی» را خریده باشند؛ گیتِ آن در addon_active است)
-RACE_FA = {"guess": "حدس عدد", "speed": "سرعت", "math": "ریاضی", "pattern": "الگو", "scramble": "درهم", "quiz": "کوییز", "emoji": "حدس ایموجی"}
-SECS = {"guess": 180, "speed": 45, "math": 45, "pattern": 60, "scramble": 45, "quiz": 30, "emoji": 45}      # فقط «حدس عدد» نوبتی است (مهلتِ هر نوبت ۳ دقیقه)؛ الگو هم‌زمان و سریع (ضدِ تقلب با چت‌بات: نوبتِ طولانی نداریم)
+RACE_FA = {"random": "رندوم", "guess": "حدس عدد", "speed": "سرعت", "math": "ریاضی", "pattern": "الگو", "scramble": "درهم", "quiz": "کوییز", "emoji": "حدس ایموجی"}
+SECS = {"random": 60, "guess": 180, "speed": 45, "math": 45, "pattern": 60, "scramble": 45, "quiz": 30, "emoji": 45}      # فقط «حدس عدد» نوبتی است (مهلتِ هر نوبت ۳ دقیقه)؛ الگو هم‌زمان و سریع (ضدِ تقلب با چت‌بات: نوبتِ طولانی نداریم)
 KEY_ON = "pgr_on"
 GUESS_GAP = 1.2
 _AMT = r"([۰-۹0-9,،]+)"
@@ -57,6 +57,7 @@ _PATTERNS = (
     ("math", re.compile(rf"^{_PREFIX}ریاضی\s+{_AMT}$")),
     ("pattern", re.compile(rf"^{_PREFIX}الگو\s+{_AMT}$")),
     ("scramble", re.compile(rf"^{_PREFIX}درهم\s+{_AMT}$")),
+    ("random", re.compile(rf"^{_PREFIX}(?:رندوم|تصادفی|رندم)\s+{_AMT}$")),        # PATCH_RANDOM_GAME_V1
     ("quiz", re.compile(rf"^{_PREFIX}(?:کوییز|کویز|کوئیز)\s+{_AMT}$")),        # PATCH_QUIZ_EMOJI_GAMES_V1
     ("emoji", re.compile(rf"^{_PREFIX}(?:حدس[\s‌]*)?ایموجی\s+{_AMT}$")),
 )
@@ -185,10 +186,26 @@ def _game_key(game: str) -> str:
     return f"platform_wager_{game}"
 
 
+async def random_pool(bot_id: int = 0) -> list[str]:
+    """PATCH_RANDOM_GAME_V1: بازی‌هایِ فعالِ این ربات که «رندوم» از بینشان انتخاب می‌کند."""
+    pool = []
+    for g in RACE_GAMES:
+        try:
+            on = await game_on(g) if not bot_id else await core.game_enabled(g, bot_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("random_pool: بررسیِ بازی %s ناموفق بود", g)
+            on = False
+        if on:
+            pool.append(g)
+    return pool
+
+
 async def game_on(game: str) -> bool:
     """روشن‌بودنِ یک مسابقه. اگر مدیر هنوز کلیدِ اختصاصیِ آن را نزده باشد، همان کلیدِ کلیِ قبلی (pgr_on) تعیین می‌کند
     (رفتارِ قبلی حفظ می‌شود)."""
     master = await enabled()
+    if game == "random":                         # PATCH_RANDOM_GAME_V1: رندوم فقط وقتی معنا دارد که حداقل یک بازیِ دیگر روشن باشد
+        return master and bool(await random_pool(0))
     v = (await core._pset(_game_key(game), "")).strip().lower()
     if not v:
         return master and game != "pattern"      # «الگو» تا مدیر روشنش نکند خاموش است؛ چهار بازیِ تازه (کلمه‌سازی/درهم/کوییز/ایموجی) به‌درخواستِ مدیر پیش‌فرض روشن‌اند (با کلیدِ کلیِ مسابقه‌ها)
@@ -215,6 +232,7 @@ def _rule(w: PlatformWager) -> str:
                        "(مهلتِ کوتاه).",
             "word": "ربات چند حرف می‌دهد و می‌گوید چند کلمه با آن‌ها بسازید (مثلاً یکی ۲ حرفی و دو تا ۳ حرفی). <b>هم‌زمان</b> کلمه‌ها را "
                     "در گروه می‌نویسید؛ اولین نفری که همهٔ کلمه‌هایِ خواسته‌شده را درست پیدا کند برنده است (فقط کلماتِ رایجِ فارسی پذیرفته می‌شود).",
+            "random": "وقتی حریف بپیوندد، ربات <b>یک بازی را تصادفی</b> از بینِ بازی‌هایِ فعال انتخاب می‌کند و همان را بازی می‌کنید.",
             "scramble": "ربات حروفِ یک کلمه را درهم می‌فرستد؛ اولین نفری که کلمهٔ درست را بنویسد برنده است.",
             "quiz": "ربات یک سؤال با چهار <b>دکمهٔ شیشه‌ای</b> می‌فرستد؛ هر کس زودتر گزینهٔ درست را بزند برنده است. هر نفر فقط <b>یک</b> فرصت دارد؛ "
                     "پاسخِ غلط یعنی حذف از بازی.",
@@ -326,9 +344,10 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
 async def join_race(wid: int, user: tuple, bot_id: int = 0):
     """مثلِ core.join_wager، ولی با ساختِ پرسش؛ خروجی R(w, err, note)."""
     uid, uname, uuser = user
+    pool = await random_pool(bot_id)           # PATCH_RANDOM_GAME_V1: پیش از باز کردنِ تراکنش
     async with Session() as s:
         w = await s.get(PlatformWager, wid, with_for_update=True)
-        if not w or (w.bot_id or 0) != bot_id or w.game not in RACE_GAMES or w.status != "pending":
+        if not w or (w.bot_id or 0) != bot_id or (w.game not in RACE_GAMES and w.game != "random") or w.status != "pending":
             return core._res(err="این مسابقه دیگر در انتظار نیست.")
         if w.creator_id == uid:
             return core._res(err="سازنده نمی‌تواند خودش به مسابقه بپیوندد.")
@@ -347,17 +366,24 @@ async def join_race(wid: int, user: tuple, bot_id: int = 0):
             return core._res(err=f"موجودی کافی نیست؛ نیاز به {_rial(w.amount)} داری.")
         if await core._active_count(s, uid, bot_id) >= core.MAX_ACTIVE:
             return core._res(err=core._t(f"هم‌زمان حداکثر {core.MAX_ACTIVE} {{bet}} باز می‌توانی داشته باشی.", bot_id))
+        picked = None
+        if w.game == "random":                                 # PATCH_RANDOM_GAME_V1
+            if not pool:
+                return core._res(err="فعلاً هیچ بازیِ فعالی برایِ «رندوم» نیست.")
+            picked = secrets.choice(pool)
         opp.balance = Decimal(str(opp.balance)) - Decimal(str(w.amount))
         core._add_txn(s, bot_id, opp, -_money(w.amount), "wager_stake", f"پیوستن به {{bet}} #{w.id}")
         w.opponent_id, w.opponent_name, w.opponent_username = uid, uname or "", uuser or None
         w.status = "playing"
+        if picked:
+            w.game = picked
         st = new_question(w.game, (w.bot_id or 0, w.chat_id))
         w.state = json.dumps(st, ensure_ascii=False)
         w.expires_at = core._now() + timedelta(seconds=SECS[w.game])
         if w.game == "guess":                                  # نوبتی: قرعه برایِ نفرِ اول
             w.turn_id = secrets.choice([w.creator_id, uid])
         await s.commit()
-        return core._res(w=w)
+        return core._res(w=w, note=(f"🎲 بازیِ تصادفی انتخاب شد: <b>{RACE_FA[picked]}</b>" if picked else None))
 
 
 async def settle_to(wid: int, uid: int):
@@ -526,7 +552,7 @@ def _is_create(m: Message) -> bool:
     return parse_race_command(m.text) is not None
 
 
-_NO_AMOUNT = re.compile(r"^شرط\s*بندی\s+(حدس\s*عدد|سرعت|ریاضی|الگو|درهم|کوییز|کویز|کوئیز|حدس[\s‌]*ایموجی|ایموجی)$")
+_NO_AMOUNT = re.compile(r"^شرط\s*بندی\s+(حدس\s*عدد|سرعت|ریاضی|الگو|رندوم|تصادفی|رندم|درهم|کوییز|کویز|کوئیز|حدس[\s‌]*ایموجی|ایموجی)$")
 
 
 def _is_paid_hint(m: Message) -> bool:
@@ -550,7 +576,7 @@ async def race_paid_hint(msg: Message):
         raise SkipHandler
     if not await _group_allowed(msg.chat.id) or not await enabled() or not await _bet_enabled():
         raise SkipHandler
-    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی", "الگو": "الگو", "درهم": "درهم", "کوییز": "کوییز", "کویز": "کوییز", "کوئیز": "کوییز",
+    game = {"حدسعدد": "حدس عدد", "سرعت": "سرعت", "ریاضی": "ریاضی", "الگو": "الگو", "رندوم": "رندوم", "تصادفی": "رندوم", "رندم": "رندوم", "درهم": "درهم", "کوییز": "کوییز", "کویز": "کوییز", "کوئیز": "کوییز",
             "حدسایموجی": "حدس ایموجی", "ایموجی": "حدس ایموجی"}[
         re.sub(r"[\s‌]+", "", _NO_AMOUNT.match(core._norm(msg.text)).group(1))]
     cfg = await core.load_cfg()
@@ -658,6 +684,8 @@ async def race_join(cb: CallbackQuery):
                         "until": time.monotonic() + SECS[r.w.game] + 5}
         await _edit(cb.bot, r.w)
         asyncio.create_task(_expire_later(cb.bot, r.w.id, SECS[r.w.game]))
+        if r.note:                                              # PATCH_RANDOM_GAME_V1
+            await cb.bot.send_message(r.w.chat_id, r.note, parse_mode="HTML")
         await _announce_turn(cb.bot, r.w)
     elif r.w is not None:
         await _edit(cb.bot, r.w)
@@ -859,9 +887,13 @@ async def help_section() -> str:
         "quiz": f"❓ <b>کوییز</b>: «شرطبندی کوییز {ex}» — سؤال با چهار دکمهٔ شیشه‌ای؛ هر کس زودتر گزینهٔ درست را بزند برنده است (هر نفر یک فرصت؛ غلط = حذف).",
         "emoji": f"🤔 <b>حدس ایموجی</b>: «شرطبندی ایموجی {ex}» — ۲ تا ۵ ایموجی می‌آید که با هم یک کلمه/عبارت را می‌گویند؛ اولین نفری که آن را بنویسد برنده است.",
     }
+    rows["random"] = (f"🎲 <b>رندوم</b>: «رندوم {ex}» — مثلِ بقیه مبلغ می‌گذاری و حریف می‌پیوندد؛ بعدِ پیوستن، ربات "
+                      "<b>یک بازی را تصادفی</b> از بینِ بازی‌هایِ فعال انتخاب می‌کند.")
     return "\n".join([
         "💰 <b>مسابقه‌هایِ پولیِ دونفره (با کیف پول)</b>",
         *[rows[g] for g in on],
+        rows["random"],
+        "🏆 «برترین بازیکنان» را بنویس تا جدولِ برترین‌ها را ببینی.",
         *(["ℹ️ اگر فقط «حدس عدد» / «سرعت» / «ریاضی» (بدونِ «شرطبندی» و مبلغ) بنویسی، بازیِ رایگان با شیرینی شروع می‌شود."]
           if await _candy_on() else []),
         f"عددِ آخر مبلغِ هر نفر به تومان است ({lim}). هر کس بخواهد می‌تواند مسابقهٔ خودش را بسازد یا به مسابقهٔ دیگران "

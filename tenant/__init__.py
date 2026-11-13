@@ -280,6 +280,8 @@ from tenant.shared.wager_games import wager_games_router  # === PATCH_WAGER_TENA
 tenant_router.include_router(wager_games_router)  # === PATCH_WAGER_TENANT_V1 ===
 from tenant.shared.wager_race import wager_race_router  # === PATCH_WAGER_RACE_TENANT_V1 ===
 tenant_router.include_router(wager_race_router)  # === PATCH_WAGER_RACE_TENANT_V1 ===
+from wager_rank import tenant_rank_router  # === PATCH_WAGER_RANK_V1 ===
+tenant_router.include_router(tenant_rank_router)
 # === PATCH_SMM_AI_ALL_KINDS_V1 ===
 # «تنظیماتِ گروه» (group_wallet) و «سرویس‌ها و محصولات» در همهٔ انواعِ ربات هست و دکمه‌هایِ
 # «راه‌اندازی و تنظیمات هوش مصنوعی» (smmai:*) به این روتر می‌رسند. قبلاً فقط در پروسهٔ
@@ -14340,7 +14342,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "590"
+BUILD_ID = "591"
 
 
 @tenant_router.message(Command("version"))

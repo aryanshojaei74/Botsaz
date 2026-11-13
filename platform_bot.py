@@ -153,6 +153,8 @@ from platform_group_game import platform_group_game_router   # === PATCH_GROUP_G
 router.include_router(platform_group_game_router)
 from platform_wager_race import platform_wager_race_router   # === PATCH_WAGER_RACE_V1 ===
 router.include_router(platform_wager_race_router)
+from wager_rank import platform_rank_router   # === PATCH_WAGER_RANK_V1 ===
+router.include_router(platform_rank_router)
 # === PATCH_WAGER_ADDON_V1 === فروش «بازی‌های شرط‌بندی» به ربات‌های مشتری
 from platform_wager_sale import platform_wager_sale_router
 router.include_router(platform_wager_sale_router)

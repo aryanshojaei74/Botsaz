@@ -48,7 +48,7 @@ platform_wager_router = Router(name="platform_wager")
 GAMES = ("xo", "rps", "dice")
 GAME_FA = {"xo": "ایکس‌او", "rps": "سنگ‌کاغذ‌قیچی", "dice": "تاس",
            "guess": "حدس عدد", "speed": "سرعت", "math": "ریاضی", "pattern": "الگو",
-           "word": "کلمه‌سازی", "scramble": "درهم", "quiz": "کوییز", "emoji": "حدس ایموجی"}   # PATCH_WAGER_RACE_V1: سه مسابقهٔ آخر فقط ربات اصلی‌اند (در GAMES نیستند)
+           "word": "کلمه‌سازی", "random": "رندوم", "scramble": "درهم", "quiz": "کوییز", "emoji": "حدس ایموجی"}   # PATCH_WAGER_RACE_V1: سه مسابقهٔ آخر فقط ربات اصلی‌اند (در GAMES نیستند)
 ACTIVE = ("pending", "playing")
 MAX_ACTIVE = 3                 # شرط هم‌زمان هر کاربر (ساخته‌شده یا پذیرفته‌شده)
 DICE_RECLAIM_SECS = 30         # اگر پرتابی گیر کرد (قطعی پروسه) بعد از این مدت دوباره مجاز است
@@ -292,6 +292,12 @@ def _finish(w: PlatformWager, status: str, reason: str, winner: int | None = Non
 
 
 async def _settle_win(s, w: PlatformWager, winner_id: int, reason: str = "win") -> None:
+    # === PATCH_WAGER_RANK_V1 === کارمزدِ پلکانی بر اساسِ رتبهٔ برنده (پله نگذاشته باشند ⇒ بی‌اثر)
+    try:
+        from wager_rank import apply_rank_fee
+        await apply_rank_fee(s, w, winner_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("کارمزدِ پلکانی اعمال نشد؛ کارمزدِ عادی ماند (wager #%s)", w.id)
     await _credit(s, winner_id, _money(w.payout_amount), "wager_prize", f"جایزهٔ {{bet}} #{w.id}", w.bot_id or 0)
     if _money(w.fee_amount):
         u = await _lock_user(s, winner_id, w.bot_id or 0)
@@ -819,7 +825,7 @@ def _rps_playing_text(w: PlatformWager, head: str) -> str:
 
 
 def render(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
-    if w.game in ("guess", "speed", "math", "pattern", "word", "scramble", "quiz", "emoji"):          # PATCH_WAGER_RACE_V1
+    if w.game in ("guess", "speed", "math", "pattern", "word", "scramble", "quiz", "emoji", "random"):          # PATCH_WAGER_RACE_V1
         from platform_wager_race import render_race
         return render_race(w)
     st = _st(w)
@@ -956,6 +962,10 @@ def help_text(enabled: dict[str, bool], bot_id: int = 0, cfg: dict | None = None
         for g, head, rule in _race:
             if enabled.get(g):
                 lines += [head, rule + " کسی برنده نشد ⇒ پولِ هر دو برمی‌گردد.", ""]
+        if any(enabled.get(g) for g, _h, _r in _race):          # PATCH_RANDOM_GAME_V1 + PATCH_WAGER_RANK_V1
+            lines += ["🎲 <b>رندوم</b>: «رندوم ۱۰۰۰۰»",
+                      "بعد از پیوستنِ حریف، ربات یک بازی را تصادفی از بینِ بازی‌هایِ فعال انتخاب می‌کند.", "",
+                      "🏆 «برترین بازیکنان» را بنویس تا جدولِ برترین‌ها را ببینی.", ""]
     _flip = ("«بازی ۱۰۰۰۰» یا «شرطبندی ۱۰۰۰۰»" if not bot_id          # ربات اصلی
              else "«شیر یا خط ۱۰۰۰۰» یا «بازی ۱۰۰۰۰»")                 # PATCH_COIN_FLIP_COMMAND_V1: ربات‌هایِ مشتری
     lines += [f"🪙 <b>شیر یا خط</b>: {_flip}",
