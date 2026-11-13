@@ -17307,6 +17307,7 @@ async def _build_bot_detail(bot_id: int, src: str = "bots", viewer_id: int | Non
         owner, uname, plan, field, created = r.owner_id, r.username, r.plan, r.field, r.created_at
         status, expires, archived_at = r.status, r.plan_expires_at, r.archived_at
         sub_months, archive_reason = r.sub_months, r.archive_reason
+        _bk_plan, _bk_sec, _bk_m = r.banked_plan, r.banked_seconds, r.banked_sub_months  # PATCH_ADM_PLAN_BANK_LINE_V1
         lock_reason = r.lock_reason  # === PATCH_BOT_OFF_REASON_V1 ===
         # === PATCH_RELEASED_TOKEN_TWIN_V1 ===
         from bot_utils import is_released_token, live_twin_bot
@@ -17485,10 +17486,23 @@ async def _build_bot_detail(bot_id: int, src: str = "bots", viewer_id: int | Non
             maker_line += "\n" + await _bot_maker_line(_s_mk, bot_id)
     except Exception:
         logger.exception("تعیینِ ابزارِ سازندهٔ ربات ناموفق بود (نادیده گرفته شد)")
+    # === PATCH_ADM_PLAN_BANK_LINE_V1 === پلنِ فعلی چند روز مانده + پلنِ قبلیِ نگه‌داری‌شده (مثلاً رشد → حرفه‌ای)
+    bank_line = ""
+    try:
+        if expires:
+            _left = max(0, (expires - datetime.datetime.now()).days)
+            bank_line += f"\n⏳ مانده از پلنِ فعلی ({PLAN_INFO[Plan(plan)]['title']}، {sub_months} ماهه): {_left} روز"
+        if _bk_plan and (_bk_sec or 0) > 0:
+            _bd = max(1, round(int(_bk_sec) / 86400))
+            bank_line += (f"\n🏦 پلنِ نگه‌داری‌شده: {PLAN_INFO[Plan(_bk_plan)]['title']}"
+                          f"{f' ({_bk_m} ماهه)' if _bk_m else ''} — {_bd} روز "
+                          "(بعد از پایانِ پلنِ فعلی برمی‌گردد)")
+    except Exception:
+        logger.exception("ساختِ خطِ پلنِ نگه‌داری‌شده ناموفق بود")
     text = (
         f"🤖 @{uname}\nمالک: {owner_name} (<code>{owner}</code>)\nنوع: {FIELDS.get(field, field)}\n"
         f"پلن: {PLAN_INFO[Plan(plan)]['title']}\nوضعیت: {status_txt}{reason_line}\n"
-        f"📅 سررسید پلن: {to_jalali(expires)}\nتاریخ ساخت: {to_jalali(created)}{dur_txt}\n"
+        f"📅 سررسید پلن: {to_jalali(expires)}{bank_line}\nتاریخ ساخت: {to_jalali(created)}{dur_txt}\n"
         f"🆘 دسترسیِ پشتیبانیِ مدیر: {support_txt}\n"
         f"🛍 مینی‌اپ فروشگاهی: {miniapp_txt}\n"
         f"🎮 بازی‌هایِ گروهی: {game_txt}"

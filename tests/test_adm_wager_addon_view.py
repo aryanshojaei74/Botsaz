@@ -81,3 +81,16 @@ async def test_history_shows_price_and_sibling_bot_addon(db):
     await pb.adm_bot_game_history(c2)
     t2, _ = c2.message.texts[-1]
     assert "فعال" in t2 and "50,000" in t2 and "کیف پول" in t2
+
+
+@pytest.mark.asyncio
+async def test_detail_shows_remaining_and_banked_plan(db):
+    import datetime as dt
+    async with db() as s:
+        b = await s.get(models.Bot, 1)
+        b.plan, b.sub_months = "pro", 1
+        b.plan_expires_at = dt.datetime.now() + dt.timedelta(days=29, hours=2)
+        b.banked_plan, b.banked_seconds, b.banked_sub_months = "growth", 12 * 86400, 1
+        await s.commit()
+    text, _kb = await pb._build_bot_detail(1, "bots", viewer_id=9)
+    assert "29 روز" in text and "پلنِ نگه‌داری‌شده" in text and "12 روز" in text
