@@ -8024,8 +8024,15 @@ async def _notify_smm_order_failed(bot: Bot, row, buyer_user, service,
         buyer_label = f"@{buyer_user.username}" if getattr(buyer_user, "username", None) else \
             str(getattr(buyer_user, "telegram_id", "—"))
         svc_name = getattr(service, "name", "سرویس مجازی")
+        # PATCH_SMM_FAIL_PANEL_NAME_V1: نامِ پنلی که سفارش رویش رد شده (ربات می‌تواند چند پنل داشته باشد)
+        try:
+            _, _, panel_name = await _panel_creds(row.id, getattr(service, "panel_pk", None))
+        except Exception:
+            logger.exception("نامِ پنل برایِ هشدارِ ردِ سفارش خوانده نشد")
+            panel_name = "—"
         text = (
             f"❌ <b>سفارشِ خودکارِ SMM رویِ پنل رد شد</b>\n\n"
+            f"🏢 پنل: <b>{panel_name}</b>\n"
             f"🛰 {svc_name} × {quantity:,}\n"
             f"👤 مشتری: {buyer_label}\n"
             f"💰 مبلغ (بازگردانده‌شده به کیفِ‌پولِ مشتری): {price:,} تومان\n"
@@ -8033,7 +8040,7 @@ async def _notify_smm_order_failed(bot: Bot, row, buyer_user, service,
         )
         if is_balance_issue:
             text += (
-                "\n\n⚠️ <b>احتمالاً موجودیِ حسابت رویِ پنلِ SMM تموم شده</b> — "
+                f"\n\n⚠️ <b>احتمالاً موجودیِ حسابت رویِ پنلِ «{panel_name}» تموم شده</b> — "
                 "برو تو سایتِ همون پنل (نه بات‌ساز) شارژش کن، وگرنه سفارش‌هایِ "
                 "بعدی هم رد می‌شن و مشتری‌هات پولشون هربار برمی‌گرده بدونِ اینکه "
                 "سرویسی بگیرن."
