@@ -17367,7 +17367,8 @@ async def prm_setmargin_save(msg: Message, bot: Bot, state: FSMContext):
 
 # ─────────────── فروشگاهِ پرمیوم — طرفِ مشتری ───────────────
 
-async def show_premium_shop_to_user(bot: Bot, target: Message, bot_id: int) -> None:
+async def show_premium_shop_to_user(bot: Bot, target: Message, bot_id: int, header: str = "") -> None:
+    # PATCH_PREMIUM_HEADER_MERGE_V1: متنِ دکمه (header) در همان پیامِ پلن‌ها می‌آید، نه پیامِ جدا
     rate, margin = await _premium_settings(bot_id)
     # === PATCH_PREMIUM_MANUAL_DELIVERY_V1 ===
     # باگ: این فیلتر همیشه بر اساسِ موجودیِ استارزِ خودِ ربات پلن‌ها را
@@ -17396,11 +17397,15 @@ async def show_premium_shop_to_user(bot: Bot, target: Message, bot_id: int) -> N
     br = await inline_back_row(bot_id)
     if br:
         rows.append(br)
+    import html as _html
+    _hdr = (header or "").strip()
+    _body = (_html.escape(_hdr) + "\n\n👇 یکی از پلن‌های پرمیوم را انتخاب کنید:") if _hdr else (
+        "🌟 <b>پرمیوم تلگرام</b>\n\n"
+        "یکی از پلن‌های پرمیوم را انتخاب کن — از طریق سایت رسمی فرگمنت "
+        "و بدون نیاز به ورود به اکانت فرگمنت، مستقیم روی حساب تلگرامت "
+        "فعال می‌شود:")
     await target.answer(
-        "🌟 <b>پرمیومِ تلگرام</b>\n\n"
-        "یکی از پلن‌های پرمیوم را انتخاب کن — از طریقِ سایتِ رسمیِ فرگمنت "
-        "و بدون نیاز به ورود به اکانتِ فرگمنت، مستقیم روی حسابِ تلگرامت "
-        "فعال می‌شود:",
+        _body,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
 
 

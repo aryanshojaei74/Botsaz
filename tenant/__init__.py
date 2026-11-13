@@ -6491,6 +6491,7 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
         "buy_metered",   # === PATCH_METERED_BTN_ACTION_V1 ===
         "submenu", "web_app", "channel_link",
         "wallet",
+        "premium_shop",   # === PATCH_PREMIUM_HEADER_MERGE_V1 === متنِ دکمه + پلن‌ها در یک پیام
         "my_services",   # === PATCH_MY_SVCS_HEADER_V1 === متنِ دکمه در همان پیامِ فهرستِ سرویس‌ها می‌آید (نه پیامِ جدا)
     }
     # اگر دکمه «اکشن» دارد، متنِ دکمه به‌صورت پیام جدا ارسال نمی‌شود؛ بلکه به‌عنوان
@@ -6985,7 +6986,7 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
     elif action == "premium_shop":
         # === PATCH_TELEGRAM_PREMIUM_V1 ===
         from tenant.bots.virtual_service.smm import show_premium_shop_to_user
-        await show_premium_shop_to_user(bot, msg, bot_id)
+        await show_premium_shop_to_user(bot, msg, bot_id, header=action_header)
     elif action == "stars_shop":
         # === PATCH_STARS_SELL_V1 ===
         from tenant.bots.virtual_service.smm import show_stars_shop_to_user
@@ -14339,7 +14340,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "584"
+BUILD_ID = "585"
 
 
 @tenant_router.message(Command("version"))
