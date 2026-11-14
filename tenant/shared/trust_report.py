@@ -732,6 +732,29 @@ async def trust_edittext_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await cb.answer()
 
 
+_TPL_VARS = ("{buyer}", "{product}", "{count}", "{amount}", "{time}", "{date}", "{bot}", "{panel}", "{button}",
+             "{bottom}", "{admin}")
+
+
+def has_template_vars(template: str | None) -> bool:
+    """PATCH_TRUST_TEMPLATE_NO_VARS_GUARD_V1: آیا قالب دست‌کم یکی از جاگذاری‌هایِ شناخته‌شده را دارد؟"""
+    t = template or ""
+    return any(v in t for v in _TPL_VARS)
+
+
+async def _menu_labels(bot_id: int) -> set[str]:
+    """برچسبِ دکمه‌هایِ منویِ اصلیِ این ربات (برایِ تشخیصِ زدنِ اشتباهیِ دکمه در حالتِ دریافتِ متن)."""
+    try:
+        from sqlalchemy import select as _sel
+        from config import Session as _S
+        from models import MainButton
+        async with _S() as s:
+            return {(x or "").strip() for x in (await s.scalars(_sel(MainButton.label).where(MainButton.bot_id == bot_id))).all()}
+    except Exception:
+        logger.exception("trust_report: خواندنِ برچسبِ دکمه‌ها ناموفق بود")
+        return set()
+
+
 @trust_report_router.message(TrustReportFSM.edittext, F.text)
 async def trust_edittext_save(msg: Message, bot: Bot, state: FSMContext):
     from tenant import get_bot_row, set_setting, main_kb_or_remove, is_owner_or_admin
@@ -761,6 +784,24 @@ async def trust_edittext_save(msg: Message, bot: Bot, state: FSMContext):
     if len(template) > 3500:
         await msg.answer("⚠️ متن بیش از حد طولانی است؛ حداکثر ۳۵۰۰ کاراکتر ارسال کنید.")
         return
+    # === PATCH_TRUST_TEMPLATE_NO_VARS_GUARD_V1 === (ربات @INFIdorbot)
+    # مالک در حالتِ «منتظرِ متنِ قالب» به‌اشتباه دکمهٔ کیبوردِ «🏆 نفرات برتر» را زد؛ همان برچسبِ دکمه به‌عنوانِ قالب ذخیره
+    # شد و از آن به بعد هر سفارش فقط «🏆 نفرات برتر» را در کانال پست می‌کرد. حالا متنی که هیچ جاگذاری ندارد ذخیره نمی‌شود
+    # مگر این‌که مالک همان متن را یک‌بار دیگر بفرستد (تأیید)؛ و اسمِ دکمه‌هایِ منویِ همین ربات اصلاً پذیرفته نمی‌شود.
+    if raw in await _menu_labels(row.id):
+        await msg.answer("⚠️ این متن اسمِ یک دکمهٔ منوست (احتمالاً اشتباهی زده‌ای). متنِ واقعیِ پیام را بفرست، "
+                         "یا برایِ انصراف «❌ لغو» را بزن.")
+        return
+    if not has_template_vars(template):
+        pending = (await state.get_data()).get("trust_tpl_pending")
+        if pending != template:
+            await state.update_data(trust_tpl_pending=template)
+            await msg.answer(
+                "⚠️ این متن هیچ جاگذاری‌ای (مثل <code>{product}</code> یا <code>{amount}</code>) ندارد؛ یعنی <b>هر سفارش دقیقاً "
+                "همین متنِ ثابت</b> را در کانال می‌گذارد، بدونِ نامِ محصول و مبلغ.\n\n"
+                "اگر دکمه‌ای را اشتباهی زده‌ای، «❌ لغو» را بزن. اگر واقعاً همین متن را می‌خواهی، <b>همان متن را یک‌بار دیگر بفرست</b>.",
+                parse_mode="HTML")
+            return
     # === PATCH_TRUST_TEMPLATE_PREVIEW_V1 ===
     # قبل از ذخیره، همان متن را با مقادیرِ نمونه به خودِ مالک می‌فرستیم.
     # اگر HTMLش نامعتبر باشد، همین‌جا خطا می‌گیرد — نه چند ساعت بعد که
