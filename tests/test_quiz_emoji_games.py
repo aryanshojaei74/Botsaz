@@ -153,6 +153,9 @@ async def test_new_games_create_join_settle_and_conserve_money(env, game):
     mk = env
     w, err = await W.create_wager(game, CHAT, (1, "u1", None), 10000, None, CFG)
     assert err is None and await _bal(mk, 1) == 90000
+    if game == "quiz":                                  # PATCH_QUIZ_CATS_V1: سازنده موضوع را انتخاب می‌کند
+        assert "هنوز انتخابش" in (await R.join_race(w.id, (2, "u2", None))).err
+        assert (await W.set_option(w.id, 1, "bio")).err is None
     r = await R.join_race(w.id, (2, "u2", None))
     assert r.err is None and r.w.status == "playing" and json.loads(r.w.state)
     won = await R.settle_to(w.id, 2)
@@ -165,6 +168,7 @@ async def test_new_games_create_join_settle_and_conserve_money(env, game):
 async def test_quiz_both_wrong_refunds_both_immediately(env):
     mk = env
     w, _ = await W.create_wager("quiz", CHAT, (1, "u1", None), 10000, None, CFG)
+    await W.set_option(w.id, 1, "chem")
     r = await R.join_race(w.id, (2, "u2", None))
     st = json.loads(r.w.state)
     wrong = [d for d in "1234" if d != st["a"]]
@@ -236,3 +240,73 @@ async def test_quiz_button_right_wrong_and_single_chance(monkeypatch):
     assert "فقط دو بازیکن" in answers[-1]
     await R.quiz_press(CB(20, 1), 0)                                   # دومی هم غلط ⇒ پایانِ زودهنگام
     assert ended == [1]
+
+
+# ── PATCH_QUIZ_CATS_V1: موضوعِ انتخابیِ سازنده، بدونِ تکرارِ پایدار، پیامِ گزینهٔ غلط ──
+def test_every_category_has_questions_and_picker_buttons():
+    import quiz_bank as QB
+    assert set(QB.CATS) == {"foot", "general", "bio", "chem", "cinema", "riddle"}
+    for k in QB.CATS:
+        assert len(QB.POOLS[k]) >= 20, k
+        q = QB.make_quiz(cat=k)
+        assert q["cat"] == k and len(q["opts"]) == 4 and q["opts"][int(q["a"]) - 1] == q["right"]
+    w = PlatformWager(id=7, bot_id=0, chat_id=-1, game="quiz", creator_id=10, creator_name="A", amount=1000,
+                      status="pending", state="{}")
+    t, kb = R.render_race(w)
+    cbs = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert "موضوع" in t and "pgw:o:7:foot" in cbs and "pgw:o:7:riddle" in cbs and "pgr:cancel:7" in cbs
+    assert not any(":join:" in c for c in cbs)                      # تا انتخابِ موضوع، پیوستن نیست
+
+
+def test_no_repeat_within_a_category_until_exhausted():
+    import quiz_bank as QB
+    used, seen = {}, set()
+    n = len(QB.POOLS["riddle"])
+    for _ in range(n):
+        q = QB.make_quiz(cat="riddle", used=used)
+        assert q["id"] not in seen
+        seen.add(q["id"])
+    assert len(seen) == n                                           # همهٔ سؤال‌ها یک‌بار بدونِ تکرار
+    again = QB.make_quiz(cat="riddle", used=used)                   # بعد از اتمام دورِ تازه
+    assert again["id"] in seen and len(used["riddle"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_used_questions_persist_across_games_in_the_same_chat(env, monkeypatch):
+    mk = env
+    import config
+    monkeypatch.setattr(config, "Session", mk)
+    import quiz_bank as QB
+    ids = []
+    for _ in range(3):
+        w, _e = await W.create_wager("quiz", CHAT, (1, "u1", None), 1000, None, CFG)
+        await W.set_option(w.id, 1, "foot")
+        r = await R.join_race(w.id, (2, "u2", None))
+        ids.append(json.loads(r.w.state)["id"])
+        await R.settle_to(w.id, 1)
+    assert len(set(ids)) == 3                                       # بینِ بازی‌هایِ پشت‌سرهم تکرار نشد
+    saved = await QB.load_used(0, CHAT)
+    assert set(ids) <= set(saved.get("foot", []))
+    assert json.loads(r.w.state)["cat"] == "foot"
+
+
+@pytest.mark.asyncio
+async def test_wrong_answer_message_names_the_chosen_option(monkeypatch):
+    from types import SimpleNamespace as NS
+    lv = _live("quiz", {"q": "x", "opts": ["الف", "ب", "ج", "د"], "a": "3", "right": "ج"})
+    sent = []
+
+    class Bot_:
+        async def send_message(self, chat, text, **k): sent.append(text)
+
+    async def noend(bot, wid): pass
+    monkeypatch.setattr(R, "_end_now", noend)
+
+    class CB:
+        data = "pgr:qz:1:1"
+        from_user = NS(id=10, full_name="Amir")
+        message = NS(chat=NS(id=-1))
+        bot = Bot_()
+        async def answer(self, *a, **k): pass
+    await R.quiz_press(CB(), 0)
+    assert "اشتباه زدی" in sent[0] and "گزینهٔ انتخابی: «ب»" in sent[0]

@@ -142,7 +142,7 @@ def make_pattern(rnd=secrets) -> tuple[str, str]:
     return " ، ".join(str(n) for n in shown) + " ، ؟", str(ans)
 
 
-def new_question(kind: str, scope: tuple = (0, 0)) -> dict:
+def new_question(kind: str, scope: tuple = (0, 0), cat: str | None = None, used: dict | None = None) -> dict:
     """پرسش و پاسخِ تازه برایِ هر نوع (state ذخیره‌شده در ردیفِ شرط)."""
     if kind == "guess":
         return {"n": 1 + secrets.randbelow(100), "tries": {}}
@@ -164,7 +164,7 @@ def new_question(kind: str, scope: tuple = (0, 0)) -> dict:
         return {"q": " ".join(pz["letters"]), "letters": pz["letters"], "need": pz["need"]}
     if kind == "quiz":                                  # PATCH_QUIZ_EMOJI_GAMES_V1
         import quiz_bank as QB
-        return QB.make_quiz(scope=scope)
+        return QB.make_quiz(scope=scope, cat=cat, used=used)
     if kind == "emoji":
         import quiz_bank as QB
         pz = QB.make_emoji()
@@ -275,6 +275,12 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
     wd = core.words(w.bot_id or 0)
     head = f"{wd['icon']} <b>{wd['bet']} {RACE_FA[w.game]}</b>"
     st = core._st(w)
+    if w.status == "pending" and core._needs_setup(w):          # PATCH_QUIZ_CATS_V1: سازنده موضوعِ کوییز را انتخاب می‌کند
+        _cancel = (InlineKeyboardButton(text="❌ لغو", callback_data=f"{'twr' if w.bot_id else 'pgr'}:cancel:{w.id}", style=ButtonStyle.DANGER))
+        return (f"{head}\n\n👤 سازنده: {core._who(w, w.creator_id)}\n{core._money_lines(w)}\n\n"
+                "🎛 <b>سازنده، سؤال‌هایِ کوییز از کدام موضوع باشد؟</b>\n"
+                "(فقط سازنده می‌تواند انتخاب کند؛ بعد از انتخاب، حریف می‌تواند بپیوندد.)",
+                InlineKeyboardMarkup(inline_keyboard=[*core._opt_keyboard(w), [_cancel]]))
     if w.status == "pending":
         target = (f"🎯 حریف تعیین‌شده: {_name(w.target_id, w.target_username, w.target_name)}\n"
                   if w.target_id else "👥 اولین نفری که «قبول و پیوستن» بزند حریف است.\n")
@@ -299,7 +305,9 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
             q = f"🔀 حروفِ این کلمه درهم شده؛ کلمه را بنویس:\n\n👉 <b>{_html.escape(str(st.get('q', '')))}</b>"
         elif w.game == "quiz":
             # PATCH_QUIZ_V2: در متن فقط سؤال؛ گزینه‌ها دکمهٔ شیشه‌ای‌اند و هر کس زودتر درست را بزند برنده است.
-            q = ("❓ <b>" + _html.escape(str(st.get("q", ""))) + "</b>\n\n"
+            import quiz_bank as _QB2
+            _ct = _QB2.CAT_NAME.get(st.get("cat") or "", "")
+            q = ((f"🏷 موضوع: <b>{_ct}</b>\n\n" if _ct else "") + "❓ <b>" + _html.escape(str(st.get("q", ""))) + "</b>\n\n"
                  "👇 گزینهٔ درست را بزن (هر نفر یک فرصت؛ غلط = حذف از بازی).")
             _px = "twr" if w.bot_id else "pgr"
             _qkb = InlineKeyboardMarkup(inline_keyboard=[
@@ -353,6 +361,17 @@ async def join_race(wid: int, user: tuple, bot_id: int = 0):
     """مثلِ core.join_wager، ولی با ساختِ پرسش؛ خروجی R(w, err, note)."""
     uid, uname, uuser = user
     pool = await random_pool(bot_id)           # PATCH_RANDOM_GAME_V1: پیش از باز کردنِ تراکنش
+    # PATCH_QUIZ_CATS_V1: «قبلاً پرسیده‌شده‌هایِ» کوییزِ همین گروه از دیتابیس (پایدار؛ سؤالِ تکراری نمی‌آید)
+    import quiz_bank as _QB
+    _quiz_used, _quiz_chat = None, None
+    try:
+        async with Session() as _s0:
+            _w0 = await _s0.get(PlatformWager, wid)
+        if _w0 is not None and _w0.game in ("quiz", "random"):
+            _quiz_chat = _w0.chat_id
+            _quiz_used = await _QB.load_used(bot_id, _w0.chat_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("quiz: خواندنِ سؤال‌هایِ قبلی ناموفق بود")
     async with Session() as s:
         w = await s.get(PlatformWager, wid, with_for_update=True)
         if not w or (w.bot_id or 0) != bot_id or (w.game not in RACE_GAMES and w.game != "random") or w.status != "pending":
@@ -369,6 +388,8 @@ async def join_race(wid: int, user: tuple, bot_id: int = 0):
             return core._res(err="تا تمام‌شدنِ مسابقهٔ فعلی‌ات نمی‌توانی به مسابقهٔ دیگری بپیوندی.")
         if player_race(w.chat_id, w.creator_id, bot_id):
             return core._res(err="سازندهٔ این مسابقه همین حالا در مسابقهٔ دیگری است؛ چند لحظهٔ دیگر دوباره امتحان کن.")
+        if core._needs_setup(w):                               # PATCH_QUIZ_CATS_V1: سازنده هنوز موضوعِ کوییز را انتخاب نکرده
+            return core._res(err="سازنده هنوز انتخابش را نکرده؛ چند لحظه بعد دوباره بزن.")
         free = not _money(w.amount)                            # PATCH_FREE_GAME_V1
         st0 = core._st(w)
         pfee, plimit = int(st0.get("pfee") or 0), int(st0.get("plimit") or 0)
@@ -407,7 +428,8 @@ async def join_race(wid: int, user: tuple, bot_id: int = 0):
         w.status = "playing"
         if picked:
             w.game = picked
-        st = new_question(w.game, (w.bot_id or 0, w.chat_id))
+        _cat = st0.get("opt") if w.game == "quiz" else None
+        st = new_question(w.game, (w.bot_id or 0, w.chat_id), cat=_cat, used=_quiz_used)
         if free:
             st["free"], st["pfee"], st["plimit"] = 1, pfee, plimit
         w.state = json.dumps(st, ensure_ascii=False)
@@ -415,6 +437,8 @@ async def join_race(wid: int, user: tuple, bot_id: int = 0):
         if w.game == "guess":                                  # نوبتی: قرعه برایِ نفرِ اول
             w.turn_id = secrets.choice([w.creator_id, uid])
         await s.commit()
+        if w.game == "quiz" and _quiz_used is not None and _quiz_chat is not None:
+            await _QB.save_used(bot_id, _quiz_chat, _quiz_used)          # PATCH_QUIZ_CATS_V1
         return core._res(w=w, note=(f"🎲 بازیِ تصادفی انتخاب شد: <b>{RACE_FA[picked]}</b>" if picked else None))
 
 
@@ -933,8 +957,14 @@ async def quiz_press(cb: CallbackQuery, bot_id: int = 0) -> None:
     locked.add(uid)
     await cb.answer("❌ اشتباه بود!")
     who = f'<a href="tg://user?id={uid}">{_html.escape(cb.from_user.full_name or str(uid))}</a>'
+    # PATCH_QUIZ_CATS_V1 (سینا): بگو کدام گزینه را زد
     try:
-        await cb.bot.send_message(cb.message.chat.id, f"❌ {who} اشتباه زدی و از بازی حذف شدی.", parse_mode="HTML")
+        chosen = str(((lv.get("st") or {}).get("opts") or [])[idx])
+    except Exception:  # noqa: BLE001
+        chosen = ""
+    chosen_txt = f"\nگزینهٔ انتخابی: «{_html.escape(chosen)}»" if chosen else ""
+    try:
+        await cb.bot.send_message(cb.message.chat.id, f"❌ {who} اشتباه زدی و از بازی حذف شدی.{chosen_txt}", parse_mode="HTML")
     except Exception:  # noqa: BLE001
         logger.info("quiz: wrong-answer notice skipped")
     if locked >= set(lv["players"]):

@@ -197,7 +197,7 @@ def _st(w: PlatformWager) -> dict:
 def _needs_setup(w: PlatformWager) -> bool:
     """=== PATCH_WAGER_UPGRADE_V1 === ایکس‌او و تاس تا وقتی سازنده انتخابش را نکرده (نماد / بزرگ‌تر یا کوچک‌تر)
     قابل پیوستن نیستند."""
-    return w.status == "pending" and w.game in ("xo", "dice") and not _st(w).get("opt")
+    return w.status == "pending" and w.game in ("xo", "dice", "quiz") and not _st(w).get("opt")      # PATCH_QUIZ_CATS_V1: کوییز هم موضوع
 
 
 def _xo_sym(w: PlatformWager, uid: int | None) -> str:
@@ -486,7 +486,8 @@ async def set_option(wid: int, uid: int, val: str, bot_id: int = 0):
             await _timeout_locked(s, w)
             await s.commit()
             return _res(w=w, err=_t("مهلت این {bet} تمام شده؛ مبلغ به سازنده برگشت.", bot_id))
-        if val not in {"xo": OPT_XO, "dice": OPT_DICE}.get(w.game, ()):
+        import quiz_bank as _QB                                # PATCH_QUIZ_CATS_V1
+        if val not in {"xo": OPT_XO, "dice": OPT_DICE, "quiz": tuple(_QB.CATS)}.get(w.game, ()):
             return _res(err="انتخاب نامعتبر.")
         st = _st(w)
         if st.get("opt"):
@@ -846,6 +847,10 @@ def _final_text(w: PlatformWager) -> str:
 def _opt_keyboard(w: PlatformWager) -> list[list[InlineKeyboardButton]]:
     """دکمه‌های انتخاب سازنده (فقط سازنده می‌تواند بزند)."""
     px = _px(w)
+    if w.game == "quiz":                                  # PATCH_QUIZ_CATS_V1: موضوعِ سؤال‌ها، دوتا در هر ردیف
+        import quiz_bank as _QB
+        btns = [_btn(w, title, callback_data=f"{px}:o:{w.id}:{k}", style=ButtonStyle.PRIMARY) for k, title in _QB.CATS.items()]
+        return [btns[i:i + 2] for i in range(0, len(btns), 2)]
     if w.game == "xo":
         return [[_btn(w, "❌ ضربدر (X)", callback_data=f"{px}:o:{w.id}:X", style=ButtonStyle.PRIMARY),
                  _btn(w, "⭕ دایره (O)", callback_data=f"{px}:o:{w.id}:O", style=ButtonStyle.PRIMARY)]]
