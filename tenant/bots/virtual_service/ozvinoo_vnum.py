@@ -1632,7 +1632,39 @@ def _code_kb(order_id: int, code: str, logout: bool = True) -> InlineKeyboardMar
     if logout:      # PATCH_VNUM_LOGOUT_V1
         rows.append([InlineKeyboardButton(text="🚪 خروج ربات از حساب", callback_data=f"vnum:ozlout:{order_id}",
                                           style=ButtonStyle.DANGER)])
+        # === PATCH_VNUM_REBUY_V1 === «خرید مجدد» (Nexivo): همان کشور، با تأیید قبل از کسرِ پول
+        rows.append([InlineKeyboardButton(text="🔁 خرید مجدد (همین کشور)", callback_data=f"vnum:ozrb:{order_id}",
+                                          style=ButtonStyle.SUCCESS)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@ozvinoo_router.callback_query(F.data.startswith("vnum:ozrb:"))
+async def ozv_rebuy_ask(cb: CallbackQuery, bot: Bot):
+    """قبل از خریدِ دوباره، کشور و قیمت را نشان می‌دهد؛ پول فقط با «تأیید» کسر می‌شود."""
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    if not row:
+        await cb.answer()
+        return
+    oid = _norm_int(cb.data.split(":")[-1], 0)
+    async with Session() as s:
+        order = await s.get(SmmOrder, oid)
+        country = await s.get(SmmService, order.smm_service_pk) if order and order.smm_service_pk else None
+    if (not order or order.bot_id != row.id or order.user_telegram_id != cb.from_user.id
+            or not country or not country.is_active or not str(country.service_id).startswith("ozv:")):
+        await cb.answer("این کشور دیگر فعال نیست؛ از فروشگاه شماره انتخاب کن.", show_alert=True)
+        return
+    price = int(country.sell_rate) // 1000
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"✅ تأیید و خرید ({price:,} تومان)", callback_data=f"vnum:ozbuy:{country.id}",
+                              style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="⬅️ انصراف", callback_data="vnum:ozlb", style=ButtonStyle.DANGER)],
+    ])
+    await cb.answer()
+    await cb.message.answer(
+        f"🔁 <b>خرید مجدد</b>\n\n🌍 کشور: {html.escape(country.name)}\n💰 قیمت: {price:,} تومان\n\n"
+        "با تأیید، مبلغ از کیف‌پولت کسر و یک شمارهٔ جدید برایت گرفته می‌شود.",
+        reply_markup=kb, parse_mode="HTML")
 
 
 @ozvinoo_router.callback_query(F.data.startswith("vnum:ozre:"))
