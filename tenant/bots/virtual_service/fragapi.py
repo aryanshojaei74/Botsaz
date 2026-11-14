@@ -46,7 +46,8 @@ MAX_AUTO_STARS = 5000
 MIN_STARS = 50
 # PATCH_FRAG_WALLET_PREFLIGHT_V1: زیرِ این موجودیِ TON حتی ارزان‌ترین سفارش (۵۰ ⭐) هم نمی‌شود؛ پیش از تماسِ خرید
 # سفارش به دستی برمی‌گردد و به مالک «ولت را شارژ کن» گفته می‌شود (قبلاً فقط خطایِ مبهمِ فرگمنت می‌آمد).
-MIN_WALLET_TON = 0.1
+MIN_WALLET_TON = 0.5     # فقط وقتی قیمتِ زنده در دسترس نیست (حداقل سفارش ≈ ۰٫۷ TON است)
+WALLET_MARGIN = 1.03      # ۳٪ حاشیه برایِ نوسانِ قیمت/کارمزد
 _USERNAME_RE = re.compile(r"@([A-Za-z][A-Za-z0-9_]{2,31})")
 
 # کدهایِ خطایِ مستند: این‌ها یعنی «قبل از پرداخت رد شد» (پولی خرج نشده)
@@ -164,6 +165,23 @@ def ton_balance(wallet: dict) -> float | None:
                 return float(b.get("amount"))
         if wallet.get("balance") is not None:
             return float(wallet.get("balance"))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return None
+
+
+def needed_ton(prices: dict, kind: str, qty: int = 0, months: int = 0) -> float | None:
+    """هزینهٔ تقریبیِ سفارش به TON از پاسخِ /misc/prices/ (stars[]: quantity+price، premium[]: months+price)؛ ناشناخته ⇒ None."""
+    try:
+        if kind == "stars":
+            for it in (prices.get("stars") or []):
+                if str(it.get("currency", "")).lower() == "ton":
+                    unit = float(it.get("price")) / max(1, int(it.get("quantity") or 1))
+                    return unit * int(qty)
+        else:
+            for it in (prices.get("premium") or []):
+                if str(it.get("currency", "")).lower() == "ton" and int(it.get("months") or 0) == int(months):
+                    return float(it.get("price"))
     except (TypeError, ValueError, AttributeError):
         return None
     return None
@@ -411,9 +429,17 @@ async def fulfil(bot: Bot, row, order_id: int, kind: str, *, by_admin: bool = Fa
                 _bal = ton_balance(await get_wallet(token))
             except Exception:
                 _bal = None          # استعلامِ موجودی خطا داد؛ مانعِ خرید نمی‌شود
-            if _bal is not None and _bal < MIN_WALLET_TON:
+            _need = None
+            if _bal is not None:
+                try:
+                    _need = needed_ton(await get_prices(token), kind, qty, months if kind != "stars" else 0)
+                except Exception:
+                    _need = None     # قیمتِ زنده نیامد ⇒ فقط آستانهٔ ثابت
+            _need_eff = (_need * WALLET_MARGIN) if _need else MIN_WALLET_TON
+            if _bal is not None and _bal < _need_eff:
                 await _revert(bot, row, order_id, kind,
-                              f"موجودیِ ولتِ Fragment API کم است ({_bal:.4f} TON) و برایِ این سفارش کافی نیست.\n"
+                              f"موجودیِ ولتِ Fragment API کم است ({_bal:.4f} TON) و برایِ این سفارش کافی نیست"
+                              + (f" (حدود {_need:.3f} TON لازم است)" if _need else "") + ".\n"
                               "ولتِ TONِ اتصال را در fragment-api.com/dashboard شارژ کن؛ بعد همین سفارش را دوباره «اجرایِ خودکار» بزن. "
                               "تا آن موقع سفارش‌هایِ جدید هم دستی می‌مانند.", warn=True)
                 return

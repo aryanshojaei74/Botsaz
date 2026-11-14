@@ -401,3 +401,49 @@ async def test_wallet_check_error_does_not_block_purchase(env, monkeypatch):
     oid = await mk_order(env)
     await FA.fulfil(env.bot, ROW, oid, "stars")
     assert env.calls == [("ali_x", 500)] and await status(env, oid) == "sent"
+
+
+PRICES = {"stars": [{"quantity": 1, "price": "0.0145672727", "currency": "ton"},
+                    {"quantity": 1, "price": "0.0150000000", "currency": "usdt_ton"}],
+          "premium": [{"months": 3, "price": "11.57", "currency": "ton"}, {"months": 6, "price": "15.5", "currency": "ton"},
+                      {"months": 3, "price": "11.99", "currency": "usdt_ton"}]}
+
+
+def test_needed_ton_from_real_price_shape():
+    assert abs(FA.needed_ton(PRICES, "stars", qty=50) - 0.7283636) < 1e-5
+    assert FA.needed_ton(PRICES, "premium", months=3) == 11.57 and FA.needed_ton(PRICES, "premium", months=12) is None
+    assert FA.needed_ton({}, "stars", qty=50) is None and FA.needed_ton({"stars": [{"price": "x"}]}, "stars", qty=5) is None
+
+
+@pytest.mark.asyncio
+async def test_wallet_enough_for_min_but_not_for_this_order(env, monkeypatch):
+    async def wal(token): return {"balances": [{"currency": "ton", "amount": "3"}]}
+    async def pr(token=None): return PRICES
+    async def buy(tok, u, q):
+        env.calls.append((u, q))
+        return {"id": "o1", "status": "COMPLETED"}
+    monkeypatch.setattr(FA, "get_wallet", wal)
+    monkeypatch.setattr(FA, "get_prices", pr)
+    monkeypatch.setattr(FA, "buy_stars", buy)
+    big = await mk_order(env, qty=500)          # ≈ 7.3 TON لازم، ۳ موجود
+    await FA.fulfil(env.bot, ROW, big, "stars")
+    assert env.calls == [] and await status(env, big) == "awaiting_admin"
+    assert "7.284" in env.notes[-1] and "3.0000" in env.notes[-1]
+    small = await mk_order(env, qty=100)        # ≈ 1.46 TON لازم
+    await FA.fulfil(env.bot, ROW, small, "stars")
+    assert env.calls == [("ali_x", 100)] and await status(env, small) == "sent"
+
+
+@pytest.mark.asyncio
+async def test_prices_failure_falls_back_to_fixed_threshold(env, monkeypatch):
+    async def wal(token): return {"balances": [{"currency": "ton", "amount": "0.2"}]}
+    async def pr(token=None): raise FA.FragApiError("down", 500, [])
+    async def buy(tok, u, q):
+        env.calls.append((u, q))
+        return {"id": "o1", "status": "COMPLETED"}
+    monkeypatch.setattr(FA, "get_wallet", wal)
+    monkeypatch.setattr(FA, "get_prices", pr)
+    monkeypatch.setattr(FA, "buy_stars", buy)
+    oid = await mk_order(env)
+    await FA.fulfil(env.bot, ROW, oid, "stars")
+    assert env.calls == [] and await status(env, oid) == "awaiting_admin"
