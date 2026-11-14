@@ -4776,6 +4776,11 @@ def _svc_platform_type(v: "SmmService") -> tuple[str, str]:
     همون چیزی که ادمین طیِ مسیرِ افزودن واقعاً انتخاب/تأیید کرده)؛ فقط
     اگه سرویس قدیمی‌تر از این فیچره و این دو تا خالیه، از رویِ اسم حدس
     می‌زنه (سازگاریِ عقب‌رو، نه رفتارِ پیش‌فرض)."""
+    # === PATCH_SMM_VNUM_OWN_TYPE_V1 ===
+    # کشورهای شمارهٔ مجازی همیشه یک نوعِ خودشان دارند؛ قبلاً بعضی «other» و بعضی «virtual_number»
+    # ذخیره شده بودند و هر دو «📦 سایر» نشان داده می‌شدند (دو دکمهٔ «سایر» کنارِ هم).
+    if _is_vnum_service(v):
+        return (v.platform_key or smm_api.detect_platform(v.name or "", v.category or "") or "telegram"), "virtual_number"
     if v.platform_key and v.type_key:
         return v.platform_key, v.type_key
     return (smm_api.detect_platform(v.name or "", v.category or ""),

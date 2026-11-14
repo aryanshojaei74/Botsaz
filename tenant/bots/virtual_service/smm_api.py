@@ -826,6 +826,8 @@ def service_type_label(key: str) -> str:
     # === PATCH_SMM_PROVIDER_CATEGORY_MODE_V1 ===
     if key == "__all__":
         return "📄 نمایشِ محصولات"
+    if key == "virtual_number":
+        return "📱 شمارهٔ مجازی"
     for k, label, _ in SERVICE_TYPES:
         if k == key:
             return label
