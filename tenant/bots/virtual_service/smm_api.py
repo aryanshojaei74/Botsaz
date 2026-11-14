@@ -736,8 +736,10 @@ SERVICE_TYPES = [
     # زودتر از reaction چک می‌شد، این سرویس‌ها اشتباهی زیرِ دستهٔ «ویو»
     # می‌رفتن. reaction را بالاتر آوردیم تا وقتی اسمِ سرویس صریحاً
     # «ری‌اکشن» دارد، همیشه برنده باشد.
-    ("reaction",  "❤️ ری‌اکشن",            ["reaction", "react", "ری‌اکشن", "ریکشن", "واکنش"]),
-    ("member",    "👥 ممبر / سابسکرایبر", ["member", "subscriber", "subscribe", "join", "ممبر", "عضو"]),
+    # PATCH_SMM_FA_KEYWORDS_V1: «ری اکشن» با فاصله (نه نیم‌فاصله) هم ری‌اکشن است — قبلاً «سایر» می‌شد.
+    ("reaction",  "❤️ ری‌اکشن",            ["reaction", "react", "ری‌اکشن", "ری اکشن", "ریکشن", "واکنش"]),
+    ("member",    "👥 ممبر / سابسکرایبر", ["member", "subscriber", "subscribe", "join", "ممبر", "عضو",
+                                           "اپلودر", "آپلودر", "uploader", "ادلیست", "addlist"]),
     ("follower",  "🧑‍🤝‍🧑 فالوور",          ["follower", "follow", "fans", "فالوور", "دنبال"]),
     ("view",      "👁 ویو / بازدید",       ["view", "watch", "impression", "reach", "ویو", "بازدید"]),
     ("like",      "👍 لایک",               ["like", "لایک"]),
@@ -779,6 +781,11 @@ def _detect_order() -> list:
 def detect_service_type(name: str, category: str = "") -> str:
     """کلید نوع سرویس را از روی نام/دسته تشخیص می‌دهد. پیش‌فرض: other."""
     text = f"{name} {category}".lower()
+    # PATCH_SMM_FA_KEYWORDS_V1: «فیک …» (ممبرِ فیک) اگر کلمهٔ نوعِ دیگری (فالوور/لایک/ویو/کامنت) نداشته باشد ممبر است
+    if ("فیک" in text or "fake" in text) and not any(
+            k in text for k in ("فالوور", "follower", "لایک", "like", "ویو", "view", "بازدید", "کامنت", "comment",
+                                "ری‌اکشن", "ری اکشن", "reaction")):
+        return "member"
     for key, _label, kws in SERVICE_TYPES:
         for kw in kws:
             if kw in text:

@@ -11039,12 +11039,40 @@ async def sync_category_platforms(bot_id: int, svcs: list | None = None) -> int:
     return len(changed)
 
 
+async def reclassify_other_types(svcs: list) -> int:
+    """=== PATCH_SMM_RECLASSIFY_OTHER_V1 === سرویس‌هایی که موقعِ افزودن «سایر» ذخیره شده‌اند ولی با کلیدواژه‌هایِ
+    فعلی نوعِ مشخصی دارند (مثلاً «ری اکشن»، «فیک»، «آپلودر») یک‌بار اصلاح می‌شوند. شمارهٔ مجازی و سرویس‌هایِ
+    بدونِ نوعِ ذخیره‌شده دست نمی‌خورند."""
+    changed = []
+    for v in svcs:
+        if getattr(v, "type_key", "") != "other" or _is_vnum_service(v):
+            continue
+        t = smm_api.detect_service_type(v.name or "", v.category or "")
+        if t and t != "other":
+            v.type_key = t
+            changed.append((v.id, t))
+    if changed:
+        from sqlalchemy import update as _upd
+        try:
+            async with Session() as s:
+                for vid, t in changed:
+                    await s.execute(_upd(SmmService).where(SmmService.id == vid).values(type_key=t))
+                await s.commit()
+        except Exception:
+            logger.exception("[smm] ذخیرهٔ نوعِ بازدسته‌بندی‌شده ناموفق بود")
+    return len(changed)
+
+
 async def classified_tree(bot_id: int, svcs: list) -> dict:
     """{platform: {type: [ {service, pk, name, category, platform, stype} ]}} — ترتیبِ ورودی حفظ می‌شود."""
     try:
         await sync_category_platforms(bot_id, svcs)
     except Exception:
         logger.exception("[smm] هماهنگ‌سازیِ پلتفرمِ دسته‌ها ناموفق بود")
+    try:
+        await reclassify_other_types(svcs)
+    except Exception:
+        logger.exception("[smm] بازدسته‌بندیِ «سایر» ناموفق بود")
     tree: dict[str, dict[str, list]] = {}
     for v in svcs:
         p, t = _svc_platform_type(v)
