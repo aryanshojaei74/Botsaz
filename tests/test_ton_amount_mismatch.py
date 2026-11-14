@@ -204,3 +204,24 @@ async def test_unmatched_memo_like_tx_is_logged_with_reason(env, monkeypatch, ca
     with caplog.at_level(logging.WARNING):
         assert await TD.settle_bot(5, bot) == 0
     assert any("BS111111" in r.getMessage() and "expired" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_late_expired_invoice_is_polled_and_credited(env, monkeypatch):
+    """PATCH_TON_LATE_POLL_V1: فاکتورِ تازه‌منقضی (در مهلتِ ۲۴ ساعته) هم باید در حلقه بررسی شود و واریزِ دیرهنگام شارژ شود."""
+    maker, bot, sent = env
+    async with maker() as s:
+        ch = (await s.scalars(select(models.TonDirectCharge))).first()
+        ch.status = "expired"
+        ch.expires_at = dt.datetime.utcnow() - dt.timedelta(hours=3)
+        await s.commit()
+    assert await TD.late_bot_ids() == [5]
+    _incoming(monkeypatch, "0.1", h="latetx")
+    assert await TD.settle_bot(5, bot) == 1 and await _bal(maker) == 100_000.0
+    assert await TD.late_bot_ids() == []                       # بعد از تسویه دیگر لازم نیست
+    async with maker() as s:
+        ch = (await s.scalars(select(models.TonDirectCharge))).first()
+        ch.status, ch.tx_hash = "expired", None
+        ch.expires_at = dt.datetime.utcnow() - dt.timedelta(hours=TD.LATE_GRACE_HOURS + 1)
+        await s.commit()
+    assert await TD.late_bot_ids() == []                       # خارج از مهلت ⇒ نه

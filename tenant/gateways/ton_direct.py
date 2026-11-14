@@ -546,6 +546,7 @@ async def _match_off_amount(bot_id: int, tx: dict):
 
 _MEMO_LIKE = re.compile(r"\bBS[0-9A-F]{6}\b", re.I)
 _UNMATCHED_LOGGED: set[str] = set()
+_LATE_POLL_AT = [0.0]   # PATCH_TON_LATE_POLL_V1
 
 
 async def _log_unmatched_memo(bot_id: int, tx: dict, tx_hash: str) -> None:
@@ -703,6 +704,17 @@ async def settle_bot(bot_id: int, tbot: Bot | None = None) -> int:
     return settled
 
 
+async def late_bot_ids() -> list[int]:
+    """PATCH_TON_LATE_POLL_V1: رباتی که فاکتورِ «منقضی‌شدهٔ هنوز-در-مهلتِ-دیرهنگام» و بدونِ tx دارد.
+    قبلاً فقط فاکتورِ waiting باعثِ بررسیِ زنجیره می‌شد؛ پس واریزی که بعد از ۲۰ دقیقه برسد (یا تراکنشی که اولِ کار
+    توسطِ toncenter دیده نشده) با اینکه ۲۴ ساعت مهلتِ دیرهنگام داشت، هرگز خودکار تسویه نمی‌شد."""
+    async with Session() as s:
+        late_from = _dt_late.datetime.utcnow() - _dt_late.timedelta(hours=LATE_GRACE_HOURS)
+        return list((await s.scalars(select(TonDirectCharge.bot_id).where(
+            TonDirectCharge.status == "expired", TonDirectCharge.expires_at >= late_from,
+            TonDirectCharge.tx_hash.is_(None), _ton_only()).distinct())).all())
+
+
 async def ton_direct_loop(interval: int = 60, fast_interval: int = 10):
     """زنجیره را برایِ ربات‌هایی که فاکتورِ باز دارند چک می‌کند: با فاکتورِ باز هر ~۱۰ ثانیه
     (=== PATCH_TON_DIRECT_FAST_POLL_V1 ===)، وگرنه هر دقیقه."""
@@ -726,6 +738,13 @@ async def ton_direct_loop(interval: int = 60, fast_interval: int = 10):
                     _ton_only()).distinct())).all())
             if bot_ids:
                 _sleep = fast_interval
+            # === PATCH_TON_LATE_POLL_V1 === فاکتورهایِ تازه‌منقضی هم (آهسته‌تر، هر ~۶۰ ثانیه) بررسی می‌شوند
+            import time as _t
+            if _t.monotonic() - _LATE_POLL_AT[0] >= 60:
+                _LATE_POLL_AT[0] = _t.monotonic()
+                for _lb in await late_bot_ids():
+                    if _lb not in bot_ids:
+                        bot_ids.append(_lb)
             # === PATCH_TON_DIRECT_RATE_TIMEOUT_V1 ===
             # کشِ نرخ را همین‌جا گرم نگه می‌داریم تا مسیرِ کاربر (ساختِ
             # فاکتور) تقریباً همیشه به کش بخورد و منتظرِ شبکه نماند.
