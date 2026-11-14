@@ -1,0 +1,1495 @@
+"""
+bk_admin.py — پنلِ مدیریتِ مالک/ادمین در رباتِ رزروِ حرفه‌ای (PATCH_BOOKING_V2). callbackها: bka:*
+
+داشبورد، لیستِ نوبت‌ها (انتظار/امروز/فردا/آینده)، تأیید/رد/انجام/عدم‌حضور/لغو، خدمات، پرسنل، ساعتِ کاری (+تنظیمِ سریع)،
+روزهایِ تعطیل، تنظیمات و آمار. همهٔ مراحلِ متنی با FSM.
+"""
+from __future__ import annotations
+
+import datetime as _dt
+
+from aiogram import Bot, F
+from aiogram.enums import ButtonStyle
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from sqlalchemy import func, select
+
+from config import Session
+from models import BkAppt, BkHours, BkOff, BkService, BkStaff, MainButton
+
+from tenant.bots.booking import engine as E
+from tenant.bots.booking.bk_user import STATUS_FA, _appt_card, _btn, _dur_txt, _esc, _price_txt, _show
+from tenant.bots.booking.handlers import booking_router
+
+from logging_setup import get_logger as _get_logger
+logger = _get_logger(__name__)
+
+PAGE = 8
+
+
+class BkAdm(StatesGroup):
+    chan = State()
+    sv_name = State()
+    sv_dur = State()
+    sv_price = State()
+    sv_desc = State()
+    sv_edit = State()
+    st_name = State()
+    hr_start = State()
+    hr_end = State()
+    q_start = State()
+    q_end = State()
+    of_date = State()
+    of_reason = State()
+    cfg_val = State()
+    pay_amount = State()
+    m_name = State()
+    m_phone = State()
+    m_note = State()
+    code = State()
+    cu_note = State()
+    cu_search = State()
+
+
+async def _guard(cb, bot: Bot):
+    from tenant import _owner_ok
+    return await _owner_ok(cb, bot)
+
+
+async def _guard_msg(msg: Message, bot: Bot):
+    from tenant import _owner_ok_msg
+    return await _owner_ok_msg(msg, bot)
+
+
+BACK_HOME = [_btn("⬅️ بازگشت", "bka:home", ButtonStyle.DANGER)]
+BACK_AP = [_btn("⬅️ بازگشت", "bka:ap", ButtonStyle.DANGER)]
+BACK_CAT = [_btn("⬅️ بازگشت", "bka:cat", ButtonStyle.DANGER)]
+BACK_TM = [_btn("⬅️ بازگشت", "bka:tm", ButtonStyle.DANGER)]
+PANEL_HOME = [_btn("🏠 پنل مدیریت", "tadm:menu", ButtonStyle.DANGER)]
+
+
+def _help_btn(key: str):
+    return [_btn("❓ راهنمایِ این بخش", f"bka:h:{key}", ButtonStyle.PRIMARY)]
+
+
+# ───────────────────────── خانه و زیرمنوها ─────────────────────────
+
+async def build_home(row) -> tuple[str, InlineKeyboardMarkup]:
+    """صفحهٔ اصلیِ پنلِ اختصاصیِ رزرو (متن + کیبورد). از /admin و «پنل مدیریت» هم صدا زده می‌شود."""
+    from tenant.bots.booking.loop import worker_alive
+    cfg = await E.get_cfg(row.id)
+    now = E.iran_now()
+    today, tmr = now.date().isoformat(), (now.date() + _dt.timedelta(days=1)).isoformat()
+    async with Session() as s:
+        async def cnt(*conds):
+            return int(await s.scalar(select(func.count()).select_from(BkAppt).where(BkAppt.bot_id == row.id, *conds)) or 0)
+        pending = await cnt(BkAppt.status == "pending", BkAppt.date_str >= today)
+        n_today = await cnt(BkAppt.date_str == today, BkAppt.status.in_(E.ACTIVE_STATUSES))
+        n_tmr = await cnt(BkAppt.date_str == tmr, BkAppt.status.in_(E.ACTIVE_STATUSES))
+        n_svc = int(await s.scalar(select(func.count()).select_from(BkService).where(BkService.bot_id == row.id, BkService.active.is_(True))) or 0)
+        n_hours = int(await s.scalar(select(func.count()).select_from(BkHours).where(BkHours.bot_id == row.id)) or 0)
+        n_btn = int(await s.scalar(select(func.count(func.distinct(MainButton.action))).where(
+            MainButton.bot_id == row.id, MainButton.action.in_(("book_show", "book_my", "book_track")))) or 0)
+    title = f"📅 <b>{_esc(cfg['biz_name'])}</b>" if cfg["biz_name"] else "📅 <b>پنل رزرو و نوبت‌دهی</b>"
+    text = (f"{title}\n\n🟡 در انتظار تأیید: <b>{pending}</b>\n📅 امروز: <b>{n_today}</b> نوبت · فردا: <b>{n_tmr}</b>\n"
+            f"💈 خدماتِ فعال: <b>{n_svc}</b>")
+    todo = []
+    if not n_svc:
+        todo.append("➕ یک «خدمت» اضافه کن (💈 خدمات و پرسنل)")
+    if not n_hours:
+        todo.append("🕘 «ساعت کاری» را تنظیم کن (🕘 زمان‌بندی)")
+    if n_btn == 0:
+        todo.append("🧩 دکمهٔ «نوبت‌گیری» را به منویِ ربات اضافه کن (دکمهٔ پایین)")
+    if todo:
+        text += "\n\n⚠️ <b>برایِ شروع:</b>\n" + "\n".join(todo)
+    if (cfg["remind1"] or cfg["remind2"]) and not await worker_alive():
+        text += "\n\n🔕 <b>یادآوریِ خودکار موقتاً غیرفعال است</b> (سرویسِ یادآوری بالا نیست). به پشتیبانیِ بات‌ساز خبر بده."
+    rows = [
+        [_btn(f"📋 نوبت‌ها ({pending} در انتظار)" if pending else "📋 نوبت‌ها", "bka:ap", ButtonStyle.SUCCESS if pending else ButtonStyle.PRIMARY),
+         _btn("👤 مشتریان و پرونده‌ها", "bka:cu:0", ButtonStyle.PRIMARY)],
+        [_btn("💈 خدمات و پرسنل", "bka:cat", ButtonStyle.PRIMARY), _btn("🕘 زمان‌بندی", "bka:tm", ButtonStyle.PRIMARY)],
+        [_btn("💰 مالی", "bka:fin", ButtonStyle.PRIMARY), _btn("📊 گزارش‌ها", "bka:stats", ButtonStyle.PRIMARY)],
+        [_btn("⚙️ تنظیمات", "bka:cfg", ButtonStyle.PRIMARY), _btn("🧰 ابزارهایِ عمومیِ ربات", "bka:gen", ButtonStyle.PRIMARY)],
+    ]
+    if n_btn < 3:
+        rows.append([_btn("🧩 افزودنِ دکمه‌هایِ رزرو به منویِ ربات (نوبت‌گیری، نوبت‌هایِ من، پیگیری)", "bka:seedbtn", ButtonStyle.SUCCESS)])
+    rows.append(_help_btn("home"))
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def home_kb(row) -> InlineKeyboardMarkup:
+    return (await build_home(row))[1]
+
+
+async def bk_dashboard(cb, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    _LAST_CAT.pop((row.id, cb.from_user.id), None)
+    text, kb = await build_home(row)
+    await _show(cb, text, kb.inline_keyboard)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data == "bka:home")
+async def bka_home(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    await state.clear()
+    await bk_dashboard(cb, bot)
+
+
+@booking_router.callback_query(F.data.startswith("bka:h:"))
+async def bka_help(cb: CallbackQuery, bot: Bot):
+    if not await _guard(cb, bot):
+        return
+    from tenant.bots.booking.bk_help import help_text
+    key = cb.data.split(":")[2]
+    back = {"home": "bka:home", "ap": "bka:ap", "cat": "bka:cat", "tm": "bka:tm", "cu": "bka:cu:0", "fin": "bka:fin",
+            "cfg": "bka:cfg", "rep": "bka:stats", "dep": "bka:dep", "chan": "bka:chan", "gen": "bka:gen"}.get(key, "bka:home")
+    await _show(cb, help_text(key), [[_btn("⬅️ بازگشت", back, ButtonStyle.DANGER)]])
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data == "bka:ap")
+async def bka_hub_appts(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    if not await _guard(cb, bot):
+        return
+    await state.clear()
+    rows = [[_btn("➕ ثبتِ نوبتِ دستی (حضوری/تلفنی)", "bka:m", ButtonStyle.SUCCESS)],
+            [_btn("🔎 جستجو با کدِ پیگیری", "bka:code", ButtonStyle.PRIMARY)],
+            [_btn("🟡 در انتظار تأیید", "bka:l:pend:0", ButtonStyle.SUCCESS)],
+            [_btn("📅 امروز", "bka:l:today:0", ButtonStyle.PRIMARY), _btn("🗓 فردا", "bka:l:tmr:0", ButtonStyle.PRIMARY)],
+            [_btn("🔜 همهٔ نوبت‌هایِ آینده", "bka:l:up:0", ButtonStyle.PRIMARY)],
+            _help_btn("ap"), BACK_HOME]
+    await _show(cb, "📋 <b>نوبت‌ها</b>\nکدام لیست را ببینی؟", rows)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data == "bka:cat")
+async def bka_hub_catalog(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    if not await _guard(cb, bot):
+        return
+    await state.clear()
+    rows = [[_btn("💈 خدمات", "bka:sv", ButtonStyle.PRIMARY), _btn("👥 پرسنل", "bka:st", ButtonStyle.PRIMARY)],
+            _help_btn("cat"), BACK_HOME]
+    await _show(cb, "💈 <b>خدمات و پرسنل</b>\nچه کاری و توسطِ چه کسی انجام می‌شود:", rows)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data == "bka:tm")
+async def bka_hub_time(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    if not await _guard(cb, bot):
+        return
+    await state.clear()
+    rows = [[_btn("🕘 ساعتِ کاری", "bka:hr", ButtonStyle.PRIMARY), _btn("🚫 روزهایِ تعطیل", "bka:of", ButtonStyle.PRIMARY)],
+            _help_btn("tm"), BACK_HOME]
+    await _show(cb, "🕘 <b>زمان‌بندی</b>\nچه روز و ساعتی نوبت می‌گیری:", rows)
+    await cb.answer()
+
+
+# ─── ابزارهایِ عمومی (PATCH_BOOKING_TOOLS_HUB_V1): دسته‌بندی‌شده؛ همه از همان قابلیت‌هایِ سایرِ ربات‌ها ───
+GEN_CATS = [
+    ("pay", "💳 پرداخت و کارت", "شماره کارت، درگاه‌ها، کیف پول، کد تخفیفِ خرید، کانالِ رسیدها و لاگِ تراکنش‌ها"),
+    ("ui", "🎨 ظاهر و منو", "دکمه‌هایِ صفحهٔ اصلی، خوش‌آمدگویی، نوعِ منو (شیشه‌ای/کیبوردی)، رنگ‌ها"),
+    ("promo", "🎁 تخفیف و پاداش", "کدِ تخفیف، هدیهٔ ورود، پاداشِ دعوت، نظرسنجی"),
+    ("usr", "👥 کاربران و پیام‌ها", "مدیریتِ کاربران، پیامِ همگانی، تیکت‌ها، عضویتِ اجباری، ادمین‌ها، پنلِ پیامکی"),
+    ("rep", "📊 گزارش و اعلان", "گزارشِ فروش، اطلاعِ خریدِ خودکار، ورودِ کاربرِ جدید"),
+    ("bot", "⚙️ مدیریتِ ربات", "خاموش/روشن، بک‌آپِ کامل، تنظیماتِ گروه، آنتی‌اسپم"),
+]
+_GEN_MAP = {
+    "pay": ("set:card", "set:zarinpal", "set:zibal", "set:crypto", "set:swap", "set:tonpays", "set:hesabpay", "set:ton_direct",
+            "set:coin_direct", "set:stars", "set:auto_approve_toggle", "set:wallet_pay_toggle", "set:wallet_charge_toggle",
+            "set:card_purchase_toggle", "set:discount_purchase_toggle", "set:toggle_payphone", "gwname:menu", "gwl:menu",
+            "wlim:menu", "tadm:receiptchannel", "tadm:orders", "tadm:payguide", "tadm:bulkwallet", "set:wallet_receipt_buttons",
+            "set:uniquepay", "set:hooshpay", "set:frenzyex", "set:blupal", "set:apay", "set:abangateway", "wcode:menu", "set:txlog"),
+    "ui": ("tadm:homebtns", "tadm:btn_colors", "set:welcome", "set:startreact", "vso:menu", "set:menu_mode", "set:nav_kb_only",
+           "set:nav_prev", "set:homemenutext", "pemj:menu:0", "thst:menu"),
+    "promo": ("tadm:discounts", "tadm:welcomebonus", "tadm:chgbonus", "tadm:firstbuy", "set:ref_reward", "rpt:menu", "set:productrating", "dga:menu"),
+    "usr": ("tadm:users", "tadm:broadcast", "tadm:polls", "psms:menu", "set:kyc", "supp:contact", "set:phonelog"),
+    "rep": ("tadm:stats", "tadm:buyinfo:today:0", "pst:menu", "tadm:trustreport", "tc:settings"),
+    "bot": ("set:bot_toggle", "set:paused_text", "tadm:backup:menu", "set:antispam", "tadm:chpost", "miniapp:panel", "miniapp:nft", "tadm:groupsettings"),
+}
+_GEN_PREFIX = {   # مواردی که callbackشان پارامتر دارد یا وضعیت‌دار است
+    "pay": ("tadm:txlog", "tadm:txch", "set:txlog"),
+    "usr": ("tadm:tickets", "tadm:ticket", "tadm:admins", "tadm:support", "tadm:forcejoin", "tadm:fj", "set:admin"),
+    "rep": ("set:purchase_notify", "set:new_user_notify", "set:notify"),
+    "bot": ("tadm:group", "set:group", "grp:"),
+}
+
+
+# توضیحِ کوتاهِ هر ابزار برایِ ادمین (در صفحهٔ هر دسته زیرِ عنوان نمایش داده می‌شود)
+GEN_DESC = {
+    "set:card": "شمارهٔ کارت و نامِ صاحبش را ثبت می‌کنی تا کاربر کیف پولش را کارت‌به‌کارت شارژ کند.",
+    "set:zarinpal": "اتصالِ درگاهِ زرین‌پال با مرچنت‌کدِ خودت برایِ شارژِ آنلاینِ کیف پول.",
+    "set:zibal": "اتصالِ درگاهِ زیبال با مرچنتِ خودت.",
+    "set:crypto": "پرداختِ ارزِ دیجیتال (NOWPayments).",
+    "set:swap": "درگاهِ سواپ‌ولت (SwapPay).",
+    "set:tonpays": "درگاهِ تون‌پیز.",
+    "set:coin_direct": "دریافتِ مستقیمِ تون/ترون/تتر در کیف پولِ خودت.",
+    "set:stars": "پرداخت با استارزِ تلگرام.",
+    "set:uniquepay": "درگاهِ یونیک‌پی.",
+    "set:hooshpay": "درگاهِ هوش‌پی: کارت‌به‌کارتِ آنی با تأییدِ خودکار.",
+    "set:blupal": "درگاهِ بلوپال: کارت‌به‌کارتِ خودکار.",
+    "set:frenzyex": "درگاهِ فرنزی‌اکس: کارت‌به‌کارت + کریپتو (ویژهٔ حرفه‌ای).",
+    "set:apay": "درگاهِ آپی: کارت‌به‌کارتِ آنی (بدونِ دخالتِ دستی).",
+    "set:abangateway": "درگاهِ آبان گیت‌وی.",
+    "gwname:menu": "اسمی که کاربر روی دکمهٔ هر درگاه می‌بیند را عوض می‌کنی.",
+    "gwl:menu": "نام و ترتیبِ دکمه‌هایِ روش‌هایِ پرداخت را تغییر می‌دهی (جابه‌جایی).",
+    "wlim:menu": "حداقل و حداکثرِ مبلغِ واریز برایِ هر درگاه.",
+    "tadm:receiptchannel": "رسیدهایِ کارت‌به‌کارت در این کانال می‌آید تا از همان‌جا تأیید/رد کنی.",
+    "set:txlog": "کانالی که گزارشِ همهٔ تراکنش‌ها (شارژ، پرداخت، بازگشت) در آن ثبت می‌شود.",
+    "set:auto_approve_toggle": "روشن: رسیدهایِ معتبر خودکار تأیید می‌شوند؛ خاموش: خودت تأیید می‌کنی.",
+    "set:wallet_pay_toggle": "اجازه می‌دهد کاربر بیعانه/خرید را از موجودیِ کیف پولش بپردازد.",
+    "set:wallet_charge_toggle": "دکمهٔ «شارژ کیف پول» را در صفحهٔ پرداخت نشان می‌دهد.",
+    "set:card_purchase_toggle": "پرداختِ کارت‌به‌کارت در فاکتورِ خرید را فعال/غیرفعال می‌کنی.",
+    "set:discount_purchase_toggle": "دکمهٔ «استفاده از کد تخفیف» را در خرید نشان می‌دهد یا پنهان می‌کند.",
+    "set:toggle_payphone": "قبل از پرداخت، تأییدِ شمارهٔ موبایلِ کاربر لازم می‌شود.",
+    "tadm:orders": "فهرستِ سفارش‌ها و رسیدهایِ در انتظار.",
+    "set:wallet_receipt_buttons": "دکمه‌هایی که زیرِ پیامِ تأییدِ واریز برایِ کاربر نشان داده می‌شود.",
+    "tadm:payguide": "متنِ راهنمای پرداخت که به کاربر نشان داده می‌شود.",
+    "tadm:bulkwallet": "شارژ یا کسرِ گروهیِ کیف پولِ کاربران.",
+    "wcode:menu": "ساختِ کدِ شارژ که کاربر وارد کند و اعتبار بگیرد.",
+    "tadm:homebtns": "افزودن، حذف، ویرایش و چیدمانِ دکمه‌هایِ صفحهٔ اصلی (نام، ردیف، عملکرد).",
+    "tadm:btn_colors": "رنگِ دکمه‌هایِ شیشه‌ایِ منو.",
+    "set:welcome": "متنِ پیامِ خوش‌آمدگویی که با /start می‌آید.",
+    "set:startreact": "ری‌اکشنِ ایموجی روی پیامِ استارتِ کاربر.",
+    "vso:menu": "ورودِ حرفه‌ای: قوانین + خوش‌آمدگویی که کاربر باید بپذیرد.",
+    "set:menu_mode": "منوی کاربر را بینِ «شیشه‌ای» (زیرِ پیام) و «کیبوردی» (پایین صفحه) عوض می‌کنی.",
+    "set:nav_kb_only": "در منوی کیبوردی، دکمه‌هایِ بازگشت فقط در کیبورد بیایند.",
+    "set:nav_prev": "دکمهٔ «بازگشت به منوی قبل» را روشن/خاموش می‌کنی.",
+    "set:homemenutext": "متنی که هنگامِ بازگشت به صفحهٔ اصلی نشان داده می‌شود.",
+    "pemj:menu:0": "ایموجیِ پرمیوم کنارِ متن‌ها و دکمه‌ها.",
+    "thst:menu": "استیکر در استارت و دکمه‌ها.",
+    "tadm:discounts": "ساخت و مدیریتِ کدهایِ تخفیف (درصدی/مبلغی، سقف، انقضا).",
+    "tadm:firstbuy": "تخفیفِ خودکار برایِ اولین خریدِ هر کاربر.",
+    "tadm:welcomebonus": "هدیهٔ ورود: اعتبارِ رایگان برایِ کاربرانِ جدید.",
+    "tadm:chgbonus": "درصدی بونوس هنگامِ شارژِ کیف پول.",
+    "set:ref_reward": "پاداشِ دعوتِ دوستان به ربات (تومان).",
+    "rpt:menu": "امتیازدهی به دعوت‌کننده‌ها.",
+    "set:productrating": "نظرسنجیِ رضایت بعد از خدمت/خرید.",
+    "dga:menu": "بازیِ شانسی با جایزه برایِ کاربران.",
+    "tadm:users": "جستجوی کاربر با آیدیِ عددی/یوزرنیم: کیف پول، شارژها، کارت‌به‌کارت‌ها، سفارش‌ها؛ شارژ/کسر و مسدودسازی.",
+    "tadm:broadcast": "ارسالِ پیامِ همگانی (متن/عکس) به همهٔ کاربرانِ ربات.",
+    "tadm:polls": "ساختِ نظرسنجی برایِ کاربران.",
+    "psms:menu": "اتصالِ پنلِ پیامکی (کاوه‌نگار، sms.ir، ملی‌پیامک) برایِ تأییدِ شمارهٔ کاربر با کد.",
+    "set:kyc": "احرازِ هویتِ کاربران پیش از پرداخت.",
+    "supp:contact": "آیدیِ مستقیمِ پشتیبانی که به کاربر نشان داده می‌شود.",
+    "set:phonelog": "کانالی که شمارهٔ کاربرانِ جدید در آن ثبت می‌شود.",
+    "tadm:admins": "افزودن/حذفِ ادمین‌هایِ پشتیبان که می‌توانند نوبت‌ها و کاربران را مدیریت کنند.",
+    "tadm:tickets": "پیام‌ها و تیکت‌هایِ کاربران؛ پاسخ از همین‌جا.",
+    "tadm:forcejoin": "کاربر باید در کانال/گروه‌هایِ تعیین‌شده عضو باشد تا از ربات استفاده کند.",
+    "tadm:buyinfo:today:0": "گزارشِ کلیِ فروش و تراکنش‌هایِ ربات به‌تفکیکِ روز.",
+    "tadm:stats": "آمارِ کلیِ ربات: کاربران، فروش، فعالیت.",
+    "pst:menu": "آمارِ زمانیِ سفارش، شارژ و زیرمجموعه‌ها.",
+    "tadm:trustreport": "کانالِ اعتمادسازی: گزارشِ عمومیِ فروش برایِ نمایشِ اعتبار.",
+    "tc:settings": "جدولِ نفراتِ برتر.",
+    "tadm:pnotify_toggle": "با هر خرید/پرداخت، به ادمین‌ها پیام می‌آید (روشن/خاموش).",
+    "tadm:newuser_notify_toggle": "با ورودِ هر کاربرِ جدید، اطلاعاتش به ادمین‌ها می‌آید (روشن/خاموش).",
+    "set:bot_toggle": "خاموش/روشنِ کاملِ ربات؛ برایِ زمانِ تعمیر یا بررسی. هنگامِ خاموشی کاربران متنِ «خاموش بودن» را می‌بینند.",
+    "set:paused_text": "متنی که هنگامِ خاموش بودنِ ربات به کاربر نشان داده می‌شود.",
+    "tadm:backup:menu": "بک‌آپِ کاملِ ربات (تنظیمات، دکمه‌ها، کاربران، نوبت‌ها) و بازگردانی.",
+    "set:antispam": "جلوگیری از اسپم و ارسالِ پشت‌سرهمِ کاربران.",
+    "tadm:chpost": "ارسالِ پست به کانال/گروه با دکمهٔ لینک.",
+    "miniapp:panel": "مینی‌اپِ فروشگاهیِ ربات.",
+    "tadm:groupsettings": "اتصالِ ربات به گروه و تنظیماتِ آن (کیف پولِ گروهی، دستورها).",
+}
+
+
+def _gen_cat_of(label: str, cb: str) -> str:
+    for key, cbs in _GEN_MAP.items():
+        if cb in cbs:
+            return key
+    for key, pre in _GEN_PREFIX.items():
+        if cb.startswith(pre):
+            return key
+    if "لاگ" in label:
+        return "pay"
+    if any(w in label for w in ("تیکت", "پشتیبان", "ادمین", "عضویت", "اجباری", "کانال")):
+        return "usr"
+    if any(w in label for w in ("اطلاع", "آمار", "گزارش")):
+        return "rep"
+    if "گروه" in label:
+        return "bot"
+    return "bot"
+
+
+async def _gen_items(row) -> list[tuple[str, str]]:
+    from tenant import tools_inline_items
+    items = await tools_inline_items(row.id, row.plan, row.status == "paused")
+    if row.plan in ("growth", "pro") and not any(c == "tadm:groupsettings" for _l, c in items):
+        items = items + [("⚙️ تنظیماتِ گروه (اتصال به گروه)", "tadm:groupsettings")]
+    seen, out = set(), []
+    for lbl, cb in items:
+        if cb in seen or cb.startswith(("tadm:sec:", "set:hub_")):
+            continue
+        seen.add(cb)
+        out.append((lbl, cb))
+    return out
+
+
+# آخرین دسته‌ایِ ابزارها که هر ادمین باز کرده — تا دکمهٔ «بازگشت»ِ صفحه‌هایِ عمومی دقیقاً به همان دسته برگردد
+_LAST_CAT: dict[tuple[int, int], str] = {}
+
+
+async def _render_hub(cb, row):
+    items = await _gen_items(row)
+    counts: dict[str, int] = {}
+    for lbl, c in items:
+        k = _gen_cat_of(lbl, c)
+        counts[k] = counts.get(k, 0) + 1
+    rows, lines = [], []
+    for key, title, desc in GEN_CATS:
+        if not counts.get(key):
+            continue
+        rows.append([_btn(f"{title} ({counts[key]})", f"bka:gc:{key}", ButtonStyle.PRIMARY)])
+        lines.append(f"{title} — {desc}")
+    rows.append(_help_btn("gen"))
+    rows.append([_btn("📅 بازگشت به پنلِ رزرو", "bka:home", ButtonStyle.SUCCESS)])
+    await _show(cb, "🧰 <b>ابزارهایِ عمومیِ ربات</b>\nتنظیماتِ مشترکِ ربات، دسته‌بندی‌شده:\n\n" + "\n".join(lines), rows)
+
+
+async def _render_cat(cb, row, key: str) -> bool:
+    title = next((t for k, t, _d in GEN_CATS if k == key), "🧰 ابزارها")
+    sel = [(lbl, c) for lbl, c in await _gen_items(row) if _gen_cat_of(lbl, c) == key]
+    if not sel:
+        return False
+    rows = [[_btn(lbl, c, ButtonStyle.PRIMARY)] for lbl, c in sel]
+    rows.append(_help_btn("gen"))
+    rows.append([_btn("⬅️ بازگشت به ابزارها", "bka:gen", ButtonStyle.DANGER)])
+    intro = next((d for k, _t, d in GEN_CATS if k == key), "")
+    lines = [f"<b>{title}</b>", intro, ""]
+    for lbl, c in sel:
+        d = GEN_DESC.get(c)
+        if d:
+            lines.append(f"▫️ <b>{_esc(lbl.split(':')[0].strip())}</b>: {d}")
+    await _show(cb, "\n".join(lines), rows)
+    return True
+
+
+async def reopen_tools(cb: CallbackQuery, bot: Bot, home_if_none: bool = True):
+    """بازگشت از صفحه‌هایِ عمومی (tadm:menu / tadm:sec:*): به همان دسته‌ایِ ابزارها که ادمین از آن آمده بود؛
+    اگر چیزی به یاد نبود ⇒ صفحهٔ اصلیِ ابزارها (یا پنلِ رزرو)."""
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    key = _LAST_CAT.get((row.id, cb.from_user.id))
+    if key and await _render_cat(cb, row, key):
+        return await cb.answer()
+    if home_if_none:
+        return await bk_dashboard(cb, bot)
+    await _render_hub(cb, row)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data == "bka:gen")
+async def bka_generic_tools(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """ابزارهایِ عمومیِ ربات، دسته‌بندی‌شده تا قاطی نباشد (کارت/درگاه، منو، تخفیف، کاربران، گزارش، مدیریت)."""
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    _LAST_CAT.pop((row.id, cb.from_user.id), None)
+    await _render_hub(cb, row)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data.startswith("bka:gc:"))
+async def bka_generic_cat(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    key = cb.data.split(":")[2]
+    if not await _render_cat(cb, row, key):
+        await cb.answer("در این دسته موردی برایِ پلنِ فعلیِ ربات نیست.", show_alert=True)
+        return
+    _LAST_CAT[(row.id, cb.from_user.id)] = key
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data == "bka:seedbtn")
+async def bka_seed_buttons(cb: CallbackQuery, bot: Bot):
+    """دو دکمهٔ «📅 نوبت‌گیری» و «🗓 نوبت‌های من» را (اگر نیستند) به منویِ اصلی اضافه می‌کند."""
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    async with Session() as s:
+        have = {b.action for b in (await s.scalars(select(MainButton).where(MainButton.bot_id == row.id))).all()}
+        top = int(await s.scalar(select(func.coalesce(func.max(MainButton.row), -1)).where(MainButton.bot_id == row.id)) or -1)
+        added = 0
+        for action, label, color in (("book_show", "📅 نوبت‌گیری", "success"), ("book_my", "🗓 نوبت‌های من", "primary"),
+                                     ("book_track", "🔎 پیگیری نوبت", "primary")):
+            if action in have:
+                continue
+            added += 1
+            s.add(MainButton(bot_id=row.id, row=top + 1, col=added - 1, label=label, action=action, color=color))
+        await s.commit()
+    await cb.answer("دکمه‌ها به منو اضافه شد ✅" if added else "دکمه‌ها از قبل هست.", show_alert=True)
+    await bk_dashboard(cb, bot)
+
+
+# ───────────────────────── نوبت‌ها ─────────────────────────
+
+LIST_TITLES = {"pend": "🟡 در انتظار تأیید", "today": "📅 نوبت‌هایِ امروز", "tmr": "🗓 نوبت‌هایِ فردا", "up": "🔜 نوبت‌هایِ آینده"}
+
+
+@booking_router.callback_query(F.data.startswith("bka:l:"))
+async def bka_list(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    _, _, kind, page = cb.data.split(":")
+    page = int(page)
+    now = E.iran_now()
+    today, tmr = now.date().isoformat(), (now.date() + _dt.timedelta(days=1)).isoformat()
+    q = select(BkAppt).where(BkAppt.bot_id == row.id)
+    if kind == "pend":
+        q = q.where(BkAppt.status == "pending", BkAppt.date_str >= today)
+    elif kind == "today":
+        q = q.where(BkAppt.date_str == today, BkAppt.status.in_(E.ACTIVE_STATUSES + ("done", "noshow")))
+    elif kind == "tmr":
+        q = q.where(BkAppt.date_str == tmr, BkAppt.status.in_(E.ACTIVE_STATUSES))
+    else:
+        q = q.where(BkAppt.date_str >= today, BkAppt.status.in_(E.ACTIVE_STATUSES))
+    async with Session() as s:
+        total = int(await s.scalar(select(func.count()).select_from(q.subquery())) or 0)
+        aps = (await s.scalars(q.order_by(BkAppt.date_str, BkAppt.start_min).offset(page * PAGE).limit(PAGE))).all()
+    if not aps:
+        await _show(cb, f"{LIST_TITLES.get(kind, '')}\n\n📭 موردی نیست.", [BACK_AP])
+        return await cb.answer()
+    rows = []
+    for a in aps:
+        d = _dt.date.fromisoformat(a.date_str)
+        icon = STATUS_FA.get(a.status, "")[:2]
+        rows.append([_btn(f"{icon} #{E.appt_code(a)} · {E.fa_date(d)} {E.fmt_hm(a.start_min)} · {a.customer_name or '—'} · {a.service_name}",
+                          f"bka:a:{a.id}:{kind}:{page}", ButtonStyle.PRIMARY)])
+    nav = []
+    if page > 0:
+        nav.append(_btn("⬅️ قبلی", f"bka:l:{kind}:{page - 1}"))
+    if (page + 1) * PAGE < total:
+        nav.append(_btn("بعدی ➡️", f"bka:l:{kind}:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    rows.append(BACK_AP)
+    await _show(cb, f"{LIST_TITLES.get(kind, '')} — {total} مورد", rows)
+    await cb.answer()
+
+
+def _admin_card(a: BkAppt, paid: int = 0) -> str:
+    link = E.tg_link_html(a.tg_id)
+    t = f"📌 <b>نوبت #{E.appt_code(a)}</b>\n\n{_appt_card(a)}\n\n👤 {_esc(a.customer_name)}\n📱 <code>{_esc(a.phone)}</code>\n🔗 {link}"
+    if a.price or paid:
+        left = max(int(a.price or 0) - int(paid), 0)
+        t += f"\n💵 پرداخت‌شده: <b>{int(paid):,}</b> از {int(a.price or 0):,} تومان" + (f" — مانده: <b>{left:,}</b>" if left else " ✅")
+    if a.note:
+        t += f"\n📝 {_esc(a.note)}"
+    if a.cancel_reason:
+        t += f"\n🗒 {_esc(a.cancel_reason)}"
+    return t
+
+
+async def _appt_actions(a: BkAppt, kind: str = "up", page: int = 0) -> list[list]:
+    rows = []
+    if a.status == "pending":
+        rows.append([_btn("✅ تأیید", f"bka:ok:{a.id}", ButtonStyle.SUCCESS), _btn("❌ رد", f"bka:no:{a.id}", ButtonStyle.DANGER)])
+    if a.status == "confirmed":
+        rows.append([_btn("✔️ انجام شد", f"bka:done:{a.id}", ButtonStyle.SUCCESS), _btn("⚠️ نیامد", f"bka:ns:{a.id}", ButtonStyle.DANGER)])
+    if a.status in ("confirmed", "done"):
+        rows.append([_btn("💵 ثبتِ پرداخت", f"bka:pay:{a.id}", ButtonStyle.PRIMARY)])
+    if a.status in E.ACTIVE_STATUSES:
+        rows.append([_btn("🚫 لغوِ نوبت (توسطِ مجموعه)", f"bka:cx:{a.id}", ButtonStyle.DANGER)])
+    rows.append([_btn("⬅️ بازگشت", f"bka:l:{kind}:{page}", ButtonStyle.DANGER)])
+    return rows
+
+
+@booking_router.callback_query(F.data.startswith("bka:a:"))
+async def bka_view(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    parts = cb.data.split(":")
+    async with Session() as s:
+        a = await s.get(BkAppt, int(parts[2]))
+    if not a or a.bot_id != row.id:
+        return await cb.answer("پیدا نشد", show_alert=True)
+    await _show(cb, _admin_card(a, await E.paid_of(row.id, a.id)), await _appt_actions(a, parts[3] if len(parts) > 3 else "up", int(parts[4]) if len(parts) > 4 else 0))
+    await cb.answer()
+
+
+async def _tell_customer(bot: Bot, a: BkAppt, text: str):
+    if not E.has_telegram(a.tg_id):          # مشتریِ ثبتِ دستی: تلگرام ندارد
+        return
+    try:
+        await bot.send_message(a.tg_id, text, parse_mode="HTML")
+    except Exception:      # noqa: BLE001
+        logger.info("bk: پیام به مشتری نرسید (tg=%s)", a.tg_id)
+
+
+_ACTIONS = {
+    "ok": ("confirmed", ("pending",), "✅ نوبت تأیید شد.",
+           "✅ <b>نوبتت تأیید شد!</b>\n\n{card}"),
+    "no": ("rejected", ("pending",), "❌ نوبت رد شد.",
+           "😔 متأسفانه نوبتت <b>تأیید نشد</b>. لطفاً زمانِ دیگری انتخاب کن.\n\n{card}"),
+    "done": ("done", ("confirmed",), "✔️ ثبت شد: انجام‌شده.", None),
+    "ns": ("noshow", ("confirmed",), "⚠️ ثبت شد: عدم حضور.", None),
+    "cx": ("cancelled", E.ACTIVE_STATUSES, "🚫 نوبت لغو شد.",
+           "ℹ️ نوبتِ شما توسطِ مجموعه <b>لغو</b> شد؛ برایِ هماهنگی با مجموعه تماس بگیرید.\n\n{card}"),
+}
+
+
+@booking_router.callback_query(F.data.regexp(r"^bka:(ok|no|done|ns|cx):\d+$"))
+async def bka_act(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    _, act, aid = cb.data.split(":")
+    status, only_from, toast, note = _ACTIONS[act]
+    reason = {"cx": "لغو توسطِ مجموعه", "no": "ردشده توسطِ مجموعه"}.get(act)
+    a = await E.set_status(row.id, int(aid), status, reason, only_from=only_from)
+    if not a:
+        return await cb.answer("این نوبت قبلاً تعیین‌تکلیف شده یا پیدا نشد.", show_alert=True)
+    refund_line = ""
+    if act in ("no", "cx"):                      # رد/لغوِ مجموعه ⇒ بیعانه کامل برمی‌گردد (اتمی و idempotent)
+        refunded = await E.refund_deposit(row.id, a.id, await E.get_cfg(row.id), force_full=True)
+        if refunded:
+            refund_line = f"\n\n💳 بیعانهٔ <b>{refunded:,}</b> تومان به کیف پولت برگشت."
+            toast += f" (بیعانهٔ {refunded:,} تومان برگشت)"
+    if note:
+        await _tell_customer(bot, a, note.format(card=_appt_card(a)) + refund_line)
+    await cb.answer(toast)
+    if await _is_appt_channel(row.id, cb):
+        who = cb.from_user.full_name if cb.from_user else ""
+        try:
+            await cb.message.edit_text(_admin_card(a, await E.paid_of(row.id, a.id)) + f"\n\n{toast} — توسط {_esc(who)}",
+                                       parse_mode="HTML", reply_markup=None)
+        except Exception:      # noqa: BLE001
+            logger.debug("ویرایشِ پیامِ کانال ممکن نشد")
+        return
+    await _show(cb, _admin_card(a, await E.paid_of(row.id, a.id)), await _appt_actions(a))
+
+
+# ───────────────────────── خدمات ─────────────────────────
+
+@booking_router.callback_query(F.data == "bka:sv")
+async def bka_services(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    svcs = await E.list_services(row.id, only_active=False)
+    rows = [[_btn(f"{'🟢' if sv.active else '⚪️'} {sv.name} · {_dur_txt(sv.duration_min)} · {_price_txt(sv.price)}", f"bka:sv:{sv.id}", ButtonStyle.PRIMARY)]
+            for sv in svcs]
+    rows.append([_btn("➕ خدمتِ جدید", "bka:sva", ButtonStyle.SUCCESS)])
+    rows.append(_help_btn("cat"))
+    rows.append(BACK_CAT)
+    await _show(cb, "💈 <b>خدمات</b>\nروی هر خدمت بزن تا ویرایش کنی:" if svcs else "💈 <b>خدمات</b>\n\nهنوز خدمتی ثبت نشده.", rows)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data == "bka:sva")
+async def bka_sv_add(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    if not await _guard(cb, bot):
+        return
+    await state.set_state(BkAdm.sv_name)
+    await cb.message.answer("💈 <b>نامِ خدمت</b> را بفرست (مثلاً «کوتاهی مو» یا «ویزیتِ عمومی»):", parse_mode="HTML")
+    await cb.answer()
+
+
+@booking_router.message(BkAdm.sv_name, F.text)
+async def bka_sv_name(msg: Message, bot: Bot, state: FSMContext):
+    if not await _guard_msg(msg, bot):
+        return
+    name = (msg.text or "").strip()
+    if not (2 <= len(name) <= 100):
+        return await msg.answer("نام ۲ تا ۱۰۰ نویسه باشد.")
+    await state.update_data(sv_name=name)
+    await state.set_state(BkAdm.sv_dur)
+    await msg.answer("⏱ <b>مدتِ خدمت</b> چند دقیقه است؟ (مثلاً <code>30</code> یا <code>90</code>)", parse_mode="HTML")
+
+
+def _num(msg_text: str) -> int | None:
+    t = E.to_en_digits(msg_text or "").replace(",", "").replace("٬", "").strip()
+    return int(t) if t.isdigit() else None
+
+
+@booking_router.message(BkAdm.sv_dur, F.text)
+async def bka_sv_dur(msg: Message, bot: Bot, state: FSMContext):
+    if not await _guard_msg(msg, bot):
+        return
+    n = _num(msg.text)
+    if not n or not (5 <= n <= 600):
+        return await msg.answer("عددِ دقیقه (۵ تا ۶۰۰) بفرست.")
+    await state.update_data(sv_dur=n)
+    await state.set_state(BkAdm.sv_price)
+    await msg.answer("💰 <b>قیمت</b> به تومان؟ (<code>0</code> = توافقی)", parse_mode="HTML")
+
+
+@booking_router.message(BkAdm.sv_price, F.text)
+async def bka_sv_price(msg: Message, bot: Bot, state: FSMContext):
+    if not await _guard_msg(msg, bot):
+        return
+    n = _num(msg.text)
+    if n is None or n > 1_000_000_000:
+        return await msg.answer("فقط عدد (تومان) بفرست؛ ۰ = توافقی.")
+    await state.update_data(sv_price=n)
+    await state.set_state(BkAdm.sv_desc)
+    await msg.answer("📝 یک <b>توضیحِ کوتاه</b> برایِ خدمت بنویس (یا <code>-</code> برایِ بدونِ توضیح):", parse_mode="HTML")
+
+
+@booking_router.message(BkAdm.sv_desc, F.text)
+async def bka_sv_desc(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard_msg(msg, bot)
+    if not row:
+        return
+    data = await state.get_data()
+    await state.clear()
+    desc = (msg.text or "").strip()
+    async with Session() as s:
+        sv = BkService(bot_id=row.id, name=data["sv_name"], duration_min=int(data["sv_dur"]), price=int(data["sv_price"]),
+                       description=None if desc in ("-", "—", "") else desc[:300])
+        s.add(sv)
+        await s.commit()
+    await msg.answer(f"✅ خدمتِ «{_esc(sv.name)}» اضافه شد.", parse_mode="HTML",
+                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_btn("💈 خدمات", "bka:sv", ButtonStyle.PRIMARY)], BACK_CAT]))
+
+
+@booking_router.callback_query(F.data.regexp(r"^bka:sv:\d+$"))
+async def bka_sv_view(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    async with Session() as s:
+        sv = await s.get(BkService, int(cb.data.split(":")[2]))
+    if not sv or sv.bot_id != row.id:
+        return await cb.answer("پیدا نشد", show_alert=True)
+    text = (f"💈 <b>{_esc(sv.name)}</b>\n⏱ {_dur_txt(sv.duration_min)}\n💰 {_price_txt(sv.price)}\n"
+            f"{'🟢 فعال' if sv.active else '⚪️ غیرفعال'}" + (f"\n📝 {_esc(sv.description)}" if sv.description else ""))
+    rows = [[_btn("✏️ نام", f"bka:sve:{sv.id}:name"), _btn("⏱ مدت", f"bka:sve:{sv.id}:dur")],
+            [_btn("💰 قیمت", f"bka:sve:{sv.id}:price"), _btn("📝 توضیح", f"bka:sve:{sv.id}:desc")],
+            [_btn("⚪️ غیرفعال‌کردن" if sv.active else "🟢 فعال‌کردن", f"bka:svt:{sv.id}", ButtonStyle.PRIMARY),
+             _btn("🗑 حذف", f"bka:svd:{sv.id}", ButtonStyle.DANGER)],
+            [_btn("⬅️ بازگشت", "bka:sv", ButtonStyle.DANGER)]]
+    await _show(cb, text, rows)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data.startswith("bka:svt:"))
+async def bka_sv_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    async with Session() as s:
+        sv = await s.get(BkService, int(cb.data.split(":")[2]))
+        if sv and sv.bot_id == row.id:
+            sv.active = not sv.active
+            await s.commit()
+    await bka_sv_view(cb, bot)
+
+
+@booking_router.callback_query(F.data.startswith("bka:svd:"))
+async def bka_sv_del(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    parts = cb.data.split(":")
+    sid = int(parts[2])
+    if len(parts) == 3:
+        return await _show(cb, "❓ این خدمت حذف شود؟ (نوبت‌هایِ قبلی می‌مانند)",
+                           [[_btn("✅ بله، حذف", f"bka:svd:{sid}:y", ButtonStyle.DANGER)], [_btn("⬅️ نه", f"bka:sv:{sid}", ButtonStyle.PRIMARY)]])
+    async with Session() as s:
+        sv = await s.get(BkService, sid)
+        if sv and sv.bot_id == row.id:
+            await s.delete(sv)
+            await s.commit()
+    await cb.answer("حذف شد")
+    await _services_after_delete(cb, bot)
+
+
+async def _services_after_delete(cb, bot):
+    row = await _guard(cb, bot)
+    svcs = await E.list_services(row.id, only_active=False)
+    rows = [[_btn(f"{'🟢' if sv.active else '⚪️'} {sv.name} · {_dur_txt(sv.duration_min)}", f"bka:sv:{sv.id}", ButtonStyle.PRIMARY)] for sv in svcs]
+    rows += [[_btn("➕ خدمتِ جدید", "bka:sva", ButtonStyle.SUCCESS)], BACK_CAT]
+    await _show(cb, "💈 <b>خدمات</b>", rows)
+
+
+_EDIT_PROMPT = {"name": "✏️ نامِ جدید را بفرست:", "dur": "⏱ مدتِ جدید (دقیقه):", "price": "💰 قیمتِ جدید (تومان؛ ۰ = توافقی):",
+                "desc": "📝 توضیحِ جدید (یا <code>-</code> برایِ حذف):"}
+
+
+@booking_router.callback_query(F.data.startswith("bka:sve:"))
+async def bka_sv_edit(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    if not await _guard(cb, bot):
+        return
+    _, _, sid, fld = cb.data.split(":")
+    await state.set_state(BkAdm.sv_edit)
+    await state.update_data(sid=int(sid), fld=fld)
+    await cb.message.answer(_EDIT_PROMPT[fld], parse_mode="HTML")
+    await cb.answer()
+
+
+@booking_router.message(BkAdm.sv_edit, F.text)
+async def bka_sv_edit_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard_msg(msg, bot)
+    if not row:
+        return
+    data = await state.get_data()
+    fld, txt = data["fld"], (msg.text or "").strip()
+    async with Session() as s:
+        sv = await s.get(BkService, int(data["sid"]))
+        if not sv or sv.bot_id != row.id:
+            await state.clear()
+            return await msg.answer("پیدا نشد.")
+        if fld == "name":
+            if not (2 <= len(txt) <= 100):
+                return await msg.answer("نام ۲ تا ۱۰۰ نویسه باشد.")
+            sv.name = txt
+        elif fld == "dur":
+            n = _num(txt)
+            if not n or not (5 <= n <= 600):
+                return await msg.answer("عددِ دقیقه (۵ تا ۶۰۰) بفرست.")
+            sv.duration_min = n
+        elif fld == "price":
+            n = _num(txt)
+            if n is None or n > 1_000_000_000:
+                return await msg.answer("فقط عدد بفرست.")
+            sv.price = n
+        else:
+            sv.description = None if txt in ("-", "—") else txt[:300]
+        await s.commit()
+    await state.clear()
+    await msg.answer("✅ ذخیره شد.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_btn("💈 خدمات", "bka:sv", ButtonStyle.PRIMARY)], BACK_CAT]))
+
+
+# ───────────────────────── پرسنل ─────────────────────────
+
+@booking_router.callback_query(F.data == "bka:st")
+async def bka_staff(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    cfg = await E.get_cfg(row.id)
+    staff = await E.list_staff(row.id, only_active=False)
+    rows = [[_btn(f"{'🟢' if st.active else '⚪️'} {st.name}", f"bka:st:{st.id}", ButtonStyle.PRIMARY)] for st in staff]
+    rows.append([_btn("➕ پرسنلِ جدید", "bka:sta", ButtonStyle.SUCCESS)])
+    rows.append([_btn("✅ انتخابِ پرسنل توسطِ مشتری: روشن (زدن = خاموش)" if cfg["use_staff"]
+                      else "⬜️ انتخابِ پرسنل توسطِ مشتری: خاموش (زدن = روشن)", "bka:cfgt:bk_use_staff", ButtonStyle.PRIMARY)])
+    rows.append(_help_btn("cat"))
+    rows.append(BACK_CAT)
+    await _show(cb, "👥 <b>پرسنل</b>\n\nاگر مجموعهٔ تو چند متخصص دارد، آن‌ها را اضافه کن و «انتخابِ پرسنل» را روشن کن؛ "
+                    "هر نفر می‌تواند ساعتِ کاریِ اختصاصی و خدماتِ مخصوصِ خودش را داشته باشد. اگر تنها هستی، لازم نیست.", rows)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data == "bka:sta")
+async def bka_staff_add(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    if not await _guard(cb, bot):
+        return
+    await state.set_state(BkAdm.st_name)
+    await cb.message.answer("👤 نامِ پرسنل را بفرست:")
+    await cb.answer()
+
+
+@booking_router.message(BkAdm.st_name, F.text)
+async def bka_staff_name(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard_msg(msg, bot)
+    if not row:
+        return
+    name = (msg.text or "").strip()
+    if not (2 <= len(name) <= 60):
+        return await msg.answer("نام ۲ تا ۶۰ نویسه باشد.")
+    await state.clear()
+    async with Session() as s:
+        st = BkStaff(bot_id=row.id, name=name)
+        s.add(st)
+        await s.commit()
+    await msg.answer(f"✅ «{_esc(name)}» اضافه شد. حالا می‌توانی خدماتش را مشخص کنی.", parse_mode="HTML",
+                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_btn("👥 پرسنل", "bka:st", ButtonStyle.PRIMARY)]]))
+
+
+@booking_router.callback_query(F.data.regexp(r"^bka:st:\d+$"))
+async def bka_staff_view(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    sid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        st = await s.get(BkStaff, sid)
+    if not st or st.bot_id != row.id:
+        return await cb.answer("پیدا نشد", show_alert=True)
+    svcs = await E.list_services(row.id)
+    rows = []
+    for sv in svcs:
+        on = E.staff_does(st, sv.id) and bool(st.service_ids)
+        rows.append([_btn(f"{'✅' if on else '⬜️'} {sv.name}", f"bka:stsv:{sid}:{sv.id}")])
+    rows.append([_btn("🔁 همهٔ خدمات (پیش‌فرض)", f"bka:stsv:{sid}:0")])
+    rows.append([_btn("🕘 ساعتِ کاریِ اختصاصی", f"bka:hrs:{sid}", ButtonStyle.PRIMARY)])
+    rows.append([_btn("⚪️ غیرفعال" if st.active else "🟢 فعال", f"bka:stt:{sid}", ButtonStyle.PRIMARY), _btn("🗑 حذف", f"bka:std:{sid}", ButtonStyle.DANGER)])
+    rows.append([_btn("⬅️ بازگشت", "bka:st", ButtonStyle.DANGER)])
+    await _show(cb, f"👤 <b>{_esc(st.name)}</b>\nخدماتی که انجام می‌دهد (خالی = همه):", rows)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data.startswith("bka:stsv:"))
+async def bka_staff_svc(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    _, _, sid, vid = cb.data.split(":")
+    async with Session() as s:
+        st = await s.get(BkStaff, int(sid))
+        if st and st.bot_id == row.id:
+            if int(vid) == 0:
+                st.service_ids = None
+            else:
+                ids = {int(x) for x in (st.service_ids or "").split(",") if x.strip().isdigit()}
+                ids ^= {int(vid)}
+                st.service_ids = ",".join(str(i) for i in sorted(ids)) or None
+            await s.commit()
+    await bka_staff_view(cb, bot)
+
+
+@booking_router.callback_query(F.data.startswith("bka:stt:"))
+async def bka_staff_toggle(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    async with Session() as s:
+        st = await s.get(BkStaff, int(cb.data.split(":")[2]))
+        if st and st.bot_id == row.id:
+            st.active = not st.active
+            await s.commit()
+    await bka_staff_view(cb, bot)
+
+
+@booking_router.callback_query(F.data.startswith("bka:std:"))
+async def bka_staff_del(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    parts = cb.data.split(":")
+    sid = int(parts[2])
+    if len(parts) == 3:
+        return await _show(cb, "❓ این پرسنل حذف شود؟",
+                           [[_btn("✅ بله", f"bka:std:{sid}:y", ButtonStyle.DANGER)], [_btn("⬅️ نه", f"bka:st:{sid}", ButtonStyle.PRIMARY)]])
+    async with Session() as s:
+        st = await s.get(BkStaff, sid)
+        if st and st.bot_id == row.id:
+            await s.delete(st)
+            for h in (await s.scalars(select(BkHours).where(BkHours.bot_id == row.id, BkHours.staff_id == sid))).all():
+                await s.delete(h)
+            await s.commit()
+    await cb.answer("حذف شد")
+    await _show(cb, "👥 پرسنل حذف شد.", [[_btn("👥 پرسنل", "bka:st", ButtonStyle.PRIMARY)], BACK_CAT])
+
+
+# ───────────────────────── ساعتِ کاری ─────────────────────────
+# staff_id=0 ⇒ کلِ مجموعه؛ bka:hr (مجموعه) / bka:hrs:{staff} (پرسنل)
+
+async def _hours_text(bot_id: int, staff_id: int) -> str:
+    async with Session() as s:
+        hs = (await s.scalars(select(BkHours).where(BkHours.bot_id == bot_id, BkHours.staff_id == staff_id)
+                              .order_by(BkHours.weekday, BkHours.start_min))).all()
+    by: dict[int, list[str]] = {}
+    for h in hs:
+        by.setdefault(h.weekday, []).append(f"{E.fmt_hm(h.start_min)}–{E.fmt_hm(h.end_min)}")
+    lines = [f"{E.WEEKDAY_FA[i]}: " + ("، ".join(by[i]) if i in by else "تعطیل") for i in range(7)]
+    return "\n".join(lines)
+
+
+async def _hours_home(cb, staff_id: int, bot_id: int):
+    who = "کلِ مجموعه" if not staff_id else "این پرسنل"
+    text = f"🕘 <b>ساعتِ کاری — {who}</b>\n\n{await _hours_text(bot_id, staff_id)}\n\nبرایِ ویرایشِ یک روز روی آن بزن:"
+    rows = [[_btn(f"⚡️ تنظیمِ سریع (چند روز با هم)", f"bka:hq:{staff_id}", ButtonStyle.SUCCESS)]]
+    line = []
+    for i in range(7):
+        line.append(_btn(E.WEEKDAY_FA[i], f"bka:hd:{staff_id}:{i}", ButtonStyle.PRIMARY))
+        if len(line) == 3:
+            rows.append(line)
+            line = []
+    if line:
+        rows.append(line)
+    rows.append(_help_btn("tm"))
+    rows.append([_btn("⬅️ بازگشت", f"bka:st:{staff_id}" if staff_id else "bka:tm", ButtonStyle.DANGER)])
+    await _show(cb, text, rows)
+
+
+@booking_router.callback_query(F.data == "bka:hr")
+async def bka_hours(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    await _hours_home(cb, 0, row.id)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data.startswith("bka:hrs:"))
+async def bka_hours_staff(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    await _hours_home(cb, int(cb.data.split(":")[2]), row.id)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data.startswith("bka:hd:"))
+async def bka_hours_day(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    _, _, stf, wd = cb.data.split(":")
+    stf, wd = int(stf), int(wd)
+    async with Session() as s:
+        hs = (await s.scalars(select(BkHours).where(BkHours.bot_id == row.id, BkHours.staff_id == stf, BkHours.weekday == wd)
+                              .order_by(BkHours.start_min))).all()
+    rows = [[_btn(f"🗑 {E.fmt_hm(h.start_min)}–{E.fmt_hm(h.end_min)}", f"bka:hx:{h.id}:{stf}:{wd}", ButtonStyle.DANGER)] for h in hs]
+    rows.append([_btn("➕ افزودنِ بازه (برایِ استراحت دو بازه بگذار)", f"bka:ha:{stf}:{wd}", ButtonStyle.SUCCESS)])
+    if hs:
+        rows.append([_btn("🧹 تعطیل‌کردنِ این روز", f"bka:hc:{stf}:{wd}", ButtonStyle.DANGER)])
+    rows.append([_btn("⬅️ بازگشت", f"bka:hrs:{stf}" if stf else "bka:hr", ButtonStyle.DANGER)])
+    await _show(cb, f"🕘 <b>{E.WEEKDAY_FA[wd]}</b>\n" + ("\n".join(f"{E.fmt_hm(h.start_min)}–{E.fmt_hm(h.end_min)}" for h in hs) or "تعطیل"), rows)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data.startswith("bka:hx:"))
+async def bka_hours_del(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    _, _, hid, stf, wd = cb.data.split(":")
+    async with Session() as s:
+        h = await s.get(BkHours, int(hid))
+        if h and h.bot_id == row.id:
+            await s.delete(h)
+            await s.commit()
+    await bka_hours_day(_CbData(cb, f"bka:hd:{stf}:{wd}"), bot, state)
+
+
+class _CbData:
+    def __init__(self, cb, data):
+        self.from_user, self.message, self.data = cb.from_user, cb.message, data
+        self._cb = cb
+
+    async def answer(self, *a, **k):
+        return await self._cb.answer(*a, **k)
+
+
+@booking_router.callback_query(F.data.startswith("bka:hc:"))
+async def bka_hours_clear(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    _, _, stf, wd = cb.data.split(":")
+    async with Session() as s:
+        for h in (await s.scalars(select(BkHours).where(BkHours.bot_id == row.id, BkHours.staff_id == int(stf), BkHours.weekday == int(wd)))).all():
+            await s.delete(h)
+        await s.commit()
+    await bka_hours_day(_CbData(cb, f"bka:hd:{stf}:{wd}"), bot, state)
+
+
+@booking_router.callback_query(F.data.startswith("bka:ha:"))
+async def bka_hours_add(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    if not await _guard(cb, bot):
+        return
+    _, _, stf, wd = cb.data.split(":")
+    await state.set_state(BkAdm.hr_start)
+    await state.update_data(stf=int(stf), wd=int(wd))
+    await cb.message.answer("🕘 <b>ساعتِ شروع</b> را بفرست (مثلاً <code>09:00</code>):", parse_mode="HTML")
+    await cb.answer()
+
+
+@booking_router.message(BkAdm.hr_start, F.text)
+async def bka_hours_start(msg: Message, bot: Bot, state: FSMContext):
+    if not await _guard_msg(msg, bot):
+        return
+    m = E.parse_hm(msg.text)
+    if m is None or m >= 24 * 60:
+        return await msg.answer("ساعت نامعتبر؛ مثل <code>09:00</code> بفرست.", parse_mode="HTML")
+    await state.update_data(hs=m)
+    await state.set_state(BkAdm.hr_end)
+    await msg.answer("🕔 <b>ساعتِ پایان</b> را بفرست (مثلاً <code>17:00</code>):", parse_mode="HTML")
+
+
+@booking_router.message(BkAdm.hr_end, F.text)
+async def bka_hours_end(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard_msg(msg, bot)
+    if not row:
+        return
+    data = await state.get_data()
+    m = E.parse_hm(msg.text)
+    if m is None or m <= int(data["hs"]):
+        return await msg.answer("پایان باید بعد از شروع باشد؛ دوباره بفرست.")
+    async with Session() as s:
+        s.add(BkHours(bot_id=row.id, staff_id=int(data["stf"]), weekday=int(data["wd"]), start_min=int(data["hs"]), end_min=m))
+        await s.commit()
+    await state.clear()
+    stf, wd = int(data["stf"]), int(data["wd"])
+    await msg.answer(f"✅ {E.WEEKDAY_FA[wd]}: {E.fmt_hm(int(data['hs']))}–{E.fmt_hm(m)} اضافه شد.",
+                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_btn("🕘 ساعت کاری", f"bka:hrs:{stf}" if stf else "bka:hr", ButtonStyle.PRIMARY)]]))
+
+
+# تنظیمِ سریع: چند روز با یک بازه
+QUICK = {"a": ("شنبه تا چهارشنبه", [0, 1, 2, 3, 4]), "b": ("شنبه تا پنج‌شنبه", [0, 1, 2, 3, 4, 5]), "c": ("همهٔ روزها", [0, 1, 2, 3, 4, 5, 6])}
+
+
+@booking_router.callback_query(F.data.startswith("bka:hq:"))
+async def bka_hours_quick(cb: CallbackQuery, bot: Bot):
+    if not await _guard(cb, bot):
+        return
+    stf = cb.data.split(":")[2]
+    rows = [[_btn(f"{lbl}", f"bka:hqs:{stf}:{k}", ButtonStyle.PRIMARY)] for k, (lbl, _d) in QUICK.items()]
+    rows.append([_btn("⬅️ بازگشت", f"bka:hrs:{stf}" if int(stf) else "bka:hr", ButtonStyle.DANGER)])
+    await _show(cb, "⚡️ <b>تنظیمِ سریع</b>\nروزهایِ کاری کدام‌اند؟ (برنامهٔ قبلیِ همین روزها جایگزین می‌شود)", rows)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data.startswith("bka:hqs:"))
+async def bka_hours_quick_days(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    if not await _guard(cb, bot):
+        return
+    _, _, stf, k = cb.data.split(":")
+    await state.set_state(BkAdm.q_start)
+    await state.update_data(stf=int(stf), qk=k)
+    await cb.message.answer(f"🕘 {QUICK[k][0]} — <b>ساعتِ شروع</b> (مثلاً <code>09:00</code>):", parse_mode="HTML")
+    await cb.answer()
+
+
+@booking_router.message(BkAdm.q_start, F.text)
+async def bka_quick_start(msg: Message, bot: Bot, state: FSMContext):
+    if not await _guard_msg(msg, bot):
+        return
+    m = E.parse_hm(msg.text)
+    if m is None or m >= 24 * 60:
+        return await msg.answer("ساعت نامعتبر؛ مثل <code>09:00</code> بفرست.", parse_mode="HTML")
+    await state.update_data(hs=m)
+    await state.set_state(BkAdm.q_end)
+    await msg.answer("🕔 <b>ساعتِ پایان</b> (مثلاً <code>17:00</code>):", parse_mode="HTML")
+
+
+@booking_router.message(BkAdm.q_end, F.text)
+async def bka_quick_end(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard_msg(msg, bot)
+    if not row:
+        return
+    data = await state.get_data()
+    m = E.parse_hm(msg.text)
+    if m is None or m <= int(data["hs"]):
+        return await msg.answer("پایان باید بعد از شروع باشد؛ دوباره بفرست.")
+    days = QUICK[data["qk"]][1]
+    stf = int(data["stf"])
+    async with Session() as s:
+        # «ویرایشِ درجا» به‌جایِ حذف و ساختِ دوباره: ردیفِ موجودِ هر روز به‌روز می‌شود، ردیفِ اضافه (استراحت) حذف و فقط
+        # برایِ روزهایِ بدونِ ردیف ردیفِ تازه ساخته می‌شود (سریع‌تر و بدونِ تغییرِ شناسه‌ها).
+        existing: dict[int, list] = {}
+        for h in (await s.scalars(select(BkHours).where(BkHours.bot_id == row.id, BkHours.staff_id == stf, BkHours.weekday.in_(days))
+                                  .order_by(BkHours.weekday, BkHours.id))).all():
+            existing.setdefault(h.weekday, []).append(h)
+        for wd in days:
+            rows_ = existing.get(wd, [])
+            if rows_:
+                rows_[0].start_min, rows_[0].end_min = int(data["hs"]), m
+                for extra in rows_[1:]:
+                    await s.delete(extra)
+            else:
+                s.add(BkHours(bot_id=row.id, staff_id=stf, weekday=wd, start_min=int(data["hs"]), end_min=m))
+        await s.commit()
+    await state.clear()
+    await msg.answer(f"✅ {QUICK[data['qk']][0]}: {E.fmt_hm(int(data['hs']))}–{E.fmt_hm(m)} تنظیم شد.\n"
+                     "برایِ استراحتِ بینِ ساعت (مثلاً ناهار) روزِ مورد نظر را باز کن و دو بازه بگذار.",
+                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_btn("🕘 ساعت کاری", f"bka:hrs:{stf}" if stf else "bka:hr", ButtonStyle.PRIMARY)]]))
+
+
+# ───────────────────────── روزهایِ تعطیل ─────────────────────────
+
+@booking_router.callback_query(F.data == "bka:of")
+async def bka_offs(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    today = E.iran_now().date().isoformat()
+    async with Session() as s:
+        offs = (await s.scalars(select(BkOff).where(BkOff.bot_id == row.id, BkOff.staff_id == 0, BkOff.date_str >= today)
+                                .order_by(BkOff.date_str).limit(20))).all()
+    rows = [[_btn(f"🗑 {E.fa_date(_dt.date.fromisoformat(o.date_str))}" + (f" — {o.reason}" if o.reason else ""), f"bka:ofx:{o.id}", ButtonStyle.DANGER)]
+            for o in offs]
+    rows.append([_btn("➕ تعطیلیِ جدید", "bka:ofa", ButtonStyle.SUCCESS)])
+    rows.append(_help_btn("tm"))
+    rows.append(BACK_TM)
+    await _show(cb, "🚫 <b>روزهایِ تعطیل</b>\nدر این روزها هیچ نوبتی گرفته نمی‌شود. برایِ حذف روی هر مورد بزن:" if offs
+                else "🚫 <b>روزهایِ تعطیل</b>\n\nتعطیلیِ ثبت‌شده‌ای نیست.", rows)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data == "bka:ofa")
+async def bka_off_add(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    if not await _guard(cb, bot):
+        return
+    await state.set_state(BkAdm.of_date)
+    await cb.message.answer("📅 <b>تاریخِ شمسی</b> را بفرست (مثلاً <code>1405/09/01</code> یا <code>09/01</code>):", parse_mode="HTML")
+    await cb.answer()
+
+
+@booking_router.message(BkAdm.of_date, F.text)
+async def bka_off_date(msg: Message, bot: Bot, state: FSMContext):
+    if not await _guard_msg(msg, bot):
+        return
+    d = E.parse_fa_date(msg.text)
+    if not d or d < E.iran_now().date():
+        return await msg.answer("تاریخ نامعتبر یا گذشته است؛ مثل <code>1405/09/01</code> بفرست.", parse_mode="HTML")
+    await state.update_data(od=d.isoformat())
+    await state.set_state(BkAdm.of_reason)
+    await msg.answer("📝 دلیل (اختیاری، مثلاً «تعطیلِ رسمی») یا <code>-</code>:", parse_mode="HTML")
+
+
+@booking_router.message(BkAdm.of_reason, F.text)
+async def bka_off_reason(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard_msg(msg, bot)
+    if not row:
+        return
+    data = await state.get_data()
+    reason = (msg.text or "").strip()
+    async with Session() as s:
+        s.add(BkOff(bot_id=row.id, staff_id=0, date_str=data["od"], reason=None if reason in ("-", "—") else reason[:100]))
+        await s.commit()
+    await state.clear()
+    # هشدار اگر نوبتِ فعال در آن روز هست
+    async with Session() as s:
+        n = int(await s.scalar(select(func.count()).select_from(BkAppt).where(
+            BkAppt.bot_id == row.id, BkAppt.date_str == data["od"], BkAppt.status.in_(E.ACTIVE_STATUSES))) or 0)
+    warn = f"\n\n⚠️ <b>{n}</b> نوبتِ فعال در این روز هست؛ آن‌ها خودکار لغو نمی‌شوند، دستی با مشتری هماهنگ کن." if n else ""
+    await msg.answer(f"✅ {E.fa_date(_dt.date.fromisoformat(data['od']))} تعطیل شد.{warn}", parse_mode="HTML",
+                     reply_markup=InlineKeyboardMarkup(inline_keyboard=[[_btn("🚫 روزهایِ تعطیل", "bka:of", ButtonStyle.PRIMARY)]]))
+
+
+@booking_router.callback_query(F.data.startswith("bka:ofx:"))
+async def bka_off_del(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    async with Session() as s:
+        o = await s.get(BkOff, int(cb.data.split(":")[2]))
+        if o and o.bot_id == row.id:
+            await s.delete(o)
+            await s.commit()
+    await bka_offs(cb, bot, state)
+
+
+# ───────────────────────── تنظیمات ─────────────────────────
+
+_TOGGLES = {"bk_auto_confirm": ("تأییدِ خودکارِ نوبت‌ها", "نوبت‌ها بدونِ تأییدِ شما قطعی می‌شوند", "هر نوبت باید توسطِ شما تأیید شود"),
+            "bk_use_staff": ("انتخابِ پرسنل توسطِ مشتری", "مشتری پرسنل انتخاب می‌کند", "بدونِ پرسنل (یک مجموعه)")}
+_NUMS = {"bk_deposit_value": ("مقدارِ بیعانه (تومان؛ در حالتِ درصدی: ۱ تا ۱۰۰)", "مثلاً 100000 یا 30"),
+         "bk_refund_hours": ("بازگشتِ بیعانه در لغوِ مشتری تا چند ساعت قبل از نوبت", "مثلاً 24"),
+         "bk_hold_min": ("مهلتِ پرداختِ بیعانه (دقیقه)", "مثلاً 15"),
+         "bk_slot_step": ("فاصلهٔ شروعِ نوبت‌ها (دقیقه)", "مثلاً 30"),
+         "bk_lead_min": ("حداقل فاصلهٔ رزرو تا شروعِ نوبت (دقیقه)", "مثلاً 60"),
+         "bk_days_ahead": ("تا چند روزِ آینده قابلِ رزرو باشد", "مثلاً 14"),
+         "bk_cancel_hours": ("مهلتِ لغو توسطِ مشتری (ساعت قبل از نوبت)", "مثلاً 12"),
+         "bk_remind1_h": ("یادآوریِ اول (ساعت قبل؛ ۰ = خاموش)", "مثلاً 24"),
+         "bk_remind2_h": ("یادآوریِ دوم (ساعت قبل؛ ۰ = خاموش)", "مثلاً 2")}
+_TEXTS = {"bk_biz_name": "نامِ مجموعه", "bk_biz_address": "آدرس", "bk_biz_phone": "تلفنِ تماس", "bk_welcome": "پیامِ خوش‌آمد (بالایِ لیستِ خدمات)"}
+
+
+@booking_router.callback_query(F.data == "bka:cfg")
+async def bka_cfg(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    cfg = await E.get_cfg(row.id)
+    rows = [[_btn(("✅ " if cfg["auto_confirm"] else "⬜️ ") + "تأییدِ خودکارِ نوبت‌ها", "bka:cfgt:bk_auto_confirm", ButtonStyle.PRIMARY)],
+            [_btn(("✅ " if cfg["use_staff"] else "⬜️ ") + "انتخابِ پرسنل توسطِ مشتری", "bka:cfgt:bk_use_staff", ButtonStyle.PRIMARY)]]
+    cur = {"bk_deposit_value": cfg["dep_value"], "bk_refund_hours": cfg["refund_h"], "bk_hold_min": cfg["hold_min"], "bk_slot_step": cfg["step"], "bk_lead_min": cfg["lead"], "bk_days_ahead": cfg["days_ahead"], "bk_cancel_hours": cfg["cancel_h"],
+           "bk_remind1_h": cfg["remind1"], "bk_remind2_h": cfg["remind2"]}
+    for k, (lbl, _ex) in _NUMS.items():
+        if k in ("bk_deposit_value", "bk_refund_hours", "bk_hold_min"):
+            continue                      # این‌ها در صفحهٔ «💳 بیعانه» هستند
+        rows.append([_btn(f"{lbl}: {cur[k]}", f"bka:cfgv:{k}")])
+    for k, lbl in _TEXTS.items():
+        have = {"bk_biz_name": cfg["biz_name"], "bk_biz_address": cfg["biz_address"], "bk_biz_phone": cfg["biz_phone"], "bk_welcome": cfg["welcome"]}[k]
+        rows.append([_btn(f"{'✅' if have else '➕'} {lbl}", f"bka:cfgv:{k}")])
+    rows.insert(2, [_btn("💳 بیعانه (پیش‌پرداخت از کیف پول)", "bka:dep", ButtonStyle.SUCCESS)])
+    rows.insert(3, [_btn("📡 کانالِ تأییدِ نوبت‌ها", "bka:chan", ButtonStyle.PRIMARY)])
+    rows.insert(4, [_btn("📆 سیستمِ تاریخِ ربات: " + ("میلادی" if cfg["cal"] == "gregorian" else "شمسی (جلالی)") + " — بزن تغییر کند",
+                         "bka:cal", ButtonStyle.PRIMARY)])
+    rows.append(_help_btn("cfg"))
+    rows.append(BACK_HOME)
+    await _show(cb, "⚙️ <b>تنظیمات رزرو</b>\nروی هر مورد بزن تا تغییر دهی:", rows)
+    await cb.answer()
+
+
+async def _is_appt_channel(bot_id: int, cb: CallbackQuery) -> bool:
+    from tenant import get_setting
+    ch = (await get_setting(bot_id, "bk_appt_channel", "")).strip()
+    return bool(ch) and cb.message is not None and str(cb.message.chat.id) == ch
+
+
+async def _chan_screen(cb_or_msg, row, note: str = ""):
+    from tenant import get_setting
+    ch = (await get_setting(row.id, "bk_appt_channel", "")).strip()
+    rows = [[_btn("🔗 اتصال/تغییرِ کانال", "bka:chan:set", ButtonStyle.SUCCESS)]]
+    if ch:
+        rows += [[_btn("🧪 ارسالِ پیامِ آزمایشی", "bka:chan:test", ButtonStyle.PRIMARY)],
+                 [_btn("🗑 قطعِ اتصال", "bka:chan:off", ButtonStyle.DANGER)]]
+    rows += [_help_btn("chan"), [_btn("⬅️ بازگشت", "bka:cfg", ButtonStyle.DANGER)]]
+    text = (note + "\n\n" if note else "") + (
+        "📡 <b>کانالِ تأییدِ نوبت‌ها</b>\n\n"
+        + (f"✅ متصل: <code>{ch}</code>\n\nهر درخواستِ نوبتِ جدید با دکمهٔ ✅ تأیید / ❌ رد در کانال می‌آید؛ هر ادمینِ ربات می‌تواند همان‌جا تعیین‌تکلیف کند."
+           if ch else "❌ هنوز کانالی وصل نشده است.\n\nربات را در کانال <b>ادمین</b> کن (با اجازهٔ ارسال پیام)، بعد «اتصال» را بزن."))
+    if isinstance(cb_or_msg, Message):
+        await cb_or_msg.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
+    else:
+        await _show(cb_or_msg, text, rows)
+
+
+@booking_router.callback_query(F.data == "bka:chan")
+async def bka_chan(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    await _chan_screen(cb, row)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data.in_({"bka:chan:set", "bka:chan:test", "bka:chan:off"}))
+async def bka_chan_act(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    from tenant import get_setting, set_setting
+    act = cb.data.split(":")[2]
+    if act == "set":
+        await state.set_state(BkAdm.chan)
+        await cb.message.answer("📡 آیدیِ کانال (مثل <code>@mychannel</code> یا <code>-100123…</code>) را بفرست، "
+                                "یا یک پیام از کانال را برایِ من فوروارد کن.\n⚠️ ربات باید در کانال ادمین باشد.", parse_mode="HTML")
+        return await cb.answer()
+    if act == "off":
+        await set_setting(row.id, "bk_appt_channel", "")
+        await cb.answer("قطع شد")
+        return await _chan_screen(cb, row)
+    ch = (await get_setting(row.id, "bk_appt_channel", "")).strip()
+    try:
+        await bot.send_message(int(ch), "🧪 پیامِ آزمایشیِ کانالِ تأییدِ نوبت‌ها — اتصال برقرار است ✅")
+        await cb.answer("پیام آزمایشی ارسال شد ✅", show_alert=True)
+    except Exception as e:      # noqa: BLE001
+        await cb.answer(f"ارسال نشد: {str(e)[:150]}", show_alert=True)
+
+
+@booking_router.message(BkAdm.chan)
+async def bka_chan_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard_msg(msg, bot)
+    if not row:
+        return
+    from tenant import set_setting
+    target = None
+    fo = getattr(msg, "forward_origin", None)
+    if fo is not None and getattr(fo, "chat", None) is not None:
+        target = fo.chat.id
+    elif getattr(msg, "forward_from_chat", None):
+        target = msg.forward_from_chat.id
+    else:
+        t = (msg.text or "").strip()
+        t = t.replace("https://t.me/", "@").replace("t.me/", "@")
+        if t.lstrip("-").isdigit():
+            target = int(t)
+        elif t.startswith("@") and len(t) > 2:
+            target = t
+    if target is None:
+        return await msg.answer("❌ نامعتبر. @یوزرنیمِ کانال، آیدیِ عددیِ -100… یا یک پیامِ فورواردی بفرست.")
+    try:
+        chat = await bot.get_chat(target)
+        await bot.send_message(chat.id, "✅ کانالِ تأییدِ نوبت‌ها وصل شد؛ درخواست‌هایِ نوبت از این به بعد اینجا می‌آید.")
+    except Exception as e:      # noqa: BLE001
+        return await msg.answer(f"❌ به کانال پیام نرسید: {_esc(str(e)[:150])}\nمطمئن شو ربات در کانال ادمین است و دوباره بفرست.")
+    await set_setting(row.id, "bk_appt_channel", str(chat.id))
+    await state.clear()
+    await _chan_screen(msg, row, "✅ کانال وصل شد.")
+
+
+@booking_router.callback_query(F.data == "bka:cal")
+async def bka_cal_toggle(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """تاریخِ کلِ ربات (تقویمِ انتخابِ روز، کارت‌ها، یادآوری‌ها) را بینِ شمسی و میلادی عوض می‌کند."""
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    from tenant import get_setting, set_setting
+    cur = await get_setting(row.id, "bk_cal", "jalali")
+    new = "jalali" if cur == "gregorian" else "gregorian"
+    await set_setting(row.id, "bk_cal", new)
+    E.set_cal(new)
+    await cb.answer("تاریخِ ربات " + ("میلادی" if new == "gregorian" else "شمسی") + " شد ✅")
+    await bka_cfg(cb, bot, state)
+
+
+@booking_router.callback_query(F.data.startswith("bka:cfgt:"))
+async def bka_cfg_toggle(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    from tenant import get_setting, set_setting
+    key = cb.data.split(":")[2]
+    if key not in _TOGGLES:
+        return await cb.answer()
+    cur = await get_setting(row.id, key, E.DEFAULTS[key])
+    await set_setting(row.id, key, "0" if cur == "1" else "1")
+    await cb.answer("تغییر کرد")
+    if key == "bk_use_staff":
+        return await bka_staff(cb, bot, state)
+    await bka_cfg(cb, bot, state)
+
+
+@booking_router.callback_query(F.data.startswith("bka:cfgv:"))
+async def bka_cfg_value(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    if not await _guard(cb, bot):
+        return
+    key = cb.data.split(":")[2]
+    if key in _NUMS:
+        lbl, ex = _NUMS[key]
+        await cb.message.answer(f"✏️ {lbl}\nعدد را بفرست ({ex}):")
+    elif key in _TEXTS:
+        await cb.message.answer(f"✏️ {_TEXTS[key]} را بفرست (یا <code>-</code> برایِ پاک‌کردن):", parse_mode="HTML")
+    else:
+        return await cb.answer()
+    await state.set_state(BkAdm.cfg_val)
+    await state.update_data(key=key)
+    await cb.answer()
+
+
+@booking_router.message(BkAdm.cfg_val, F.text)
+async def bka_cfg_save(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard_msg(msg, bot)
+    if not row:
+        return
+    from tenant import set_setting
+    key = (await state.get_data())["key"]
+    txt = (msg.text or "").strip()
+    if key in _NUMS:
+        n = _num(txt)
+        lim = {"bk_deposit_value": (0, 1_000_000_000), "bk_refund_hours": (0, 720), "bk_hold_min": (5, 180), "bk_slot_step": (5, 240), "bk_lead_min": (0, 10080), "bk_days_ahead": (1, 60), "bk_cancel_hours": (0, 336),
+               "bk_remind1_h": (0, 168), "bk_remind2_h": (0, 168)}[key]
+        if n is None or not (lim[0] <= n <= lim[1]):
+            return await msg.answer(f"عددی بینِ {lim[0]:,} و {lim[1]:,} بفرست.")
+        if key == "bk_deposit_value":
+            from tenant import get_setting
+            if (await get_setting(row.id, "bk_deposit_mode", "off")) == "percent" and n > 100:
+                return await msg.answer("در حالتِ «درصدی» عددی بینِ ۰ تا ۱۰۰ بفرست.")
+        val = str(n)
+    else:
+        val = "" if txt in ("-", "—") else txt[:300]
+    await set_setting(row.id, key, val)
+    await state.clear()
+    back = [_btn("💳 بیعانه", "bka:dep", ButtonStyle.PRIMARY)] if key in ("bk_deposit_value", "bk_hold_min", "bk_refund_hours") else [_btn("⚙️ تنظیمات", "bka:cfg", ButtonStyle.PRIMARY)]
+    await msg.answer("✅ ذخیره شد.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[back, BACK_HOME]))
+
+
+# ───────────────────────── آمار ─────────────────────────
+
+@booking_router.callback_query(F.data == "bka:stats")
+async def bka_stats(cb: CallbackQuery, bot: Bot):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    now = E.iran_now().date()
+    month_ago = (now - _dt.timedelta(days=30)).isoformat()
+    async with Session() as s:
+        by = dict((await s.execute(select(BkAppt.status, func.count()).where(
+            BkAppt.bot_id == row.id, BkAppt.date_str >= month_ago).group_by(BkAppt.status))).all())
+        rev = int(await s.scalar(select(func.coalesce(func.sum(BkAppt.price), 0)).where(
+            BkAppt.bot_id == row.id, BkAppt.date_str >= month_ago, BkAppt.status.in_(("done", "confirmed")))) or 0)
+        top = (await s.execute(select(BkAppt.service_name, func.count()).where(
+            BkAppt.bot_id == row.id, BkAppt.date_str >= month_ago, BkAppt.status.in_(("done", "confirmed", "pending")))
+            .group_by(BkAppt.service_name).order_by(func.count().desc()).limit(5))).all()
+        customers = int(await s.scalar(select(func.count(func.distinct(BkAppt.tg_id))).where(BkAppt.bot_id == row.id, BkAppt.date_str >= month_ago)) or 0)
+    total = sum(by.values())
+    noshow = by.get("noshow", 0)
+    lines = ["📊 <b>آمارِ ۳۰ روزِ اخیر</b>", "",
+             f"کلِ نوبت‌ها: <b>{total}</b> · مشتریِ یکتا: <b>{customers}</b>",
+             f"🟢 تأییدشده: {by.get('confirmed', 0)} · ✅ انجام‌شده: {by.get('done', 0)} · 🟡 انتظار: {by.get('pending', 0)}",
+             f"⚪️ لغو: {by.get('cancelled', 0)} · 🔴 رد: {by.get('rejected', 0)} · ⚠️ عدم حضور: {noshow}",
+             f"💰 درآمدِ برآوردی (تأییدشده+انجام‌شده): <b>{rev:,}</b> تومان"]
+    if total:
+        lines.append(f"نرخِ عدم حضور: {round(100 * noshow / total)}٪")
+    if top:
+        lines += ["", "🏆 پرطرفدارترین خدمات:"] + [f"• {_esc(n)} — {c}" for n, c in top]
+    await _show(cb, "\n".join(lines), [_help_btn("rep"), BACK_HOME])
+    await cb.answer()
+
+
+# ───────────────────────── بیعانه ─────────────────────────
+
+_DEP_MODES = ["off", "fixed", "percent"]
+_DEP_LBL = {"off": "⬜️ خاموش", "fixed": "💵 مبلغِ ثابت", "percent": "٪ درصدی از قیمتِ خدمت"}
+
+
+@booking_router.callback_query(F.data == "bka:dep")
+async def bka_deposit(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    cfg = await E.get_cfg(row.id)
+    mode = cfg["dep_mode"]
+    val_txt = {"off": "—", "fixed": f"{cfg['dep_value']:,} تومان", "percent": f"{cfg['dep_value']}٪"}[mode]
+    text = ("💳 <b>بیعانه (پیش‌پرداخت)</b>\n\n"
+            f"حالت: <b>{_DEP_LBL[mode]}</b>\nمقدار: <b>{val_txt}</b>\n"
+            f"مهلتِ پرداخت: <b>{cfg['hold_min']}</b> دقیقه (ساعت تا آن موقع برایِ مشتری نگه داشته می‌شود)\n"
+            f"بازگشتِ بیعانه در لغوِ مشتری: تا <b>{cfg['refund_h']}</b> ساعت قبل از نوبت\n\n"
+            "مشتری بیعانه را از <b>کیف پولِ خودش در همین ربات</b> می‌پردازد (کیف پول با همهٔ درگاه‌هایِ ربات شارژ می‌شود). "
+            "اگر رد کنی یا نوبت را لغو کنی، بیعانه کامل برمی‌گردد؛ «عدم حضور» بیعانه را نگه می‌دارد. "
+            "نوبت‌هایِ دستیِ مالک بیعانه ندارند.")
+    rows = [[_btn(f"حالت: {_DEP_LBL[mode]} (زدن = تغییر)", "bka:depm", ButtonStyle.PRIMARY)],
+            [_btn(f"✏️ مقدار: {val_txt}", "bka:cfgv:bk_deposit_value")],
+            [_btn(f"⏳ مهلتِ پرداخت: {cfg['hold_min']} دقیقه", "bka:cfgv:bk_hold_min")],
+            [_btn(f"↩️ مهلتِ بازگشت: {cfg['refund_h']} ساعت", "bka:cfgv:bk_refund_hours")],
+            _help_btn("dep"), [_btn("⬅️ بازگشت", "bka:cfg", ButtonStyle.DANGER)]]
+    await _show(cb, text, rows)
+    await cb.answer()
+
+
+@booking_router.callback_query(F.data == "bka:depm")
+async def bka_deposit_mode(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    from tenant import get_setting, set_setting
+    cur = await get_setting(row.id, "bk_deposit_mode", "off")
+    nxt = _DEP_MODES[(_DEP_MODES.index(cur) + 1) % 3] if cur in _DEP_MODES else "fixed"
+    await set_setting(row.id, "bk_deposit_mode", nxt)
+    if nxt == "percent":                          # مقدارِ ثابتِ قبلی (مثلاً ۱۰۰٬۰۰۰) در حالتِ درصدی بی‌معناست
+        v = int(float(await get_setting(row.id, "bk_deposit_value", "0") or 0))
+        if v > 100 or v <= 0:
+            await set_setting(row.id, "bk_deposit_value", "30")
+    await cb.answer("تغییر کرد")
+    await bka_deposit(cb, bot, state)
+
+
+# ───────────────────────── جستجو با کدِ پیگیری ─────────────────────────
+
+@booking_router.callback_query(F.data == "bka:code")
+async def bka_code_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    if not await _guard(cb, bot):
+        return
+    await state.set_state(BkAdm.code)
+    await cb.message.answer("🔎 <b>کدِ پیگیریِ</b> نوبت را بفرست (مثلاً <code>12</code>):", parse_mode="HTML")
+    await cb.answer()
+
+
+@booking_router.message(BkAdm.code, F.text)
+async def bka_code_in(msg: Message, bot: Bot, state: FSMContext):
+    row = await _guard_msg(msg, bot)
+    if not row:
+        return
+    code = E.parse_code(msg.text or "")
+    if code is None:
+        return await msg.answer("کد فقط یک عدد است (مثلاً <code>12</code>).", parse_mode="HTML")
+    ap = await E.find_by_code(row.id, code)
+    await state.clear()
+    if not ap:
+        return await msg.answer("نوبتی با این کد پیدا نشد.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[BACK_AP]))
+    paid = await E.paid_of(row.id, ap.id)
+    await msg.answer(_admin_card(ap, paid), reply_markup=InlineKeyboardMarkup(inline_keyboard=await _appt_actions(ap)), parse_mode="HTML")

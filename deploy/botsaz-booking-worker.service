@@ -1,0 +1,20 @@
+[Unit]
+Description=Botsaz - Booking reminders worker (dedicated)
+StartLimitIntervalSec=120
+StartLimitBurst=8
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/botsaz
+EnvironmentFile=/opt/botsaz/.env
+ExecStart=/opt/botsaz/venv/bin/python /opt/botsaz/worker_booking.py
+KillSignal=SIGTERM
+TimeoutStopSec=25
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

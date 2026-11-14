@@ -1,0 +1,19 @@
+[Unit]
+StartLimitIntervalSec=60
+StartLimitBurst=5
+Description=Botsaz - Tenant community_mgmt worker
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/botsaz
+EnvironmentFile=/opt/botsaz/.env
+Environment=TENANT_BOT_KIND=community_mgmt
+ExecStart=/opt/botsaz/venv/bin/uvicorn main_tenant:app --host 127.0.0.1 --port 8015
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,266 @@
+--- base/tenant/__init__.py	2026-08-26 15:00:28.000000000 +0000
++++ work/tenant/__init__.py	2026-08-26 15:19:35.498989432 +0000
+@@ -686,28 +686,32 @@
+         # درستِ بالا خیلی زودتر گرفته می‌شود.
+         # === PATCH_FORCEJOIN_UNCHECKABLE_CACHE_V1 ===
+         uck = (bot_id, fj.chat_id)
+-        _uc_until = _FORCEJOIN_UNCHECKABLE_CACHE.get(uck)
++        _uc_until = None if bypass_cache else _FORCEJOIN_UNCHECKABLE_CACHE.get(uck)  # PATCH_FORCEJOIN_CHECK_FRESH_V1
+         if _uc_until is not None and _uc_until > now:
+             return  # این کانال به‌تازگی «غیرقابلِ‌بررسی» تشخیص داده شده — دوباره از تلگرام نمی‌پرسیم
+         try:
+             member = await asyncio.wait_for(
+                 bot.get_chat_member(fj.chat_id, user_id), timeout=5.0)
+             joined = member.status not in ("left", "kicked")
++            _FORCEJOIN_BROKEN.pop(uck, None)  # PATCH_FORCEJOIN_HEALTH_V1 — دوباره سالم شد
+         except asyncio.TimeoutError:
+             logger.warning(
+                 "force-join: کانال %s ظرفِ ۵ ثانیه پاسخ نداد (بدونِ صبر برایِ "
+                 "تلاشِ مجددِ کامل) — نادیده گرفته شد تا کاربر قفل نشه.", fj.chat_id)
+             _FORCEJOIN_UNCHECKABLE_CACHE[uck] = _time.monotonic() + _FORCEJOIN_UNCHECKABLE_TTL  # PATCH_FORCEJOIN_UNCHECKABLE_CACHE_V1
++            _FORCEJOIN_BROKEN[uck] = "پاسخ نداد (تایم‌اوت)"  # PATCH_FORCEJOIN_HEALTH_V1
+             return
+         except (TelegramBadRequest, TelegramForbiddenError) as e:
+             logger.warning(
+                 "force-join: کانال %s قابلِ بررسی نیست (ربات ادمین نیست؟) — "
+                 "نادیده گرفته شد تا کاربر قفل نشه. جزئیات: %s", fj.chat_id, e)
+             _FORCEJOIN_UNCHECKABLE_CACHE[uck] = _time.monotonic() + _FORCEJOIN_UNCHECKABLE_TTL  # PATCH_FORCEJOIN_UNCHECKABLE_CACHE_V1
++            _FORCEJOIN_BROKEN[uck] = "ربات ادمینِ این کانال/گروه نیست"  # PATCH_FORCEJOIN_HEALTH_V1
+             return
+         except Exception:
+             logger.exception("force-join: خطای غیرمنتظره در بررسیِ کانال %s", fj.chat_id)
+             _FORCEJOIN_UNCHECKABLE_CACHE[uck] = _time.monotonic() + _FORCEJOIN_UNCHECKABLE_TTL  # PATCH_FORCEJOIN_UNCHECKABLE_CACHE_V1
++            _FORCEJOIN_BROKEN[uck] = "خطای نامشخص در بررسی"  # PATCH_FORCEJOIN_HEALTH_V1
+             return
+         if joined:
+             # فقط نتیجهٔ «عضو است» کش می‌شود — نتیجهٔ «عضو نیست» هرگز کش
+@@ -734,6 +738,14 @@
+ _FORCEJOIN_UNCHECKABLE_CACHE: dict[tuple[int, object], float] = {}
+ _FORCEJOIN_UNCHECKABLE_TTL = 300.0  # ثانیه — ۵ دقیقه
+ 
++# === PATCH_FORCEJOIN_HEALTH_V1 ===
++# دلیلِ خرابیِ هر کانال، برایِ نمایش در پنلِ مالک. باگِ اصلیِ گزارش‌شده این
++# بود که وقتی ربات ادمینِ کانال نیست، عضویتِ اجباری «بی‌صدا» از کار می‌افتد
++# (fail-open، تا کاربرِ بی‌گناه قفل نشود) و مالک هیچ‌وقت نمی‌فهمد چرا گیتش
++# کار نمی‌کند — فقط می‌بیند همه بدونِ عضویت رد می‌شوند. حالا در همان صفحهٔ
++# «عضویت اجباری» با ⚠️ و دلیلش نشان داده می‌شود.
++_FORCEJOIN_BROKEN: dict[tuple[int, object], str] = {}
++
+ 
+ # ======================= آنتی‌اسپم (فلود پیام) — ربات‌های مستأجر =======================
+ # اگر کاربری در یک ربات مستأجر ۱۰ پیام پشت‌سرهم (در بازهٔ کوتاه) بفرستد،
+@@ -839,13 +851,28 @@
+         cid = ch["chat_id"]
+         title = ch["title"]
+         invite = ch.get("invite_link")
++        # === PATCH_FORCEJOIN_LINK_FIX_V1 ===
++        # باگ: قبلاً برایِ کانالِ خصوصی از `str(cid).lstrip('-100')` استفاده
++        # می‌شد. `lstrip` یک *مجموعه کاراکتر* حذف می‌کند نه یک پیشوند — پس
++        # برایِ -1001234567890 علاوه بر «-100»، رقمِ «1»ِ بعدی را هم می‌خورد و
++        # لینکِ خراب t.me/c/234567890 ساخته می‌شد. کاربر روی دکمه می‌زد و به
++        # هیچ‌جا نمی‌رسید، ولی همچنان پشتِ عضویتِ اجباری گیر بود. حالا پیشوند
++        # دقیق برداشته می‌شود، و اگر هیچ لینکِ قابلِ‌استفاده‌ای نداریم (کانالِ
++        # خصوصی بدونِ لینکِ دعوت) به‌جایِ فرستادنِ کاربر به یک آدرسِ اشتباه،
++        # دکمه بدونِ لینک نشان داده می‌شود.
++        cid_s = str(cid)
+         if invite:
+             link = invite
+-        elif str(cid).startswith("@"):
+-            link = f"https://t.me/{cid.lstrip('@')}"
++        elif cid_s.startswith("@"):
++            link = f"https://t.me/{cid_s[1:]}"
++        elif cid_s.startswith("-100"):
++            link = f"https://t.me/c/{cid_s[4:]}"
++        else:
++            link = None
++        if link:
++            rows.append([InlineKeyboardButton(text=f"📢 {title}", url=link)])
+         else:
+-            link = f"https://t.me/c/{str(cid).lstrip('-100')}"
+-        rows.append([InlineKeyboardButton(text=f"📢 {title}", url=link)])
++            rows.append([InlineKeyboardButton(text=f"📢 {title}", callback_data="noop")])
+     rows.append([InlineKeyboardButton(text="✅ عضو شدم", callback_data="fj:check")])
+     row = await get_bot_row(bot)
+     custom_text = await get_setting(row.id, "force_join_text", "") if row else ""
+@@ -3065,7 +3092,12 @@
+     if not row:
+         await cb.answer()
+         return
+-    nj = await check_force_join(bot, row.id, cb.from_user.id)
++    # === PATCH_FORCEJOIN_CHECK_FRESH_V1 ===
++    # دکمهٔ «✅ عضو شدم» باید *همیشه* نتیجهٔ زنده بگیرد. نتیجهٔ منفی کش
++    # نمی‌شد، ولی کشِ «غیرقابلِ‌بررسی» (۵ دقیقه‌ای) هنوز اثر داشت — یعنی اگر
++    # مالک همین الان ربات را ادمینِ کانال کرده بود، تا ۵ دقیقه هیچ‌کس واقعاً
++    # چک نمی‌شد. با bypass_cache هر دو کش کنار گذاشته می‌شوند.
++    nj = await check_force_join(bot, row.id, cb.from_user.id, bypass_cache=True)
+     if nj:
+         await cb.answer("هنوز عضو نشدی!", show_alert=True)
+         return
+@@ -4072,6 +4104,19 @@
+                         _kwargs["bot"] = bot
+                     if "state" in _sig.parameters:
+                         _kwargs["state"] = state
++                    # === PATCH_FINANCE_KEYBOARD_MODE_ORIGIN_V1 ===
++                    # باگِ گزارش‌شده: در حالتِ کیبوردی، «🤖 تایید خودکار رسید»
++                    # را می‌زدی و بعد «❌ انصراف»، ولی برگشت رویِ پنلِ شیشه‌ایِ
++                    # «تنظیمات» می‌آمد نه منویِ کیبوردیِ «مالی و کیف پول».
++                    # علتش: هندلر مبدا را از رویِ متنِ پیامِ فعلی حدس می‌زند،
++                    # و _FakeCbMessage.text همیشه None است — پس حدس همیشه
++                    # "settings" درمی‌آمد. (پچِ قبلی forced_origin="finance"
++                    # را پایین‌تر پاس می‌داد، ولی این دیسپچرِ عمومی زودتر
++                    # اجرا و return می‌کند، پس آن شاخه هرگز اجرا نمی‌شد.)
++                    # چون این دیسپچر فقط و فقط گزینه‌هایِ همین زیرمنو را
++                    # اجرا می‌کند، مبدا قطعاً "finance" است.
++                    if "forced_origin" in _sig.parameters:
++                        _kwargs["forced_origin"] = "finance"
+                     await _fn(_FakeCb(msg, _fin_cbd), **_kwargs)
+                     return
+ 
+@@ -21109,7 +21154,20 @@
+ # ───── عضویت اجباری ─────
+ 
+ async def _parse_channel(raw: str, bot: Bot):
+-    """از یوزرنیم/آیدی/لینک، (chat_id, title, invite_link) را استخراج می‌کند."""
++    """از یوزرنیم/آیدی/لینک، (chat_id, title, invite_link, err) را استخراج می‌کند.
++
++    === PATCH_FORCEJOIN_HEALTH_V1 ===
++    قبلاً این تابع هر ورودی‌ای را بی‌چون‌وچرا قبول می‌کرد: اگر ربات به کانال
++    دسترسی نداشت یا ادمینش نبود، `get_chat` خطا می‌داد، خطا بی‌صدا بلعیده
++    می‌شد و کانال با عنوانِ خامِ خودش ذخیره می‌شد. نتیجه: مالک فکر می‌کرد
++    عضویتِ اجباری فعال است، ولی چون بررسیِ عضویت هرگز موفق نمی‌شد،
++    `check_force_join` (به‌درستی، برایِ قفل‌نشدنِ کاربرها) همه را رد می‌کرد و
++    گیت عملاً وجود نداشت. حالا همان‌جا سرِ افزودن تشخیص داده و به مالک گفته
++    می‌شود، به‌علاوهٔ اینکه برایِ کانالِ خصوصی یک لینکِ دعوتِ واقعی ساخته
++    می‌شود (قبلاً `invite_link` تقریباً همیشه None بود و لینکِ دکمه خراب درمی‌آمد).
++
++    err: None یعنی همه‌چیز سالم است؛ در غیر این صورت یک متنِ فارسیِ آماده.
++    """
+     raw = raw.strip()
+     if "t.me/" in raw:
+         username = raw.split("t.me/")[-1].strip("/").split("/")[0]
+@@ -21120,15 +21178,50 @@
+         chat_id = f"@{raw}"
+     title = chat_id
+     invite_link = None
++
+     try:
+         chat = await bot.get_chat(chat_id)
+-        title = chat.title or chat.username or chat_id
+-        invite_link = chat.invite_link or (
+-            f"https://t.me/{chat.username}" if getattr(chat, "username", None) else None
+-        )
+-    except Exception:
+-        logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+-    return chat_id, title, invite_link
++    except Exception as e:
++        logger.warning("force-join: get_chat برایِ %s ناموفق بود: %s", chat_id, e)
++        return chat_id, title, invite_link, (
++            "⚠️ ربات به این کانال/گروه دسترسی ندارد. اول ربات را در آن‌جا "
++            "ادمین کن، بعد دوباره اضافه‌اش کن — وگرنه عضویت اجباری کار نمی‌کند "
++            "و همهٔ کاربران بدون عضویت رد می‌شوند.")
++
++    title = chat.title or chat.username or chat_id
++    if getattr(chat, "username", None):
++        invite_link = f"https://t.me/{chat.username}"
++    else:
++        invite_link = chat.invite_link
++
++    # ربات باید ادمین باشد، وگرنه get_chat_member هرگز جواب نمی‌دهد.
++    err = None
++    try:
++        me = await bot.me()
++        my_member = await bot.get_chat_member(chat.id, me.id)
++        if my_member.status not in ("administrator", "creator"):
++            err = ("⚠️ ربات در این کانال/گروه ادمین نیست، پس نمی‌تواند عضویت را "
++                   "بررسی کند. تا وقتی ادمینش نکنی، این مورد نادیده گرفته می‌شود.")
++    except Exception as e:
++        logger.warning("force-join: بررسیِ ادمین‌بودنِ ربات در %s ناموفق: %s", chat_id, e)
++        err = ("⚠️ نتوانستم بررسی کنم که ربات در این کانال/گروه ادمین است یا نه. "
++               "اگر ادمین نباشد، عضویت اجباری برایش کار نمی‌کند.")
++
++    if not invite_link and err is None:
++        # کانالِ خصوصیِ سالم — یک لینکِ دعوتِ اختصاصی بساز تا دکمهٔ کاربر واقعاً کار کند.
++        try:
++            _lnk = await bot.create_chat_invite_link(chat.id, name="عضویت اجباری")
++            invite_link = _lnk.invite_link
++        except Exception as e:
++            logger.warning("force-join: ساختِ لینکِ دعوت برایِ %s ناموفق: %s", chat_id, e)
++            err = ("⚠️ این کانال/گروه خصوصی است و نتوانستم لینکِ دعوت بسازم "
++                   "(دسترسیِ «دعوت کاربران» را به ربات بده)، پس دکمهٔ عضویت "
++                   "ممکن است برای کاربر باز نشود.")
++
++    # شناسهٔ عددی پایدارتر از یوزرنیم است (یوزرنیم قابلِ تغییر است و بعدِ
++    # تغییر، بررسیِ عضویت بی‌صدا می‌شکست).
++    chat_id = str(chat.id)
++    return chat_id, title, invite_link, err
+ 
+ 
+ # === PATCH_FJ_TEXT_NAV_FIX_V1 ===
+@@ -21140,7 +21233,13 @@
+         fjs = (await s.scalars(select(ForceJoin).where(ForceJoin.bot_id == bot_id))).all()
+     rows_kb = []
+     for fj in fjs:
+-        st = "🟢" if fj.is_active else "🔴"
++        # === PATCH_FORCEJOIN_HEALTH_V1 ===
++        # کانالی که بررسیِ عضویتش شکست خورده با ⚠️ مشخص می‌شود تا مالک
++        # بفهمد چرا گیتش عملاً کار نمی‌کند (قبلاً کاملاً بی‌صدا بود).
++        if fj.is_active and _FORCEJOIN_BROKEN.get((bot_id, fj.chat_id)):
++            st = "⚠️"
++        else:
++            st = "🟢" if fj.is_active else "🔴"
+         rows_kb.append([InlineKeyboardButton(
+             text=f"{st} {fj.title or fj.chat_id}",
+             callback_data=f"fj:view:{fj.id}"
+@@ -21189,10 +21288,15 @@
+ async def _fj_show_detail(cb: CallbackQuery, fj):
+     st = "🟢 فعال" if fj.is_active else "🔴 غیرفعال"
+     link = fj.invite_link or "—"
++    # === PATCH_FORCEJOIN_HEALTH_V1 ===
++    _broken = _FORCEJOIN_BROKEN.get((fj.bot_id, fj.chat_id))
++    _warn = (f"\n\n⚠️ <b>این مورد الان کار نمی‌کند:</b> {_broken}.\n"
++             "تا وقتی درست نشود، برایِ جلوگیری از قفل‌شدنِ کاربرها نادیده "
++             "گرفته می‌شود (یعنی کاربر بدونِ عضویت رد می‌شود).") if _broken else ""
+     txt = (f"📢 <b>{fj.title or fj.chat_id}</b>\n\n"
+            f"شناسه: <code>{fj.chat_id}</code>\n"
+            f"لینک: {link}\n"
+-           f"وضعیت: {st}")
++           f"وضعیت: {st}" + _warn)
+     try:
+         await cb.message.edit_text(txt, reply_markup=_fj_detail_kb(fj))
+     except Exception:
+@@ -21288,14 +21392,15 @@
+     if not row:
+         await state.clear()
+         return
+-    chat_id, title, invite_link = await _parse_channel(msg.text, bot)
++    chat_id, title, invite_link, err = await _parse_channel(msg.text, bot)  # PATCH_FORCEJOIN_HEALTH_V1
+     async with Session() as s:
+         s.add(ForceJoin(bot_id=row.id, chat_id=chat_id, title=title, invite_link=invite_link))
+         await s.commit()
+     await state.clear()
+     # === PATCH_FJ_TEXT_NAV_FIX_V1 ===
+     await msg.answer(
+-        f"✅ «{title}» به عضویت اجباری اضافه شد.\n\nبرای افزودن مورد بعدی، روی «➕ افزودن کانال یا گروه دیگر» بزنید.",
++        f"✅ «{title}» به عضویت اجباری اضافه شد.\n\nبرای افزودن مورد بعدی، روی «➕ افزودن کانال یا گروه دیگر» بزنید."
++        + (f"\n\n{err}" if err else ""),
+         reply_markup=await _fj_hub_kb(row.id, row.plan))
+ 
+ 
+@@ -21322,7 +21427,7 @@
+     data = await state.get_data()
+     fid = data.get("fj_edit_id")
+     await state.clear()
+-    chat_id, title, invite_link = await _parse_channel(msg.text, bot)
++    chat_id, title, invite_link, err = await _parse_channel(msg.text, bot)  # PATCH_FORCEJOIN_HEALTH_V1
+     async with Session() as s:
+         fj = await s.get(ForceJoin, fid)
+         if not fj or fj.bot_id != row.id:
+@@ -21335,7 +21440,7 @@
+         fj.invite_link = invite_link
+         await s.commit()
+     await msg.answer(
+-        f"✅ کانال به «{title}» ویرایش شد.",
++        f"✅ کانال به «{title}» ویرایش شد." + (f"\n\n{err}" if err else ""),
+         reply_markup=await _tn_general_hub_kb(row.id, row.plan))
+ 
+ 

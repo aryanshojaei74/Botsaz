@@ -1,0 +1,8 @@
+[Unit]
+Description=Botsaz: hosted apps disk cap + old download/upload cleanup (PATCH_HOSTING_DISK_GUARD_V1)
+After=network-online.target postgresql.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/botsaz
+ExecStart=/opt/botsaz/venv/bin/python -m hosting_disk_guard

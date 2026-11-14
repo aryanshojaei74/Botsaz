@@ -1,0 +1,281 @@
+
+════════ A) بار سرور ════════
+ 12:29:21 up 6 days, 13:24,  4 users,  load average: 0.97, 1.14, 0.77
+4
+               total        used        free      shared  buff/cache   available
+Mem:            7937        3347        1070         163        3519        4119
+Swap:           4095         278        3817
+procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 1  0 284908 1095976 399908 3204184    0    0     4    37   15   12 13  2 83  1  1
+ 1  0 284908 1095752 399908 3204400    0    0     0    56 1553 1414 18  1 80  1  0
+ 0  0 284908 1105176 399908 3204436    0    0     0   592 7492 13250 27  4 69  0  0
+ 0  0 284908 1104952 399908 3204440    0    0     0    20 1463 1076 20  1 79  0  0
+ 0  0 284908 1092692 399908 3204440    0    0     0  4116 1752 1072 23  2 71  4  0
+--- پرمصرف‌ترین پردازش‌ها
+    PID %CPU %MEM     ELAPSED COMMAND
+2857933 33.6  4.6       02:40 /opt/botsaz/venv/bin/python3 worker_tenant.py
+2857934 16.1  4.3       02:40 /opt/botsaz/venv/bin/python3 /opt/botsaz/venv/bin/uvicorn main_tenant:app --host 127.0.0.1 --port 8011
+2857931 12.2  3.2       02:40 /opt/botsaz/venv/bin/python3 worker_platform.py
+2857927 11.6  3.2       02:40 /opt/botsaz/venv/bin/python3 /opt/botsaz/venv/bin/uvicorn main_tenant:app --host 127.0.0.1 --port 8012
+2857932 10.5  3.2       02:40 /opt/botsaz/venv/bin/python3 /opt/botsaz/venv/bin/uvicorn main_tenant:app --host 127.0.0.1 --port 8001
+2857925  8.1  3.0       02:40 /opt/botsaz/venv/bin/python3 /opt/botsaz/venv/bin/uvicorn main_tenant:app --host 127.0.0.1 --port 8014
+2857928  8.1  3.0       02:40 /opt/botsaz/venv/bin/python3 /opt/botsaz/venv/bin/uvicorn main_tenant:app --host 127.0.0.1 --port 8013
+
+════════ B) سرویس‌ها و ری‌استارت ════════
+NRestarts=0 ActiveState=active ActiveEnterTimestamp=Mon 2026-10-05 12:26:45 UTC  ← botsaz-tenant
+NRestarts=0 ActiveState=active ActiveEnterTimestamp=Mon 2026-10-05 12:26:45 UTC  ← botsaz-platform
+NRestarts=0 ActiveState=inactive ActiveEnterTimestamp=n/a  ← botsaz-main
+NRestarts=0 ActiveState=active ActiveEnterTimestamp=Mon 2026-09-28 23:05:16 UTC  ← postgresql
+NRestarts=0 ActiveState=active ActiveEnterTimestamp=Sun 2026-10-04 10:27:30 UTC  ← nginx
+  botsaz-platform-worker.service        loaded active running Botsaz - Platform background loops worker (backu
+  botsaz-platform.service               loaded active running Botsaz - Platform (bot-saz) service
+  botsaz-tenant-booking.service         loaded active running Botsaz - Tenant booking worker
+  botsaz-tenant-community-mgmt.service  loaded active running Botsaz - Tenant community_mgmt worker
+  botsaz-tenant-digital-shop.service    loaded active running Botsaz - Tenant digital_shop worker
+  botsaz-tenant-virtual-service.service loaded active running Botsaz - Tenant virtual_service (SMM) worker
+  botsaz-tenant-vpn-test.service        loaded active running Botsaz - Tenant VPN-only worker (PHASE 0 TEST �
+  botsaz-tenant-worker.service          loaded active running Botsaz - Tenant background loops worker (VPN exp
+  botsaz-tenant.service                 loaded active running Botsaz - Tenant bots service
+  botsazvip.service                     loaded active running BotSaz VIP — سرور فعال‌سازی هو
+--- صفِ اتصالِ پورت ۸۰۰۱ (Recv-Q بالا = رویدادلوپ گیر کرده)
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      2048       127.0.0.1:8011      0.0.0.0:*          
+LISTEN 0      2048       127.0.0.1:8012      0.0.0.0:*          
+LISTEN 0      2048       127.0.0.1:8013      0.0.0.0:*          
+LISTEN 0      2048       127.0.0.1:8014      0.0.0.0:*          
+LISTEN 0      2048       127.0.0.1:8015      0.0.0.0:*          
+LISTEN 0      2048       127.0.0.1:8000      0.0.0.0:*          
+LISTEN 0      2048       127.0.0.1:8001      0.0.0.0:*          
+LISTEN 0      2048       127.0.0.1:8002      0.0.0.0:*          
+LISTEN 0      2048       127.0.0.1:8099      0.0.0.0:*          
+--- تعداد اتصالِ برقرار به ۸۰۰۱:
+1
+
+════════ C) Postgres ════════
+        state        | count 
+---------------------+-------
+ idle                |    34
+ active              |     1
+ idle in transaction |     1
+(3 rows)
+
+ max_connections 
+-----------------
+ 300
+(1 row)
+
+   pid   |    xact_age     |      q_age      |        state        |                  q                   
+---------+-----------------+-----------------+---------------------+--------------------------------------
+ 2858025 | 00:01:48.382569 | 00:01:48.378708 | idle in transaction | SELECT partner_sales.sold_bot_id    +
+         |                 |                 |                     | FROM partner_sales                  +
+         |                 |                 |                     | WHERE partner_sales.sold_bot_id IN (
+(1 row)
+
+ blocked 
+---------
+       0
+(1 row)
+
+      relname       | n_live_tup | n_dead_tup | seq_scan | idx_scan 
+--------------------+------------+------------+----------+----------
+ admin_supports     |        195 |         10 |  2286542 |        0
+ smm_categories     |        154 |         60 |   580311 |      594
+ vpn_partners       |         36 |         39 |   470441 |    11047
+ force_joins        |        284 |         58 |   359417 |    35802
+ swap_charges       |         68 |          5 |   357352 |      125
+ charge_drafts      |          1 |          0 |   267632 |       37
+ ton_direct_charges |        211 |         45 |   220447 |    70965
+ dice_games         |        184 |         47 |   196570 |        3
+(8 rows)
+
+ db_size 
+---------
+ 144 MB
+(1 row)
+
+
+════════ D) تلگرام (تأخیر getMe) ════════
+
+==============================================================
+نمونه‌ها: 20  |  موفق: 20  |  تایم‌اوت: 0  |  خطا: 0
+
+تأخیر:  میانه=0.17s   p90=0.53s   p99=0.59s   بیشینه=0.59s
+کندتر از ۲ ثانیه: 0 از 20 (0%)
+نرخِ شکست: 0.0%
+
+--------------------------------------------------------------
+تفسیر:
+  ✅ شبکه سالم است. پس کندی از تلگرام نیست و باید در
+     خودِ هندلرها دنبالش گشت (لاگِ «slow update … →» را ببین).
+
+نکته: این تستِ لحظه‌ای است. اگر مشکل رگباری باشد، در ساعتِ
+      شلوغ دوباره اجرایش کن.
+--- curl به API تلگرام:
+dns=0.005584 connect=0.151858 tls=0.365415 total=0.512315
+dns=0.001079 connect=0.148748 tls=0.370368 total=0.507992
+dns=0.001356 connect=0.174358 tls=0.418271 total=0.816486
+
+════════ E) webhook همهٔ ربات‌ها ════════
+[timeout] تایم‌اوتِ پیش‌فرضِ درخواست‌های تلگرام به ۱۲ ثانیه کاهش یافت.
+[preview] پیش‌نمایشِ لینک برایِ ربات‌هایِ مشتری پیش‌فرض خاموش شد.
+[retry] تلاشِ خودکارِ مجدد برای خطاهای شبکه‌ای فعال شد (حداکثر 3 تلاش).
+[callback] پاسخ به callback_queryهای منقضی/نامعتبر بی‌خطر شد.
+رباتِ فعال: 143 | آدرسِ مورد انتظار webhook: botsaz.mobitek.shop
+پرسش از تلگرام: 2.0s
+
+✅ webhook سالم و بدونِ صف: 142
+⏳ رباتِ دارایِ صفِ نرسیده (pending>0): 0  | مجموعِ آپدیتِ در صف: 0
+🚫 بدونِ webhook: 0
+⚠️ آدرسِ webhook با دامنهٔ مورد انتظار نمی‌خواند: 0
+🔑 توکنِ باطل/ربات حذف‌شده در تلگرام: 1
+     #694 @VPN_RT3_BOT …QS1qak
+🌐 خطایِ شبکه در پرسش: 0
+
+خطایِ تحویلِ webhook در 3 ساعتِ اخیر (تعداد رباتِ دچار): 24
+     24×  Wrong response from the webhook: N Bad Gateway
+     12:27:19  #1011 @Gamersping_bot …N8u7DE  Wrong response from the webhook: 502 Bad Gateway
+     12:27:17  #979 @Nitro_Skybot …EjvNH4  Wrong response from the webhook: 502 Bad Gateway
+     12:27:17  #936 @WHALESHOP1BOT …Hw0W1Y  Wrong response from the webhook: 502 Bad Gateway
+     12:27:17  #1170 @ExpressPanel_Bot …ypE_3Q  Wrong response from the webhook: 502 Bad Gateway
+     12:27:14  #973 @SVXVirtualBot …JlgxpE  Wrong response from the webhook: 502 Bad Gateway
+     12:27:14  #1124 @TELEGUANHBOT …wBsgy8  Wrong response from the webhook: 502 Bad Gateway
+
+IPِ مقصدِ webhook (از دیدِ تلگرام): {'188.132.174.150': 142}
+max_connections تنظیم‌شده: {40: 142}
+
+════════ F) آپدیت‌های کند (۶ ساعت اخیر) ════════
+--- تعداد 'slow update' در هر ساعت:
+      3 01
+      7 02
+     21 03
+      1 04
+      4 05
+      6 06
+     26 07
+     13 08
+     12 09
+     49 10
+     50 11
+     91 12
+--- ۱۵ کندترین:
+kind=callback_query, 92.1s) → vget:single:16782
+kind=callback_query, 89.5s) → vget:single:16782
+kind=callback_query, 86.9s) → vget:single:16782
+kind=callback_query, 59.5s) → smmu:link_confirm
+kind=callback_query, 55.0s) → vget:single:16735
+kind=callback_query, 54.9s) → vget:single:16782
+kind=callback_query, 49.0s) → vwgcfg:16782
+kind=callback_query, 47.8s) → tvpn:planmenu:pasarguard:1705
+kind=callback_query, 47.2s) → thb:cat:look:8142
+kind=callback_query, 45.4s) → thb:cat:look:8142
+kind=message, 43.8s) → /start mbtn_7738
+kind=message, 41.8s) → /start
+kind=callback_query, 39.0s) → mbtn:4910
+kind=callback_query, 38.2s) → thb:pick:8142
+kind=callback_query, 38.2s) → smmu:restart
+--- خطاهایِ شبکه/تایم‌اوت/۴۲۹ (۱۲ ساعت):
+timeout: 111
+429: 10
+db-pool: 2
+
+════════ G) nginx ════════
+upstream timed out (امروز): 0
+connect() failed:           531
+worker_connections:         0
+2026/10/05 12:27:14 [error] 2668486#2668486: *74151 connect() failed (111: Unknown error) while connecting to upstream, client: 127.0.0.1, server: botsaz.mobitek.shop, request: "POST /webhook/89022860
+2026/10/05 12:27:17 [error] 2668486#2668486: *74138 connect() failed (111: Unknown error) while connecting to upstream, client: 127.0.0.1, server: botsaz.mobitek.shop, request: "POST /webhook/87810006
+2026/10/05 12:27:17 [error] 2668487#2668487: *74155 connect() failed (111: Unknown error) while connecting to upstream, client: 127.0.0.1, server: botsaz.mobitek.shop, request: "POST /webhook/83545973
+2026/10/05 12:27:17 [error] 2668486#2668486: *73794 connect() failed (111: Unknown error) while connecting to upstream, client: 127.0.0.1, server: botsaz.mobitek.shop, request: "POST /webhook/89460582
+2026/10/05 12:27:19 [error] 2668487#2668487: *74237 connect() failed (111: Unknown error) while connecting to upstream, client: 127.0.0.1, server: botsaz.mobitek.shop, request: "POST /webhook/88113374
+--- کدهای وضعیت /webhook (۵۰۰۰ خط آخر):
+   4096 200
+    158 502
+--- اگر log_format شامل request_time نباشد، پایین خالی است:
+
+════════ H) سایت/مستندات (زمانِ پاسخ) ════════
+https://botsaz.mobitek.shop → 404 total=0.180406s
+https://botsaz.mobitek.shop → 404 total=0.079246s
+https://botsaz.mobitek.shop → 404 total=0.086645s
+
+════════ I) رویدادلوپِ main_tenant (py-spy، اختیاری) ════════
+Process 2857932: /opt/botsaz/venv/bin/python3 /opt/botsaz/venv/bin/uvicorn main_tenant:app --host 127.0.0.1 --port 8001
+Python v3.10.12 (/usr/bin/python3.10)
+
+Thread 2857932 (idle): "MainThread"
+    run (asyncio/runners.py:44)
+    run (uvicorn/server.py:65)
+    run (uvicorn/main.py:575)
+    main (uvicorn/main.py:409)
+    invoke (click/core.py:876)
+    invoke (click/core.py:1308)
+    main (click/core.py:1445)
+    __call__ (click/core.py:1524)
+    <module> (uvicorn:6)
+Thread 2858057 (idle): "botsaz-io_0"
+    _worker (concurrent/futures/thread.py:81)
+    run (threading.py:953)
+    _bootstrap_inner (threading.py:1016)
+    _bootstrap (threading.py:973)
+Thread 2858092 (idle): "botsaz-io_1"
+    _worker (concurrent/futures/thread.py:81)
+    run (threading.py:953)
+    _bootstrap_inner (threading.py:1016)
+    _bootstrap (threading.py:973)
+Thread 2858094 (idle): "botsaz-io_2"
+    _worker (concurrent/futures/thread.py:81)
+---
+Process 2857932: /opt/botsaz/venv/bin/python3 /opt/botsaz/venv/bin/uvicorn main_tenant:app --host 127.0.0.1 --port 8001
+Python v3.10.12 (/usr/bin/python3.10)
+
+Thread 2857932 (idle): "MainThread"
+    run (asyncio/runners.py:44)
+    run (uvicorn/server.py:65)
+    run (uvicorn/main.py:575)
+    main (uvicorn/main.py:409)
+    invoke (click/core.py:876)
+    invoke (click/core.py:1308)
+    main (click/core.py:1445)
+    __call__ (click/core.py:1524)
+    <module> (uvicorn:6)
+Thread 2858057 (idle): "botsaz-io_0"
+    _worker (concurrent/futures/thread.py:81)
+    run (threading.py:953)
+    _bootstrap_inner (threading.py:1016)
+    _bootstrap (threading.py:973)
+Thread 2858092 (idle): "botsaz-io_1"
+    _worker (concurrent/futures/thread.py:81)
+    run (threading.py:953)
+    _bootstrap_inner (threading.py:1016)
+    _bootstrap (threading.py:973)
+Thread 2858094 (idle): "botsaz-io_2"
+    _worker (concurrent/futures/thread.py:81)
+---
+Process 2857932: /opt/botsaz/venv/bin/python3 /opt/botsaz/venv/bin/uvicorn main_tenant:app --host 127.0.0.1 --port 8001
+Python v3.10.12 (/usr/bin/python3.10)
+
+Thread 2857932 (idle): "MainThread"
+    run (asyncio/runners.py:44)
+    run (uvicorn/server.py:65)
+    run (uvicorn/main.py:575)
+    main (uvicorn/main.py:409)
+    invoke (click/core.py:876)
+    invoke (click/core.py:1308)
+    main (click/core.py:1445)
+    __call__ (click/core.py:1524)
+    <module> (uvicorn:6)
+Thread 2858057 (idle): "botsaz-io_0"
+    _worker (concurrent/futures/thread.py:81)
+    run (threading.py:953)
+    _bootstrap_inner (threading.py:1016)
+    _bootstrap (threading.py:973)
+Thread 2858092 (idle): "botsaz-io_1"
+    _worker (concurrent/futures/thread.py:81)
+    run (threading.py:953)
+    _bootstrap_inner (threading.py:1016)
+    _bootstrap (threading.py:973)
+Thread 2858094 (idle): "botsaz-io_2"
+    _worker (concurrent/futures/thread.py:81)
+---
+
+پایان. فایل perf_out.txt را بفرست.
