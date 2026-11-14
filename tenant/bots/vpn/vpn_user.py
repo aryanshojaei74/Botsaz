@@ -4194,9 +4194,9 @@ async def _show_card_details(cb: CallbackQuery, bot: Bot, bot_id: int,
         logger.exception("kyc: بررسیِ سقف ناموفق بود (vpn card, پیش از نمایشِ شماره‌کارت)")
         _ok, _why = True, ""
     if not _ok:
-        from models import Order
+        from models import Order as _OrderM
         async with Session() as s:
-            o = await s.get(Order, oid)
+            o = await s.get(_OrderM, oid)
             if o and o.status == "awaiting_receipt":
                 o.status = "rejected"
                 await s.commit()
@@ -4217,7 +4217,8 @@ async def _show_card_details(cb: CallbackQuery, bot: Bot, bot_id: int,
     _plan_hide, _plan_note, _plan_title = False, "", ""
     try:
         async with Session() as _sp:
-            _ord = await _sp.get(Order, oid)
+            from models import Order as _OrderM2
+            _ord = await _sp.get(_OrderM2, oid)
             _pl = await _sp.get(VpnPlan, _ord.plan_id) if (_ord and _ord.plan_id) else None
         if _pl:
             _plan_hide = bool(getattr(_pl, "hide_spec", False))
