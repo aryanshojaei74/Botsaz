@@ -1860,6 +1860,7 @@ from platform_ai_kb import (ALWAYS as _GG_AI_ALWAYS, TOPICS_2026_10D as _GG_AI_T
                             TOPICS_2026_10E as _GG_AI_TOPICS_NEW_E,
                             TOPICS_2026_11A as _GG_AI_TOPICS_NEW_11A,
                             TOPICS_2026_11B as _GG_AI_TOPICS_NEW_11B,
+                            TOPICS_2026_11C as _GG_AI_TOPICS_NEW_11C,
                             clean_ai_text as _gg_clean_ai_text, select_relevant_topics as _kb_select,
                             strip_marks as _gg_strip_marks)
 # === PATCH_AI_TWO_STAGE_V1 === تحلیلِ سوال + نقشهٔ دقیقِ دکمه‌هایِ پنل
@@ -2313,6 +2314,7 @@ _GG_AI_TOPICS.extend(_GG_AI_TOPICS_NEW)
 _GG_AI_TOPICS.extend(_GG_AI_TOPICS_NEW_E)   # آپدیتِ ۲۴۵ تا ۲۶۶
 _GG_AI_TOPICS.extend(_GG_AI_TOPICS_NEW_11A)   # آپدیتِ ۴۴۰ تا ۴۷۶ (آبان ۱۴۰۵)
 _GG_AI_TOPICS.extend(_GG_AI_TOPICS_NEW_11B)   # آپدیتِ ۴۹۹ تا ۵۳۵ (آبان ۱۴۰۵): مسیرهایِ دقیق
+_GG_AI_TOPICS.extend(_GG_AI_TOPICS_NEW_11C)   # PATCH_REFUND_POLICY_KB_V1: قانونِ برگشتِ پولِ پلن
 
 
 def _gg_select_relevant_topics(question: str, char_budget: int = 11000) -> str:
