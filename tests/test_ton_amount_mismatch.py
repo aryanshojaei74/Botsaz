@@ -216,6 +216,10 @@ async def test_late_expired_invoice_is_polled_and_credited(env, monkeypatch):
         ch.status = "expired"
         ch.expires_at = dt.datetime.utcnow() - dt.timedelta(hours=3)
         await s.commit()
+    assert await TD.late_bot_ids() == []                       # پیش‌فرض خاموش است (بدونِ شارژِ خودکارِ تازه)
+    async with maker() as s:
+        s.add(models.Setting(bot_id=0, key="ton_late_poll_enabled", value="1"))
+        await s.commit()
     # بار اولِ فعال‌شدن: نشانه همین حالا ثبت می‌شود ⇒ فاکتورِ ۳ ساعت پیش عمداً نادیده گرفته می‌شود (ممکن است دستی شارژ شده باشد)
     assert await TD.late_bot_ids() == []
     async with maker() as s:

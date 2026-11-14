@@ -770,6 +770,13 @@ async def late_bot_ids() -> list[int]:
     """رباتی که فاکتورِ «منقضی‌شده، هنوز در مهلتِ دیرهنگام، بدونِ tx، و منقضی‌شده‌بعد از فعال‌شدنِ این قابلیت» دارد.
     قبلاً فقط فاکتورِ waiting باعثِ بررسیِ زنجیره می‌شد؛ پس واریزی که بعد از ۲۰ دقیقه برسد (یا تراکنشی که اولِ کار
     توسطِ toncenter دیده نشده) با اینکه ۲۴ ساعت مهلتِ دیرهنگام داشت، هرگز خودکار تسویه نمی‌شد."""
+    # PATCH_TON_LATE_POLL_OPTIN_V1: به‌درخواستِ مدیر، هیچ شارژِ خودکارِ تازه‌ای پیش‌فرض روشن نیست؛ این بازبینی فقط با
+    # settings(bot_id=0, key='ton_late_poll_enabled', value='1') روشن می‌شود.
+    from models import Setting
+    async with Session() as s:
+        _en = await s.scalar(select(Setting.value).where(Setting.bot_id == 0, Setting.key == "ton_late_poll_enabled"))
+    if (_en or "0") != "1":
+        return []
     since = await _late_poll_since()
     async with Session() as s:
         late_from = max(_dt_late.datetime.utcnow() - _dt_late.timedelta(hours=LATE_GRACE_HOURS), since)
