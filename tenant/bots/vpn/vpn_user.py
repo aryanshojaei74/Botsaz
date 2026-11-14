@@ -795,6 +795,9 @@ def _parse_wireguard_uri(uri: str) -> str | None:
         text = "\n".join(lines)
         if _name:
             text = f"# Name = {_name}\n" + text
+        # === PATCH_WG_URI_COMMENT_V1 === (Whale) فایلِ اصلیِ پنل در انتها «# URI: wireguard://…» دارد؛ فایلِ ربات
+        # بدونِ آن «فشرده‌شده» بود و بعضی کلاینت‌ها آن را نمی‌پذیرفتند. خطِ کامنت برایِ WireGuard بی‌اثر است.
+        text += "\n\n# URI: " + raw
         return text
     except Exception:
         logger.exception("پارسِ wireguard:// ناموفق بود")
@@ -3741,6 +3744,7 @@ async def _fetch_wg_files_from_sub(sub_link: str) -> list[tuple[str, bytes]]:
 
 async def _send_wg_file_list(bot, chat_id: int, files: list[tuple[str, bytes]]) -> int:
     sent = 0
+    _qrs: list = []
     for i, (name, data) in enumerate(files, 1):
         try:
             await bot.send_document(
@@ -3749,8 +3753,11 @@ async def _send_wg_file_list(bot, chat_id: int, files: list[tuple[str, bytes]]) 
                         "این فایل مستقیم از ساب‌لینکِ شما گرفته شده و هیچ تغییری نکرده — ایمپورتش کن.",
                 parse_mode="HTML")
             sent += 1
+            _qrs.append((data.decode("utf-8", "ignore"), name.rsplit(".conf", 1)[0]))   # PATCH_WG_CONF_QR_V1
         except Exception:
             logger.exception("ارسالِ فایلِ وایرگاردِ ساب ناموفق بود")
+    for _t, _l in _qrs:
+        await _send_wg_qr(bot, chat_id, _t, _l)
     return sent
 
 
@@ -3806,6 +3813,7 @@ async def _send_native_wg_files(bot, chat_id: int, client, email: str) -> int:
     if not endpoints:
         return 0
     sent = 0
+    _qrs: list = []
     _used_fn: set = set()
     for ep in endpoints:
         fname = _wg_safe_file_name(ep.get("file"), f"wg{ep.get('id', sent + 1)}", _used_fn)
@@ -3826,8 +3834,11 @@ async def _send_native_wg_files(bot, chat_id: int, client, email: str) -> int:
                 chat_id, BufferedInputFile(cfg_text.encode("utf-8"), filename=fname),
                 caption=caption, parse_mode="HTML")
             sent += 1
+            _qrs.append((cfg_text, name))   # PATCH_WG_CONF_QR_V1
         except Exception:
             logger.exception("ارسالِ فایلِ کانفیگِ وایرگاردِ بومی ناموفق بود")
+    for _t, _l in _qrs:
+        await _send_wg_qr(bot, chat_id, _t, _l)
     return sent
 
 
@@ -4020,9 +4031,34 @@ async def _send_config_cards_loop(bot: Bot, chat_id: int, cards: list, tasks: li
         await bot.send_message(chat_id, body)
 
 
+# === PATCH_WG_CONF_QR_V1 === (Whale) QRِ ربات آدرسِ ساب بود و اپِ WireGuard آن را نمی‌خواند؛ QRِ پنل متنِ کاملِ
+# .conf است. برایِ هر فایل، QRِ خودِ متنِ کانفیگ هم فرستاده می‌شود (فقط وقتی کوتاه باشد تا قابلِ اسکن بماند).
+_WG_QR_MAX_CHARS = 1800
+
+
+async def _send_wg_qr(bot, chat_id: int, cfg_text: str, label: str = "") -> bool:
+    try:
+        text = (cfg_text or "").strip()
+        if not text or len(text) > _WG_QR_MAX_CHARS or "[Interface]" not in text:
+            return False
+        png = await asyncio.to_thread(_qr_bytes, text)
+        if not png:
+            return False
+        cap = "📷 <b>QR همین کانفیگ</b> — داخل اپِ WireGuard با «اسکن QR» اضافه کن."
+        if label:
+            cap += f"\n🌍 <code>{html.escape(label)}</code>"
+        await bot.send_photo(chat_id, BufferedInputFile(png, filename="wireguard_qr.png"),
+                             caption=cap, parse_mode="HTML")
+        return True
+    except Exception:
+        logger.exception("ارسالِ QRِ کانفیگِ وایرگارد ناموفق بود")
+        return False
+
+
 async def _send_wg_texts(bot: Bot, chat_id: int, wg_configs: list) -> int:
     """هر متنِ .conf را به‌صورتِ فایل می‌فرستد (نام/کپشنِ لوکیشن‌دار). تعدادِ فایل‌هایِ فرستاده‌شده را برمی‌گرداند."""
     sent = 0
+    _qrs: list = []
     for i, cfg_text in enumerate(wg_configs, 1):
         # === PATCH_WG_ENDPOINT_LABEL_V1 / PATCH_WG_SHORT_FILENAME_V1 ===
         # === MARKER_WG_FRIENDLY_NAME_V1 ===
@@ -4038,9 +4074,12 @@ async def _send_wg_texts(bot: Bot, chat_id: int, wg_configs: list) -> int:
                 BufferedInputFile(cfg_text.encode("utf-8"), filename=fname),
                 caption=caption, parse_mode="HTML")
             sent += 1
+            _qrs.append((cfg_text, _wg_label or ""))   # PATCH_WG_CONF_QR_V1: QRها بعد از همهٔ فایل‌ها
         except Exception:
             logger.exception("ارسالِ فایلِ کانفیگِ وایرگارد ناموفق بود")
             await bot.send_message(chat_id, "⚠️ ارسالِ فایلِ کانفیگ ناموفق بود.")
+    for _t, _l in _qrs:
+        await _send_wg_qr(bot, chat_id, _t, _l)
     return sent
 
 
