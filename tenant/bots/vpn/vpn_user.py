@@ -2979,20 +2979,22 @@ async def _build_buy_summary(bot: Bot, bot_id: int, plan_id: int,
 CFG_NAME_SKIP_DEFAULT = "⏭ بدون نام (ادامه)"
 
 
-async def _auto_cfg_name(bot_id: int, panel_key: str | None) -> str | None:
-    """PATCH_CFG_NAME_AUTO_V1: وقتی مشتری «بدون نام» را می‌زند و مالک «نامِ خودکار» را روشن کرده،
-    ربات خودش یک نام می‌سازد (نامِ سرور + عدد) تا هم در پیش‌فاکتور دیده شود هم همان نام برایِ کانفیگ بماند."""
+def _random_cfg_name() -> str:
+    """PATCH_CFG_NAME_AUTO_V2 (VikingVPN): نامِ خودکارِ انگلیسیِ تصادفی با عدد، مثل «Dg87gtop» (نه فارسی/نامِ سرور)."""
+    import secrets
+    up, lo, dg = "ABCDEFGHJKLMNPQRSTUVWXYZ", "abcdefghijkmnpqrstuvwxyz", "23456789"
+    return (secrets.choice(up) + secrets.choice(lo) + secrets.choice(dg) + secrets.choice(dg)
+            + "".join(secrets.choice(lo) for _ in range(4)))
+
+
+async def _auto_cfg_name(bot_id: int, panel_key: str | None = None) -> str | None:
+    """PATCH_CFG_NAME_AUTO_V1/V2: وقتی مشتری «بدونِ نام» را می‌زند و مالک «نامِ خودکار» را روشن کرده، ربات یک نامِ
+    انگلیسیِ تصادفی می‌سازد تا هم در پیش‌فاکتور دیده شود هم همان نام برایِ کانفیگ بماند."""
     try:
         from tenant import get_setting
         if (await get_setting(bot_id, "cfg_name_auto", "0")) != "1":
             return None
-        base = ""
-        if panel_key:
-            from tenant.bots.vpn.vpn_admin import panel_label
-            base = (await panel_label(bot_id, panel_key) or "").strip()
-        base = base or "VPN"
-        import secrets
-        return f"{base[:40]}-{secrets.randbelow(9000) + 1000}"
+        return _random_cfg_name()
     except Exception:
         logger.exception("vpn: ساختِ نامِ خودکارِ کانفیگ ناموفق بود")
         return None
