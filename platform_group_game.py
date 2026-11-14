@@ -558,7 +558,9 @@ def _is_rules(m: Message) -> bool:
 
 @platform_group_game_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_rules))
 async def gg_rules(msg: Message):
-    if not msg.from_user or msg.from_user.is_bot or msg.sender_chat:
+    # === PATCH_RULES_FOR_CHANNEL_SENDERS_V1 === وقتی کسی با «یوزرنیمِ کانال» (به‌نامِ کانال) می‌نویسد، فرستنده یک ربات/کانالِ
+    # تلگرام است (from_user.is_bot + sender_chat). متنِ قوانین پولی/هویتی ندارد، پس برایِ آن‌ها هم جواب می‌دهیم.
+    if not msg.from_user or (msg.from_user.is_bot and not msg.sender_chat):
         raise SkipHandler
     if not await _group_allowed(msg.chat.id):          # فقط گروهِ بات‌ساز؛ بازی‌ها روشن بودن لازم نیست
         raise SkipHandler

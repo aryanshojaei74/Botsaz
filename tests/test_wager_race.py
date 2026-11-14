@@ -491,3 +491,21 @@ def test_free_and_purchase_terms_are_single_sourced():
     src = open(PB.__file__, encoding="utf-8").read()
     assert src.count("قوانین ربات رایگان</b>") == 1        # فقط در FREE_BOT_TERMS، نه کپیِ جدا
     assert PB.FREE_BOT_TERMS in PB.bot_creation_rules_text() and PB.PURCHASE_TERMS in PB.bot_creation_rules_text()
+
+
+@pytest.mark.asyncio
+async def test_group_rules_also_answer_messages_sent_as_a_channel(env, monkeypatch):
+    """PATCH_RULES_FOR_CHANNEL_SENDERS_V1: نوشتن «قوانین بات ساز» با یوزرنیمِ کانال (sender_chat) قبلاً بی‌جواب می‌ماند."""
+    G._LAST_RULES.clear()
+    m = _Reply()
+    m.text = "قوانین بات ساز"
+    m.sender_chat = NS(id=-1001, title="کانال")
+    m.from_user = NS(id=136817688, is_bot=True, full_name="Channel", username="Channel_Bot")
+    await G.gg_rules(m)
+    assert len(m.sent) == 1 and "قوانین خرید" in m.sent[0]
+    # ربات (بدونِ sender_chat) همچنان نادیده گرفته می‌شود
+    from aiogram.dispatcher.event.bases import SkipHandler
+    b = _Reply(); b.text = "قوانین بات ساز"; b.sender_chat = None
+    b.from_user = NS(id=5, is_bot=True, full_name="bot", username="x")
+    with pytest.raises(SkipHandler):
+        await G.gg_rules(b)
