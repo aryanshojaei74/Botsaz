@@ -400,7 +400,10 @@ async def fulfil(bot: Bot, row, order_id: int, kind: str, *, by_admin: bool = Fa
                               "اگر انجام شده، دستی نفرست.", warn=True)
                 return
             except FragApiError as e:
-                logger.warning("fragapi: خرید رد شد: %s %s", e.status, e.codes)
+                # PATCH_FRAG_LOG_MSG_V1: متنِ خطای فرگمنت و سفارش هم لاگ شود (قبلاً فقط status/code بود و علت معلوم نمی‌شد)
+                logger.warning("fragapi: خرید رد شد: order=%s kind=%s user=%s qty=%s status=%s codes=%s msg=%r",
+                               order_id, kind, username, qty if kind == "stars" else months, e.status, e.codes,
+                               (e.message or "")[:200])
                 _hint = ""
                 if "can't gift" in (e.message or "").lower() or "cannot gift" in (e.message or "").lower():
                     _hint = ("\n\nℹ️ این خطا از خودِ فرگمنت می‌آید. اگر برایِ چند گیرندهٔ مختلف تکرار شد، "
