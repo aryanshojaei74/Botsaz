@@ -112,6 +112,9 @@ async def env(monkeypatch):
     monkeypatch.setattr(S, "_stars_admin_kb", stars_kb)
     monkeypatch.setattr(S, "_prm_admin_kb", stars_kb)
     monkeypatch.setattr(FA, "token_of", tok)
+
+    async def wal_ok(token): return {"balances": [{"currency": "ton", "amount": "50"}]}
+    monkeypatch.setattr(FA, "get_wallet", wal_ok)      # PATCH_FRAG_WALLET_PREFLIGHT_V1: پیش‌فرضِ تست‌ها: ولتِ پر
     store = {}
 
     async def sets(bid, k, v): store[k] = v
@@ -364,3 +367,37 @@ async def test_old_fragment_button_can_be_hidden(monkeypatch):
     _, kb2 = await S.smm_panels_content(1)
     datas2 = [b.callback_data for r in kb2.inline_keyboard for b in r]
     assert "smm:fragment:menu" not in datas2 and "fapi:menu" in datas2
+
+
+def test_ton_balance_parsing():
+    assert FA.ton_balance({"balances": [{"currency": "usdt_ton", "amount": "5"}, {"currency": "ton", "amount": "0.5"}]}) == 0.5
+    assert FA.ton_balance({"balance": "0.009"}) == 0.009
+    assert FA.ton_balance({}) is None and FA.ton_balance({"balances": [{"currency": "usdt_ton", "amount": "5"}]}) is None
+    assert FA.ton_balance({"balance": "x"}) is None
+
+
+@pytest.mark.asyncio
+async def test_low_wallet_reverts_with_warning_and_does_not_buy(env, monkeypatch):
+    async def wal(token): return {"balances": [{"currency": "ton", "amount": "0.009"}]}
+    async def buy(tok, u, q):
+        env.calls.append((u, q))
+        return {"id": "o1", "status": "COMPLETED"}
+    monkeypatch.setattr(FA, "get_wallet", wal)
+    monkeypatch.setattr(FA, "buy_stars", buy)
+    oid = await mk_order(env)
+    await FA.fulfil(env.bot, ROW, oid, "stars")
+    assert env.calls == [] and await status(env, oid) == "awaiting_admin"
+    assert env.notes and "ولت" in env.notes[-1] and "0.0090" in env.notes[-1] and "شارژ" in env.notes[-1]
+
+
+@pytest.mark.asyncio
+async def test_wallet_check_error_does_not_block_purchase(env, monkeypatch):
+    async def wal(token): raise FA.FragApiError("down", 500, [])
+    async def buy(tok, u, q):
+        env.calls.append((u, q))
+        return {"id": "o1", "status": "COMPLETED"}
+    monkeypatch.setattr(FA, "get_wallet", wal)
+    monkeypatch.setattr(FA, "buy_stars", buy)
+    oid = await mk_order(env)
+    await FA.fulfil(env.bot, ROW, oid, "stars")
+    assert env.calls == [("ali_x", 500)] and await status(env, oid) == "sent"

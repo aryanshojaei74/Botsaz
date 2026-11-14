@@ -44,6 +44,9 @@ _TIMEOUT_READ = 20
 _TIMEOUT_BUY = 150          # سفارشِ همگام (بدونِ webhook) تا تأییدِ بلاک‌چین طول می‌کشد
 MAX_AUTO_STARS = 5000
 MIN_STARS = 50
+# PATCH_FRAG_WALLET_PREFLIGHT_V1: زیرِ این موجودیِ TON حتی ارزان‌ترین سفارش (۵۰ ⭐) هم نمی‌شود؛ پیش از تماسِ خرید
+# سفارش به دستی برمی‌گردد و به مالک «ولت را شارژ کن» گفته می‌شود (قبلاً فقط خطایِ مبهمِ فرگمنت می‌آمد).
+MIN_WALLET_TON = 0.1
 _USERNAME_RE = re.compile(r"@([A-Za-z][A-Za-z0-9_]{2,31})")
 
 # کدهایِ خطایِ مستند: این‌ها یعنی «قبل از پرداخت رد شد» (پولی خرج نشده)
@@ -151,6 +154,19 @@ async def _call(method: str, path: str, token: str | None = None, *, body: dict 
 
 async def get_wallet(token: str) -> dict:
     return await _call("GET", "/v1/misc/wallet/", token) or {}
+
+
+def ton_balance(wallet: dict) -> float | None:
+    """موجودیِ TONِ پاسخِ /misc/wallet/ (balances[] یا balance)؛ ناشناخته ⇒ None (پیش‌پرداخت‌چک انجام نمی‌شود)."""
+    try:
+        for b in (wallet.get("balances") or []):
+            if str(b.get("currency", "")).lower() == "ton":
+                return float(b.get("amount"))
+        if wallet.get("balance") is not None:
+            return float(wallet.get("balance"))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    return None
 
 
 async def get_prices(token: str | None = None) -> dict:
@@ -390,6 +406,17 @@ async def fulfil(bot: Bot, row, order_id: int, kind: str, *, by_admin: bool = Fa
                 if months not in (3, 6, 12):
                     await _revert(bot, row, order_id, kind, "مدتِ پرمیوم نامعتبر است (فقط ۳/۶/۱۲ ماه).")
                     return
+            # === PATCH_FRAG_WALLET_PREFLIGHT_V1 === ولتِ تقریباً خالی ⇒ بدونِ تماسِ خرید، پیامِ روشن به مالک
+            try:
+                _bal = ton_balance(await get_wallet(token))
+            except Exception:
+                _bal = None          # استعلامِ موجودی خطا داد؛ مانعِ خرید نمی‌شود
+            if _bal is not None and _bal < MIN_WALLET_TON:
+                await _revert(bot, row, order_id, kind,
+                              f"موجودیِ ولتِ Fragment API کم است ({_bal:.4f} TON) و برایِ این سفارش کافی نیست.\n"
+                              "ولتِ TONِ اتصال را در fragment-api.com/dashboard شارژ کن؛ بعد همین سفارش را دوباره «اجرایِ خودکار» بزن. "
+                              "تا آن موقع سفارش‌هایِ جدید هم دستی می‌مانند.", warn=True)
+                return
             try:
                 res = (await buy_stars(token, username, qty) if kind == "stars"
                        else await gift_premium(token, username, months))
