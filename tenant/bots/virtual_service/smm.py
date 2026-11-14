@@ -2641,7 +2641,8 @@ async def smm_panels_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     for p in panels:
         conn_dot = "—" if p.last_check_ok is None else ("🟢" if p.last_check_ok else "🔴")
         active_mark = "" if p.is_active else " (غیرفعال)"
-        lines.append(f"{conn_dot} <b>{p.name}</b>{active_mark}")
+        _om = "⚡️ خودکار" if (p.order_mode or "manual") == "auto" else "⏳ تأییدِ ادمین"
+        lines.append(f"{conn_dot} <b>{p.name}</b>{active_mark} — ثبتِ سفارش: {_om}")
         rows.append([InlineKeyboardButton(text=f"{conn_dot} {p.name}{active_mark}",
                                           callback_data=f"smm:panel:detail:{p.id}")])
     # === PATCH_SMM_ONE_ENTRY_V1 ===
@@ -2745,6 +2746,7 @@ async def _panel_detail_content(bot_id: int, panel_id: int) -> tuple[str, Inline
     price_mode = await _panel_price_mode(bot_id, p.id)
     browse_pk = await _get_browsing_panel(bot_id)
     bulk_on = await _panel_bulk_enabled(bot_id, p.id)
+    order_mode_p = await _panel_order_mode(bot_id, p.id)
     from tenant.bots.virtual_service import smm_price_sync as _PS   # PATCH_SMM_PRICE_AUTOSYNC_V1
     price_auto = await _PS.panel_auto_on(bot_id, p.id)
     balance_txt = "—" if p.last_balance is None else f"{float(p.last_balance):,.2f} {p.last_currency}".strip()
@@ -2772,6 +2774,9 @@ async def _panel_detail_content(bot_id: int, panel_id: int) -> tuple[str, Inline
         [InlineKeyboardButton(text="⚡️ وضعیتِ پنل", callback_data="noop"),
          InlineKeyboardButton(text=("🟢 روشن" if p.is_active else "🔴 خاموش"),
                               callback_data=f"smm:panel:toggle:{p.id}")],
+        [InlineKeyboardButton(text="🧾 حالتِ ثبتِ سفارش", callback_data="noop"),
+         InlineKeyboardButton(text=("✅ خودکار" if order_mode_p == "auto" else "⏳ تأییدِ ادمین"),
+                              callback_data=f"smm:panel:ordmode:{p.id}")],
         [InlineKeyboardButton(text="🔁 بررسیِ وضعیت‌گرِ خودکار", callback_data="noop"),
          InlineKeyboardButton(text=("✅ فعال" if p.auto_check_enabled else "❌ غیرفعال"),
                               callback_data=f"smm:panel:autochk:{p.id}")],
@@ -2825,6 +2830,21 @@ async def smm_panel_detail(cb: CallbackQuery, bot: Bot):
     pid = int(cb.data.rsplit(":", 1)[1])
     await _render_panel_detail(cb.message, row.id, pid)
     await cb.answer()
+
+
+@smm_router.callback_query(F.data.startswith("smm:panel:ordmode:"))
+async def smm_panel_ordmode(cb: CallbackQuery, bot: Bot):
+    """تغییرِ سریعِ «حالتِ ثبتِ سفارش» (خودکار ⇄ تأییدِ ادمین) مستقیم از صفحهٔ ارائه‌دهنده."""
+    row = await _owner(cb, bot)
+    if not row:
+        await cb.answer()
+        return
+    pid = int(cb.data.rsplit(":", 1)[1])
+    cur = await _panel_order_mode(row.id, pid)
+    new = "manual" if cur == "auto" else "auto"
+    await _panel_set_setting(row.id, pid, "order_mode", new)
+    await cb.answer("✅ ثبتِ سفارش روی «خودکار» رفت" if new == "auto" else "⏳ ثبتِ سفارش روی «تأییدِ ادمین» رفت")
+    await _render_panel_detail(cb.message, row.id, pid)
 
 
 @smm_router.callback_query(F.data.startswith("smm:panel:refresh:"))
