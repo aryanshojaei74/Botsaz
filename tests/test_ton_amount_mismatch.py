@@ -233,3 +233,15 @@ async def test_late_expired_invoice_is_polled_and_credited(env, monkeypatch):
         ch.expires_at = dt.datetime.utcnow() - dt.timedelta(hours=TD.LATE_GRACE_HOURS + 1)
         await s.commit()
     assert await TD.late_bot_ids() == []                       # خارج از مهلتِ ۲۴ ساعته ⇒ نه
+
+
+def test_extract_comment_fallbacks():
+    import base64
+    ex = TD._extract_comment
+    assert ex({"message": "BS5760C0"}) == "BS5760C0"                                  # حالتِ عادی
+    assert ex({"message": "", "msg_data": {"@type": "msg.dataText", "text": base64.b64encode(b"BS5760C0").decode()}}) == "BS5760C0"
+    boc = b"\xb5\xee\x9c\x72\x01\x01\x01\x00\x00\x00\x00\x00BS5760C0\x00"            # بدنهٔ خام که حاویِ متن است
+    assert ex({"message": "", "msg_data": {"@type": "msg.dataRaw", "body": base64.b64encode(boc).decode()}}) == "BS5760C0"
+    assert ex({"message": "سلام", "msg_data": {"text": base64.b64encode(b"BS1A2B3C").decode()}}) == "سلام BS1A2B3C"
+    assert ex({"message": ""}) == "" and ex({}) == ""
+    assert ex({"message": "hello", "msg_data": {"body": "!!notbase64!!"}}) == "hello"

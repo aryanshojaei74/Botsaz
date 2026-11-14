@@ -250,6 +250,34 @@ _TC_FAILS = [0]
 _TC_LAST_WARN = [-1e9]
 
 
+_MEMO_BYTES = re.compile(rb"BS[0-9A-Fa-f]{6}")
+
+
+def _extract_comment(in_msg: dict) -> str:
+    """PATCH_TON_COMMENT_FALLBACK_V1: کامنتِ واریز. ۱) فیلدِ message (متنِ رمزگشایی‌شدهٔ toncenter)؛
+    ۲) msg_data.text (base64)؛ ۳) اگر کیف‌پولی کامنت را به شکلی فرستاده که toncenter رمزگشایی نکرده (msg_data خام/BOC)،
+    کدِ فاکتور (BS + ۶ کاراکترِ hex) مستقیم از بایت‌هایِ بدنه پیدا می‌شود. فقط در صورتِ پیداشدنِ الگو؛ وگرنه همان «»."""
+    import base64
+    msg = (in_msg.get("message") or "").strip()
+    if msg and _MEMO_BYTES.search(msg.encode("utf-8", "ignore")):
+        return msg
+    data = in_msg.get("msg_data") or {}
+    blobs = []
+    for key in ("text", "body"):
+        v = data.get(key) if isinstance(data, dict) else None
+        if isinstance(v, str) and v:
+            blobs.append(v)
+    for b64 in blobs:
+        try:
+            raw = base64.b64decode(b64 + "=" * (-len(b64) % 4), altchars=b"-_", validate=False)
+        except Exception:  # noqa: BLE001
+            continue
+        m = _MEMO_BYTES.search(raw)
+        if m:
+            return (msg + " " + m.group(0).decode("ascii")).strip() if msg else m.group(0).decode("ascii")
+    return msg
+
+
 async def fetch_incoming(address: str, limit: int = 100) -> list[dict]:   # PATCH_TON_FETCH_100_V1: ۴۰ تراکنشِ اخیر برایِ کیف‌پولِ پرتردد کم بود
     """تراکنش‌هایِ اخیرِ یک آدرس از toncenter.
 
@@ -334,7 +362,7 @@ async def fetch_incoming(address: str, limit: int = 100) -> list[dict]:   # PATC
         out.append({
             "hash": ((tx.get("transaction_id") or {}).get("hash") or "")[:80],
             "value_nano": value,
-            "comment": (in_msg.get("message") or "").strip(),
+            "comment": _extract_comment(in_msg),
             "source": in_msg.get("source") or "",
         })
     _FETCH_CACHE[_ck] = (_time.monotonic(), list(out))
