@@ -9060,6 +9060,12 @@ async def show_profile(msg, bot_id: int, u: BotUser):
             kb_rows.append([InlineKeyboardButton(text="🔑 خرید دسترسیِ API", callback_data="pubapi:key")])
     except Exception:
         logger.exception("[profile] نمایشِ دکمهٔ API ناموفق بود")
+    # === PATCH_PROFILE_MYORDERS_BTN_V1 === (ARTACO) دکمهٔ «📦 سفارش‌های من» داخلِ صفحهٔ مشخصات/حساب کاربری — رباتِ خدماتِ مجازی
+    try:
+        if _pf_brow and _pf_brow.field == "virtual_service" and (await get_setting(bot_id, "profile_orders_btn", "1")) != "0":
+            kb_rows.insert(0, [InlineKeyboardButton(text="📦 سفارش‌های من", callback_data="prof:orders")])
+    except Exception:
+        logger.exception("[profile] نمایشِ دکمهٔ سفارش‌های من ناموفق بود")
     if back_row:
         kb_rows.append(back_row)
     _kb = InlineKeyboardMarkup(inline_keyboard=kb_rows) if kb_rows else None
@@ -9079,6 +9085,18 @@ async def show_profile(msg, bot_id: int, u: BotUser):
             logger.warning("[profile] ارسالِ صفحهٔ مشخصات رد شد (%s)؛ نسخهٔ سادهٔ بعدی امتحان می‌شود", e)
     if last_exc is not None:
         raise last_exc
+
+
+@tenant_router.callback_query(F.data == "prof:orders")
+async def profile_open_orders(cb: CallbackQuery, bot: Bot):
+    """PATCH_PROFILE_MYORDERS_BTN_V1: دکمهٔ «📦 سفارش‌های من» در صفحهٔ مشخصات ⇒ همان فهرستِ سفارش‌هایِ منویِ اصلی."""
+    row = await get_bot_row(bot)
+    if not row or row.field != "virtual_service":
+        await cb.answer()
+        return
+    await cb.answer()
+    from tenant.bots.virtual_service.smm import show_smm_myorders_to_user
+    await show_smm_myorders_to_user(bot, cb, row.id)
 
 
 # === PATCH_PUBLIC_API_PER_USER_V1 ===
@@ -14344,7 +14362,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "606"
+BUILD_ID = "607"
 
 
 @tenant_router.message(Command("version"))

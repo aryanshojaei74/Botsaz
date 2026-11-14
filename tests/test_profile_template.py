@@ -678,3 +678,28 @@ def test_profile_admin_handlers_are_registered_on_the_router():
         assert f'F.data == "{cb}"' in src, cb
     assert 'F.data.startswith("set:pf:rst:")' in src
     assert "AdminFSM.profile_template" in src
+
+
+# ── PATCH_PROFILE_MYORDERS_BTN_V1 (ARTACO): دکمهٔ «سفارش‌های من» در صفحهٔ مشخصات (خدماتِ مجازی) ──
+@pytest.mark.asyncio
+async def test_profile_shows_my_orders_button_only_for_virtual_service(db, monkeypatch):
+    import tenant
+    maker, ids, row = db
+    ali = await user(maker, ids)
+
+    async def kb_of(field, setting=None):
+        async with maker() as s:
+            b = await s.get(models.Bot, ids["bot"])
+            b.field = field
+            await s.commit()
+        if setting is not None:
+            await tenant.set_setting(ids["bot"], "profile_orders_btn", setting)
+        tenant._SETTING_CACHE.clear()
+        m = Msg()
+        await tenant.show_profile(m, ids["bot"], ali)
+        mk = m.sent[-1][1].get("reply_markup")
+        return [b_.callback_data for r_ in (mk.inline_keyboard if mk else []) for b_ in r_]
+
+    assert "prof:orders" in await kb_of("virtual_service")
+    assert "prof:orders" not in await kb_of("vpn_sales")                      # رباتِ VPN: نه
+    assert "prof:orders" not in await kb_of("virtual_service", setting="0")   # مالک خاموش کرده باشد: نه
