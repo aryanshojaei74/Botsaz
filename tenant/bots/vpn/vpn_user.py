@@ -778,6 +778,14 @@ def _parse_wireguard_uri(uri: str) -> str | None:
             lines.append(f"DNS = {dns}")
         if mtu:
             lines.append(f"MTU = {mtu}")
+        # === PATCH_WG_AMNEZIA_KEEP_V1 === (Whale Support) فیلدهایِ AmneziaWG (Jc/Jmin/Jmax/S1…/H1…/I1…) قبلاً
+        # موقعِ بازسازی از wireguard:// دور ریخته می‌شد؛ فایل کوچک‌تر از فایلِ پنل می‌شد و روی کلاینتِ
+        # آمنزیا handshake نمی‌شد. فقط همین کلیدهایِ شناخته‌شده نگه داشته می‌شوند (نه هر پارامترِ دلخواه).
+        for _ak in ("jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4",
+                    "i1", "i2", "i3", "i4", "i5"):
+            _av = _q(_ak)
+            if _av:
+                lines.append(f"{_ak.capitalize()} = {_av}")
         lines += ["", "[Peer]", f"PublicKey = {public_key}"]
         if preshared:  # === PATCH_WG_SUB_FALLBACK_V1 ===
             lines.append(f"PresharedKey = {preshared}")
