@@ -3,7 +3,7 @@ daily_report.py — «📅 گزارشِ روزانه» به تلگرامِ ما�
 
 هر روز در ساعتِ دلخواه (به وقتِ ایران) خلاصهٔ ۲۴ ساعتِ گذشته برایِ مالکِ ربات فرستاده می‌شود: کاربرانِ جدید، سفارش/فروش،
 شارژها، زیرمجموعه‌ها، موجودیِ کلِ کیف‌پول‌ها و (ربات VPN) سرویس‌هایِ نزدیک به انقضا. پیش‌فرض خاموش؛ متن قابلِ ویرایش است
-با متغیرهایِ {{date}} {{new_users}} {{orders}} {{sales}} {{charges}} {{charge_total}} {{referrals}} {{wallet_total}} {{expiring}}.
+با متغیرهایِ {{date}} {{new_users}} {{orders}} {{sales}} {{charges}} {{charge_total}} {{referrals}} {{wallet_total}} {{expiring}} {{gb_sold}}.
 دسترسی: «آمار و گزارشات ← 📈 آمار زمانی ← 📅 گزارشِ روزانه».  callbackها: drep:*
 """
 from __future__ import annotations
@@ -31,7 +31,7 @@ daily_report_router = Router(name="daily_report")
 
 _IR = _dt.timedelta(hours=3, minutes=30)
 INTERVAL = 300
-VARS = ("date", "new_users", "orders", "sales", "charges", "charge_total", "referrals", "wallet_total", "expiring")
+VARS = ("date", "new_users", "orders", "sales", "charges", "charge_total", "referrals", "wallet_total", "expiring", "gb_sold")
 
 DEFAULT_TEXT = ("📅 <b>گزارشِ روزانه — {{date}}</b>\n\n"
                 "🆕 کاربرانِ جدید: <b>{{new_users}}</b>\n"
@@ -64,6 +64,9 @@ async def metrics(bot_id: int, now: _dt.datetime | None = None) -> dict:
                                     ReferralJoin.bot_id, bot_id, since)
         new_users = int(await s.scalar(select(func.count(BotUser.id)).where(BotUser.bot_id == bot_id, BotUser.joined_at >= since)) or 0)
         wallet = int(await s.scalar(select(func.coalesce(func.sum(BotUser.balance), 0)).where(BotUser.bot_id == bot_id)) or 0)
+        from models import Order as _Order          # PATCH_GB_SOLD_STATS_V1
+        gb_sold = int(await s.scalar(select(func.coalesce(func.sum(_Order.volume_gb * func.coalesce(_Order.count, 1)), 0)).where(
+            _Order.bot_id == bot_id, _Order.status == "paid", _Order.volume_gb > 0, _Order.created_at >= since)) or 0)
         soon = int(await s.scalar(select(func.count(PanelAccount.id)).where(
             PanelAccount.bot_id == bot_id, PanelAccount.status == "active", PanelAccount.expires_at.is_not(None),
             PanelAccount.expires_at >= now, PanelAccount.expires_at <= now + _dt.timedelta(days=3))) or 0)
@@ -74,7 +77,8 @@ async def metrics(bot_id: int, now: _dt.datetime | None = None) -> dict:
     except Exception:      # noqa: BLE001
         date = ir.strftime("%Y-%m-%d")
     return {"date": date, "new_users": _n(new_users), "orders": _n(orders), "sales": _n(sales), "charges": _n(ch),
-            "charge_total": _n(cht), "referrals": _n(rf), "wallet_total": _n(wallet), "expiring": _n(soon)}
+            "charge_total": _n(cht), "referrals": _n(rf), "wallet_total": _n(wallet), "expiring": _n(soon),
+            "gb_sold": _n(gb_sold)}
 
 
 def render(template: str, m: dict) -> str:
@@ -84,7 +88,12 @@ def render(template: str, m: dict) -> str:
 async def build(bot_id: int, now: _dt.datetime | None = None) -> str:
     from tenant import get_setting
     tpl = (await get_setting(bot_id, "daily_report_text", "") or "").strip() or DEFAULT_TEXT
-    return render(tpl, await metrics(bot_id, now))
+    m = await metrics(bot_id, now)
+    text = render(tpl, m)
+    # PATCH_GB_SOLD_STATS_V1: متنِ پیش‌فرض برایِ رباتی که حجم فروخته، خطِ «حجمِ فروخته‌شده» را هم دارد
+    if tpl is DEFAULT_TEXT and m.get("gb_sold") not in ("0", 0):
+        text += f"\n📦 حجمِ فروخته‌شدهٔ ۲۴ ساعتِ گذشته: <b>{m['gb_sold']}</b> گیگ"
+    return text
 
 
 # ───────────────────────── ارسال ─────────────────────────

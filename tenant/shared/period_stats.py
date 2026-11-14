@@ -166,6 +166,29 @@ async def profit_report(bot_id: int, now_utc=None) -> list[tuple[str, int, int, 
     return out
 
 
+async def gb_report(bot_id: int, now_utc=None) -> list[tuple[str, int, int]]:
+    """PATCH_GB_SOLD_STATS_V1 (پیشنهاد #213): [(برچسب، تعدادِ سفارشِ VPN، مجموعِ گیگابایتِ فروخته‌شده)]
+    فقط سفارش‌هایِ پرداخت‌شدهٔ VPN (جدولِ Order)؛ حجمِ هر سفارش × تعداد. سرویسِ نامحدود (۰ گیگ) در جمعِ گیگ نمی‌آید."""
+    out = []
+    async with Session() as s:
+        for label, since in period_starts(now_utc):
+            q = select(func.count(), func.coalesce(func.sum(Order.volume_gb * func.coalesce(Order.count, 1)), 0)).where(
+                Order.bot_id == bot_id, Order.status == "paid", Order.volume_gb > 0)
+            if since is not None:
+                q = q.where(Order.created_at >= since)
+            r = (await s.execute(q)).one()
+            out.append((label, int(r[0] or 0), int(r[1] or 0)))
+    return out
+
+
+def _gb_block(rows: list[tuple[str, int, int]]) -> str:
+    lines = ["<b>آمار حجمِ فروخته‌شده (VPN):</b>"]
+    for label, n, gb in rows:
+        lines.append(f"• {label}: <b>{_fa(gb)}</b> گیگ — {_fa(n)} سفارش")
+    lines.append("<i>سرویس‌هایِ نامحدود در جمعِ گیگ نیستند.</i>")
+    return "\n".join(lines)
+
+
 def _fees_block(rows: list[tuple[str, int, int]]) -> str:
     lines = ["<b>آمار کارمزد:</b>"]
     for label, tr, gm in rows:
@@ -200,10 +223,17 @@ async def build_text(bot_id: int, now_utc=None) -> str:
     except Exception:
         logger.exception("period_stats: آمارِ کارمزد/سود ناموفق بود (بقیهٔ گزارش نمایش داده شد)")
         fp = ""
+    gb_text = ""
+    try:
+        gb = await gb_report(bot_id, now_utc)
+        if gb and gb[0][2] > 0:                    # فقط رباتی که تا حالا حجم فروخته (فروشِ VPN)
+            gb_text = "\n\n📦 " + _gb_block(gb)
+    except Exception:
+        logger.exception("period_stats: آمارِ حجمِ فروخته‌شده ناموفق بود (بقیهٔ گزارش نمایش داده شد)")
     return ("📈 <b>آمار زمانی</b>\n\n"
             + "📋 " + _block("آمار سفارشات", o, "سفارش", "فروش") + "\n\n"
             + "👛 " + _block("آمار افزایش موجودی‌ها", w, "شارژ", "مجموع") + "\n\n"
-            + "👥 " + _block("آمار زیرمجموعه‌گیری", r, "نفر", "پاداشِ پرداخت‌شده") + fp)
+            + "👥 " + _block("آمار زیرمجموعه‌گیری", r, "نفر", "پاداشِ پرداخت‌شده") + gb_text + fp)
 
 
 @pst_router.callback_query(F.data == "pst:menu")
