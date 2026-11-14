@@ -1254,6 +1254,21 @@ def _remaining_days_text(expiry: "_dt.datetime | None" = None, expiry_ms: int = 
         return "—"
 
 
+def _svc_time_expired(usage, fallback_expiry=None) -> bool:
+    """زمانِ سرویس تمام شده؟ (expiryTime پنل به میلی‌ثانیه؛ وگرنه تاریخِ ثبت‌شده). بی‌انقضا/نامشخص ⇒ False."""
+    import time as _t
+    try:
+        ms = int((usage or {}).get("expiryTime", 0) or 0) if isinstance(usage, dict) else 0
+    except (TypeError, ValueError):
+        ms = 0
+    if not ms and fallback_expiry:
+        try:
+            ms = int(fallback_expiry.replace(tzinfo=_dt.timezone.utc).timestamp() * 1000)
+        except Exception:
+            ms = 0
+    return bool(ms) and ms < int(_t.time() * 1000)
+
+
 def _usage_block(usage: dict, fallback_expiry: "_dt.datetime | None" = None, remaining: bool = False) -> str:
     """بلوک کامل وضعیت زنده با نوار پیشرفت، مثل ربات سوپرا.
 
@@ -6549,6 +6564,7 @@ async def vpn_service(cb: CallbackQuery, bot: Bot):
     _hide_addvol = (await _gs_so(row.id, "svc_addvol_btn", "1")) == "0"
     _renew_simple = (await _gs_so(row.id, "svc_renew_simple", "0")) == "1"
     usage_blk = _usage_block(None, fallback_expiry, _remaining_mode)
+    usage = None     # PATCH_ADDVOL_HIDE_EXPIRED_V1
     if panel:
         client = await _panel_client(panel)
         try:
@@ -6604,7 +6620,9 @@ async def vpn_service(cb: CallbackQuery, bot: Bot):
             [InlineKeyboardButton(text=("♻️ تمدید سرویس" if _renew_simple else "♻️ تمدید مجدد سرویس (زمان + حجم)"),
                                   callback_data=f"vren:{aid}",
                                   style=await _ibs(_bid, "ibtn:renew") or ButtonStyle.SUCCESS)],
-            *([] if _hide_addvol else [
+            # === PATCH_ADDVOL_HIDE_EXPIRED_V1 === (MidnightSoul) وقتی زمانِ سرویس تمام شده «فقط افزایش حجم» فایده ندارد
+            # و مشتری‌ها اشتباهی آن را می‌زدند؛ فقط «تمدید» نشان داده می‌شود.
+            *([] if (_hide_addvol or _svc_time_expired(usage, fallback_expiry)) else [
                 [InlineKeyboardButton(text="📈 فقط افزایش حجم (بدون تغییر زمان)",
                                       callback_data=f"vadd:{aid}",
                                       style=await _ibs(_bid, "ibtn:add_volume"))]]),
