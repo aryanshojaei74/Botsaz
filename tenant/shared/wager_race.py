@@ -92,6 +92,33 @@ async def twr_hint(msg: Message, bot: Bot):
     await msg.reply(f"💰 برایِ این بازی مبلغ را هم بنویس (به تومان، {lim}):\n<code>{game} {ex}</code>", parse_mode="HTML")
 
 
+@wager_race_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(R._is_free))
+async def twr_free_create(msg: Message, bot: Bot):
+    """PATCH_FREE_GAME_V1: «سرعت» (فقط اسمِ بازی) ⇒ بازیِ رایگان، اگر مالک روشن کرده باشد؛ وگرنه ساکت."""
+    from tenant import get_or_create_user
+    game = R.parse_free_command(msg.text)
+    if not msg.from_user or msg.from_user.is_bot or msg.sender_chat:
+        raise SkipHandler
+    from bot_addons import WAGER_ADDON, addon_active, wager_eligible
+    row, _adm = await _row_and_admin(bot, msg.from_user.id)
+    if (not row or not wager_eligible(row.field, row.plan) or not await addon_active(row.id, WAGER_ADDON)
+            or not await core.master_enabled(row.id)):
+        raise SkipHandler
+    if game == "random":
+        if not await R.random_pool(row.id):
+            raise SkipHandler
+    elif not await core.game_enabled(game, row.id):
+        raise SkipHandler
+    await get_or_create_user(row.id, msg.from_user.id, msg.from_user.full_name or "", msg.from_user.username or "")
+    try:
+        await R.free_create(msg, bot, row.id, game)
+    except SkipHandler:
+        raise
+    except Exception:  # noqa: BLE001
+        logger.exception("tenant free race: create failed (bot=%s chat=%s)", row.id, msg.chat.id)
+        await msg.reply("❌ ساخت بازی با خطا روبه‌رو شد؛ چند لحظه بعد دوباره امتحان کن.")
+
+
 @wager_race_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_create))
 async def twr_create(msg: Message, bot: Bot):
     from tenant import get_or_create_user
@@ -251,5 +278,5 @@ async def twr_answer(msg: Message, bot: Bot):
     R.LIVE.pop(live["wid"], None)
     await R._edit(bot, w)
     await msg.reply(f"🏁 <b>{_html.escape(msg.from_user.full_name or str(uid))}</b> برنده شد!\n"
-                    f"🎁 {_rial(w.payout_amount)} به کیف پولش اضافه شد.", parse_mode="HTML",
+                    f"{R.prize_line(w)}", parse_mode="HTML",
                     reply_markup=await core.result_kb(w))

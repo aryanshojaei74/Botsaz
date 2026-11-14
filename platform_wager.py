@@ -276,6 +276,8 @@ def _add_txn(s, bot_id: int, u, amount: int, kind: str, note: str) -> None:
 
 
 async def _credit(s, uid: int, amount: int, kind: str, note: str, bot_id: int = 0) -> None:
+    if not amount:                                    # PATCH_FREE_GAME_V1: بازیِ رایگان (مبلغ ۰) هیچ تراکنشِ خالی‌ای نمی‌سازد
+        return
     u = await _lock_user(s, uid, bot_id)
     if u is None:                                     # نباید پیش بیاید؛ ولی پول گم نشود
         u = (BotUser(bot_id=bot_id, telegram_id=uid, full_name=str(uid), balance=0) if bot_id
@@ -386,6 +388,46 @@ async def create_wager(game: str, chat_id: int, creator: tuple, amount: int, tar
         s.add(w)
         await s.flush()
         _add_txn(s, bot_id, u, -amount, "wager_reserve", f"رزرو {{bet}} #{w.id}")
+        await s.commit()
+        return w, None
+
+
+def _day_start_utc() -> datetime:
+    """شروعِ امروز به وقتِ تهران (UTC+3:30) به‌صورتِ UTC — برایِ سقفِ روزانهٔ بازیِ رایگان."""
+    local = datetime.utcnow() + timedelta(hours=3, minutes=30)
+    return local.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=3, minutes=30)
+
+
+async def free_used_today(s, bot_id: int, uid: int) -> int:
+    """PATCH_FREE_GAME_V1: تعدادِ بازی‌هایِ رایگانِ شروع‌شدهٔ امروزِ این کاربر (سازنده یا حریف)."""
+    return int(await s.scalar(select(func.count(PlatformWager.id)).where(
+        func.coalesce(PlatformWager.bot_id, 0) == bot_id, PlatformWager.amount == 0,
+        PlatformWager.opponent_id.is_not(None), PlatformWager.created_at >= _day_start_utc(),
+        or_(PlatformWager.creator_id == uid, PlatformWager.opponent_id == uid))) or 0)
+
+
+async def create_free_wager(game: str, chat_id: int, creator: tuple, target: tuple | None, ttl: int,
+                            pfee: int, limit: int, bot_id: int = 0):
+    """PATCH_FREE_GAME_V1: بازیِ رایگان (بدونِ شرط). pfee = هزینهٔ ورودِ هر بازیکن (بعد از پیوستنِ حریف)، limit = سقفِ روزانهٔ هر نفر (۰ = نامحدود).
+    خروجی: (wager|None, پیام خطا|None)."""
+    cid, cname, cuser = creator
+    async with Session() as s:
+        if limit and await free_used_today(s, bot_id, cid) >= limit:
+            return None, f"⛔️ سقفِ بازیِ رایگانِ امروزِ تو ({limit} بازی) پر شده؛ فردا دوباره بیا."
+        if await _active_count(s, cid, bot_id) >= MAX_ACTIVE:
+            return None, _t(f"❌ هم‌زمان حداکثر {MAX_ACTIVE} {{bet}} باز می‌توانی داشته باشی.", bot_id)
+        if pfee:
+            u = await _lock_user(s, cid, bot_id)
+            if not u or u.is_banned or _money(u.balance) < pfee:
+                return None, f"❌ برای بازیِ رایگان باید {_rial(pfee)} هزینهٔ ورود در کیف پولت باشد."
+        w = PlatformWager(
+            bot_id=bot_id, chat_id=chat_id, game=game, creator_id=cid, creator_name=cname or "", creator_username=cuser or None,
+            target_id=target[0] if target else 0, target_name=(target[1] if target else "") or "",
+            target_username=(target[2] if target else None) or None, amount=0, fee_pct=0, fee_amount=0,
+            payout_amount=0, status="pending", expires_at=_now() + timedelta(seconds=ttl),
+            state=json.dumps({"free": 1, "pfee": int(pfee), "plimit": int(limit)}))
+        s.add(w)
+        await s.flush()
         await s.commit()
         return w, None
 
@@ -691,6 +733,11 @@ def _head(w: PlatformWager) -> str:
 
 def _money_lines(w: PlatformWager) -> str:
     wd = words(w.bot_id or 0)
+    if not _money(w.amount):                          # PATCH_FREE_GAME_V1
+        pf = int(_st(w).get("pfee") or 0)
+        return ("🆓 <b>بازیِ رایگان</b> — جایزهٔ پولی ندارد\n"
+                + (f"🎟 هزینهٔ ورود: <b>{_rial(pf)}</b> از هر بازیکن (بعد از پیوستنِ حریف کم می‌شود؛ برنگشتنی)" if pf
+                   else "🎟 هزینهٔ ورود: ندارد"))
     return (f"💰 {wd['stake']} هر نفر: <b>{_rial(w.amount)}</b>\n"
             f"💸 کارمزد: <b>{_rial(w.fee_amount)}</b> ({float(w.fee_pct or 0):g}٪)\n"
             f"🏆 جایزهٔ برنده: <b>{_rial(w.payout_amount)}</b>")
@@ -875,7 +922,7 @@ async def result_kb(w: PlatformWager):
     """=== PATCH_WAGER_RESULT_KB_V1 === (فدایی) نتیجهٔ همهٔ بازی‌هایِ ربات‌هایِ مشتری یک شکل: همان پیامِ بازی ادیت شود و زیرش
     دکمه‌هایِ شیشه‌ایِ «🎁 جایزهٔ برنده / 💎 موجودیِ برنده / ❌ موجودیِ بازنده» (مثلِ نتیجهٔ بازیِ قبلی) بیاید.
     ربات اصلی هم همین را دارد (فدایی). فقط وقتی برنده دارد؛ مساوی/لغو/برگشتِ پول ⇒ None (همان کیبوردِ render می‌ماند)."""
-    if w.status != "settled" or not w.winner_id:
+    if w.status != "settled" or not w.winner_id or not _money(getattr(w, "amount", 1)):      # PATCH_FREE_GAME_V1: بازیِ رایگان جایزه/دکمهٔ موجودی ندارد
         return None
     loser_id = w.opponent_id if w.winner_id == w.creator_id else w.creator_id
     ids = [w.winner_id, loser_id]

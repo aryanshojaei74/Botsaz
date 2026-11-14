@@ -139,3 +139,106 @@ async def test_tiers_input_flow_and_menu(env):
     assert "از 20 بازی" in text and any(b.callback_data == "pgrk:stats" for r in kb.inline_keyboard for b in r)
     await K._tiers_input(Msg("/clear"), St(), 0, "pgrk", "pgrk:back")
     assert (await K.load_config(0))[1] == []
+
+
+# ───────────── PATCH_FREE_GAME_V1: بازیِ رایگان ─────────────
+def test_parse_free_command():
+    for t, g in (("سرعت", "speed"), ("ریاضی", "math"), ("حدس عدد", "guess"), ("رندوم", "random"), ("تصادفی", "random"),
+                 ("حدس ایموجی", "emoji"), ("ایموجی", "emoji"), ("کوییز", "quiz"), ("درهم", "scramble"), ("الگو", "pattern")):
+        assert R.parse_free_command(t) == g, t
+    for t in ("سرعت 1000", "شرطبندی سرعت", "سلام", "بازی سرعت"):
+        assert R.parse_free_command(t) is None, t
+
+
+@pytest.mark.asyncio
+async def test_free_cfg_defaults_and_save(env):
+    fc = await K.free_cfg(0)
+    assert fc == {"on": False, "limit": 5, "fee": 0}
+    await K.save_kv(0, "free_on", "1")
+    await K.save_kv(0, "free_limit", "2")
+    await K.save_kv(0, "free_fee", "500")
+    assert await K.free_cfg(0) == {"on": True, "limit": 2, "fee": 500}
+
+
+async def _bal(mk, uid):
+    async with mk() as s:
+        return int((await s.scalar(select(models.PlatformUser).where(models.PlatformUser.telegram_id == uid))).balance)
+
+
+@pytest.mark.asyncio
+async def test_free_game_charges_entry_fee_only_and_pays_no_prize(env):
+    mk = env
+    w, err = await W.create_free_wager("speed", CHAT, (1, "u1", None), None, 300, 500, 5)
+    assert err is None and int(w.amount) == 0 and await _bal(mk, 1) == 1_000_000       # هنوز چیزی کم نشده
+    t, kb = R.render_race(w)
+    assert "بازیِ رایگان" in t and "500" in t
+    r = await R.join_race(w.id, (2, "u2", None))
+    assert r.err is None and r.w.status == "playing"
+    assert await _bal(mk, 1) == 999_500 and await _bal(mk, 2) == 999_500               # هزینهٔ ورودِ هر دو
+    won = await R.settle_to(w.id, 2)
+    assert won.status == "settled" and await _bal(mk, 2) == 999_500 and await _bal(mk, 1) == 999_500   # جایزهٔ پولی نیست
+    assert "جایزهٔ پولی ندارد" in R.prize_line(won)
+    async with mk() as s:
+        kinds = [r_.kind for r_ in (await s.scalars(select(models.PlatformTxn))).all()]
+    assert kinds.count("wager_fee") == 2 and "wager_prize" not in kinds and "wager_stake" not in kinds
+
+
+@pytest.mark.asyncio
+async def test_free_game_without_fee_touches_no_wallet(env):
+    mk = env
+    w, _ = await W.create_free_wager("math", CHAT, (1, "u1", None), None, 300, 0, 0)
+    r = await R.join_race(w.id, (2, "u2", None))
+    assert r.err is None
+    await R.settle_to(w.id, 1)
+    assert await _bal(mk, 1) == 1_000_000 and await _bal(mk, 2) == 1_000_000
+    async with mk() as s:
+        assert (await s.scalars(select(models.PlatformTxn))).all() == []
+
+
+@pytest.mark.asyncio
+async def test_free_daily_limit_and_insufficient_fee(env):
+    mk = env
+    for _ in range(2):
+        w, err = await W.create_free_wager("math", CHAT, (1, "u1", None), None, 300, 0, 2)
+        assert err is None
+        assert (await R.join_race(w.id, (2, "u2", None))).err is None
+        await R.settle_to(w.id, 1)
+    w, err = await W.create_free_wager("math", CHAT, (1, "u1", None), None, 300, 0, 2)
+    assert w is None and "سقف" in err
+    w, err = await W.create_free_wager("math", CHAT, (2, "u2", None), None, 300, 0, 2)    # حریف هم همین سقف را دارد
+    assert w is None and "سقف" in err
+    w, err = await W.create_free_wager("math", CHAT, (1, "u1", None), None, 300, 2_000_000, 0)
+    assert w is None and "هزینهٔ ورود" in err
+
+
+@pytest.mark.asyncio
+async def test_free_games_do_not_count_in_stats_or_rank(env):
+    mk = env
+    w, _ = await W.create_free_wager("math", CHAT, (1, "u1", None), None, 300, 0, 0)
+    await R.join_race(w.id, (2, "u2", None))
+    await R.settle_to(w.id, 2)
+    assert await K.player_stats(0, 10) == []
+    async with mk() as s:
+        assert await K.rank_count(s, 0, 2, "games") == 0
+
+
+@pytest.mark.asyncio
+async def test_free_settings_screen_and_input(env):
+    out = []
+
+    class Msg:
+        def __init__(self, text): self.text = text
+        async def answer(self, text, **k): out.append(text)
+
+    class St:
+        async def clear(self): pass
+    text, kb = await K._free_view(0, "pgrk")
+    cbs = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert "خاموش" in text and {"pgrk:fon", "pgrk:flim", "pgrk:ffee", "pgrk:menu"} <= set(cbs)
+    await K._free_input(Msg("abc"), St(), 0, "free_limit", "pgrk")
+    assert "عدد" in out[-1]
+    await K._free_input(Msg("۳"), St(), 0, "free_limit", "pgrk")
+    await K._free_input(Msg("1,500"), St(), 0, "free_fee", "pgrk")
+    assert await K.free_cfg(0) == {"on": False, "limit": 3, "fee": 1500}
+    menu_text, menu_kb = await K._menu_view(0, "pgrk", "pgrk:back")
+    assert any(b.callback_data == "pgrk:free" for r in menu_kb.inline_keyboard for b in r)

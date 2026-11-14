@@ -102,13 +102,38 @@ async def save_config(bot_id: int, *, basis: str | None = None, tiers_text: str 
             await core._set(f"platform_wager_{KEY_TIERS}", tiers_text)
 
 
+async def save_kv(bot_id: int, key: str, value: str) -> None:
+    import platform_wager as core
+    if bot_id:
+        from tenant import set_setting
+        await set_setting(bot_id, f"wager_game_{key}", value)
+    else:
+        await core._set(f"platform_wager_{key}", value)
+
+
+async def free_cfg(bot_id: int = 0) -> dict:
+    """PATCH_FREE_GAME_V1: {on, limit (سقفِ روزانهٔ هر نفر؛ ۰=نامحدود)، fee (هزینهٔ ورودِ هر بازیکن به تومان)}. پیش‌فرض: خاموش، ۵ بازی، بدونِ هزینه."""
+    from config import Session
+    async with Session() as s:
+        on = (await _read(s, bot_id, "free_on", "0")).strip() == "1"
+        lim = (await _read(s, bot_id, "free_limit", "5")).strip()
+        fee = (await _read(s, bot_id, "free_fee", "0")).strip()
+
+    def _i(v, d):
+        try:
+            return max(0, int(str(v).translate(_FA).replace(",", "")))
+        except ValueError:
+            return d
+    return {"on": on, "limit": min(_i(lim, 5), 1000), "fee": min(_i(fee, 0), 10_000_000)}
+
+
 # ───────────────────────── کارمزدِ پلکانی (هستهٔ تسویه صدا می‌زند) ─────────────────────────
 
 async def rank_count(s, bot_id: int, uid: int, basis: str, exclude_wid: int | None = None) -> int:
     from sqlalchemy import func, or_
     from models import PlatformWager as W
     q = select(func.count(W.id)).where(
-        func.coalesce(W.bot_id, 0) == bot_id, W.status == "settled", W.winner_id.is_not(None))
+        func.coalesce(W.bot_id, 0) == bot_id, W.status == "settled", W.winner_id.is_not(None), W.amount > 0)   # بازیِ رایگان رتبه نمی‌سازد
     if exclude_wid:
         q = q.where(W.id != exclude_wid)
     if basis == "wins":
@@ -148,7 +173,7 @@ async def player_stats(bot_id: int = 0, limit: int = 15, order: str = "wins") ->
             W.creator_id, W.creator_name, W.creator_username, W.opponent_id, W.opponent_name, W.opponent_username,
             W.winner_id, W.amount, W.fee_amount).where(
             func.coalesce(W.bot_id, 0) == bot_id, W.status == "settled", W.winner_id.is_not(None),
-            W.opponent_id.is_not(None)).order_by(W.id.desc()).limit(20000))).all()
+            W.opponent_id.is_not(None), W.amount > 0).order_by(W.id.desc()).limit(20000))).all()
     st: dict[int, dict] = {}
 
     def slot(uid, name, uname):
@@ -229,6 +254,8 @@ _BOARD_RX = re.compile(r"^\s*(?:برترین[\s‌]*(?:بازیکنان|بازی
 
 class RankFSM(StatesGroup):
     tiers = State()
+    free_limit = State()     # PATCH_FREE_GAME_V1
+    free_fee = State()
 
 
 HELP_TIERS = (
@@ -253,8 +280,65 @@ async def _menu_view(bot_id: int, prefix: str, back_cb: str):
                               callback_data=f"{prefix}:basis")],
         [InlineKeyboardButton(text="✏️ تنظیمِ پله‌ها", callback_data=f"{prefix}:set", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="📊 آمارِ برترین بازیکنان", callback_data=f"{prefix}:stats", style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="🆓 بازیِ رایگان (سقف روزانه و هزینهٔ ورود)", callback_data=f"{prefix}:free")],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=back_cb, style=ButtonStyle.DANGER)]])
     return text, kb
+
+
+async def _free_view(bot_id: int, prefix: str):
+    fc = await free_cfg(bot_id)
+    lim = f"{fc['limit']} بازی" if fc["limit"] else "نامحدود"
+    fee = f"{fc['fee']:,} تومان از هر بازیکن" if fc["fee"] else "ندارد"
+    text = ("🆓 <b>بازیِ رایگان</b>\n\n"
+            "وقتی کسی فقط اسمِ بازی را بنویسد (مثلاً «سرعت» یا «رندوم»، بدونِ مبلغ)، بازیِ رایگان ساخته می‌شود: "
+            "جایزهٔ پولی ندارد، فقط برنده اعلام می‌شود.\n\n"
+            f"وضعیت: <b>{'✅ روشن' if fc['on'] else '❌ خاموش'}</b>\n"
+            f"📅 سقفِ روزانهٔ هر نفر: <b>{lim}</b>\n"
+            f"🎟 هزینهٔ ورودِ هر بازی (کارمزدِ بازی): <b>{fee}</b>\n\n"
+            "هزینهٔ ورود بعد از پیوستنِ حریف از کیف پولِ هر دو بازیکن کم می‌شود و برنمی‌گردد. "
+            "بازی‌هایِ رایگان در آمار و رتبه‌بندی حساب نمی‌شوند.")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=("🔴 خاموش‌کردن" if fc["on"] else "🟢 روشن‌کردن"), callback_data=f"{prefix}:fon",
+                              style=ButtonStyle.DANGER if fc["on"] else ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="📅 سقفِ روزانه", callback_data=f"{prefix}:flim"),
+         InlineKeyboardButton(text="🎟 هزینهٔ ورود", callback_data=f"{prefix}:ffee")],
+        [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=f"{prefix}:menu", style=ButtonStyle.DANGER)]])
+    return text, kb
+
+
+async def _free_action(cb: CallbackQuery, state: FSMContext, bot_id: int, act: str, prefix: str) -> bool:
+    """act ∈ free|fon|flim|ffee؛ True یعنی پیام را فرستادیم/صفحه را عوض کردیم."""
+    if act == "fon":
+        fc = await free_cfg(bot_id)
+        await save_kv(bot_id, "free_on", "0" if fc["on"] else "1")
+    elif act in ("flim", "ffee"):
+        await state.set_state(RankFSM.free_limit if act == "flim" else RankFSM.free_fee)
+        await state.update_data(rank_bot=bot_id)
+        await cb.message.answer(
+            "📅 سقفِ بازیِ رایگانِ هر نفر در روز را بفرست (عدد؛ ۰ = نامحدود). برایِ انصراف: /cancel" if act == "flim"
+            else "🎟 هزینهٔ ورودِ هر بازیکن در هر بازیِ رایگان را به تومان بفرست (۰ = رایگانِ کامل). برایِ انصراف: /cancel")
+        await cb.answer()
+        return True
+    text, kb = await _free_view(bot_id, prefix)
+    await _show(cb, text, kb)
+    await cb.answer()
+    return True
+
+
+async def _free_input(msg: Message, state: FSMContext, bot_id: int, which: str, prefix: str) -> None:
+    raw = (msg.text or "").strip()
+    if raw not in ("/cancel", "لغو", "انصراف"):
+        try:
+            val = int(raw.translate(_FA).replace(",", ""))
+            if val < 0 or val > (1000 if which == "free_limit" else 10_000_000):
+                raise ValueError
+        except ValueError:
+            await msg.answer("⚠️ یک عددِ معتبر بفرست (یا /cancel).")
+            return
+        await save_kv(bot_id, which, str(val))
+    await state.clear()
+    text, kb = await _free_view(bot_id, prefix)
+    await msg.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
 async def _show(cb_or_msg, text, kb):
@@ -274,7 +358,8 @@ def _main_admin(uid: int) -> bool:
     return uid == PLATFORM_ADMIN_ID
 
 
-@platform_rank_router.callback_query(F.data.in_({"pgrk:menu", "pgrk:basis", "pgrk:set", "pgrk:stats", "pgrk:back"}))
+@platform_rank_router.callback_query(F.data.in_({"pgrk:menu", "pgrk:basis", "pgrk:set", "pgrk:stats", "pgrk:back",
+                                                  "pgrk:free", "pgrk:fon", "pgrk:flim", "pgrk:ffee"}))
 async def main_rank_cb(cb: CallbackQuery, state: FSMContext):
     if not _main_admin(cb.from_user.id):
         await cb.answer("فقط مدیر اصلی", show_alert=True)
@@ -283,6 +368,9 @@ async def main_rank_cb(cb: CallbackQuery, state: FSMContext):
     if act == "back":
         from platform_group_money import _edit_settings
         await _edit_settings(cb, "bet")
+        return
+    if act in ("free", "fon", "flim", "ffee"):
+        await _free_action(cb, state, 0, act, "pgrk")
         return
     if act == "basis":
         basis, _ = await load_config(0)
@@ -301,6 +389,18 @@ async def main_rank_cb(cb: CallbackQuery, state: FSMContext):
     text, kb = await _menu_view(0, "pgrk", "pgrk:back")
     await _show(cb, text, kb)
     await cb.answer()
+
+
+@platform_rank_router.message(RankFSM.free_limit, F.text)
+async def main_free_limit_input(msg: Message, state: FSMContext):
+    if msg.from_user and _main_admin(msg.from_user.id):
+        await _free_input(msg, state, 0, "free_limit", "pgrk")
+
+
+@platform_rank_router.message(RankFSM.free_fee, F.text)
+async def main_free_fee_input(msg: Message, state: FSMContext):
+    if msg.from_user and _main_admin(msg.from_user.id):
+        await _free_input(msg, state, 0, "free_fee", "pgrk")
 
 
 @platform_rank_router.message(RankFSM.tiers, F.text)
@@ -356,13 +456,17 @@ async def _tenant_row(bot: Bot, uid: int, need_admin: bool = True):
     return row
 
 
-@tenant_rank_router.callback_query(F.data.in_({"twrk:menu", "twrk:basis", "twrk:set", "twrk:stats"}))
+@tenant_rank_router.callback_query(F.data.in_({"twrk:menu", "twrk:basis", "twrk:set", "twrk:stats",
+                                                "twrk:free", "twrk:fon", "twrk:flim", "twrk:ffee"}))
 async def tenant_rank_cb(cb: CallbackQuery, bot: Bot, state: FSMContext):
     row = await _tenant_row(bot, cb.from_user.id)
     if not row:
         await cb.answer("فقط مالک/ادمینِ ربات", show_alert=True)
         return
     act = cb.data.split(":")[1]
+    if act in ("free", "fon", "flim", "ffee"):
+        await _free_action(cb, state, row.id, act, "twrk")
+        return
     if act == "basis":
         basis, _ = await load_config(row.id)
         await save_config(row.id, basis=("games" if basis == "wins" else "wins"))
@@ -379,6 +483,20 @@ async def tenant_rank_cb(cb: CallbackQuery, bot: Bot, state: FSMContext):
     text, kb = await _menu_view(row.id, "twrk", "gset:betmenu")
     await _show(cb, text, kb)
     await cb.answer()
+
+
+@tenant_rank_router.message(RankFSM.free_limit, F.text)
+async def tenant_free_limit_input(msg: Message, bot: Bot, state: FSMContext):
+    row = await _tenant_row(bot, msg.from_user.id) if msg.from_user else None
+    if row:
+        await _free_input(msg, state, row.id, "free_limit", "twrk")
+
+
+@tenant_rank_router.message(RankFSM.free_fee, F.text)
+async def tenant_free_fee_input(msg: Message, bot: Bot, state: FSMContext):
+    row = await _tenant_row(bot, msg.from_user.id) if msg.from_user else None
+    if row:
+        await _free_input(msg, state, row.id, "free_fee", "twrk")
 
 
 @tenant_rank_router.message(RankFSM.tiers, F.text)

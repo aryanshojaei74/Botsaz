@@ -250,6 +250,13 @@ def _kb_pending(w: PlatformWager) -> InlineKeyboardMarkup:
         hx_btn("❌ لغو", f"{px}:cancel:{w.id}", ButtonStyle.DANGER)]])
 
 
+def prize_line(w: PlatformWager) -> str:
+    """PATCH_FREE_GAME_V1: جملهٔ جایزه — بازیِ رایگان پولی ندارد."""
+    if not _money(w.amount):
+        return "🆓 بازیِ رایگان بود؛ جایزهٔ پولی ندارد."
+    return f"🎁 {_rial(w.payout_amount)} به کیف پولش اضافه شد."
+
+
 def hx_btn(text: str, cb: str, style):
     from premium_emoji import hx_button
     return hx_button(text, callback_data=cb, style=style)
@@ -333,7 +340,8 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
             loser = w.opponent_id if w.winner_id == w.creator_id else w.creator_id
             lines += [f"⏰ <b>{core._who(w, loser)}</b> در مهلتِ نوبتش حدس نزد."]
         lines += [shown, "", f"🏁 برنده: <b>{core._who(w, w.winner_id)}</b>",
-                  f"🎁 دریافتی برنده: <b>{_rial(w.payout_amount)}</b> (کارمزد {_rial(w.fee_amount)})"]
+                  (f"🎁 دریافتی برنده: <b>{_rial(w.payout_amount)}</b> (کارمزد {_rial(w.fee_amount)})" if _money(w.amount)
+                   else "🆓 بازیِ رایگان بود؛ جایزهٔ پولی ندارد.")]
     else:
         lines += ["", f"⏰ کسی در مهلت برنده نشد؛ {wd['stake']} به هر دو نفر برگشت (بدون کارمزد)."]
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=[])
@@ -361,8 +369,24 @@ async def join_race(wid: int, user: tuple, bot_id: int = 0):
             return core._res(err="تا تمام‌شدنِ مسابقهٔ فعلی‌ات نمی‌توانی به مسابقهٔ دیگری بپیوندی.")
         if player_race(w.chat_id, w.creator_id, bot_id):
             return core._res(err="سازندهٔ این مسابقه همین حالا در مسابقهٔ دیگری است؛ چند لحظهٔ دیگر دوباره امتحان کن.")
+        free = not _money(w.amount)                            # PATCH_FREE_GAME_V1
+        st0 = core._st(w)
+        pfee, plimit = int(st0.get("pfee") or 0), int(st0.get("plimit") or 0)
         opp = await core._lock_user(s, uid, bot_id)
-        if not opp or opp.is_banned or _money(opp.balance) < _money(w.amount):
+        if free:
+            if opp is not None and opp.is_banned:
+                return core._res(err="این کاربر اجازهٔ بازی ندارد.")
+            if plimit and await core.free_used_today(s, bot_id, uid) >= plimit:
+                return core._res(err=f"⛔️ سقفِ بازیِ رایگانِ امروزِ تو ({plimit} بازی) پر شده.")
+            if plimit and await core.free_used_today(s, bot_id, w.creator_id) >= plimit:
+                return core._res(err="سقفِ بازیِ رایگانِ امروزِ سازندهٔ این بازی پر شده؛ بازیِ دیگری بساز.")
+            if pfee:
+                cre = await core._lock_user(s, w.creator_id, bot_id)
+                if not opp or _money(opp.balance) < pfee:
+                    return core._res(err=f"برایِ بازیِ رایگان باید {_rial(pfee)} هزینهٔ ورود در کیف پولت باشد.")
+                if not cre or _money(cre.balance) < pfee:
+                    return core._res(err="موجودیِ سازنده برایِ هزینهٔ ورود کافی نیست؛ بازیِ دیگری بساز.")
+        elif not opp or opp.is_banned or _money(opp.balance) < _money(w.amount):
             return core._res(err=f"موجودی کافی نیست؛ نیاز به {_rial(w.amount)} داری.")
         if await core._active_count(s, uid, bot_id) >= core.MAX_ACTIVE:
             return core._res(err=core._t(f"هم‌زمان حداکثر {core.MAX_ACTIVE} {{bet}} باز می‌توانی داشته باشی.", bot_id))
@@ -371,13 +395,21 @@ async def join_race(wid: int, user: tuple, bot_id: int = 0):
             if not pool:
                 return core._res(err="فعلاً هیچ بازیِ فعالی برایِ «رندوم» نیست.")
             picked = secrets.choice(pool)
-        opp.balance = Decimal(str(opp.balance)) - Decimal(str(w.amount))
-        core._add_txn(s, bot_id, opp, -_money(w.amount), "wager_stake", f"پیوستن به {{bet}} #{w.id}")
+        if free:
+            if pfee:                                           # هزینهٔ ورودِ هر دو بازیکن (کارمزدِ بازی؛ برنمی‌گردد)
+                for _u in (opp, cre):
+                    _u.balance = Decimal(str(_u.balance)) - Decimal(pfee)
+                    core._add_txn(s, bot_id, _u, -pfee, "wager_fee", f"هزینهٔ ورود بازیِ رایگان #{w.id}")
+        else:
+            opp.balance = Decimal(str(opp.balance)) - Decimal(str(w.amount))
+            core._add_txn(s, bot_id, opp, -_money(w.amount), "wager_stake", f"پیوستن به {{bet}} #{w.id}")
         w.opponent_id, w.opponent_name, w.opponent_username = uid, uname or "", uuser or None
         w.status = "playing"
         if picked:
             w.game = picked
         st = new_question(w.game, (w.bot_id or 0, w.chat_id))
+        if free:
+            st["free"], st["pfee"], st["plimit"] = 1, pfee, plimit
         w.state = json.dumps(st, ensure_ascii=False)
         w.expires_at = core._now() + timedelta(seconds=SECS[w.game])
         if w.game == "guess":                                  # نوبتی: قرعه برایِ نفرِ اول
@@ -588,6 +620,74 @@ async def race_paid_hint(msg: Message):
                     parse_mode="HTML")
 
 
+# ───────────────────────── بازیِ رایگان (فقط اسمِ بازی، بدونِ مبلغ) ─────────────────────────
+# PATCH_FREE_GAME_V1 (سینا): مالک روشن/خاموش می‌کند، سقفِ روزانهٔ هر نفر و هزینهٔ ورودِ هر بازی (کارمزدِ بازی) می‌گذارد.
+_FREE_RX = re.compile(r"^\s*(حدس\s*عدد|سرعت|ریاضی|الگو|رندوم|تصادفی|رندم|درهم|کوییز|کویز|کوئیز|حدس[\s‌]*ایموجی|ایموجی)\s*$")
+_FREE_MAP = {"حدسعدد": "guess", "سرعت": "speed", "ریاضی": "math", "الگو": "pattern", "رندوم": "random", "تصادفی": "random",
+             "رندم": "random", "درهم": "scramble", "کوییز": "quiz", "کویز": "quiz", "کوئیز": "quiz",
+             "حدسایموجی": "emoji", "ایموجی": "emoji"}
+
+
+def parse_free_command(text: str | None) -> str | None:
+    m = _FREE_RX.match(core._norm(text or ""))
+    return _FREE_MAP.get(re.sub(r"[\s‌]+", "", m.group(1))) if m else None
+
+
+def _is_free(m: Message) -> bool:
+    return bool(m.text and parse_free_command(m.text))
+
+
+async def free_create(msg: Message, bot, bot_id: int, game: str) -> None:
+    """ساخت و ارسالِ بازیِ رایگان (مشترکِ ربات اصلی و مستأجر). فراخوان پیشاپیش دسترسی/روشن‌بودنِ بازی را چک کرده است."""
+    import wager_rank as K
+    fc = await K.free_cfg(bot_id)
+    if not fc["on"]:
+        raise SkipHandler
+    target = _reply_target(msg)
+    if target and (target.is_bot or target.id == msg.from_user.id):
+        await msg.reply("❌ سازنده نباید خودش یا یک ربات را هدف بگیرد.")
+        return
+    await core.sweep_expired(bot, bot_id) if bot_id else await core.sweep_expired(bot)
+    cfg = await core.load_cfg(bot_id)
+    w, err = await core.create_free_wager(
+        game, msg.chat.id, (msg.from_user.id, msg.from_user.full_name or "", msg.from_user.username or ""),
+        (target.id, target.full_name or "", target.username or "") if target else None,
+        cfg["ttl"], fc["fee"], fc["limit"], bot_id)
+    if err:
+        await msg.reply(err)
+        return
+    LIVE[w.id] = {"wid": w.id, "chat": msg.chat.id, "bot": bot_id, "kind": game, "players": set(), "answer": None,
+                  "n": None, "until": time.monotonic() + cfg["ttl"] + 5}
+    text, kb = render_race(w)
+    try:
+        sent = await msg.reply(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:  # noqa: BLE001
+        logger.exception("free race #%s: sending failed", w.id)
+        LIVE.pop(w.id, None)
+        async with core._wlock(w.id):
+            await core.cancel_wager(w.id, w.creator_id, bot_id)
+        raise
+    async with Session() as s:
+        row = await s.get(PlatformWager, w.id)
+        row.message_id = sent.message_id
+        await s.commit()
+
+
+@platform_wager_race_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_free))
+async def race_free_create(msg: Message):
+    if not msg.from_user or msg.from_user.is_bot or msg.sender_chat:
+        raise SkipHandler
+    if not await _group_allowed(msg.chat.id) or not await enabled() or not await _bet_enabled():
+        raise SkipHandler
+    if await _candy_on():                    # مودِ شیرینی: بازیِ رایگانِ خودِ آن (platform_group_game) این دستورها را دارد
+        raise SkipHandler
+    game = parse_free_command(msg.text)
+    if not await game_on(game):
+        raise SkipHandler
+    await _user(msg.from_user.id, msg.from_user.full_name or "", msg.from_user.username or "")
+    await free_create(msg, msg.bot, 0, game)
+
+
 @platform_wager_race_router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.func(_is_create))
 async def race_create(msg: Message):
     if not msg.from_user or msg.from_user.is_bot:
@@ -722,7 +822,7 @@ async def _expire_later(bot: Bot, wid: int, secs: int) -> None:
                 loser = w.opponent_id if w.winner_id == w.creator_id else w.creator_id
                 await bot.send_message(
                     w.chat_id, f"⏰ <b>{core._who(w, loser)}</b> در ۳ دقیقه حدس نزد و باخت.\n"
-                               f"🏁 <b>{core._who(w, w.winner_id)}</b> برنده شد! 🎁 {_rial(w.payout_amount)} به کیف پولش اضافه شد.",
+                               f"🏁 <b>{core._who(w, w.winner_id)}</b> برنده شد! {prize_line(w)}",
                     parse_mode="HTML", reply_markup=await core.result_kb(w))
             else:
                 await bot.send_message(w.chat_id, "⌛ کسی برنده نشد؛ مبلغِ هر دو نفر برگشت. 👻")
@@ -795,7 +895,7 @@ async def race_answer(msg: Message):
     LIVE.pop(live["wid"], None)
     await _edit(msg.bot, w)
     await msg.reply(f"🏁 <b>{_html.escape(msg.from_user.full_name or str(uid))}</b> برنده شد!\n"
-                    f"🎁 {_rial(w.payout_amount)} به کیف پولش اضافه شد.", parse_mode="HTML",
+                    f"{prize_line(w)}", parse_mode="HTML",
                     reply_markup=await core.result_kb(w))            # دکمه‌هایِ شیشه‌ایِ جایزه/موجودیِ برنده و بازنده
 
 
@@ -827,7 +927,7 @@ async def quiz_press(cb: CallbackQuery, bot_id: int = 0) -> None:
         await _edit(cb.bot, w)
         await cb.bot.send_message(
             w.chat_id, f"🏁 <b>{_html.escape(cb.from_user.full_name or str(uid))}</b> برنده شد!\n"
-                       f"🎁 {_rial(w.payout_amount)} به کیف پولش اضافه شد.", parse_mode="HTML",
+                       f"{prize_line(w)}", parse_mode="HTML",
             reply_markup=await core.result_kb(w))
         return
     locked.add(uid)
