@@ -231,6 +231,10 @@ async def _menu_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     # === PATCH_TNUMBER_PROVIDER_V1 ===
     rows.append([InlineKeyboardButton(text="➕ افزودن TNumber", callback_data="ozv:addtn", style=ButtonStyle.SUCCESS)])
     rows.append([InlineKeyboardButton(text="➕ افزودن IVN", callback_data="ozv:addivn", style=ButtonStyle.SUCCESS)])   # PATCH_IVN_PROVIDER_V1
+    _hid = (await _setting(bot_id, "smm_tree_hide_vnum", "0")) == "1"   # PATCH_SMM_HIDE_VNUM_TREE_V1
+    rows.append([InlineKeyboardButton(
+        text=("🙈 شماره‌ها در بخشِ تلگرامِ فروشگاه: مخفی" if _hid else "👁 شماره‌ها در بخشِ تلگرامِ فروشگاه: نمایش"),
+        callback_data="ozv:hidetree")])
     rows.append([InlineKeyboardButton(text="📘 راهنمای اتصال OzVinoo", callback_data="ozv:help")])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:products", style=ButtonStyle.DANGER)])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
@@ -251,6 +255,21 @@ async def ozv_menu(cb: CallbackQuery, bot: Bot):
     text, kb = await _menu_content(row.id)
     await _render(cb, text, kb)
     await cb.answer()
+
+
+@ozvinoo_router.callback_query(F.data == "ozv:hidetree")
+async def ozv_hide_tree(cb: CallbackQuery, bot: Bot):
+    """PATCH_SMM_HIDE_VNUM_TREE_V1 — مخفی/نمایشِ کشورهایِ شماره در درختِ «تلگرام» (فروشگاهِ شماره سر جایش می‌ماند)."""
+    row = await _owner(cb, bot)
+    if not row or not await _require_access(cb, row):
+        return
+    from tenant import set_setting
+    cur = (await _setting(row.id, "smm_tree_hide_vnum", "0")) == "1"
+    await set_setting(row.id, "smm_tree_hide_vnum", "0" if cur else "1")
+    text, kb = await _menu_content(row.id)
+    await _render(cb, text, kb)
+    await cb.answer("شماره‌ها از بخشِ تلگرام مخفی شد (فقط در فروشگاهِ شمارهٔ مجازی هستند)" if not cur
+                    else "شماره‌ها دوباره در بخشِ تلگرام نمایش داده می‌شوند")
 
 
 @ozvinoo_router.callback_query(F.data == "ozv:add")

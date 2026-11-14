@@ -11061,6 +11061,10 @@ async def _user_active_tree(bot_id: int):
         svcs = (await s.scalars(select(SmmService).where(
             SmmService.bot_id == bot_id, SmmService.is_active == True)
             .order_by(SmmService.id))).all()
+    # === PATCH_SMM_HIDE_VNUM_TREE_V1 === (Nexivo) مالک می‌تواند کشورهایِ شمارهٔ مجازی را از درختِ SMM (تلگرام) مخفی
+    # کند؛ آن‌ها فقط از «فروشگاهِ شمارهٔ مجازی» خریده می‌شوند. پیش‌فرض: نمایش (رفتارِ قبلی).
+    if (await _get_setting(bot_id, "smm_tree_hide_vnum", "0")) == "1":
+        svcs = [v for v in svcs if not _is_vnum_service(v)]
     by_pk = {v.id: v for v in svcs}
     tree = await classified_tree(bot_id, svcs)
     return tree, by_pk
