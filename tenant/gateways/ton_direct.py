@@ -704,12 +704,37 @@ async def settle_bot(bot_id: int, tbot: Bot | None = None) -> int:
     return settled
 
 
+LATE_POLL_MARKER = "ton_late_poll_since"
+
+
+async def _late_poll_since() -> "_dt_late.datetime":
+    """PATCH_TON_LATE_POLL_V1: لحظه‌ای که بررسیِ فاکتورهایِ منقضی برایِ اولین بار فعال شد (در دیتابیس ثبت می‌شود).
+    فاکتورهایی که *قبل* از این لحظه منقضی شده‌اند عمداً بازبینی نمی‌شوند: ممکن است مالک پرداختشان را دستی شارژ کرده باشد
+    و بازبینیِ خودکار آن‌ها را دوباره شارژ می‌کرد."""
+    from models import Setting
+    async with Session() as s:
+        row = await s.scalar(select(Setting).where(Setting.bot_id == 0, Setting.key == LATE_POLL_MARKER))
+        if row and row.value:
+            try:
+                return _dt_late.datetime.fromisoformat(row.value)
+            except ValueError:
+                pass
+        now = _dt_late.datetime.utcnow()
+        if row:
+            row.value = now.isoformat()
+        else:
+            s.add(Setting(bot_id=0, key=LATE_POLL_MARKER, value=now.isoformat()))
+        await s.commit()
+        return now
+
+
 async def late_bot_ids() -> list[int]:
-    """PATCH_TON_LATE_POLL_V1: رباتی که فاکتورِ «منقضی‌شدهٔ هنوز-در-مهلتِ-دیرهنگام» و بدونِ tx دارد.
+    """رباتی که فاکتورِ «منقضی‌شده، هنوز در مهلتِ دیرهنگام، بدونِ tx، و منقضی‌شده‌بعد از فعال‌شدنِ این قابلیت» دارد.
     قبلاً فقط فاکتورِ waiting باعثِ بررسیِ زنجیره می‌شد؛ پس واریزی که بعد از ۲۰ دقیقه برسد (یا تراکنشی که اولِ کار
     توسطِ toncenter دیده نشده) با اینکه ۲۴ ساعت مهلتِ دیرهنگام داشت، هرگز خودکار تسویه نمی‌شد."""
+    since = await _late_poll_since()
     async with Session() as s:
-        late_from = _dt_late.datetime.utcnow() - _dt_late.timedelta(hours=LATE_GRACE_HOURS)
+        late_from = max(_dt_late.datetime.utcnow() - _dt_late.timedelta(hours=LATE_GRACE_HOURS), since)
         return list((await s.scalars(select(TonDirectCharge.bot_id).where(
             TonDirectCharge.status == "expired", TonDirectCharge.expires_at >= late_from,
             TonDirectCharge.tx_hash.is_(None), _ton_only()).distinct())).all())
