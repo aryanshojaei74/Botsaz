@@ -9680,6 +9680,9 @@ async def do_free_trial(msg, bot: "Bot", bot_id: int, u: BotUser,
                     email=email, panel_key=panel.panel_key,
                     uuid=acc.get("uuid"), sub_id=acc.get("sub_id"),
                     sub_link=sub_link, volume_gb=gb_int, days=days,
+                    # === PATCH_TRIAL_MB_DISPLAY_LEGACY_V1 === (Sibnet) مسیرِ سراسریِ تست حجمِ مگابایتی را ذخیره
+                    # نمی‌کرد؛ پیامِ تحویل «نامحدود» می‌گفت در حالی که پنل ۵۱ مگابایت گذاشته بود.
+                    volume_mb=(_mb_val if gb < 1 else None),
                     plan_title="تست رایگان", status="active",
                     # PATCH_TRIAL_HOURS_DISPLAY_V1: زمانِ پایانِ واقعیِ تست (روز+ساعت) ثبت شود تا «۶ ساعت» به‌جایِ «بی‌انقضا» نشان داده شود
                     # created_at صریحاً UTC: server_default (now() دیتابیس) در منطقهٔ زمانیِ سرور ذخیره می‌شد (تهران +۳:۳۰) و اختلافِ
@@ -14362,7 +14365,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "618"
+BUILD_ID = "619"
 
 
 @tenant_router.message(Command("version"))

@@ -607,6 +607,7 @@ async def _do_trial(ctx: AuthCtx, user: BotUser, p: dict) -> JSONResponse:
             new_acc = PanelAccount(bot_id=ctx.bot_id, user_telegram_id=user.telegram_id, email=email, panel_key=panel.panel_key,
                                    uuid=acc.get("uuid"), sub_id=acc.get("sub_id"), sub_link=sub_link,
                                    volume_gb=int(gb) if gb >= 1 else 0, days=days, plan_title="تست رایگان", status="active",
+                                   volume_mb=(int(round(gb * 1024)) if gb < 1 else None),   # PATCH_TRIAL_MB_DISPLAY_LEGACY_V1
                                    svc_code=await new_svc_code(s, ctx.bot_id), first_conn_notified=False)
             s.add(new_acc)
             await s.commit()
