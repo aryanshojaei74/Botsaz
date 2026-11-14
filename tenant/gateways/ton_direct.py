@@ -250,6 +250,12 @@ _TC_FAILS = [0]
 _TC_LAST_WARN = [-1e9]
 
 
+def _json_lenient(raw: bytes):
+    """JSON با رمزگشاییِ بی‌خطای UTF-8 (بایتِ نامعتبر ⇒ «�»)."""
+    import json
+    return json.loads(raw.decode("utf-8", errors="replace"))
+
+
 _MEMO_BYTES = re.compile(rb"BS[0-9A-Fa-f]{6}")
 
 
@@ -320,7 +326,11 @@ async def fetch_incoming(address: str, limit: int = 100) -> list[dict]:   # PATC
             async with aiohttp.ClientSession(timeout=t, headers=headers) as s:
                 async with s.get(url, params=params) as r:
                     _status = r.status
-                    data = await r.json(content_type=None)
+                    # === PATCH_TON_LENIENT_JSON_V1 === (علتِ شارژ نشدنِ امیر/سجاد)
+                    # تراکنشِ اسپم/باینری با بایتِ نامعتبرِ UTF-8 در کامنت، کلِ پاسخِ toncenter را غیرقابلِ‌خواندن می‌کرد
+                    # (UnicodeDecodeError ⇒ «پاسخ نداد» ⇒ لیستِ خالی) و تا وقتی آن تراکنش در بینِ ۴۰/۱۰۰ تراکنشِ اخیر بود،
+                    # *هیچ* واریزی دیده نمی‌شد. حالا بایت‌هایِ خراب جایگزین می‌شوند و بقیه سالم خوانده می‌شود.
+                    data = _json_lenient(await r.read())
         except Exception:
             logger.warning("ton_direct: toncenter پاسخ نداد (%s)", address, exc_info=True)
             return []

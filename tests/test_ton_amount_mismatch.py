@@ -245,3 +245,17 @@ def test_extract_comment_fallbacks():
     assert ex({"message": "سلام", "msg_data": {"text": base64.b64encode(b"BS1A2B3C").decode()}}) == "سلام BS1A2B3C"
     assert ex({"message": ""}) == "" and ex({}) == ""
     assert ex({"message": "hello", "msg_data": {"body": "!!notbase64!!"}}) == "hello"
+
+
+def test_toncenter_response_with_invalid_utf8_is_still_parsed():
+    """علتِ واقعیِ شارژ نشدنِ امیر/سجاد: بایتِ 0xEC نامعتبر در کامنتِ یک تراکنشِ اسپم ⇒ UnicodeDecodeError ⇒ هیچ واریزی دیده نمی‌شد."""
+    import json
+    good = {"ok": True, "result": [
+        {"transaction_id": {"hash": "h1"}, "in_msg": {"value": "1070000000", "message": "BS5760C0", "source": "EQx"}},
+        {"transaction_id": {"hash": "spam"}, "in_msg": {"value": "1", "message": "JUNK", "source": "EQy"}}]}
+    raw = json.dumps(good, ensure_ascii=False).encode("utf-8").replace(b"JUNK", b"\xec\xff\xfe")
+    with pytest.raises(UnicodeDecodeError):
+        raw.decode("utf-8")                         # همان خطای لاگِ سرور
+    data = TD._json_lenient(raw)
+    assert data["ok"] and data["result"][0]["in_msg"]["message"] == "BS5760C0"
+    assert TD._extract_comment(data["result"][0]["in_msg"]) == "BS5760C0"
