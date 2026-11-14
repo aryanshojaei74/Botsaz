@@ -26,6 +26,29 @@ _last_refresh: dict[int, float] = {}
 _unauth_logged: set[int] = set()
 
 
+_skip_until: dict[int, float] = {}      # PATCH_GIVEAWAY_BAD_TOKEN_QUIET_V1
+
+
+def _token_ok(tok: str) -> bool:
+    """توکنِ نامعتبر (مثلاً «released#…» یا خالی) همان‌جا در aiogram خطا می‌دهد، حتی بدونِ اتصال به تلگرام."""
+    try:
+        from aiogram.utils.token import validate_token
+        validate_token(tok)
+        return True
+    except Exception:      # noqa: BLE001
+        return False
+
+
+def _quiet_skip(gid: int, bot_id: int, now: float | None = None) -> None:
+    """PATCH_GIVEAWAY_BAD_TOKEN_QUIET_V1: قرعه‌کشی‌ای که توکنِ رباتش نامعتبر است هر ۳۰ ثانیه traceback می‌ساخت (لاگِ سرور پر می‌شد)؛
+    حالا فقط یک‌بار هشدار و تا ۶ ساعت کنار گذاشته می‌شود."""
+    now = time.monotonic() if now is None else now
+    _skip_until[gid] = now + UNAUTH_BACKOFF
+    if gid not in _unauth_logged:
+        _unauth_logged.add(gid)
+        logger.warning("giveaway: توکنِ رباتِ قرعه‌کشی %s (bot %s) معتبر نیست؛ تا ۶ ساعت کنار گذاشته شد", gid, bot_id)
+
+
 def _token_for(row) -> str:
     """PATCH_GIVEAWAY_PRO_V1: ردیفِ مجازیِ رباتِ مادر توکنِ واقعیِ پلتفرم را از env می‌گیرد."""
     if row is not None and getattr(row, "status", "") == "platform":
@@ -43,6 +66,11 @@ async def end_due_once() -> int:
                 row = await s.get(BotRow, bot_id)
             tok = _token_for(row)
             if row is None or not tok or row.status not in ("active", "platform"):
+                continue
+            if _skip_until.get(gid, 0.0) > time.monotonic():      # PATCH_GIVEAWAY_BAD_TOKEN_QUIET_V1
+                continue
+            if not _token_ok(tok):
+                _quiet_skip(gid, bot_id)
                 continue
             bot = Bot(token=tok, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
             try:
@@ -78,6 +106,10 @@ async def refresh_counters_once(now: float | None = None) -> int:
                 row = await s.get(BotRow, g.bot_id)
             tok = _token_for(row)
             if row is None or not tok:
+                continue
+            if not _token_ok(tok):                                  # PATCH_GIVEAWAY_BAD_TOKEN_QUIET_V1
+                _quiet_skip(g.id, g.bot_id, now)
+                _last_refresh[g.id] = now + UNAUTH_BACKOFF - REFRESH_EVERY
                 continue
             bot = Bot(token=tok, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
             try:
