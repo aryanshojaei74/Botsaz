@@ -250,7 +250,7 @@ _TC_FAILS = [0]
 _TC_LAST_WARN = [-1e9]
 
 
-async def fetch_incoming(address: str, limit: int = 40) -> list[dict]:
+async def fetch_incoming(address: str, limit: int = 100) -> list[dict]:   # PATCH_TON_FETCH_100_V1: ۴۰ تراکنشِ اخیر برایِ کیف‌پولِ پرتردد کم بود
     """تراکنش‌هایِ اخیرِ یک آدرس از toncenter.
 
     خروجی: [{"hash":…, "value_nano":int, "comment":str, "source":str}, …]
@@ -429,10 +429,16 @@ async def _credit(bot_id: int, charge_id: int, tx_hash: str, credit_override: in
         u = await s.scalar(select(BotUser).where(
             BotUser.bot_id == bot_id,
             BotUser.telegram_id == payer).with_for_update())
-        if u:
-            u.balance = float(u.balance or 0) + credit
-            s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=credit,
-                            kind="ton_direct", note=note))
+        if not u:
+            # === PATCH_TON_CREDIT_NO_USER_V1 === قبلاً فاکتور «paid» می‌شد ولی کیف‌پولی شارژ نمی‌شد (و دیگر هم تلاش نمی‌شد).
+            # حالا تراکنش برگردانده می‌شود تا فاکتور باز بماند و دورِ بعد/بررسیِ دستی بتواند شارژ کند.
+            await s.rollback()
+            logger.error("ton_direct: کاربرِ فاکتور %s (bot_id=%s، کاربر %s) پیدا نشد؛ شارژ انجام نشد و فاکتور باز ماند.",
+                         charge_id, bot_id, payer)
+            return 0
+        u.balance = float(u.balance or 0) + credit
+        s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=credit,
+                        kind="ton_direct", note=note))
         await s.commit()
     return credit
 
@@ -538,6 +544,38 @@ async def _match_off_amount(bot_id: int, tx: dict):
     return None
 
 
+_MEMO_LIKE = re.compile(r"\bBS[0-9A-F]{6}\b", re.I)
+_UNMATCHED_LOGGED: set[str] = set()
+
+
+async def _log_unmatched_memo(bot_id: int, tx: dict, tx_hash: str) -> None:
+    """PATCH_TON_DIAG_V1: واریزی که کامنتش شبیهِ کدِ فاکتور است ولی به فاکتورِ بازی نخورد — دلیل را در لاگ می‌نویسد
+    (قبلاً کاملاً بی‌صدا رد می‌شد و پیگیریِ «پرداخت کردم و شارژ نشد» غیرممکن بود). هر tx فقط یک‌بار لاگ می‌شود."""
+    try:
+        m = _MEMO_LIKE.search(norm_memo_text(tx.get("comment")))
+        if not m or tx_hash in _UNMATCHED_LOGGED:
+            return
+        _UNMATCHED_LOGGED.add(tx_hash)
+        if len(_UNMATCHED_LOGGED) > 5000:
+            _UNMATCHED_LOGGED.clear()
+        memo = m.group(0).upper()
+        async with Session() as s:
+            rows = (await s.scalars(select(TonDirectCharge).where(TonDirectCharge.memo == memo))).all()
+        value = Decimal(tx["value_nano"]) / NANO
+        if not rows:
+            why = "هیچ فاکتوری با این کد در دیتابیس نیست (شاید برای ربات/محیطِ دیگری است)"
+        else:
+            parts = []
+            for r in rows:
+                other = "ربات دیگری" if r.bot_id != bot_id else "همین ربات"
+                parts.append(f"فاکتور #{r.id} ({other}) وضعیت={r.status} مبلغ={r.ton_amount} TON انقضا={r.expires_at} tx={r.tx_hash or '—'}")
+            why = "؛ ".join(parts)
+        logger.warning("ton_direct: واریزِ %s TON با کامنتِ «%s» (tx %s…) به فاکتورِ بازی نخورد — %s",
+                       value, memo, tx_hash[:16], why)
+    except Exception:
+        logger.exception("ton_direct: ثبتِ دلیلِ عدمِ تطبیق ناموفق بود")
+
+
 async def settle_bot(bot_id: int, tbot: Bot | None = None) -> int:
     """یک دورِ بررسیِ زنجیره برایِ یک ربات. خروجی: تعدادِ فاکتورهایِ تسویه‌شده."""
     addr = await wallet_address(bot_id)
@@ -576,6 +614,7 @@ async def settle_bot(bot_id: int, tbot: Bot | None = None) -> int:
         else:
             off = await _match_off_amount(bot_id, tx)
             if off is None:
+                await _log_unmatched_memo(bot_id, tx, tx_hash)      # PATCH_TON_DIAG_V1
                 continue
             _och, _val = off
             _cr, _ratio = proportional_credit(int(_och.amount_toman or 0), _och.ton_amount, _val)

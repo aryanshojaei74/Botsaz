@@ -170,3 +170,37 @@ def test_invoice_text_has_no_raw_ton_link_and_is_compact():
     src = inspect.getsource(TD.tond_amount)
     assert "لینک مستقیم" not in src and "{deep}" not in src            # لینکِ خام فقط پشتِ دکمهٔ شیشه‌ای
     assert "💎 پرداخت با Tonkeeper" in src and "callback_data=f\"tond:check:{memo}\"" in src
+
+
+# ── PATCH_TON_CREDIT_NO_USER_V1 + PATCH_TON_DIAG_V1 ──
+@pytest.mark.asyncio
+async def test_missing_user_keeps_invoice_open_instead_of_silently_paying(env, monkeypatch):
+    maker, bot, sent = env
+    async with maker() as s:
+        u = await s.get(models.BotUser, 1)
+        await s.delete(u)
+        await s.commit()
+    _incoming(monkeypatch, "0.1")
+    assert await TD.settle_bot(5, bot) == 0
+    async with maker() as s:
+        ch = (await s.scalars(select(models.TonDirectCharge))).first()
+    assert ch.status == "waiting" and not ch.tx_hash             # فاکتور «paid» نشد؛ بعداً قابلِ تسویه است
+
+
+@pytest.mark.asyncio
+async def test_unmatched_memo_like_tx_is_logged_with_reason(env, monkeypatch, caplog):
+    maker, bot, sent = env
+    async with maker() as s:
+        ch = (await s.scalars(select(models.TonDirectCharge))).first()
+        ch.status = "expired"
+        ch.expires_at = dt.datetime.utcnow() - dt.timedelta(hours=TD.LATE_GRACE_HOURS + 5)   # خارج از مهلتِ دیرهنگام
+        s.add(models.TonDirectCharge(bot_id=5, user_telegram_id=777, memo="BS222222", asset="TON", amount_toman=1,
+                                     ton_amount=Decimal("0.1"), rate_toman=1, wallet_address="UQx", status="waiting",
+                                     expires_at=dt.datetime.utcnow() + dt.timedelta(minutes=5)))
+        await s.commit()
+    TD._UNMATCHED_LOGGED.clear()
+    _incoming(monkeypatch, "0.19", comment="BS111111", h="txdiag1")
+    import logging
+    with caplog.at_level(logging.WARNING):
+        assert await TD.settle_bot(5, bot) == 0
+    assert any("BS111111" in r.getMessage() and "expired" in r.getMessage() for r in caplog.records)
