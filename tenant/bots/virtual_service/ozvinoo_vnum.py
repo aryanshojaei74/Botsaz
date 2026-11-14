@@ -177,7 +177,7 @@ def _provider_detail(provider: dict) -> tuple[str, InlineKeyboardMarkup]:
     # تغییرش نبود — علتِ اصلیِ شکایتِ «قیمتِ خرید ۱۰ هزار بالاتر از تعرفهٔ
     # پنلِ من است».
     _nr = bool(provider.get("none_report", True))
-    if not _is_tnumber(provider):
+    if not _phone_keyed(provider):
       text += ("\n📶 ردهٔ شماره: "
              + ("<b>هر دو رده</b> (کاربر انتخاب می‌کند: بدونِ ریپورت یا ارزان)" if provider.get("tier_both")
                 else "<b>بدونِ ریپورت</b> (کیفیتِ بالاتر، گران‌تر)" if _nr
@@ -197,7 +197,7 @@ def _provider_detail(provider: dict) -> tuple[str, InlineKeyboardMarkup]:
         # === PATCH_OZVINOO_COST_ADJUST_V1 ===
         [InlineKeyboardButton(text="🧾 اصلاحِ قیمتِ خرید", callback_data=f"ozv:costadj:{provider['id']}")],
         # === PATCH_OZVINOO_NONE_REPORT_TOGGLE_V1 === (فقط OzVinoo؛ TNumber رده ندارد)
-        *([] if _is_tnumber(provider) else [[InlineKeyboardButton(
+        *([] if _phone_keyed(provider) else [[InlineKeyboardButton(
             text=("📶 ردهٔ شماره: هر دو (انتخابِ کاربر)" if provider.get("tier_both")
                   else "📶 ردهٔ شماره: بدونِ ریپورت (گران‌تر)" if provider.get("none_report", True)
                   else "📶 ردهٔ شماره: معمولی (ارزان‌تر)"),
@@ -217,7 +217,7 @@ async def _menu_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     providers = await _providers(bot_id)
     lines = [
         "📱 <b>مدیریت شمارهٔ مجازی خودکار</b>\n",
-        "اتصال به API ارائه‌دهنده (OzVinoo یا TNumber) برای دریافت شمارهٔ تلگرام، دریافت کد و لغو سفارش.",
+        "اتصال به API ارائه‌دهنده (OzVinoo، TNumber یا IVN) برای دریافت شمارهٔ تلگرام، دریافت کد و لغو سفارش.",
         "پرداخت مشتری از کیف‌پول داخلی ربات و به تومان انجام می‌شود.",
     ]
     rows = []
@@ -230,6 +230,7 @@ async def _menu_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     rows.append([InlineKeyboardButton(text="➕ افزودن سرویس شمارهٔ مجازی خودکار", callback_data="ozv:add", style=ButtonStyle.SUCCESS)])
     # === PATCH_TNUMBER_PROVIDER_V1 ===
     rows.append([InlineKeyboardButton(text="➕ افزودن TNumber", callback_data="ozv:addtn", style=ButtonStyle.SUCCESS)])
+    rows.append([InlineKeyboardButton(text="➕ افزودن IVN", callback_data="ozv:addivn", style=ButtonStyle.SUCCESS)])   # PATCH_IVN_PROVIDER_V1
     rows.append([InlineKeyboardButton(text="📘 راهنمای اتصال OzVinoo", callback_data="ozv:help")])
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:products", style=ButtonStyle.DANGER)])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
@@ -262,6 +263,24 @@ async def ozv_add(cb: CallbackQuery, bot: Bot, state: FSMContext):
     await cb.message.answer(
         "🔑 <b>کلید API حساب OzVinoo را بفرستید.</b>\n\n"
         "کلید با فرمت Bearer در سمت سرور ذخیره می‌شود و در پیام‌های عمومی نمایش داده نمی‌شود.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ لغو", callback_data="ozv:cancel_input", style=ButtonStyle.DANGER)],
+        ]), parse_mode="HTML")
+    await cb.answer()
+
+
+# === PATCH_IVN_PROVIDER_V1 ===
+@ozvinoo_router.callback_query(F.data == "ozv:addivn")
+async def ozv_add_ivn(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row or not await _require_access(cb, row):
+        return
+    await state.set_state(OzVinooFSM.token)
+    await state.update_data(provider_kind="ivn", provider_id=None)
+    await cb.message.answer(
+        "🔑 <b>کلید API حساب IVN را بفرستید.</b>\n\n"
+        "کلید را از پنل IVN (ivn-api.inbo.ir) بردارید. در پیام‌های عمومی نمایش داده نمی‌شود.\n"
+        "قیمت‌هایِ این ارائه‌دهنده دلاری است و با نرخِ روزِ دلار به تومان تبدیل می‌شود.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="❌ لغو", callback_data="ozv:cancel_input", style=ButtonStyle.DANGER)],
         ]), parse_mode="HTML")
@@ -319,11 +338,11 @@ async def ozv_token_input(msg: Message, bot: Bot, state: FSMContext):
     data = await state.get_data()
     provider_id = data.get("provider_id")
     providers = await _providers(row.id)
-    kind = "tnumber" if data.get("provider_kind") == "tnumber" else "ozvinoo"   # PATCH_TNUMBER_PROVIDER_V1
+    kind = data.get("provider_kind") if data.get("provider_kind") in ("tnumber", "ivn") else "ozvinoo"   # PATCH_TNUMBER_PROVIDER_V1
     if provider_id:
         p = _provider(providers, provider_id)
     else:
-        _pref = "tn" if kind == "tnumber" else "ozv"
+        _pref = {"tnumber": "tn", "ivn": "ivn"}.get(kind, "ozv")
         _used = {x.get("id") for x in providers}
         idx = len(providers) + 1
         while f"{_pref}{idx}" in _used:
@@ -333,6 +352,7 @@ async def ozv_token_input(msg: Message, bot: Bot, state: FSMContext):
     if p is None:
         p = {"id": provider_id, "kind": kind,
              "name": ("TNumber — شمارهٔ مجازی تلگرام" if kind == "tnumber"
+                      else "IVN — شمارهٔ مجازی تلگرام" if kind == "ivn"
                       else "OzVinoo — شمارهٔ مجازی تلگرام"),
              "active": False,
              "margin_pct": 30, "none_report": True, "last_sync": None, "last_count": 0, "last_error": ""}
@@ -417,6 +437,94 @@ _TN_RAW_LOGGED: set = set()
 
 def _is_tnumber(provider: dict | None) -> bool:
     return bool(provider) and str(provider.get("kind") or "") == "tnumber"
+
+
+# ═══════════════════════ IVN — PATCH_IVN_PROVIDER_V1 ═══════════════════════
+# ارائه‌دهندهٔ سوم (https://ivn-api.inbo.ir/api/v2). Bearer؛ قیمت‌ها به دلار؛ کشور با کدِ ISO؛ سفارش با «شماره».
+#  • GET  /accounts                 فهرستِ کشورها {code,name,price(USD),available}
+#  • POST /account/reserve-number   {country_code} → {phone,price,expires_in}
+#  • POST /account/get-code         {phone} → {codes:{otp,password}} (۴۰۴ منقضی، ۴۲۲ هنوز کد نیامده)
+#  • POST /account/cancel-reserve   {phone}
+#  • POST /account/logout           {phone}
+_IVN_BASE = "https://ivn-api.inbo.ir"
+_IVN_PASS: dict[str, str] = {}      # شماره → رمزِ دومرحله‌ای (فقط برایِ نمایش کنارِ کد)
+
+
+def _is_ivn(provider: dict | None) -> bool:
+    return bool(provider) and str(provider.get("kind") or "") == "ivn"
+
+
+def _phone_keyed(provider: dict | None) -> bool:
+    """TNumber و IVN: سفارش با شمارهٔ تلفن شناخته می‌شود (panel_order_id = شماره)، نه شناسهٔ عددی."""
+    return _is_tnumber(provider) or _is_ivn(provider)
+
+
+async def _ivn_request(provider: dict, method: str, path: str, *, params=None, body=None):
+    """(http_status, payload). status=0 یعنی خطای شبکه."""
+    token = str(provider.get("token") or "").strip()
+    if not token:
+        return 0, {"error": "کلید API ثبت نشده است"}
+    base = str(provider.get("base_url") or _IVN_BASE).rstrip("/")
+    timeout = aiohttp.ClientTimeout(total=25)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.request(method, base + "/api/v2" + path, params=params, json=body,
+                                       headers={"Authorization": f"Bearer {token}",
+                                                "Accept": "application/json"}) as r:
+                try:
+                    payload = await r.json(content_type=None)
+                except Exception:
+                    payload = {"error": f"پاسخِ نامعتبر (HTTP {r.status})"}
+                return r.status, payload
+    except Exception as exc:
+        return 0, {"error": f"اتصال ناموفق: {exc}"[:200]}
+
+
+def _ivn_err(status: int, payload) -> str:
+    if isinstance(payload, dict):
+        return str(payload.get("error") or payload.get("message") or f"خطای HTTP {status}")
+    return f"خطای HTTP {status}"
+
+
+def _ivn_ok(status: int, payload) -> bool:
+    return 200 <= status < 300 and isinstance(payload, dict) and payload.get("success") is not False \
+        and not payload.get("error")
+
+
+async def _ivn_usd_toman(provider: dict) -> float:
+    """نرخِ دلار→تومان: اول مقدارِ دستیِ ارائه‌دهنده، بعد زنده."""
+    try:
+        manual = float(provider.get("usd_rate") or 0)
+    except (TypeError, ValueError):
+        manual = 0.0
+    if manual > 0:
+        return manual
+    from tenant.gateways.stars_rate import usd_toman
+    return float(await usd_toman() or 0)
+
+
+async def _ivn_countries(provider: dict) -> tuple[bool, str, list[dict]]:
+    status, payload = await _ivn_request(provider, "GET", "/accounts")
+    if not _ivn_ok(status, payload):
+        return False, _ivn_err(status, payload), []
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    lst = data.get("countries")
+    if not isinstance(lst, list):
+        return False, "پاسخِ فهرستِ کشورها قابلِ خواندن نبود.", []
+    out = []
+    for it in lst:
+        if not isinstance(it, dict):
+            continue
+        iso = str(it.get("code") or "").strip().upper()
+        try:
+            usd = float(it.get("price") or 0)
+        except (TypeError, ValueError):
+            usd = 0.0
+        if len(iso) != 2 or usd <= 0:
+            continue
+        out.append({"iso": iso, "name": _clean_country_name(str(it.get("name") or iso), _tn_flag(iso)),
+                    "usd": usd, "count": _norm_int(it.get("available"), 0)})
+    return True, "", out
 
 
 async def _tn_request(provider: dict, method: str, path: str, *, params=None):
@@ -517,6 +625,21 @@ async def _tn_countries(provider: dict) -> tuple[bool, str, list[dict]]:
 
 async def _pv_buy(provider: dict, country_ref, svc) -> tuple[bool, str, str, str]:
     """(ok, پیامِ خطا, شناسهٔ سفارش نزدِ ارائه‌دهنده, شماره)."""
+    if _is_ivn(provider):
+        status, payload = await _ivn_request(provider, "POST", "/account/reserve-number",
+                                             body={"country_code": str(country_ref)})
+        if status == 402:
+            return False, "موجودیِ حسابِ ارائه‌دهنده کافی نیست (مالکِ ربات باید شارژ کند)", "", ""
+        if status == 404:
+            return False, "برای این کشور شمارهٔ آزاد نیست", "", ""
+        if not _ivn_ok(status, payload):
+            return False, _ivn_err(status, payload), "", ""
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        phone = _tn_phone(str(data.get("phone") or ""))
+        if not phone:
+            logger.error("IVN reserve: success بدونِ شماره — پاسخِ خام: %s", str(payload)[:800])
+            return False, "UNPARSED:" + str(payload)[:600], "", ""
+        return True, "", phone, phone
     if _is_tnumber(provider):
         ok, data, err, code = await _tn_request(provider, "POST", "/buy/account",
                                                 params={"country": str(country_ref)})
@@ -545,6 +668,10 @@ async def _pv_buy(provider: dict, country_ref, svc) -> tuple[bool, str, str, str
 
 async def _pv_cancel(provider: dict, order_ref) -> tuple[bool, str]:
     """(پذیرفته شد؟, متنِ پاسخ برایِ لاگ/نمایش)."""
+    if _is_ivn(provider):
+        status, payload = await _ivn_request(provider, "POST", "/account/cancel-reserve",
+                                             body={"phone": str(order_ref)})
+        return _ivn_ok(status, payload), ("ok" if _ivn_ok(status, payload) else _ivn_err(status, payload))
     if _is_tnumber(provider):
         ok, data, err, code = await _tn_request(provider, "POST", "/order/cancel",
                                                 params={"phonenumber": str(order_ref)})
@@ -557,6 +684,22 @@ async def _pv_cancel(provider: dict, order_ref) -> tuple[bool, str]:
 
 async def _pv_fetch_code(provider: dict, order_ref) -> tuple[str, str, str]:
     """(وضعیت: ok | pending | missing | error, کد, توضیح)."""
+    if _is_ivn(provider):
+        status, payload = await _ivn_request(provider, "POST", "/account/get-code", body={"phone": str(order_ref)})
+        if status == 404:
+            return "missing", "", _ivn_err(status, payload)
+        if status == 422:                      # «No new code received» = هنوز کد نیامده
+            return "pending", "", _ivn_err(status, payload)
+        if not _ivn_ok(status, payload):
+            return "error", "", _ivn_err(status, payload)
+        codes = (payload.get("data") or {}).get("codes") if isinstance(payload.get("data"), dict) else None
+        otp = str((codes or {}).get("otp") or "").strip() if isinstance(codes, dict) else ""
+        if not otp:
+            return "pending", "", ""
+        pw = (codes or {}).get("password")
+        if pw:
+            _IVN_PASS[_tn_phone(str(order_ref))] = str(pw)
+        return "ok", otp, ""
     if _is_tnumber(provider):
         ok, data, err, code = await _tn_request(provider, "GET", f"/account/code/{order_ref}")
         if not ok:
@@ -599,6 +742,13 @@ async def _pv_logout(provider: dict, order_ref) -> tuple[str, str]:
     202=هنوز در انتظارِ کد (خروج انجام نمی‌شود)، 404=سفارش پیدا نشد، 422=وضعیتِ ناشناخته/خطا.
     TNumber مستنداتِ خروج ندارد ⇒ پشتیبانی نمی‌شود.
     برمی‌گرداند: (ok | pending | missing | unsupported | error, پیام)."""
+    if _is_ivn(provider):
+        status, payload = await _ivn_request(provider, "POST", "/account/logout", body={"phone": str(order_ref)})
+        if _ivn_ok(status, payload):
+            return "ok", ""
+        if status == 404:
+            return "missing", _ivn_err(status, payload)
+        return "error", _ivn_err(status, payload)
     if _is_tnumber(provider):
         return "unsupported", "این ارائه‌دهنده قابلیتِ خروج ندارد."
     status, payload = await _oz_request(provider, "POST", _OZ_SERVICES, body={"order_id": _norm_int(order_ref, 0)})
@@ -755,7 +905,55 @@ async def _sync_tnumber_locked(bot_id: int, provider: dict) -> tuple[bool, str, 
     return True, f"{len(seen)} کشور همگام شد.", len(seen)
 
 
+async def _sync_ivn_locked(bot_id: int, provider: dict) -> tuple[bool, str, int]:
+    """PATCH_IVN_PROVIDER_V1 — قیمتِ ارائه‌دهنده دلاری است: تومان = دلار × نرخ، بعد سود و اصلاحِ قیمت."""
+    ok, err, items = await _ivn_countries(provider)
+    if not ok:
+        return False, err, 0
+    rate = await _ivn_usd_toman(provider)
+    if rate <= 0:
+        return False, "نرخِ دلار در دسترس نیست؛ نرخِ دستی را برایِ این ارائه‌دهنده تنظیم کن.", 0
+    seen = set()
+    price_overrides = await _oz_price_overrides(bot_id)
+    disabled_services = await _oz_disabled_services(bot_id)
+    margin = float(provider.get("margin_pct", 30) or 0)
+    adj = float(provider.get("cost_adjust", 0) or 0)
+    async with Session() as s:
+        for it in items:
+            price = max(0.0, it["usd"] * rate + adj)
+            if price <= 0:
+                continue
+            service_id = f"ozv:{provider['id']}:{it['iso']}"
+            seen.add(service_id)
+            available = it["count"] > 0
+            sell = price_overrides.get(service_id) or (int(round(price * (1 + margin / 100))) * 1000)
+            active = bool(provider.get("active") and available) and service_id not in disabled_services
+            desc = f"موجودی: {it['count']} | قیمتِ ارائه‌دهنده: {it['usd']:g}$"
+            svc = await s.scalar(select(SmmService).where(
+                SmmService.bot_id == bot_id, SmmService.service_id == service_id))
+            if not svc:
+                s.add(SmmService(bot_id=bot_id, service_id=service_id, name=it["name"],
+                                 category=_OZ_CATEGORY, category_pk=await _oz_default_category_pk(bot_id),
+                                 panel_rate=price, sell_rate=sell,
+                                 min_qty=1, max_qty=1, is_active=active, is_manual=False,
+                                 platform_key="telegram", type_key="virtual_number",
+                                 provider_desc=desc))
+            else:
+                svc.name, svc.category = it["name"], _OZ_CATEGORY
+                svc.panel_rate, svc.sell_rate = price, sell
+                svc.is_active, svc.provider_desc = active, desc
+        existing = (await s.scalars(select(SmmService).where(
+            SmmService.bot_id == bot_id, SmmService.service_id.like(f"ozv:{provider['id']}:%")))).all()
+        for svc in existing:
+            if svc.service_id not in seen:
+                svc.is_active = False
+        await s.commit()
+    return True, f"{len(seen)} کشور همگام شد.", len(seen)
+
+
 async def _sync_provider_locked(bot_id: int, provider: dict) -> tuple[bool, str, int]:
+    if _is_ivn(provider):
+        return await _sync_ivn_locked(bot_id, provider)
     if _is_tnumber(provider):
         return await _sync_tnumber_locked(bot_id, provider)
     # === PATCH_OZVINOO_TIER_BOTH_V1 ===
@@ -889,6 +1087,14 @@ async def ozv_test(cb: CallbackQuery, bot: Bot):
     p = _provider(await _providers(row.id), pid)
     if not p:
         await cb.answer("ارائه‌دهنده پیدا نشد", show_alert=True)
+        return
+    if _is_ivn(p):   # PATCH_IVN_PROVIDER_V1
+        status, payload = await _ivn_request(p, "GET", "/user/balance")
+        if _ivn_ok(status, payload):
+            d = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            await cb.answer(f"✅ اتصال و کلید معتبر است.\nموجودیِ حساب IVN: {d.get('balance', '—')} دلار", show_alert=True)
+        else:
+            await cb.answer(("❌ اتصال ناموفق: " + _ivn_err(status, payload))[:190], show_alert=True)
         return
     if _is_tnumber(p):   # PATCH_TNUMBER_PROVIDER_V1
         ok, data, err, _c = await _tn_request(p, "GET", "/account/balance")
@@ -1542,7 +1748,7 @@ async def _service_provider(bot_id: int, svc: SmmService) -> tuple[dict | None, 
         return None, None
     providers = await _providers(bot_id)
     prov = _provider(providers, parts[1])
-    if _is_tnumber(prov):   # PATCH_TNUMBER_PROVIDER_V1 — کشور با کدِ ISO (مثلاً «IR»)
+    if _phone_keyed(prov):   # PATCH_TNUMBER_PROVIDER_V1 — کشور با کدِ ISO (مثلاً «IR»)
         return prov, parts[2].split(":")[0].upper() or None
     # پسوندِ «:c» = ردهٔ ارزان در حالتِ «هر دو رده» (PATCH_OZVINOO_TIER_BOTH_V1)
     return prov, _norm_int(parts[2].split(":")[0], 0)
@@ -1576,7 +1782,7 @@ async def _refund_order(bot: Bot, order_id: int, note: str, text: str | None = N
 
 async def _process_code(bot: Bot, order: SmmOrder, provider: dict, api_order_id: int) -> str:
     # PATCH_TNUMBER_PROVIDER_V1 — TNumber با شماره شناخته می‌شود (panel_order_id = شماره)
-    ref = order.panel_order_id if _is_tnumber(provider) else api_order_id
+    ref = order.panel_order_id if _phone_keyed(provider) else api_order_id
     kind, code, _why = await _pv_fetch_code(provider, ref)
     if kind in ("pending", "missing", "error"):
         return kind
@@ -1613,6 +1819,9 @@ _CODE_IN_NOTE = re.compile(r"کد: (\S+)")
 
 def _code_message(code: str, phone: str | None) -> str:
     phone_line = f"☎️ شماره مجازی: <code>{html.escape(str(phone))}</code>\n" if phone else ""
+    _pw = _IVN_PASS.get(_tn_phone(str(phone or "")))        # PATCH_IVN_PROVIDER_V1
+    if _pw:
+        phone_line += f"🔐 رمز تأیید دومرحله‌ای: <code>{html.escape(_pw)}</code>\n"
     return (
         "🎉 <b>کد ورود با موفقیت دریافت شد</b>\n\n"
         f"🔢 کد ورود: <code>{html.escape(code)}</code>\n{phone_line}\n"
@@ -1901,7 +2110,7 @@ async def _ozv_buy_locked(cb, bot, row, country, provider, api_country_id, buyer
     await cb.answer("⏳ در حال رزرو شماره…")
     # PATCH_TNUMBER_PROVIDER_V1 — رزرو از طریقِ لایهٔ مشترک (OzVinoo یا TNumber)
     _ok, _err, api_order_id, phone = await _pv_buy(provider, api_country_id, country)
-    _pname = "TNumber" if _is_tnumber(provider) else "OzVinoo"
+    _pname = "IVN" if _is_ivn(provider) else ("TNumber" if _is_tnumber(provider) else "OzVinoo")
     if not _ok:
         if _err.startswith("UNPARSED:"):
             # ارائه‌دهنده موفق گفت ولی شماره در پاسخش پیدا نشد: پولِ کاربر کم نمی‌شود و
@@ -2368,7 +2577,7 @@ async def _service_provider(bot_id: int, svc: SmmService) -> tuple[dict | None, 
         return None, None
     providers = await _providers(bot_id)
     prov = _provider(providers, parts[1])
-    if _is_tnumber(prov):   # PATCH_TNUMBER_PROVIDER_V1 — کشور با کدِ ISO (مثلاً «IR»)
+    if _phone_keyed(prov):   # PATCH_TNUMBER_PROVIDER_V1 — کشور با کدِ ISO (مثلاً «IR»)
         return prov, parts[2].split(":")[0].upper() or None
     # پسوندِ «:c» = ردهٔ ارزان در حالتِ «هر دو رده» (PATCH_OZVINOO_TIER_BOTH_V1)
     return prov, _norm_int(parts[2].split(":")[0], 0)
