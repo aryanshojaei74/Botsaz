@@ -125,7 +125,9 @@ async def _toncenter_call(method: str, url: str, **kwargs):
             async with aiohttp.ClientSession(timeout=t) as s:
                 async with s.request(method, url, headers=_toncenter_headers(), **kwargs) as r:
                     status = r.status
-                    data = await r.json(content_type=None)
+                    # PATCH_TON_LENIENT_JSON_V1: کامنتِ اسپم/باینری (بایتِ نامعتبرِ UTF-8) نباید کلِ پاسخ را خراب کند
+                    import json as _json
+                    data = _json.loads((await r.read()).decode("utf-8", errors="replace"))
         except Exception as e:                               # noqa: BLE001
             last_err = f"{type(e).__name__}"
             continue
