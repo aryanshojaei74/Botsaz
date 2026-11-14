@@ -403,10 +403,11 @@ async def fulfil(bot: Bot, row, order_id: int, kind: str, *, by_admin: bool = Fa
                 logger.warning("fragapi: خرید رد شد: %s %s", e.status, e.codes)
                 _hint = ""
                 if "can't gift" in (e.message or "").lower() or "cannot gift" in (e.message or "").lower():
-                    # PATCH_FRAG_RECIPIENT_HINT_V1: خطا از سمتِ گیرنده است، نه قطعیِ API
-                    _hint = ("\n\nℹ️ این یعنی فرگمنت برایِ همین گیرنده (حسابِ مقصد) اجازهٔ هدیه‌دادنِ استارز نمی‌دهد؛ "
-                             "API قطع نیست. معمولاً حسابِ مقصد محدود/جدید است یا تنظیماتِ حریمِ خصوصی دارد. "
-                             "با یک گیرندهٔ دیگر امتحان کنید یا همین سفارش را دستی بفرستید.")
+                    _hint = ("\n\nℹ️ این خطا از خودِ فرگمنت می‌آید. اگر برایِ چند گیرندهٔ مختلف تکرار شد، "
+                             "مشکل از حسابِ گیرنده نیست؛ معمولاً از سمتِ حسابِ خریدارِ Fragment API است "
+                             "(محدودیتِ موقتِ فرگمنت، موجودی/کیفِ TON، یا نیازِ به ورودِ دوبارهٔ حساب). "
+                             "در fragment-api.com/dashboard وضعیتِ حساب و کیف را ببین و اگر درست بود به پشتیبانیِ آن‌ها "
+                             "همین متنِ خطا را بفرست. تا درست شدن سفارش‌ها را دستی بفرست.")
                 await _revert(bot, row, order_id, kind, f"Fragment API خرید را رد کرد: {e.message}{_hint}", warn=not e.clean)
                 return
             oid = str(res.get("id") or "")
