@@ -3439,7 +3439,13 @@ async def _vpn_pay_impl(cb: CallbackQuery, bot: Bot, state: FSMContext, plan_id:
     await state.update_data(vdisc_code=None, vdisc_plan_id=None, vcustom_label=None)
 
     await cb.answer("در حال ساخت کانفیگ…")
-    await _progress_edit(cb, "⏳ پرداخت موفق بود. در حال ساخت کانفیگ روی سرور…")
+    # PATCH_VPN_BUILDING_TEXT_V1: متنِ دلخواهِ مالک (تیترهایِ vtl) یا پیش‌فرضِ قبلی
+    try:
+        from tenant.bots.vpn.vpn_titles import get_raw as _bt_raw, TITLES as _BT
+        _bt = (await _bt_raw(bot_id, "building")) or _BT["building"][0]
+    except Exception:
+        _bt = "پرداخت موفق بود. در حال ساخت کانفیگ روی سرور…"
+    await _progress_edit(cb, "⏳ " + _bt)
 
     # ۲) ساخت روی پنل
     email = await _make_config_email(
