@@ -2197,6 +2197,21 @@ async def _show_count(bot_id: int) -> bool:
 _SVC_LIST_PAGE = 30
 
 
+# === PATCH_SMM_VNUM_MENU_PRICE_V1 === (Infldor) در فهرست‌هایِ «اتصالِ سریع/فروشگاه» کشورهایِ شمارهٔ مجازی فقط اسم داشتند؛
+# قیمت روی دکمه نمی‌آمد و ترتیبشان به ترتیبِ ثبت (فارسی/انگلیسیِ قاطی) بود. حالا قیمت کنارِ اسم است و از ارزان به گران.
+def _item_btn_text(v) -> str:
+    name = (getattr(v, "name", "") or "")
+    if _is_vnum_service(v):
+        return f"{name[:34]} — {_vnum_shop_price(v):,} تومان"
+    return name[:55]
+
+
+def _menu_sorted(items: list) -> list:
+    """سرویس‌هایِ عادی به ترتیبِ id (مثلِ قبل)، بعد شماره‌هایِ مجازی از ارزان به گران."""
+    return sorted(items, key=lambda v: ((1, _vnum_shop_price(v), v.name or "") if _is_vnum_service(v)
+                                         else (0, v.id, "")))
+
+
 def _page_slice(items: list, page: int) -> tuple[list, int, int]:
     pages = max(1, (len(items) + _SVC_LIST_PAGE - 1) // _SVC_LIST_PAGE)
     page = max(1, min(int(page or 1), pages))
@@ -2238,8 +2253,8 @@ _QLC_DEPTH_TXT = {"1": "فقط سرویس", "2": "دسته ← سرویس", "3":
 
 async def _qlc_all_content(bot_id: int, mb_id: int, svcs: list, page: int = 1) -> tuple[str, InlineKeyboardMarkup]:
     """عمقِ ۱: سرویس‌هایِ دسته(های) وصل‌شده مستقیم و بدونِ مرحلهٔ دسته/نوع."""
-    items, page, pages = _page_slice(sorted(svcs, key=lambda v: v.id), page)
-    rows = [[InlineKeyboardButton(text=v.name[:55], callback_data=f"smmu:svcbraw:{v.id}:{mb_id}")]
+    items, page, pages = _page_slice(_menu_sorted(svcs), page)
+    rows = [[InlineKeyboardButton(text=_item_btn_text(v), callback_data=f"smmu:svcbraw:{v.id}:{mb_id}")]
             for v in items]
     nav = _page_nav(f"smm:qlc:{mb_id}:all", page, pages)
     if nav:
@@ -2349,9 +2364,9 @@ async def smm_qlc_nav(cb: CallbackQuery, bot: Bot):
         _depth = await _get_setting(row.id, "qlc_depth", "3")
         if _depth == "2":
             _pg = int(parts[5]) if len(parts) > 5 and parts[5].isdigit() else 1
-            _page_items, _pg, _pages = _page_slice(cat_svcs, _pg)   # PATCH_SMM_LIST_PAGINATION_V1
+            _page_items, _pg, _pages = _page_slice(_menu_sorted(cat_svcs), _pg)   # PATCH_SMM_LIST_PAGINATION_V1
             rows = [[InlineKeyboardButton(
-                text=v.name[:55],
+                text=_item_btn_text(v),
                 callback_data=f"smmu:svcbraw:{v.id}:{mb_id}")]
                 for v in _page_items]
             _nav = _page_nav(f"smm:qlc:{mb_id}:cat:{cat_pk}", _pg, _pages)
@@ -2391,9 +2406,9 @@ async def smm_qlc_nav(cb: CallbackQuery, bot: Bot):
         names = await _qlc_category_names(row.id, [cat_pk])
         cat_name = names.get(cat_pk, "؟")
         items = [v for v in svcs if getattr(v, "category_pk", None) == cat_pk and _svc_platform_type(v)[1] == tkey]
-        items, _pg, _pages = _page_slice(items, _pg)   # PATCH_SMM_LIST_PAGINATION_V1
+        items, _pg, _pages = _page_slice(_menu_sorted(items), _pg)   # PATCH_SMM_LIST_PAGINATION_V1
         breadcrumb = f"{cat_name} › {smm_api.service_type_label(tkey)}"
-        rows = [[InlineKeyboardButton(text=v.name[:55], callback_data=f"smmu:svcbraw:{v.id}:{mb_id}")]
+        rows = [[InlineKeyboardButton(text=_item_btn_text(v), callback_data=f"smmu:svcbraw:{v.id}:{mb_id}")]
                 for v in items]
         _nav = _page_nav(f"smm:qlc:{mb_id}:typ:{cat_pk}:{tkey}", _pg, _pages)
         if _nav:
@@ -2513,13 +2528,13 @@ async def smm_qlu_nav(cb: CallbackQuery, bot: Bot):
         pkey, tkey = parts[4], parts[5]
         _pg = int(parts[6]) if len(parts) > 6 and parts[6].isdigit() else 1
         items = [v for v in svcs if _svc_platform_type(v) == (pkey, tkey)]
-        items, _pg, _pages = _page_slice(items, _pg)   # PATCH_SMM_LIST_PAGINATION_V1
+        items, _pg, _pages = _page_slice(_menu_sorted(items), _pg)   # PATCH_SMM_LIST_PAGINATION_V1
         # === PATCH_SMM_QUICKLINK_BREADCRUMB_V1 ===
         # درخواستِ ادمین: توی مسیرِ «اتصالِ سریع»، وقتی مشتری تا اینجا
         # (پلتفرم → نوع → سرویس) اومده، صفحهٔ نهاییِ خرید هم مسیرِ کامل
         # (مثلاً «اینستاگرام › ممبر › نامِ سرویس») رو نشون بده، نه فقط
         # اسمِ سرویس تنها.
-        rows = [[InlineKeyboardButton(text=v.name[:55], callback_data=f"smmu:svcb:{v.id}:{pkey}:{tkey}:{mb_id}")] for v in items]   # PATCH_SMM_QL_BACK_V1: mb_id برایِ دکمهٔ بازگشت
+        rows = [[InlineKeyboardButton(text=_item_btn_text(v), callback_data=f"smmu:svcb:{v.id}:{pkey}:{tkey}:{mb_id}")] for v in items]   # PATCH_SMM_QL_BACK_V1: mb_id برایِ دکمهٔ بازگشت
         _nav = _page_nav(f"smm:qlu:{mb_id}:typ:{pkey}:{tkey}", _pg, _pages)
         if _nav:
             rows.append(_nav)
@@ -11228,11 +11243,14 @@ async def smmu_pick_type(cb: CallbackQuery, bot: Bot):
     # === PATCH_SMM_SORT_EVERYWHERE_V1 === همان مرتب‌سازِ مشترک (با قیمتِ واقعی)
     _ord = {v.id: i for i, v in enumerate(await _sort_svc_objs(row.id, [e[1] for e in entries], sort_order))}
     entries.sort(key=lambda x: _ord[x[1].id])
+    if sort_order == "none" and entries and all(_is_vnum_service(e[1]) for e in entries):   # PATCH_SMM_VNUM_MENU_PRICE_V1
+        entries.sort(key=lambda x: (_vnum_shop_price(x[1]), x[1].name or ""))
     entries, _pg, _pages = _page_slice(entries, _pg)
     for it, v in entries:
         _cbd = f"smmu:svc:{v.id}:{pkey}:{tkey}:{_pg}{'h' if _home else ''}"          # PATCH_SMM_PRODUCT_BACK_TO_LIST_V1: صفحهٔ محصول بداند از کدام لیست آمده
         rows.append([InlineKeyboardButton(
-            text=it["name"][:55], callback_data=_cbd if len(_cbd.encode()) <= 64 else f"smmu:svc:{v.id}")])
+            text=_item_btn_text(v) if _is_vnum_service(v) else it["name"][:55],   # PATCH_SMM_VNUM_MENU_PRICE_V1
+            callback_data=_cbd if len(_cbd.encode()) <= 64 else f"smmu:svc:{v.id}")])
     _nav = _page_nav(f"smmu:type:{pkey}:{tkey}", _pg, _pages)
     if _nav:
         if _home:       # فلگِ «h» در صفحه‌بندی هم حفظ شود
