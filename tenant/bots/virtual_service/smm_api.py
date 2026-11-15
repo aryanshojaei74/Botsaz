@@ -695,6 +695,7 @@ PLATFORMS = [
     ("reddit",    "👽 ردیت",        ["reddit", "ردیت"]),
     ("twitch",    "🟣 توییچ",       ["twitch", "توییچ"]),
     ("vimeo",     "🎬 ویمیو",       ["vimeo", "ویمیو"]),
+    ("aparat",    "📺 آپارات",      ["aparat", "آپارات"]),    # PATCH_SMM_APARAT_V1 (Nexivo)
     # === PATCH_SMM_MANUAL_CATEGORY_V1 ===
     ("rubika",    "💜 روبیکا",      ["rubika", "روبیکا"]),
     ("rubino",    "🟣 روبینو",      ["rubino", "روبینو"]),   # === PATCH_RUBINO_PLATFORM_V1 ===
