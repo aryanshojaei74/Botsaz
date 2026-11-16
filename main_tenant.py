@@ -334,6 +334,13 @@ def _platform_deep_link(payload: str) -> str | None:
     return f"https://t.me/{_platform_bot_username}?start={payload}"
 
 
+async def _reactivation_link(brow) -> str | None:
+    """=== PATCH_PARTNER_REACTIVATION_LINK_TENANT_V1 === (Nexivo) رباتِ فروخته‌شده از طریقِ ربات همکار ⇒ لینکِ همان ربات همکار؛
+    وگرنه صفحهٔ تمدیدِ بات‌سازِ اصلی."""
+    from reactivation_link import partner_bot_link
+    return (await partner_bot_link(brow, Session)) or _platform_deep_link(f"mbup_{brow.id}")
+
+
 # ───────────────────── حلقه‌های پس‌زمینهٔ مستأجر ─────────────────────
 
 async def _warm_tenant_bots():
@@ -1386,7 +1393,7 @@ async def tenant_webhook(token: str, request: Request):
 # === PATCH_ARCHIVED_START_DIRECT_RENEW_V1 ===
                 # قبلاً به صفحهٔ جزئیاتِ ربات (mb_) می‌رفت؛ الان مستقیم
                 # به صفحهٔ تمدید/پرداخت (mbup_) می‌ره.
-                link = _platform_deep_link(f"mbup_{brow.id}")
+                link = await _reactivation_link(brow)    # PATCH_PARTNER_REACTIVATION_LINK_TENANT_V1
                 if link:
                     maint_kb = InlineKeyboardMarkup(inline_keyboard=[[
                         InlineKeyboardButton(text="🔓 رفتن به فعال‌سازیِ ربات", url=link)
