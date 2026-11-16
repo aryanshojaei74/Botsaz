@@ -62,3 +62,28 @@ async def test_reseller_report_errors_never_raise(monkeypatch):
         async def __aexit__(self, *a): return False
     monkeypatch.setattr(WP, "Session", lambda: S())
     await WP._rs_trial_report(1, 2, "x", "p", 1, 1, 0, 1)      # نباید exception بدهد
+
+
+@pytest.mark.asyncio
+async def test_admin_answer_dup_shows_force_button_without_crediting(monkeypatch):
+    import tenant
+    calls = []
+
+    async def owner_ok(cb, bot): return NS(id=5)
+
+    async def settle(bot_id, cid, admin, force=False):
+        calls.append(force)
+        return (False, "DUP:احتمالِ تکراری") if not force else (True, "ok")
+    monkeypatch.setattr(tenant, "_owner_ok", owner_ok)
+    monkeypatch.setattr(AP, "manual_settle", settle)
+    edits, answers = [], []
+
+    async def edit_text(text, **k): edits.append((text, k.get("reply_markup")))
+
+    async def answer(t=None, **k): answers.append((t, k))
+    cb = NS(data="apadm:ok:3", from_user=NS(id=9), answer=answer,
+            message=NS(html_text="سوال", edit_text=edit_text))
+    await AA.ap_admin_answer(cb, None)
+    assert calls == [False] and "احتمالِ شارژِ تکراری" in edits[-1][0]
+    datas = [b.callback_data for r in edits[-1][1].inline_keyboard for b in r]
+    assert "apadm:okf:3" in datas and "apadm:no:3" in datas and answers[-1][1].get("show_alert") is True

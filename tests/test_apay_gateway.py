@@ -1097,3 +1097,36 @@ async def test_miniapp_topup_init_offers_apay_even_if_card_is_off(db):
     await tenant.set_setting(5, "apay_show_wallet", "1")
     await tenant.set_setting(5, "apay_enabled", "0")
     assert await MA._apay_info(5) is None
+
+
+# === PATCH_APAY_MANUAL_DUP_GUARD_V1 ===
+@pytest.mark.asyncio
+async def test_manual_settle_blocks_probable_duplicate_unless_forced(db):
+    from datetime import datetime, timedelta
+    maker, notified = db
+    async with maker() as s:
+        s.add(models.ApayCharge(bot_id=5, user_telegram_id=777, order_id="bsTWIN", payment_id="pay_2",
+                                amount_toman=50_000, pay_amount_rial=500_007, status="paid",
+                                paid_at=datetime.utcnow() - timedelta(minutes=20)))
+        await s.commit()
+        cid = (await s.scalar(select(models.ApayCharge).where(models.ApayCharge.order_id == "bsabc"))).id
+    ok, msg = await AP.manual_settle(5, cid, 1)
+    assert not ok and msg.startswith("DUP:") and "bsTWIN" in msg and "50,000" in msg
+    assert (await _balance(maker))[0] == 0 and (await _balance(maker))[1] == "waiting"       # شارژ نشد
+    ok, msg = await AP.manual_settle(5, cid, 1, force=True)                                   # ادمین آگاهانه تأیید کرد
+    assert ok and (await _balance(maker))[:2] == (50_000, "paid")
+
+
+@pytest.mark.asyncio
+async def test_manual_settle_ignores_old_or_other_amount_twins(db):
+    from datetime import datetime, timedelta
+    maker, _n = db
+    async with maker() as s:
+        s.add(models.ApayCharge(bot_id=5, user_telegram_id=777, order_id="bsOLD", payment_id="p3",
+                                amount_toman=50_000, status="paid", paid_at=datetime.utcnow() - timedelta(hours=7)))
+        s.add(models.ApayCharge(bot_id=5, user_telegram_id=777, order_id="bsOTH", payment_id="p4",
+                                amount_toman=90_000, status="paid", paid_at=datetime.utcnow() - timedelta(minutes=5)))
+        await s.commit()
+        cid = (await s.scalar(select(models.ApayCharge).where(models.ApayCharge.order_id == "bsabc"))).id
+    ok, _m = await AP.manual_settle(5, cid, 1)
+    assert ok

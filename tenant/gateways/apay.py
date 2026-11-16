@@ -860,8 +860,24 @@ async def _drop_admin_ask(bot_id: int, chat_id, msg_id) -> None:
         logger.info("apay: حذفِ پیامِ پرسش از ادمین ممکن نشد")
 
 
-async def manual_settle(bot_id: int, charge_id: int, admin_uid: int) -> tuple[bool, str]:
-    """ادمین تأیید کرد که واریز انجام شده → شارژِ اتمیک و یک‌بار (با تسویهٔ خودکار هم تداخل ندارد)."""
+DUP_WINDOW_HOURS = 6      # PATCH_APAY_MANUAL_DUP_GUARD_V1
+
+
+async def _recent_paid_twin(s, bot_id: int, ch):
+    """فاکتورِ دیگریِ همین کاربر با همین مبلغ که در چند ساعتِ اخیر شارژ شده (احتمالِ «یک واریز، دو فاکتور»)."""
+    since = datetime.utcnow() - timedelta(hours=DUP_WINDOW_HOURS)
+    return await s.scalar(select(ApayCharge).where(
+        ApayCharge.bot_id == bot_id, ApayCharge.user_telegram_id == ch.user_telegram_id,
+        ApayCharge.amount_toman == ch.amount_toman, ApayCharge.id != ch.id,
+        ApayCharge.status == "paid", ApayCharge.paid_at >= since).order_by(ApayCharge.paid_at.desc()).limit(1))
+
+
+async def manual_settle(bot_id: int, charge_id: int, admin_uid: int, force: bool = False) -> tuple[bool, str]:
+    """ادمین تأیید کرد که واریز انجام شده → شارژِ اتمیک و یک‌بار (با تسویهٔ خودکار هم تداخل ندارد).
+
+    === PATCH_APAY_MANUAL_DUP_GUARD_V1 === (فرزاد: «یک واریز را دو بار تأیید زد») اگر همین کاربر در ۶ ساعتِ اخیر
+    فاکتورِ دیگری با همین مبلغ داشته که شارژ شده (مثلاً پیامکِ دیرهنگام فاکتورِ قبلی را خودکار شارژ کرده)، تأییدِ دستی
+    شارژ نمی‌کند و پیامی با پیشوندِ «DUP:» برمی‌گرداند تا ادمین آگاهانه (force=True) تأیید کند."""
     async with Session() as s:
         ch = await s.scalar(select(ApayCharge).where(
             ApayCharge.id == charge_id, ApayCharge.bot_id == bot_id).with_for_update())
@@ -869,6 +885,11 @@ async def manual_settle(bot_id: int, charge_id: int, admin_uid: int) -> tuple[bo
             return False, "این فاکتور پیدا نشد."
         if ch.status == "paid":
             return False, "این فاکتور قبلاً شارژ شده است."
+        if not force:
+            twin = await _recent_paid_twin(s, bot_id, ch)
+            if twin is not None:
+                return False, (f"DUP:همین کاربر {int(twin.amount_toman or 0):,} تومانِ دیگری هم در {DUP_WINDOW_HOURS} ساعتِ اخیر "
+                               f"شارژ شده (فاکتور {twin.order_id}). ممکن است همین واریز باشد؛ شارژ نشد.")
         u = await s.scalar(select(BotUser).where(
             BotUser.bot_id == bot_id, BotUser.telegram_id == ch.user_telegram_id).with_for_update())
         if not u:

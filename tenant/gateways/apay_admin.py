@@ -942,8 +942,20 @@ async def ap_admin_answer(cb: CallbackQuery, bot: Bot):
         cid = int(cid)
     except ValueError:
         return await cb.answer()
-    if act == "ok":
-        ok, msg = await AP.manual_settle(row.id, cid, cb.from_user.id)
+    if act in ("ok", "okf"):
+        ok, msg = await AP.manual_settle(row.id, cid, cb.from_user.id, force=(act == "okf"))
+        if not ok and msg.startswith("DUP:"):         # PATCH_APAY_MANUAL_DUP_GUARD_V1
+            warn = msg[4:]
+            kb = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="✅ با این حال شارژ کن", callback_data=f"apadm:okf:{cid}",
+                                     style=ButtonStyle.DANGER),
+                InlineKeyboardButton(text="❌ واریز نشده", callback_data=f"apadm:no:{cid}")]])
+            try:
+                await cb.message.edit_text((cb.message.html_text or "") + f"\n\n⚠️ <b>احتمالِ شارژِ تکراری</b>\n{warn}",
+                                           reply_markup=kb, parse_mode="HTML")
+            except Exception:
+                logger.info("apay: ویرایشِ پیامِ هشدارِ تکراری ممکن نشد")
+            return await cb.answer("احتمالِ شارژِ تکراری — هشدار را بخوان.", show_alert=True)
         tail = "\n\n✅ <b>تأیید شد و کیف پولِ کاربر شارژ گردید.</b>" if ok else f"\n\n⚠️ {msg}"
     else:
         ok, msg = True, "ثبت شد."
@@ -957,7 +969,7 @@ async def ap_admin_answer(cb: CallbackQuery, bot: Bot):
         await s.execute(sa_update(ApayCharge).where(ApayCharge.id == cid, ApayCharge.bot_id == row.id)
                         .values(admin_ask_chat=None, admin_ask_msg=None))
         await s.commit()
-    await cb.answer(msg if not ok else ("شارژ شد ✅" if act == "ok" else "ثبت شد"), show_alert=not ok)
+    await cb.answer(msg if not ok else ("شارژ شد ✅" if act in ("ok", "okf") else "ثبت شد"), show_alert=not ok)
 
 
 # ═════════════════ لاگِ پرداخت‌هایِ آپی در کانال ═════════════════
