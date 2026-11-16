@@ -375,6 +375,13 @@ async def _panel_creds(bot_id: int, panel_pk: int | None) -> tuple[str, str, str
     return p.api_url, p.api_key, p.name
 
 
+async def _panel_configured(bot_id: int, panel_pk: int | None) -> bool:
+    """=== PATCH_SMM_NO_PANEL_MANUAL_V1 === (شریف) پنلِ سرویس حذف شده/کلیدش خالی است؟ ⇒ ثبتِ خودکار ممکن نیست؛
+    سفارش به‌جایِ «ارتباط با پنل برقرار نشد» و بازگشتِ وجه، مثلِ سفارشِ دستی در صفِ تأییدِ ادمین می‌رود."""
+    url, key, _name = await _panel_creds(bot_id, panel_pk)
+    return bool((url or "").strip() and (key or "").strip())
+
+
 # === PATCH_SMM_BULK_STATUS_V1 ===
 async def _panel_bulk_enabled(bot_id: int, panel_pk: int | None) -> bool:
     """آیا برای این پنل استعلامِ گروهیِ وضعیت فعاله؟"""
@@ -11922,7 +11929,7 @@ async def _smm_bulk_process_bg(bot: Bot, row, order_ids: list[int], chat_id: int
         async with Session() as s:
             v = await s.get(SmmService, o.smm_service_pk) if o.smm_service_pk else None
         order_mode = await _panel_order_mode(row.id, o.panel_pk)
-        if order_mode == "auto" and not (v and v.is_manual):
+        if order_mode == "auto" and not (v and v.is_manual) and await _panel_configured(row.id, o.panel_pk):   # PATCH_SMM_NO_PANEL_MANUAL_V1
             ok, note = await _place_on_panel(row.id, oid)
         else:
             ok, note = True, "در انتظارِ تأییدِ ادمین"
@@ -12507,7 +12514,7 @@ async def smm_place_order(bot: Bot, row, msg, v, link: str, qty: int, price: int
         price = final_price  # از این‌جا به بعد، همه‌ی متن‌ها مبلغِ نهایی را نشان می‌دهند
     _status = "ok"
 
-    if order_mode == "auto" and not v.is_manual:
+    if order_mode == "auto" and not v.is_manual and await _panel_configured(row.id, v.panel_pk):   # PATCH_SMM_NO_PANEL_MANUAL_V1
         # === PATCH_SMM_LOADING_FEEDBACK_V1 ===
         # ثبتِ سفارش رویِ پنل یه تماسِ شبکه‌ایِ واقعی به یه سرورِ بیرونیه
         # که ما کنترلش نمی‌کنیم — گاهی چند ثانیه طول می‌کشه. قبلاً تویِ این
