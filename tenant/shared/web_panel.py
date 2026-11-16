@@ -1251,6 +1251,30 @@ def _trial_label(gb: float, days: int, hours: int) -> str:
     return f"{vol} / {dur}"
 
 
+async def _rs_trial_report(bot_id: int, tg_id: int, uname, panel_key: str,
+                           gb: float, days: int, hours: int, count: int) -> None:
+    """=== PATCH_RESELLER_TRIAL_REPORT_V1 === (ایلیا) تستِ رایگانِ نماینده هم مثلِ تستِ مشتری در کانالِ گزارشِ تست
+    (و برای ادمین‌ها اگر روشن باشد) پست می‌شود. همان شرطِ پلن و تنظیماتِ گزارشِ تست؛ خطا هرگز مانعِ ساخت نمی‌شود."""
+    try:
+        from aiogram import Bot as _AiogramBot
+        from tenant import _trial_report_post
+        async with Session() as s:
+            _row = await s.get(BotRow, bot_id)
+            _u = await s.scalar(select(BotUser).where(
+                BotUser.bot_id == bot_id, BotUser.telegram_id == tg_id))
+        if not _row or not _u:
+            return
+        vol, _sep, dur = _trial_label(gb, days, hours).partition(" / ")
+        _tb = _AiogramBot(token=_row.token)
+        try:
+            await _trial_report_post(_tb, bot_id, _u, uname, "", vol + (f" × {count}" if count > 1 else ""),
+                                     dur, panel_key, "reseller")
+        finally:
+            await _tb.session.close()
+    except Exception:
+        logger.exception("پنلِ نماینده: گزارشِ تست ارسال نشد (نادیده گرفته شد)")
+
+
 async def _rs_trial_used_today(bot_id: int, tg_id: int) -> int:
     """تعدادِ تستی که این نماینده امروز گرفته.
 
@@ -1374,6 +1398,7 @@ async def rs_trial_create(request: Request, panel_key: str = Form(...),
         return _rs_back("trial", err="ساختِ تست ناموفق بود. سهمیه‌ات مصرف نشد.")
     # === PATCH_RESELLER_TRIAL_LOG_V1 === سهمیه بعد از ساختِ موفق ثبت می‌شود
     await _rs_trial_log(bot_id, tg_id, panel_key, made)
+    await _rs_trial_report(bot_id, tg_id, uname, panel_key, t_gb, t_days, t_hours, made)   # PATCH_RESELLER_TRIAL_REPORT_V1
     if uid:
         await _rs_notify_owner(bot_id, uid, "پنلِ وبِ نماینده (تست رایگان)",
                                f"{_trial_label(t_gb, t_days, t_hours)} × {made} عدد",

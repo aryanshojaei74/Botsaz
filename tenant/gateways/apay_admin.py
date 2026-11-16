@@ -560,9 +560,55 @@ async def _apu_block_if_open(target, row, tg_id: int) -> bool:
     return True
 
 
+# === PATCH_APAY_AMOUNT_PRESETS_V1 === (ایلیا) مثلِ بقیهٔ درگاه‌ها دکمهٔ مبلغِ آماده هم داشته باشد
+_APU_PRESETS = (50_000, 100_000, 200_000, 500_000, 1_000_000)
+
+
+def apu_presets(min_amount: int, max_amount: int) -> list[int]:
+    """مبلغ‌هایِ آماده‌ای که داخلِ بازهٔ مجازِ درگاه‌اند."""
+    mx = min(int(max_amount or AP.API_MAX_TOMAN), AP.API_MAX_TOMAN)
+    return [p for p in _APU_PRESETS if int(min_amount) <= p <= mx]
+
+
+def _apu_amount_kb(presets: list[int]) -> InlineKeyboardMarkup:
+    rows = []
+    for i in range(0, len(presets), 2):
+        rows.append([InlineKeyboardButton(text=f"{x:,} تومان", callback_data=f"apu:amt:{x}",
+                                          style=ButtonStyle.SUCCESS) for x in presets[i:i + 2]])
+    rows.append([InlineKeyboardButton(text="✏️ مبلغِ دلخواه", callback_data="apu:custom", style=ButtonStyle.PRIMARY)])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="w:back", style=ButtonStyle.DANGER)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@apay_router.callback_query(F.data.startswith("apu:amt:"))
+async def apu_pick_amount(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    if not row:
+        return await cb.answer()
+    if not await AP.is_available(row.id):
+        return await cb.answer("این درگاه فعال نیست.", show_alert=True)
+    try:
+        amount = int(cb.data.rsplit(":", 1)[1])
+    except ValueError:
+        return await cb.answer("مبلغ نامعتبر", show_alert=True)
+    mn, mx = await AP.get_min_amount(row.id), await AP.get_max_amount(row.id)
+    if amount not in apu_presets(mn, mx):
+        return await cb.answer("این مبلغ در بازهٔ مجازِ درگاه نیست.", show_alert=True)
+    await state.clear()
+    await cb.answer()
+    await _apu_create_charge(cb.message, bot, row, amount, cb.from_user.id)
+
+
+@apay_router.callback_query(F.data == "apu:custom")
+async def apu_custom_amount(cb: CallbackQuery, state: FSMContext):
+    await state.set_state(ApFSM.amount)
+    await cb.answer("مبلغ را به تومان بفرست.")
+
+
 @apay_router.callback_query(F.data.in_({"apu:start", "w:apay"}))
 async def apu_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
-    from tenant import get_bot_row, smart_cancel_kb
+    from tenant import get_bot_row
     row = await get_bot_row(bot)
     if not row:
         return await cb.answer()
@@ -577,9 +623,10 @@ async def apu_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if max_amount:
         rng += f" | حداکثر: <b>{max_amount:,}</b> تومان"
     await state.set_state(ApFSM.amount)
+    _pre = apu_presets(min_amount, max_amount)
     await cb.message.answer(
-        f"💳 چه مبلغی می‌خواهی شارژ کنی؟ (تومان)\n\n{rng}",
-        reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
+        f"💳 مبلغِ شارژ را انتخاب کن یا مبلغِ دلخواهت را (به تومان) بفرست:\n\n{rng}",
+        reply_markup=_apu_amount_kb(_pre), parse_mode="HTML")
     await cb.answer()
 
 

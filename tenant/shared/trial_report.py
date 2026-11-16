@@ -44,6 +44,8 @@ def build_report(*, user_id, username, full_name, link, volume, duration,
         lines.append(f"🚀 پنل: {_html.escape(str(panel))}")
     elif source == "stock":
         lines.append("📦 منبع: انبار دستی")
+    if source == "reseller":      # PATCH_RESELLER_TRIAL_REPORT_V1
+        lines.append("🤝 ساخته‌شده توسط نماینده")
     # نحوهٔ نمایشِ هویتِ مشتری (پیشنهادِ #188): هر دو (پیش‌فرض) / فقط آیدیِ عددی / فقط یوزرنیم
     from tenant.shared.buyer_ident import normalize as _norm_mode
     _mode = _norm_mode(ident_mode)
