@@ -297,6 +297,19 @@ a{{color:var(--acc)}}
 .pg a:hover{{color:var(--tx);border-color:var(--acc);transform:translateY(-2px);
   box-shadow:0 10px 20px -12px var(--acc)}}
 form{{margin:0}}
+/* PATCH_RESELLER_MOBILE_CARDS_V1 — کارتِ کانفیگ */
+.cfg{{background:linear-gradient(158deg,var(--surface2),var(--surface) 70%);border:1px solid var(--line);
+  border-radius:var(--r);padding:14px;margin-bottom:12px;box-shadow:var(--sh)}}
+.cfg .r1{{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;font-size:14px}}
+.cfg .r2{{display:flex;flex-wrap:wrap;gap:6px 14px;color:var(--tx2);font-size:12.5px;margin-bottom:10px}}
+.cfg .st{{color:var(--ok);font-weight:700}}
+.cfg .lk{{display:flex;gap:8px;margin-bottom:10px}}
+.cfg .lk input{{flex:1;min-width:0;font-size:12px;direction:ltr;text-align:left}}
+.cfg .lk .cp{{padding:10px 14px;white-space:nowrap}}
+.cfg .act{{display:flex;gap:8px}}
+.cfg .b{{flex:1;text-align:center;text-decoration:none;color:#fff;font-weight:700;font-size:14px;padding:11px;
+  border-radius:12px;background:linear-gradient(170deg,var(--acc),var(--acc2))}}
+.cfg .b.dd{{background:linear-gradient(170deg,#ef6a5e,var(--dan))}}
 @media(max-width:560px){{
   main{{padding:16px 12px 50px}} header{{padding:11px 14px}}
   .card .n{{font-size:21px}} th,td{{padding:10px 9px;font-size:12.5px}}
@@ -304,7 +317,12 @@ form{{margin:0}}
 @media(prefers-reduced-motion:reduce){{*{{animation:none!important;transition:none!important}}}}
 </style></head><body>
 <header><h1>{_html.escape(title)}</h1><nav>{nav}</nav></header>
-<main>{body}</main></body></html>"""
+<main>{body}</main>
+<script>function cpy(b){{var i=b.parentNode.querySelector('input');i.select();i.setSelectionRange(0,99999);
+var ok=false;try{{ok=document.execCommand('copy')}}catch(e){{}}
+if(!ok&&navigator.clipboard){{navigator.clipboard.writeText(i.value);ok=true}}
+var t=b.textContent;b.textContent=ok?'✅ کپی شد':'⚠️ دستی کپی کن';setTimeout(function(){{b.textContent=t}},1800)}}</script>
+</body></html>"""
 
 
 def _msg(t: str) -> str:
@@ -1406,6 +1424,30 @@ async def rs_trial_create(request: Request, panel_key: str = Form(...),
     return _rs_back("trial", msg=f"✅ {made} تست ساخته شد. در «کانفیگ‌های من» ببینشان.")
 
 
+# === PATCH_RESELLER_MOBILE_CARDS_V1 === (Weirdnet) جدولِ کانفیگ‌ها رویِ گوشی از صفحه بیرون می‌زد و لینکِ ساب را نمی‌شد کپی کرد.
+# حالا هر کانفیگ یک کارت است: مشخصات، لینکِ ساب در کادرِ قابل‌انتخاب با دکمهٔ «کپی»، و دکمه‌هایِ بزرگِ تمدید/حذف.
+def _rs_cfg_cards(data) -> str:
+    out = []
+    for aid, code, title, gb, d, st, exp, link in data:
+        vol = "نامحدود" if not gb else f"{gb} گیگ"
+        dur = "بی‌انقضا" if not d else f"{d} روز"
+        expv = exp.strftime("%Y-%m-%d") if exp else "—"
+        lk = _html.escape(link or "")
+        copy = (f'<div class="lk"><input readonly dir="ltr" value="{lk}" onfocus="this.select()">'
+                f'<button type="button" class="g cp" onclick="cpy(this)">📋 کپی</button></div>') if link else ""
+        out.append(
+            '<div class="cfg">'
+            f'<div class="r1"><b>{_html.escape(title or "—")}</b><code>{_html.escape(str(code or "—"))}</code></div>'
+            f'<div class="r2"><span>📦 {vol}</span><span>⏳ {dur}</span><span>📅 {expv}</span>'
+            f'<span class="st">{_html.escape(st or "—")}</span></div>'
+            f'{copy}'
+            '<div class="act">'
+            f'<a class="b" href="/panel/r/renew/{aid}">تمدید</a>'
+            f'<a class="b dd" href="/panel/r/delete/{aid}">حذف</a></div>'
+            '</div>')
+    return "".join(out)
+
+
 @web_panel_router.get("/r/list")
 async def rs_list(request: Request, page: int = 0, msg: str = "", err: str = ""):
     ctx = await _rs_resolve(request)
@@ -1426,22 +1468,7 @@ async def rs_list(request: Request, page: int = 0, msg: str = "", err: str = "")
         head += _msg(_html.escape(msg))
     if err:
         head += f'<div class="msg" style="color:#e06c6c">{_html.escape(err)}</div>'
-    trs = "".join(
-        f"<tr><td><code>{_html.escape(str(code or '—'))}</code></td>"
-        f"<td>{_html.escape(title or '—')}</td>"
-        f"<td>{'نامحدود' if not gb else str(gb) + ' گیگ'}</td>"
-        f"<td>{'بی‌انقضا' if not d else str(d) + ' روز'}</td>"
-        f"<td>{_html.escape(st or '—')}</td>"
-        f"<td>{exp.strftime('%Y-%m-%d') if exp else '—'}</td>"
-        f"<td><code style=\"font-size:11px\">{_html.escape(link or '—')}</code></td>"
-        f'<td style="white-space:nowrap">'
-        f'<a href="/panel/r/renew/{aid}" style="color:#6fb1ff;text-decoration:none">تمدید</a>'
-        f' &nbsp;<a href="/panel/r/delete/{aid}" style="color:#e06c6c;text-decoration:none">حذف</a>'
-        f"</td></tr>"
-        for aid, code, title, gb, d, st, exp, link in data)
-    body = head + ("<table><tr><th>کد</th><th>پلن</th><th>حجم</th><th>مدت</th>"
-            "<th>وضعیت</th><th>انقضا</th><th>لینکِ ساب</th><th></th></tr>"
-            + (trs or '<tr><td colspan="8">هنوز کانفیگی نساخته‌ای.</td></tr>') + "</table>")
+    body = head + (_rs_cfg_cards(data) or '<div class="msg">هنوز کانفیگی نساخته‌ای.</div>')   # PATCH_RESELLER_MOBILE_CARDS_V1
     body += '<div class="pg">'
     if page > 0:
         body += f'<a href="/panel/r/list?page={page-1}">→ قبلی</a>'
