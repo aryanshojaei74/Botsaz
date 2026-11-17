@@ -73,6 +73,16 @@ def _hm_name(email: str) -> str:
     return ((cleaned[:20] + "-") if len(cleaned) >= 2 else "u-") + h
 
 
+def _is_transient_hm(method: str, status: int, text: str) -> bool:
+    """خطایِ گذرایِ HMPanel که تکرارِ درخواست امن و معمولاً کافی است."""
+    if status in (502, 503, 504):
+        return method.upper() == "GET"
+    if status == 400:
+        low = (text or "").lower()
+        return "update is already in progress" in low
+    return False
+
+
 class HMPanelClient:
     """امضایِ سازنده مثلِ بقیهٔ کلاینت‌ها؛ password = کلیدِ API (hmp_…)."""
 
@@ -118,10 +128,16 @@ class HMPanelClient:
         if method.upper() != "GET":
             headers["Content-Type"] = "application/json"
         url = f"{self.base_url}/api{path}"
-        for attempt in range(2 if retry else 1):
+        _attempts = 3 if retry else 1
+        for attempt in range(_attempts):
             try:
                 async with s.request(method, url, headers=headers, **kwargs) as r:
                     text = await r.text()
+                    # === PATCH_HM_TRANSIENT_RETRY_V1 === (ABOL) خطاهایِ گذرا: ۵۰۲/۵۰۳/۵۰۴ در خواندن (GET، بی‌خطر) و
+                    # «Client update is already in progress» (ویرایشِ هم‌زمانِ همان کاربر) با کمی صبر دوباره امتحان می‌شود.
+                    if attempt < _attempts - 1 and _is_transient_hm(method, r.status, text):
+                        await asyncio.sleep(1.5 * (attempt + 1))
+                        continue
                     if r.status == 401:
                         raise PanelError(
                             "کلیدِ API پنلِ HMPanel نامعتبر است، ادمینِ آن غیرفعال/منقضی شده، یا کلید ابطال شده (HTTP 401). "

@@ -6412,9 +6412,35 @@ def submenu_header(btn) -> str:
     return _rtl_lines(f"🗂 <b>{btn.label}</b>\nیکی را انتخاب کن:")
 
 
+# === PATCH_GLASS_SUBMENU_V1 === (ABOL) زیرمنوی «شیشه‌ای» در رباتِ کیبوردی:
+# منویِ اصلی کیبوردی می‌ماند ولی دکمه‌هایِ داخلِ این زیرمنو اینلاین (شیشه‌ای) نشان داده می‌شوند.
+# شناسهٔ دکمه‌ها در یک تنظیمِ ساده (glass_submenus = "12,15") نگه داشته می‌شود؛ بدونِ تغییرِ دیتابیس.
+async def glass_submenu_ids(bot_id: int) -> set[int]:
+    raw = await get_setting(bot_id, "glass_submenus", "") or ""
+    return {int(x) for x in raw.split(",") if x.strip().isdigit()}
+
+
+async def set_glass_submenu(bot_id: int, mb_id: int, on: bool) -> None:
+    ids = await glass_submenu_ids(bot_id)
+    (ids.add if on else ids.discard)(mb_id)
+    await set_setting(bot_id, "glass_submenus", ",".join(str(i) for i in sorted(ids)))
+
+
 async def _render_reply_submenu(msg: Message, bot_id: int, btn: "MainButton", state: FSMContext) -> None:
     """رندرِ زیرمنوی کیبوردی برای دکمهٔ btn — هم موقعِ ورود اولیه به زیرمنو
     استفاده می‌شود، هم موقعِ زدنِ «◀️ بازگشت» (رفتن یک سطح بالا)."""
+    if btn.id in await glass_submenu_ids(bot_id):
+        _sup_on = getattr(btn, "support_btn", False)
+        _sup_contact = (getattr(btn, "support_contact", None) or "").strip() or None
+        skb = await submenu_inline_kb(bot_id, btn.id)
+        if skb:
+            skb = await _attach_support(bot_id, skb, _sup_on, contact=_sup_contact, mb=btn)
+            _set_last_menu(bot_id, msg.from_user.id, btn.id)
+            await state.update_data(cur_submenu_id=None)
+            await msg.answer(submenu_header(btn), reply_markup=skb)
+        else:
+            await msg.answer("🗂 این زیرمنو هنوز دکمه‌ای ندارد.")
+        return
     support_enabled = getattr(btn, "support_btn", False)
     _sm_head = submenu_header(btn)
     kb = await submenu_kb(bot_id, btn.id, support_row=support_enabled,
@@ -14365,7 +14391,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "636"
+BUILD_ID = "637"
 
 
 @tenant_router.message(Command("version"))
@@ -16019,6 +16045,19 @@ def _thb_kb_look(mb) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+async def _thb_kb_look_glass(mb) -> InlineKeyboardMarkup:
+    """همان دستهٔ «نام، متن و ظاهر» + برایِ زیرمنو، کلیدِ «نمایشِ شیشه‌ای» (PATCH_GLASS_SUBMENU_V1)."""
+    kb = _thb_kb_look(mb)
+    if mb.action == "submenu":
+        on = mb.id in await glass_submenu_ids(mb.bot_id)
+        rows = [list(r) for r in kb.inline_keyboard]
+        rows.insert(len(rows) - 1, [InlineKeyboardButton(
+            text="🪟 نمایشِ شیشه‌ای (اینلاین): " + ("✅ روشن" if on else "⚪️ خاموش"),
+            callback_data=f"thb:glass:{mb.id}", style=ButtonStyle.SUCCESS if on else ButtonStyle.PRIMARY)])
+        kb = InlineKeyboardMarkup(inline_keyboard=rows)
+    return kb
+
+
 async def _thb_kb_support(mb) -> InlineKeyboardMarkup:
     """دستهٔ «پشتیبانیِ این دکمه»: روشن/خاموش، تنظیم/ویرایش آدرس، حذف و اطلاع از کلیک."""
     notify_on = await get_setting(mb.bot_id, f"sup_notify_{mb.id}", "0") == "1"
@@ -16531,7 +16570,7 @@ async def thb_cat_open(cb: CallbackQuery, bot: Bot):
         return
     is_dis = mb_id in await _disabled_btn_ids(row.id)
     builders = {
-        "look": (_thb_kb_look(mb), "✏️ <b>نام، متن و ظاهرِ دکمه</b>"),
+        "look": (await _thb_kb_look_glass(mb), "✏️ <b>نام، متن و ظاهرِ دکمه</b>"),
         "support": (await _thb_kb_support(mb), "💬 <b>پشتیبانیِ این دکمه</b>\n"
                     "روشن/خاموش‌کردن، تنظیمِ آدرس اختصاصی و حذفِ آن از همین‌جا."),
         "rules": (_thb_kb_rules(mb), "📜 <b>قوانین و دسترسی و تستِ این دکمه</b>"),
@@ -21738,6 +21777,28 @@ async def thb_unset_profile(cb: CallbackQuery, bot: Bot):
     except Exception:
         await cb.message.answer(_thb_text(mb, is_dis), reply_markup=_thb_kb(mb, is_dis))
     await cb.answer("حذف شد")
+
+
+@tenant_router.callback_query(F.data.startswith("thb:glass:"))
+async def thb_glass_toggle(cb: CallbackQuery, bot: Bot):
+    """روشن/خاموش‌کردنِ نمایشِ شیشه‌ایِ یک زیرمنو (PATCH_GLASS_SUBMENU_V1)."""
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    mb_id = int(cb.data.split(":")[2])
+    async with Session() as s:
+        mb = await s.get(MainButton, mb_id)
+    if not mb or mb.bot_id != row.id or mb.action != "submenu":
+        await cb.answer("این دکمه زیرمنو نیست.", show_alert=True)
+        return
+    await set_glass_submenu(row.id, mb_id, mb_id not in await glass_submenu_ids(row.id))
+    is_dis = mb_id in await _disabled_btn_ids(row.id)
+    text = "✏️ <b>نام، متن و ظاهرِ دکمه</b>\n\n" + _thb_text(mb, is_dis)
+    try:
+        await cb.message.edit_text(text, reply_markup=await _thb_kb_look_glass(mb))
+    except Exception:
+        await cb.message.answer(text, reply_markup=await _thb_kb_look_glass(mb))
+    await cb.answer("تغییر کرد")
 
 
 @tenant_router.callback_query(F.data.startswith("thb:suptoggle:"))
