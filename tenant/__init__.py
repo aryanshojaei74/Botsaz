@@ -6857,6 +6857,15 @@ async def _run_button_action(action, btn, msg, bot, state, row, u, bot_id, cb=No
         else:
             text = await _build_main_text(bot_id, msg.from_user.id)
             await msg.answer(text, reply_markup=_main_kb(is_owner_view))
+    elif action == "top_players":   # PATCH_TOP_PLAYERS_BTN_V1
+        from bot_addons import WAGER_ADDON, addon_active, wager_eligible
+        _kb_back = await _attach_support(bot_id, await inline_back_kb(bot_id), support_enabled,
+                                         contact=support_contact, mb=btn)
+        if not (wager_eligible(row.field, row.plan) and await addon_active(row.id, WAGER_ADDON)):
+            await msg.answer("🔒 بازی‌هایِ گروهی در این ربات فعال نیست.", reply_markup=_kb_back)
+        else:
+            import wager_rank as _wr
+            await msg.answer(await _wr.board_page_text(bot_id), reply_markup=_kb_back, parse_mode="HTML")
     elif action == "referral":
         if not has_feature(row.plan, Feature.REFERRAL):
             await msg.answer(
@@ -14391,7 +14400,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "638"
+BUILD_ID = "639"
 
 
 @tenant_router.message(Command("version"))
@@ -15746,6 +15755,10 @@ _SIMPLE_ACTIONS: dict[str, tuple[str, str, frozenset | None]] = {
     "pnr_mybots": ("🗂 ربات‌های من",
                    "این دکمه حالا ربات‌هایی که کاربر خریده را نشان می‌دهد.",
                    frozenset({"partner"})),
+    # === PATCH_TOP_PLAYERS_BTN_V1 === (سینا) «برترین بازیکنان» بازی‌هایِ گروهی + پله‌هایِ کارمزد، مثلِ «نفرات برتر»
+    "top_players": ("🏆 برترین بازیکنان",
+                    "این دکمه حالا جدولِ برترین بازیکنان را همراهِ درصدِ کارمزدِ پلکانی نشان می‌دهد.",
+                    frozenset({"virtual_service", "vpn_sales", "panel_seller"})),
     "wallet":      ("💰 کیف پول", "این دکمه حالا «کیف پول» را نمایش می‌دهد.", None),
     "profile":     ("👤 پروفایل من", "این دکمه حالا «پروفایل من» را نمایش می‌دهد.", None),
     "my_services": ("📡 سرویس‌های من", "این دکمه حالا «سرویس‌های من» (سرویس‌های VPN خودکار) را نمایش می‌دهد.",
@@ -16509,6 +16522,10 @@ def _thb_kb_action_pick(mb, bot_field: str = "", plan: str = "", category: str =
                 continue
             if _akey == "escrow" and not has_feature(plan, Feature.ESCROW):   # PATCH_ESCROW_V1
                 continue
+            if _akey == "top_players":   # PATCH_TOP_PLAYERS_BTN_V1
+                from bot_addons import wager_eligible as _we_tp
+                if not _we_tp(bot_field, plan):
+                    continue
             if _akey == "gw_pro" and not (_is_partner or bot_field == "giveaway"):   # PATCH_GIVEAWAY_PRO_PARTNER_V1: همکار + رباتِ قرعه‌کشی (ربات مادر جدا دارد)
                 continue
             # === PATCH_STORE_MINIAPP_GATE_V1 === فقط وقتی مینی‌اپ روشن و محلِ نمایشش «کیبورد» است

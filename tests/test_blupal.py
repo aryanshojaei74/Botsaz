@@ -759,3 +759,45 @@ def test_wallet_full_labels_are_recognised_by_keyboard_dispatcher():
     for key in ("blupal", "hooshpay"):
         ref = f'WALLET_FULL_LABELS["{key}"]'
         assert src.count(ref) == 2, key          # یک‌بار ساختِ دکمه، یک‌بار تشخیصِ متن
+
+
+# ───────── PATCH_BLUPAL_NAME_MATCH_V1 (SINA): پرداختِ فقط-شبا ⇒ نامِ واریزکننده با نامِ روی کارتِ ثبت‌شده مقایسه می‌شود ─────────
+async def _kyc_holder(maker, level, card, holder):
+    async with maker() as s:
+        u = await s.scalar(select(models.BotUser).where(models.BotUser.telegram_id == 777))
+        u.kyc_level, u.kyc_card, u.kyc_card_holder = level, card, holder
+        await s.commit()
+
+
+@pytest.mark.asyncio
+async def test_sheba_only_payment_name_mismatch_blocks_and_match_does_not(env, monkeypatch):
+    maker, fb, _n = env
+    sent = []
+    import tenant.gateways.zibal_wallet as ZW
+
+    async def _mm(bot_id, tg, last4, paid_card=None, payer_name=None): sent.append((last4, payer_name))
+    monkeypatch.setattr(ZW, "_kyc_mismatch_notify", _mm)
+    monkeypatch.setattr(BP, "payer_card_of", lambda res: "")             # فقط شبا؛ کارتی در پاسخ نیست
+    # فیکسچر همیشه payer_name="علی رضایی" می‌دهد
+    await _kyc_holder(maker, 1, "6037991111111111", "محمد کریمی")        # نامِ متفاوت ⇒ محدود
+    await BP.create_invoice(KEY, 1_000_000)
+    await _add_charge(maker, "bpn1", 101)
+    fb.invoices[101]["status"] = "PAID"
+    ok, _m, _c = await BP.settle_charge(5, "bpn1")
+    assert ok and await _blocked(maker) == (True, 100_000.0) and sent == [("", "علی رضایی")]
+    # نامِ هم‌خوان (ترتیبِ کلمه‌ها فرق کند) ⇒ محدود نشود
+    await _kyc_holder(maker, 1, "6037991111111111", "رضایی علی اکبر")
+    async with maker() as s:
+        u = await s.scalar(select(models.BotUser).where(models.BotUser.telegram_id == 777))
+        u.kyc_blocked = False
+        await s.commit()
+    await BP.create_invoice(KEY, 1_000_000)
+    await _add_charge(maker, "bpn2", 102)
+    fb.invoices[102]["status"] = "PAID"
+    assert (await BP.settle_charge(5, "bpn2"))[0] and (await _blocked(maker))[0] is False
+    # نامِ ثبت‌نشده (کاربرِ قدیمی بدونِ نامِ کارت) ⇒ هرگز محدود نشود
+    await _kyc_holder(maker, 1, "6037991111111111", None)
+    await BP.create_invoice(KEY, 1_000_000)
+    await _add_charge(maker, "bpn3", 103)
+    fb.invoices[103]["status"] = "PAID"
+    assert (await BP.settle_charge(5, "bpn3"))[0] and (await _blocked(maker))[0] is False

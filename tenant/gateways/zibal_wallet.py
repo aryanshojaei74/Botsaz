@@ -230,7 +230,7 @@ def kyc_mismatch_admin_text(telegram_id, last4: str, registered_card, paid_card=
             "شارژ انجام شد و حساب تا احرازِ سطح ۲ مسدود شد.")
 
 
-async def _kyc_mismatch_notify(bot_id: int, telegram_id: int, last4: str, paid_card=None) -> None:
+async def _kyc_mismatch_notify(bot_id: int, telegram_id: int, last4: str, paid_card=None, payer_name: str | None = None) -> None:
     from aiogram.client.default import DefaultBotProperties
     from aiogram.enums import ParseMode
     async with Session() as s:
@@ -243,14 +243,20 @@ async def _kyc_mismatch_notify(bot_id: int, telegram_id: int, last4: str, paid_c
     try:
         await tbot.send_message(telegram_id, (
             "⚠️ <b>شارژ انجام شد، ولی حسابِ شما محدود شد.</b>\n\n"
-            f"این پرداخت با کارتی انجام شد (…{last4}) که با کارتِ ثبت‌شدهٔ "
-            "شما یکی نیست.\n\n"
+            + (f"این پرداخت با کارتی انجام شد (…{last4}) که با کارتِ ثبت‌شدهٔ "
+               "شما یکی نیست.\n\n" if last4 else
+               f"نامِ واریزکننده ({payer_name}) با نامِ روی کارتِ ثبت‌شدهٔ شما یکی نیست.\n\n")       # PATCH_BLUPAL_NAME_MATCH_V1
+            +
             "مبلغ به کیفِ پولِ شما اضافه شده، اما تا انجامِ احرازِ هویتِ "
             "سطح ۲ امکانِ استفاده از آن نیست.\n"
             "از دکمهٔ «🛡 احرازِ هویت» اقدام کن."))
         try:
             from tenant import _notify_admins
-            await _notify_admins(tbot, brow, kyc_mismatch_admin_text(telegram_id, last4, _reg, paid_card))
+            _at = kyc_mismatch_admin_text(telegram_id, last4, _reg, paid_card)
+            if not last4 and payer_name:                  # PATCH_BLUPAL_NAME_MATCH_V1
+                import html as _h
+                _at += f"\n\n👤 نامِ واریزکننده (شبا): <b>{_h.escape(str(payer_name))}</b> — با نامِ روی کارتِ ثبت‌شده نمی‌خواند."
+            await _notify_admins(tbot, brow, _at)
         except Exception:
             logger.exception("kyc: اطلاع به ادمین ناموفق بود")
     finally:

@@ -11,6 +11,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (CallbackQuery, InlineKeyboardButton,
                            InlineKeyboardMarkup, Message)
 
+import html as _html_h
 from tenant.shared import kyc as K
 
 from logging_setup import get_logger as _get_logger
@@ -160,7 +161,8 @@ async def _user_manage_view(bot_id: int, user_id: int):
         f"💵 سقفِ فعلی: <b>{cap_text}</b>\n"
         f"📈 سقفِ سطح بعدی: <b>{next_text}</b>\n"
         f"💳 کارتِ تأییدشده: <code>{card}</code>\n"
-        f"{pending_text}\n\n"
+        + (f"👤 نامِ روی کارت: <b>{_html_h.escape(str(u.kyc_card_holder))}</b>\n" if getattr(u, "kyc_card_holder", None) else "")
+        + f"{pending_text}\n\n"
         "تغییر یا حذف کارت فقط اطلاعات کارتِ فعال را تغییر می‌دهد؛ درخواست‌هایِ تاریخی و رسیدهایِ قبلی دست‌نخورده می‌مانند."
     )
     rows = []
@@ -372,6 +374,7 @@ async def kyc_user_level_set(cb: CallbackQuery, bot: Bot):
         u.kyc_note = None
         if new == 0:
             u.kyc_card = None   # دوباره باید کارت ثبت و احراز کند
+            u.kyc_card_holder = None
         await s.commit()
     if new < old:
         await _tell_user(bot, tg_id,
@@ -462,6 +465,7 @@ async def kyc_user_card_delete_yes(cb: CallbackQuery, bot: Bot):
         level_before = int(u.kyc_level or 0)
         tg_id = u.telegram_id
         u.kyc_card = None
+        u.kyc_card_holder = None      # PATCH_KYC_CARD_HOLDER_V1
         if level_before == 1:
             u.kyc_level = 0
             u.kyc_blocked = False
@@ -687,6 +691,9 @@ async def kyc_pend(cb: CallbackQuery, bot: Bot):
     ])
     if r.level == 1:
         cap += f"\n💳 کارت: <code>{_mask(r.card)}</code>"
+        if getattr(r, "card_holder", None):            # PATCH_KYC_CARD_HOLDER_V1
+            import html as _h
+            cap += f"\n👤 نامِ روی کارت: <b>{_h.escape(str(r.card_holder))}</b>"
 
     nav = []
     if idx > 0:
@@ -755,6 +762,7 @@ async def kyc_approve(cb: CallbackQuery, bot: Bot):
             u.kyc_note = None
         if r.level == 1 and r.card:
             u.kyc_card = r.card
+            u.kyc_card_holder = getattr(r, "card_holder", None) or None     # PATCH_KYC_CARD_HOLDER_V1
         tg_id = u.telegram_id
         lvl = int(u.kyc_level)
         _approved_level = int(r.level or lvl)        # PATCH_KYC_REVIEW_GROUP_V1

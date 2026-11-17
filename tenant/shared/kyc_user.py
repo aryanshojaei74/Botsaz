@@ -40,6 +40,7 @@ _DEF_L2_TEXT = (
 
 class KycUserFSM(StatesGroup):
     card_no = State()
+    card_holder = State()      # PATCH_KYC_CARD_HOLDER_V1
     card_photo = State()
     l2_file = State()
 
@@ -290,9 +291,26 @@ async def kycu_card_no(msg: Message, bot: Bot, state: FSMContext):
     if len(c) != 16:
         return await msg.answer("شمارهٔ کارت باید دقیقاً ۱۶ رقم باشد. دوباره بفرست.")
     await state.update_data(card=c)
-    await state.set_state(KycUserFSM.card_photo)
+    await state.set_state(KycUserFSM.card_holder)
     await msg.answer(
         f"شمارهٔ کارت: <code>{_mask(c)}</code>\n\n"
+        "حالا <b>نام و نام‌خانوادگیِ کامل</b> را همان‌طور که روی کارت نوشته شده بفرست.",
+        reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
+
+
+@kyc_user_router.message(KycUserFSM.card_holder, F.text)
+async def kycu_card_holder(msg: Message, bot: Bot, state: FSMContext):
+    """PATCH_KYC_CARD_HOLDER_V1 (سینا): مرحلهٔ «نامِ روی کارت» بینِ شمارهٔ کارت و عکس."""
+    from tenant import smart_cancel_kb
+    from tenant.shared import kyc as _K
+    name = " ".join((msg.text or "").split())[:80]
+    if len(_K.norm_name(name)) < 2 or any(ch.isdigit() for ch in name):
+        return await msg.answer("نام و نام‌خانوادگی را کامل و فقط با حروف بفرست (مثلاً «علی رضایی»).")
+    await state.update_data(holder=name)
+    await state.set_state(KycUserFSM.card_photo)
+    data = await state.get_data()
+    await msg.answer(
+        f"👤 نامِ روی کارت: <b>{name}</b>\n\n"
         "حالا یک <b>عکسِ واضح از همان کارت</b> بفرست "
         "(نامِ صاحبِ کارت باید خوانا باشد).",
         reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
@@ -306,6 +324,7 @@ async def kycu_card_photo(msg: Message, bot: Bot, state: FSMContext):
         return
     data = await state.get_data()
     card = data.get("card") or ""
+    holder = (data.get("holder") or "")[:80] or None     # PATCH_KYC_CARD_HOLDER_V1
     is_change = bool(data.get("change"))
     await state.clear()
 
@@ -318,7 +337,7 @@ async def kycu_card_photo(msg: Message, bot: Bot, state: FSMContext):
             return await msg.answer(f"⚠️ {why}")
 
     async with Session() as s:
-        req = KycRequest(bot_id=row.id, user_id=u.id, level=1, card=card,
+        req = KycRequest(bot_id=row.id, user_id=u.id, level=1, card=card, card_holder=holder,
                          file_id=msg.photo[-1].file_id, file_type="photo",
                          kind=("card_change" if is_change else None))
         s.add(req)

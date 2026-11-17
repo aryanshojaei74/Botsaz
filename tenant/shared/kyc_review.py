@@ -47,6 +47,9 @@ def request_caption(u, req) -> str:
     cap = (f"🛡 <b>درخواستِ {kind_title(int(req.level or 1), cc)}</b>  (#{req.id})\n\n{user_block(u)}")
     if int(req.level or 1) == 1 and getattr(req, "card", None):
         cap += f"\n💳 کارت: <code>{_mask(req.card)}</code>"
+        if getattr(req, "card_holder", None):          # PATCH_KYC_CARD_HOLDER_V1
+            import html as _h
+            cap += f"\n👤 نامِ روی کارت: <b>{_h.escape(str(req.card_holder))}</b>"
     return cap
 
 

@@ -106,6 +106,7 @@ class BotUser(Base):
     kyc_level: Mapped[int] = mapped_column(Integer, default=0)
     kyc_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
     kyc_card: Mapped[str | None] = mapped_column(String(32))
+    kyc_card_holder: Mapped[str | None] = mapped_column(String(80))   # PATCH_KYC_CARD_HOLDER_V1 — نامِ روی کارتِ احرازشده
     kyc_note: Mapped[str | None] = mapped_column(String(255))
     spam_warnings: Mapped[int] = mapped_column(Integer, default=0)  # تعداد اخطارهای آنتی‌اسپم (۳ام = بن)
     balance: Mapped[float] = mapped_column(Numeric(12, 0), default=0)
@@ -172,6 +173,7 @@ class KycRequest(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("bot_users.id"), index=True)
     level: Mapped[int] = mapped_column(Integer, default=1)      # 1 یا 2
     card: Mapped[str | None] = mapped_column(String(32))        # سطح ۱
+    card_holder: Mapped[str | None] = mapped_column(String(80))  # PATCH_KYC_CARD_HOLDER_V1 — نام و نام‌خانوادگیِ روی کارت
     file_id: Mapped[str | None] = mapped_column(String(300))
     file_type: Mapped[str | None] = mapped_column(String(20))   # photo/video/video_note
     status: Mapped[str] = mapped_column(String(12), default="pending")  # pending/approved/rejected

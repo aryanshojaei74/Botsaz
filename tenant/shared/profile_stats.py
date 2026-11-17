@@ -65,6 +65,22 @@ async def compute(bot_id: int, u, *, is_virtual_service: bool = False) -> Profil
             SmmOrder.bot_id == bot_id, SmmOrder.user_telegram_id == tg_id,
             SmmOrder.status.in_(SMM_COUNTED))) or 0)
         if is_virtual_service:
+            # === PATCH_VS_SPEND_ONCE_V1 === (سینا) «تراکنش کل» فقط Order را می‌شمرد و رباتِ خدماتِ مجازی Order نمی‌سازد
+            # ⇒ همیشه ۰ بود. حالا همان منابعِ «نفراتِ برتر» (هر خرید یک بار): SMM، گیفت/استارز، شمارهٔ مجازی.
+            from models import GiftOrder, WalletTxn
+            _smm = float(await s.scalar(select(func.coalesce(func.sum(
+                SmmOrder.price_toman - func.coalesce(SmmOrder.refunded_toman, 0)), 0)).where(
+                SmmOrder.bot_id == bot_id, SmmOrder.user_telegram_id == tg_id,
+                SmmOrder.status.in_(("sent", "completed", "partial")))) or 0)
+            _gift = float(await s.scalar(select(func.coalesce(func.sum(
+                GiftOrder.price_toman * func.coalesce(GiftOrder.quantity, 1)
+                - func.coalesce(GiftOrder.discount_amount, 0)), 0)).where(
+                GiftOrder.bot_id == bot_id, GiftOrder.buyer_user_id == u.id,
+                GiftOrder.status == "sent")) or 0)
+            _vn = float(await s.scalar(select(func.coalesce(func.sum(-WalletTxn.amount), 0)).where(
+                WalletTxn.bot_id == bot_id, WalletTxn.user_id == u.id, WalletTxn.kind == "smm_order",
+                WalletTxn.amount < 0, ~func.coalesce(WalletTxn.note, "").like("سفارش SMM:%"))) or 0)
+            st.total_spent += int(_smm + _gift + _vn)
             st.orders_count += st.smm_orders
             st.active_services += int(await s.scalar(select(func.count(SmmOrder.id)).where(
                 SmmOrder.bot_id == bot_id, SmmOrder.user_telegram_id == tg_id,

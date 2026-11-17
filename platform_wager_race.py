@@ -284,7 +284,14 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
     if w.status == "pending":
         target = (f"🎯 حریف تعیین‌شده: {_name(w.target_id, w.target_username, w.target_name)}\n"
                   if w.target_id else "👥 اولین نفری که «قبول و پیوستن» بزند حریف است.\n")
-        text = (f"{head}\n\n👤 سازنده: {core._who(w, w.creator_id)}\n{target}📜 {_rule(w)}\n"
+        # === PATCH_QUIZ_TOPIC_ON_CARD_V1 === (سینا) موضوعی که سازنده انتخاب کرده باید پیش از پیوستنِ حریف دیده شود
+        _topic = ""
+        if w.game == "quiz":
+            import quiz_bank as _QBT
+            _tn = _QBT.CAT_NAME.get(st.get("opt") or st.get("cat") or "", "")
+            if _tn:
+                _topic = f"🏷 موضوعِ سؤال‌ها: <b>{_tn}</b>\n"
+        text = (f"{head}\n\n👤 سازنده: {core._who(w, w.creator_id)}\n{target}{_topic}📜 {_rule(w)}\n"
                 f"{core._money_lines(w)}\n\n⏳ منتظر حریف…\n\n{wd['notice']}")
         return text, _kb_pending(w)
     if w.status == "playing":

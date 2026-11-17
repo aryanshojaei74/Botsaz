@@ -299,7 +299,10 @@ async def _add_virtual_service_totals(s, bot_id: int, since, totals: dict, users
         select(BotUser, func.sum(-WalletTxn.amount))
         .join(WalletTxn, WalletTxn.user_id == BotUser.id)
         .where(BotUser.bot_id == bot_id, WalletTxn.kind == "smm_order", WalletTxn.amount < 0,
-               WalletTxn.created_at >= since)
+               WalletTxn.created_at >= since,
+               # PATCH_VS_SPEND_ONCE_V1: سفارشِ SMM هم SmmOrder دارد هم همین کسرِ کیف پول؛ این‌جا فقط شماره‌هایِ مجازی
+               # (که SmmOrder نمی‌سازند) شمرده می‌شوند تا مبلغ دوبار حساب نشود.
+               ~func.coalesce(WalletTxn.note, "").like("سفارش SMM:%"))
         .group_by(BotUser.id))).all()
     for u, total in vnum:
         _add(u, float(total or 0))

@@ -38,6 +38,27 @@ _MEDIA_LABELS = {
 }
 
 
+# === PATCH_KYC_CARD_HOLDER_V1 === (سینا) نامِ صاحبِ کارت: ثبت در احراز + مقایسه با نامِ واریزکننده (بلوپال با شبا)
+_NAME_FIX = str.maketrans({"ي": "ی", "ك": "ک", "ۀ": "ه", "ة": "ه", "أ": "ا", "إ": "ا", "آ": "ا", "‌": " ", "\u200f": " ",
+                           "\u200e": " ", "ـ": ""})
+
+
+def norm_name(name) -> list[str]:
+    """نام را به فهرستِ کلمه‌هایِ یکدست (حروفِ عربی→فارسی، بدون نیم‌فاصله/علامت/حروفِ بزرگ) تبدیل می‌کند."""
+    import re
+    t = str(name or "").translate(_NAME_FIX).lower()
+    t = re.sub(r"[^\w\s]|_", " ", t)
+    return [w for w in t.split() if w]
+
+
+def names_match(a, b) -> bool | None:
+    """True اگر دو نام دست‌کم یک کلمهٔ مشترک دارند (ترتیب/نام‌میانی مهم نیست)؛ False اگر هیچ؛ None اگر یکی خالی است."""
+    wa, wb = norm_name(a), norm_name(b)
+    if not wa or not wb:
+        return None
+    return bool(set(wa) & set(wb))
+
+
 async def enabled(bot_id: int) -> bool:
     from tenant import get_setting
     if (await get_setting(bot_id, "kyc_enabled", "0")) != "1":

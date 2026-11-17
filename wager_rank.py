@@ -207,18 +207,44 @@ def _t(n: int) -> str:
     return f"{int(n):,}"
 
 
+_RLM = "\u200f"          # علامتِ راست‌به‌چپ: هر خط را راست‌چین نگه می‌دارد
+_FSI, _PDI = "\u2068", "\u2069"     # ایزوله‌کنندهٔ جهتِ نام: نامِ لاتین/عدد/ایموجی ترتیبِ بقیهٔ خط را به‌هم نمی‌ریزد
+
+
+def _board_name(d: dict) -> str:
+    return f"{_FSI}<b>{_nm(d)}</b>{_PDI}"
+
+
 def public_board(stats: list[dict], tiers=None, basis="games") -> str:
+    """PATCH_BOARD_RTL_V1 (سینا): «متنش مرتب نیست»؛ نامِ لاتین/عددی (مثلاً «onxy 16:54») ترتیبِ خط را به‌هم می‌ریخت.
+    حالا هر بازیکن دو خطِ مرتب دارد: رتبه و نام، و زیرش آمار."""
     if not stats:
         return "🏆 هنوز بازیکنی در جدول نیست؛ اولین بازی را شروع کن!"
     medals = ["🥇", "🥈", "🥉"]
-    lines = ["🏆 <b>برترین بازیکنان</b>", ""]
+    lines = [f"{_RLM}🏆 <b>برترین بازیکنان</b>", ""]
     for i, d in enumerate(stats[:10]):
         pre = medals[i] if i < 3 else f"{i + 1}."
         cnt = d["wins"] if basis == "wins" else d["games"]
         pct = pct_for(tiers or [], cnt)
-        fee = f" · کارمزد {pct:g}٪" if pct is not None else ""
-        lines.append(f"{pre} <b>{_nm(d)}</b> — {d['games']} بازی · {d['wins']} برد · {d['losses']} باخت{fee}")
+        fee = f" · 💸 کارمزد {pct:g}٪" if pct is not None else ""
+        lines.append(f"{_RLM}{pre} {_board_name(d)}")
+        lines.append(f"{_RLM}     🎮 {d['games']} بازی · ✅ {d['wins']} برد · ❌ {d['losses']} باخت{fee}")
     return "\n".join(lines)
+
+
+def tiers_footer(tiers, basis="games") -> str:
+    """توضیحِ پله‌هایِ کارمزد زیرِ جدول (برایِ دکمهٔ «برترین بازیکنان»)؛ بدونِ پله ⇒ خالی."""
+    if not tiers:
+        return ""
+    unit = "برد" if basis == "wins" else "بازی"
+    body = "\n".join(f"{_RLM}• از {mn} {unit} به بعد: کارمزد {pct:g}٪" for mn, pct in tiers)
+    return f"\n\n{_RLM}💸 <b>کارمزدِ پلکانی</b> (هرچه بیشتر بازی کنی، کارمزدِ بُردت کمتر):\n{body}"
+
+
+async def board_page_text(bot_id: int) -> str:
+    """متنِ کاملِ صفحهٔ «برترین بازیکنان» برایِ دکمهٔ منو: جدول + پله‌هایِ کارمزد."""
+    basis, tiers = await load_config(bot_id)
+    return public_board(await player_stats(bot_id, 10), tiers, basis) + tiers_footer(tiers, basis)
 
 
 def admin_board(stats: list[dict]) -> str:
