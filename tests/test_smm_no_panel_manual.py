@@ -20,4 +20,4 @@ async def test_panel_configured_cases(monkeypatch):
 
 def test_both_auto_sites_check_panel_first():
     src = open("tenant/bots/virtual_service/smm.py", encoding="utf-8").read()
-    assert src.count("await _panel_configured(row.id, ") == 2
+    assert src.count("await _panel_configured(row.id, ") == 3   # ثبت خودکار ×۲ + دکمهٔ تأییدِ ادمین

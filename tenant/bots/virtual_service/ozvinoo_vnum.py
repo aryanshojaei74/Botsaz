@@ -747,6 +747,13 @@ async def _pv_fetch_code(provider: dict, order_ref) -> tuple[str, str, str]:
     data = _api_data(payload)
     if status == 202 or (isinstance(payload, dict) and payload.get("status_code") == 202):
         return "pending", "", ""
+    # === PATCH_OZV_CODE_STATUSES_V1 === (Infldor) مستنداتِ Callinoo برایِ دریافتِ کد: 402 = اعتبارِ حسابِ ارائه‌دهنده برایِ
+    # دریافتِ کد کافی نیست، 422 = دسترسی به اکانت ممکن نیست. قبلاً هر دو «خطای موقت» می‌شدند و مالک نمی‌فهمید چرا کد نمی‌رسد.
+    _pcode = payload.get("status_code") if isinstance(payload, dict) else None
+    if status == 402 or _pcode == 402:
+        return "nobalance", "", _api_message(status, payload)
+    if status == 422 or _pcode == 422:
+        return "noaccess", "", _api_message(status, payload)
     if status < 200 or status >= 300 or not isinstance(data, dict):
         if status in (404, 409):
             return "missing", "", _api_message(status, payload)
@@ -1803,6 +1810,10 @@ async def _process_code(bot: Bot, order: SmmOrder, provider: dict, api_order_id:
     # PATCH_TNUMBER_PROVIDER_V1 — TNumber با شماره شناخته می‌شود (panel_order_id = شماره)
     ref = order.panel_order_id if _phone_keyed(provider) else api_order_id
     kind, code, _why = await _pv_fetch_code(provider, ref)
+    if kind in ("nobalance", "noaccess"):         # PATCH_OZV_CODE_STATUSES_V1
+        logger.warning("[ozv-code] order=%s provider-status=%s %s", order.id, kind, _why)
+        await _ozv_alert_provider(order, provider, kind, _why)
+        return kind
     if kind in ("pending", "missing", "error"):
         return kind
     async with Session() as s:
@@ -2203,7 +2214,8 @@ async def _ozv_buy_locked(cb, bot, row, country, provider, api_country_id, buyer
     await cb.message.answer(
         f"✅ <b>شماره آماده شد</b> 🎉\n\n🌍 کشور: {html.escape(country.name)}\n"
         f"📱 شماره: <code>{html.escape(phone)}</code>\n💳 مبلغ: {real_price:,} تومان\n"
-        f"🔑 کد پیگیری: <code>{trk}</code>\n\nپس از دریافت کد، دکمهٔ زیر را بزنید.",
+        f"🔑 کد پیگیری: <code>{trk}</code>\n\nپس از دریافت کد، دکمهٔ زیر را بزنید.\n"
+        "🔄 اگر کد نیامد: در اپِ تلگرام «ارسال مجدد کد» را بزن، چند ثانیه صبر کن و دوباره «دریافت کد پیامک» را بزن.",
         reply_markup=kb, parse_mode="HTML")
     try:
         await _purchase_alert(bot, row, buyer=buyer, section="خدمات مجازی تلگرام",
@@ -2241,8 +2253,42 @@ async def ozv_code(cb: CallbackQuery, bot: Bot):
         await cb.answer("این سفارش لغو شده و وجه برگشته است.", show_alert=True)
     elif result == "missing":
         await cb.answer("❌ سفارش در ارائه‌دهنده پیدا نشد.", show_alert=True)
+    elif result in ("nobalance", "noaccess"):     # PATCH_OZV_CODE_STATUSES_V1
+        await cb.answer("⚠️ کد برایِ این شماره آماده است ولی ارائه‌دهنده فعلاً اجازهٔ دریافتش را نمی‌دهد. "
+                        "به پشتیبانی پیام بده؛ سفارشت حفظ شده و بعد از رفعِ مشکل کد می‌رسد.", show_alert=True)
     else:
         await cb.answer("❌ دریافت کد موقتاً ناموفق بود.", show_alert=True)
+
+
+_PROVIDER_ALERT_AT: dict = {}
+
+
+async def _ozv_alert_provider(order: SmmOrder, provider: dict, kind: str, why: str) -> None:
+    """مالکِ ربات را (حداکثر ساعتی یک‌بار برایِ هر ارائه‌دهنده) از مشکلِ حسابِ ارائه‌دهنده خبر می‌کند."""
+    import time as _t
+    key = (order.bot_id, provider.get("id"), kind)
+    if _t.monotonic() - _PROVIDER_ALERT_AT.get(key, -1e9) < 3600:
+        return
+    _PROVIDER_ALERT_AT[key] = _t.monotonic()
+    try:
+        from aiogram import Bot as _AB
+        async with Session() as s:
+            from models import Bot as _BR
+            brow = await s.get(_BR, order.bot_id)
+        if not brow:
+            return
+        txt = ("⚠️ <b>دریافتِ کدِ شمارهٔ مجازی ممکن نیست</b>\n\n"
+               + ("ارائه‌دهنده می‌گوید <b>اعتبارِ حسابِ شما کافی نیست</b> (در Callinoo/OzVinoo حساب را شارژ کن)."
+                  if kind == "nobalance" else "ارائه‌دهنده می‌گوید <b>دسترسی به اکانتِ این شماره ممکن نیست</b>.")
+               + f"\n\nپاسخِ ارائه‌دهنده: <code>{html.escape(str(why)[:150])}</code>"
+               + f"\nسفارش: #{order.tracking_code or order.id} · شماره: <code>{html.escape(str(order.link or ''))}</code>")
+        tb = _AB(token=brow.token)
+        try:
+            await tb.send_message(brow.owner_id, txt, parse_mode="HTML")
+        finally:
+            await tb.session.close()
+    except Exception:
+        logger.exception("اطلاعِ مشکلِ حسابِ ارائه‌دهنده به مالک ناموفق بود")
 
 
 async def _service_from_order(order: SmmOrder) -> SmmService:

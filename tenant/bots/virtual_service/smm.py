@@ -7568,6 +7568,10 @@ async def smm_approve(cb: CallbackQuery, bot: Bot):
         # اگر service_pk نبود، از روی service_id تشخیص بده
         if o and not is_manual and str(o.service_id).startswith("man"):
             is_manual = True
+        _pk_ap = o.panel_pk if o else None
+    # === PATCH_SMM_NO_PANEL_MANUAL_V1 === پنلِ این سرویس حذف شده/خالی ⇒ «تأیید» یعنی ادمین خودش انجامش داده، نه ثبت روی پنل
+    if o and not is_manual and not await _panel_configured(row.id, _pk_ap):
+        is_manual = True
 
     if is_manual:
         # سرویس دستی: به پنل ارسال نمی‌شود؛ ادمین خودش انجام داده و اینجا فقط تأیید می‌کند
