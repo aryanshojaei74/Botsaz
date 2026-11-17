@@ -35,7 +35,7 @@ from models import (
 )
 
 from partner_rules import (
-    LOW_STOCK_GRACE_DAYS, MIN_ACTIVE_SALES, min_active_sales, MAX_ORDER_QTY,
+    LOW_STOCK_GRACE_DAYS, MIN_ACTIVE_SALES, min_active_sales, MAX_ORDER_QTY, FIRST_ORDER_MIN_QTY, first_order_shortfall,
     jalali,  # === PATCH_PARTNER_V4 ===
 )
 
@@ -269,7 +269,16 @@ def _back_kb() -> InlineKeyboardMarkup:
 
 # ────────── خرید ربات جهت فروش ──────────
 
-def _buy_kb(g: int, p: int, price_g: int, price_p: int, disc: int) -> InlineKeyboardMarkup:
+async def _first_order_need(pb: PartnerBot) -> int:
+    """۳ اگر همکار هنوز هیچ خریدِ تأییدشده‌ای ندارد (خریدِ اول باید عمده باشد)، وگرنه ۰."""
+    async with Session() as s:
+        n = await s.scalar(select(func.count(PartnerStockOrder.id)).where(
+            PartnerStockOrder.partner_bot_id == pb.id, PartnerStockOrder.status == "approved"))
+    bought = int(pb.bought_growth or 0) + int(pb.bought_pro or 0)
+    return FIRST_ORDER_MIN_QTY if first_order_shortfall(bought, int(n or 0), 0) else 0
+
+
+def _buy_kb(g: int, p: int, price_g: int, price_p: int, disc: int, need_min: int = 0) -> InlineKeyboardMarkup:
     """شمارندهٔ شیشه‌ای: عدد روی خودِ دکمه می‌نشیند."""
     total = g * price_g + p * price_p
     rows = [
@@ -288,7 +297,11 @@ def _buy_kb(g: int, p: int, price_g: int, price_p: int, disc: int) -> InlineKeyb
         [InlineKeyboardButton(text=f"💰 مبلغ نهایی: {total:,} تومان", callback_data="pp:noop",
                              style=ButtonStyle.PRIMARY)],
     ]
-    if total > 0:
+    if need_min and 0 < g + p < need_min:
+        rows.append([InlineKeyboardButton(
+            text=f"⚠️ خریدِ اول حداقل {need_min} عدد (الان {g + p})", callback_data="pp:noop",
+            style=ButtonStyle.PRIMARY)])
+    elif total > 0:
         rows.append([InlineKeyboardButton(
             text="✅ تایید و پرداخت", callback_data=f"pp:order:{g}:{p}",
             style=ButtonStyle.SUCCESS)])
@@ -297,7 +310,7 @@ def _buy_kb(g: int, p: int, price_g: int, price_p: int, disc: int) -> InlineKeyb
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _buy_text(disc: int, price_g: int, price_p: int) -> str:
+async def _buy_text(disc: int, price_g: int, price_p: int, need_min: int = 0) -> str:
     bg = await base_price("growth")
     bp = await base_price("pro")
     return (
@@ -305,7 +318,9 @@ async def _buy_text(disc: int, price_g: int, price_p: int) -> str:
         f"🏷 تخفیف همکاری شما: <b>{disc}٪</b> روی قیمت پایه\n\n"
         f"🚀 رشد: <s>{bg:,}</s> → <b>{price_g:,}</b> تومان\n"
         f"💎 حرفه‌ای: <s>{bp:,}</s> → <b>{price_p:,}</b> تومان\n\n"
-        "با دکمه‌های ➕ و ➖ تعداد را مشخص کن:"
+        + (f"📌 <b>خریدِ اولِ همکار باید عمده باشد: حداقل {need_min} ربات</b> (از رشد و حرفه‌ای، "
+           "هر ترکیبی). از خریدِ بعدی می‌توانی یکی‌یکی بخری.\n\n" if need_min else "")
+        + "با دکمه‌های ➕ و ➖ تعداد را مشخص کن:"
     )
 
 
@@ -343,9 +358,10 @@ async def pp_buy_start(cb: CallbackQuery, bot: Bot):
         return
     _row, pb = ok
     pg, pp = await _partner_prices(pb)
+    need = await _first_order_need(pb)
     await cb.message.edit_text(
-        await _buy_text(pb.discount_percent, pg, pp),
-        reply_markup=_buy_kb(0, 0, pg, pp, pb.discount_percent))
+        await _buy_text(pb.discount_percent, pg, pp, need),
+        reply_markup=_buy_kb(0, 0, pg, pp, pb.discount_percent, need))
     await cb.answer()
 
 
@@ -364,7 +380,7 @@ async def pp_buy_adjust(cb: CallbackQuery, bot: Bot):
     pg, pp = await _partner_prices(pb)
     try:
         await cb.message.edit_reply_markup(
-            reply_markup=_buy_kb(g, p, pg, pp, pb.discount_percent))
+            reply_markup=_buy_kb(g, p, pg, pp, pb.discount_percent, await _first_order_need(pb)))
     except Exception:
         logger.exception("ویرایشِ شمارندهٔ خرید ناموفق بود")
     await cb.answer()
@@ -388,6 +404,11 @@ async def pp_pay_choose(cb: CallbackQuery, bot: Bot, state: FSMContext):
         await cb.answer("اول تعداد را مشخص کن", show_alert=True)
         return
 
+    _need = await _first_order_need(pb)
+    if _need and g + p < _need:
+        await cb.answer(f"خریدِ اولِ همکار باید عمده باشد: حداقل {_need} ربات (الان {g + p}). "
+                        "از خریدِ بعدی یکی‌یکی هم می‌شود.", show_alert=True)
+        return
     pg, pp = await _partner_prices(pb)
     total = g * pg + p * pp
     await state.update_data(pp_g=g, pp_p=p, pp_total=total, pp_pb=pb.id)

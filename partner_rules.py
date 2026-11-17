@@ -42,6 +42,18 @@ PARTNER_TRIAL_DAYS = 2
 # سقفِ تعداد در یک سفارشِ خریدِ عمده
 MAX_ORDER_QTY = 100
 
+# === PATCH_PARTNER_FIRST_ORDER_MIN_V1 === خریدِ اولِ همکار باید عمده باشد (حداقل ۳ ربات)؛ بعدش یکی‌یکی هم می‌شود
+FIRST_ORDER_MIN_QTY = 3
+
+
+def first_order_shortfall(bought_total: int, approved_orders: int, qty: int) -> int:
+    """اگر این اولین خریدِ همکار است و تعدادش کمتر از حداقل است، کسری را برمی‌گرداند (وگرنه ۰).
+
+    «اولین خرید» یعنی تا حالا نه سفارشِ تأییدشده داشته و نه رباتی (از هر راه) به نامش ثبت شده."""
+    if (bought_total or 0) > 0 or (approved_orders or 0) > 0:
+        return 0
+    return max(0, FIRST_ORDER_MIN_QTY - int(qty or 0))
+
 
 # === PATCH_PARTNER_V4 ===
 # تاریخِ شمسی به وقتِ تهران. این‌جا گذاشته شد چون هم سرویسِ پلتفرم و هم
