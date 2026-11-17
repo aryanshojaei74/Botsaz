@@ -1161,7 +1161,8 @@ async def _run_play_locked(bot: Bot, chat_id: int, telegram_id: int,
         left = max(0, limit - (await plays_used(bot_id, game, telegram_id)))
         text += f"\n\nسهمیهٔ باقی‌مانده: <b>{left}</b> بار {PERIOD_LABELS.get(period, '')}"
 
-    if player_name:
+    from tenant.shared.dice_texts import template_has_name as _has_name
+    if player_name and not await _has_name(bot_id, _key):   # PATCH_DICE_NAME_ONCE_V1
         text = f"👤 {player_name}\n" + text
     kb = None if player_name else await dice_games_kb(bot_id)
     await bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML")

@@ -53,3 +53,13 @@ async def get_text(bot_id: int, key: str, **kw) -> str:
     except Exception:
         # اگر ادمین متغیرِ ناشناخته گذاشته باشد، متن خام برگردانده می‌شود
         return tpl
+
+
+# === PATCH_DICE_NAME_ONCE_V1 === (ایلیا) اگر مالک {name} را خودش در متن گذاشته، پیشوندِ خودکارِ «👤 نام» نباید دوباره بیاید
+async def template_has_name(bot_id: int, key: str) -> bool:
+    try:
+        from tenant import get_setting
+        v = (await get_setting(bot_id, f"dice_txt_{key}", "") or "").strip()
+    except Exception:
+        return False
+    return "{name}" in v
