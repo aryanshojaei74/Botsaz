@@ -754,9 +754,12 @@ async def _pv_fetch_code(provider: dict, order_ref) -> tuple[str, str, str]:
         return "nobalance", "", _api_message(status, payload)
     if status == 422 or _pcode == 422:
         return "noaccess", "", _api_message(status, payload)
-    if status < 200 or status >= 300 or not isinstance(data, dict):
-        if status in (404, 409):
-            return "missing", "", _api_message(status, payload)
+    # مستنداتِ Callinoo خطاهایِ منطقی را با HTTP 200 و «status_code» داخلِ بدنه نشان می‌دهد (مثلاً 404 «Order does not exist»)؛
+    # پس کدِ مؤثر = status_code بدنه اگر بود.
+    eff = _pcode if isinstance(_pcode, int) else status
+    if eff in (404, 409):
+        return "missing", "", _api_message(status, payload)
+    if status < 200 or status >= 300 or not isinstance(data, dict) or (isinstance(_pcode, int) and _pcode >= 400):
         return "error", "", _api_message(status, payload)
     code = str(data.get("code") or "").strip()
     return ("ok", code, "") if code else ("pending", "", "")
@@ -2412,7 +2415,7 @@ async def _ozv_maybe_autocancel(bot: Bot, order: SmmOrder, provider: dict) -> bo
         return False
     now = _time.monotonic()
     retry_gap = _AUTOCANCEL_RETRY_SEC if age < minutes * 60 + 1800 else 600
-    if now - _AUTOCANCEL_LAST.get(order.id, 0) < retry_gap:
+    if now - _AUTOCANCEL_LAST.get(order.id, -1e9) < retry_gap:   # بدونِ سابقه ⇒ هرگز throttle نشود (monotonic از بوتِ سیستم شروع می‌شود)
         return False
     _AUTOCANCEL_LAST[order.id] = now
     ok, _cinfo = await _pv_cancel(provider, order.panel_order_id)   # PATCH_TNUMBER_PROVIDER_V1

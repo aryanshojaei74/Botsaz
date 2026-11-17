@@ -18,6 +18,8 @@ def _patch(monkeypatch, status, payload):
     (200, {"status": False, "status_code": 402, "message": "Insufficient balance"}, "nobalance"),
     (422, {"status": False, "status_code": 422, "message": "Account access denied"}, "noaccess"),
     (404, {"status": False, "status_code": 404, "message": "Order does not exist"}, "missing"),
+    (200, {"status": False, "status_code": 404, "message": "Order does not exist"}, "missing"),      # خطای منطقی با HTTP 200
+    (200, {"status": False, "status_code": 500, "message": "x"}, "error"),
     (500, {"message": "boom"}, "error"),
 ])
 async def test_fetch_code_statuses(monkeypatch, status, payload, expect):
