@@ -74,7 +74,9 @@ SETTING_KEY = "premium_emoji_enabled"
 _PMAP_CACHE: dict[int, tuple[dict, float]] = {}
 _PMAP_CACHE_TTL = 30.0
 _TOKEN_INFO_CACHE: dict[str, tuple[int | None, str | None, float]] = {}
-_TOKEN_CACHE_TTL = 300.0
+# PATCH_PEMJ_PLAN_CACHE_V1: پلن توسطِ سرویسِ پلتفرم عوض می‌شود و این پروسه‌ها خبردار نمی‌شوند؛ با TTLِ ۵ دقیقه‌ایِ قبلی بعد از
+# ارتقا (رشد ← حرفه‌ای) تا ۵ دقیقه ایموجیِ پرمیوم نشان داده نمی‌شد. ۶۰ ثانیه: هنوز بارِ DB ناچیز، ولی تأخیرِ ارتقا کم.
+_TOKEN_CACHE_TTL = 60.0
 
 
 class PremiumEmojiFSM(StatesGroup):
