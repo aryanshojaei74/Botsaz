@@ -685,6 +685,23 @@ async def _pv_buy(provider: dict, country_ref, svc) -> tuple[bool, str, str, str
     return True, "", str(api_order_id), phone
 
 
+def _oz_cancel_accepted(status: int, payload) -> bool:
+    """=== PATCH_OZV_CANCEL_STRICT_V1 === (Infldor: «لغو کردم، پول به مشتری برگشت ولی OzVinoo پولِ من را نگه داشت»)
+    قبلاً هر پاسخی که «cancel» در متنش بود یا HTTP 200 داشت «لغو پذیرفته شد» حساب می‌شد؛ در حالی که مستنداتِ Callinoo
+    خطای منطقی را با HTTP 200 و status_code داخلِ بدنه می‌دهد و «Cannot cancel a completed order» (409) هم کلمهٔ cancel دارد.
+    نتیجه: مشتری پول پس می‌گرفت ولی ارائه‌دهنده لغو را نپذیرفته بود و پولِ مالک می‌سوخت.
+    حالا فقط وقتی پذیرفته می‌شود که کدِ مؤثر ۲xx باشد و status=false نباشد، یا صریحاً «قبلاً لغو شده» باشد."""
+    if not isinstance(payload, dict):
+        return status in (200, 201)
+    if "already been cancelled" in str(payload.get("message", "")).lower():
+        return True
+    body_code = payload.get("status_code")
+    eff = body_code if isinstance(body_code, int) else status
+    if not (200 <= eff < 300) or status not in (200, 201):
+        return False
+    return payload.get("status") is not False
+
+
 async def _pv_cancel(provider: dict, order_ref) -> tuple[bool, str]:
     """(پذیرفته شد؟, متنِ پاسخ برایِ لاگ/نمایش)."""
     if _is_ivn(provider):
@@ -697,7 +714,7 @@ async def _pv_cancel(provider: dict, order_ref) -> tuple[bool, str]:
         return ok, ("ok" if ok else f"{err} ({code})")
     status, payload = await _oz_request(provider, "POST", _OZ_CANCEL,
                                         body={"order_id": _norm_int(order_ref, 0)})
-    ok = status in (200, 201) or (isinstance(payload, dict) and "cancel" in str(payload.get("message", "")).lower())
+    ok = _oz_cancel_accepted(status, payload)
     return ok, (f"http={status} " + str(payload)[:300])
 
 
@@ -743,7 +760,9 @@ async def _pv_fetch_code(provider: dict, order_ref) -> tuple[str, str, str]:
                                key, str(data)[:500])
             return "pending", "", ""
         return "ok", got, ""
-    status, payload = await _oz_request(provider, "GET", _OZ_SERVICES, body={"order_id": _norm_int(order_ref, 0)})
+    # PATCH_OZV_GET_QUERY_V1: مستندات «order_id در body یا query» می‌گوید؛ بدنه در GET را بعضی سرورها/پراکسی‌ها می‌اندازند ⇒ هر دو
+    status, payload = await _oz_request(provider, "GET", _OZ_SERVICES, params={"order_id": _norm_int(order_ref, 0)},
+                                        body={"order_id": _norm_int(order_ref, 0)})
     data = _api_data(payload)
     if status == 202 or (isinstance(payload, dict) and payload.get("status_code") == 202):
         return "pending", "", ""
@@ -1817,6 +1836,12 @@ async def _process_code(bot: Bot, order: SmmOrder, provider: dict, api_order_id:
         logger.warning("[ozv-code] order=%s provider-status=%s %s", order.id, kind, _why)
         await _ozv_alert_provider(order, provider, kind, _why)
         return kind
+    if kind in ("missing", "error"):                # PATCH_OZV_GET_QUERY_V1: قبلاً بی‌صدا بود ⇒ علتِ «کد نمی‌رسد» دیده نمی‌شد
+        import time as _t
+        _k = (order.id, kind)
+        if _t.monotonic() - _FETCH_LOG_AT.get(_k, -1e9) > 600:
+            _FETCH_LOG_AT[_k] = _t.monotonic()
+            logger.warning("[ozv-code] order=%s api_order=%s result=%s %s", order.id, order.panel_order_id, kind, str(_why)[:200])
     if kind in ("pending", "missing", "error"):
         return kind
     async with Session() as s:
@@ -2264,6 +2289,7 @@ async def ozv_code(cb: CallbackQuery, bot: Bot):
 
 
 _PROVIDER_ALERT_AT: dict = {}
+_FETCH_LOG_AT: dict = {}
 
 
 async def _ozv_alert_provider(order: SmmOrder, provider: dict, kind: str, why: str) -> None:

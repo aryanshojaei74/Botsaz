@@ -54,3 +54,31 @@ async def test_provider_alert_is_throttled(monkeypatch):
     await Z._ozv_alert_provider(o, P, "nobalance", "Insufficient balance")
     await Z._ozv_alert_provider(o, P, "nobalance", "Insufficient balance")
     assert len(sent) == 1 and sent[0][0] == 9 and "اعتبارِ حسابِ شما کافی نیست" in sent[0][1] and "148" in sent[0][1]
+
+
+@pytest.mark.parametrize("status,payload,expect", [
+    (200, {"status": True, "status_code": 200, "message": "Order cancelled successfully."}, True),
+    (200, {"status": True, "status_code": 200, "message": "Order has already been cancelled."}, True),
+    (200, {"status": True}, True),
+    (200, {"status": False, "status_code": 409, "message": "Cannot cancel a completed order."}, False),   # HTTP 200 + خطای منطقی
+    (409, {"status": False, "status_code": 409, "message": "Cannot cancel a completed order."}, False),   # «cancel» در متن بود ⇒ قبلاً پذیرفته می‌شد
+    (200, {"status": False, "status_code": 422, "message": "Order is in a non-cancellable state: shipped"}, False),
+    (200, {"status": False, "status_code": 404, "message": "Order not found."}, False),
+    (200, {"status": False, "status_code": 400, "message": "Failed to update flood time."}, False),
+    (401, {"detail": "bad token"}, False),
+    (0, {"status": False, "message": "timeout"}, False),
+])
+def test_cancel_acceptance_is_strict(status, payload, expect):
+    assert Z._oz_cancel_accepted(status, payload) is expect
+
+
+@pytest.mark.asyncio
+async def test_fetch_code_sends_order_id_in_query_and_body(monkeypatch):
+    seen = {}
+
+    async def fake(provider, method, path, *, params=None, body=None):
+        seen.update(params=params, body=body)
+        return 202, {"status": False, "status_code": 202}
+    monkeypatch.setattr(Z, "_oz_request", fake)
+    await Z._pv_fetch_code(P, "777")
+    assert seen["params"] == {"order_id": 777} and seen["body"] == {"order_id": 777}
