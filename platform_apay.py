@@ -977,7 +977,10 @@ async def ask_admin_pending() -> int:
     return n
 
 
-async def manual_settle(charge_id: int, admin_uid: int) -> tuple[bool, str]:
+DUP_WINDOW_HOURS = 6      # PATCH_APAY_MANUAL_DUP_GUARD_V1 (همان محافظِ ربات‌هایِ مشتری؛ فرزاد: «یک واریز، دو تأیید»)
+
+
+async def manual_settle(charge_id: int, admin_uid: int, force: bool = False) -> tuple[bool, str]:
     from platform_bot import get_user
     async with Session() as s0:      # === PATCH_PARTNER_APAY_V1 === خریدِ عمدهٔ همکار → تأییدِ سفارش، نه شارژِ کیف پول
         _c0 = await s0.get(PlatformApayCharge, charge_id)
@@ -999,6 +1002,20 @@ async def manual_settle(charge_id: int, admin_uid: int) -> tuple[bool, str]:
         await _delete_partner_invoice(ref_id, c_chat, c_msg)
         return (True, f"✅ سفارشِ خریدِ عمده تأیید و موجودی افزوده شد ({amt:,} تومان).") if ok else \
                (False, "پرداخت ثبت شد ولی سفارش pending نبود (قبلاً تأیید/رد شده).")
+    if not force:
+        # همین کاربر در ۶ ساعتِ اخیر فاکتورِ دیگری با همین مبلغ داشته که شارژ شده؟ ⇒ احتمالِ «یک واریز، دو فاکتور»؛ شارژ نکن و بپرس.
+        async with Session() as s:
+            _ch = await s.get(PlatformApayCharge, charge_id)
+            if _ch is not None and _ch.status != "paid":
+                twin = await s.scalar(select(PlatformApayCharge).where(
+                    PlatformApayCharge.user_telegram_id == _ch.user_telegram_id,
+                    PlatformApayCharge.amount_toman == _ch.amount_toman, PlatformApayCharge.id != _ch.id,
+                    PlatformApayCharge.status == "paid",
+                    PlatformApayCharge.paid_at >= datetime.utcnow() - timedelta(hours=DUP_WINDOW_HOURS)
+                ).order_by(PlatformApayCharge.paid_at.desc()).limit(1))
+                if twin is not None:
+                    return False, (f"DUP:همین کاربر {int(twin.amount_toman or 0):,} تومانِ دیگری هم در {DUP_WINDOW_HOURS} ساعتِ اخیر "
+                                   f"شارژ شده (فاکتور {twin.order_id}). ممکن است همین واریز باشد؛ شارژ نشد.")
     async with Session() as s:
         claim = await s.execute(sa_update(PlatformApayCharge).where(
             PlatformApayCharge.id == charge_id, PlatformApayCharge.status != "paid"
@@ -1039,8 +1056,19 @@ async def papay_admin_answer(cb: CallbackQuery):
         cid = int(cid)
     except ValueError:
         return await cb.answer()
-    if act == "ok":
-        ok, msg = await manual_settle(cid, cb.from_user.id)
+    if act in ("ok", "okf"):
+        ok, msg = await manual_settle(cid, cb.from_user.id, force=(act == "okf"))
+        if not ok and msg.startswith("DUP:"):         # PATCH_APAY_MANUAL_DUP_GUARD_V1
+            from aiogram.types import InlineKeyboardButton as _IB, InlineKeyboardMarkup as _IM
+            kb = _IM(inline_keyboard=[[
+                _IB(text="✅ با این حال شارژ کن", callback_data=f"papadm:okf:{cid}"),
+                _IB(text="❌ واریز نشده", callback_data=f"papadm:no:{cid}")]])
+            try:
+                await cb.message.edit_text((cb.message.html_text or "") + f"\n\n⚠️ <b>احتمالِ شارژِ تکراری</b>\n{msg[4:]}",
+                                           reply_markup=kb, parse_mode="HTML")
+            except Exception:
+                logger.info("platform apay: ویرایشِ پیامِ هشدارِ تکراری ممکن نشد")
+            return await cb.answer("احتمالِ شارژِ تکراری — هشدار را بخوان.", show_alert=True)
         tail = "\n\n✅ <b>تأیید شد و کیف پولِ کاربر شارژ گردید.</b>" if ok else f"\n\n⚠️ {msg}"
     else:
         ok, msg = True, "ثبت شد."
@@ -1054,4 +1082,4 @@ async def papay_admin_answer(cb: CallbackQuery):
         await s.execute(sa_update(PlatformApayCharge).where(PlatformApayCharge.id == cid)
                         .values(admin_ask_chat=None, admin_ask_msg=None))
         await s.commit()
-    await cb.answer(msg if not ok else ("شارژ شد ✅" if act == "ok" else "ثبت شد"), show_alert=not ok)
+    await cb.answer(msg if not ok else ("شارژ شد ✅" if act in ("ok", "okf") else "ثبت شد"), show_alert=not ok)

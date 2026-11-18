@@ -628,3 +628,29 @@ async def test_admin_who_pays_is_also_asked(db, monkeypatch):
         ch.created_at = datetime.utcnow() - timedelta(minutes=AP.ASK_AFTER_MIN + 1)
         await s.commit()
     assert await PA.ask_admin_pending() == 1 and sent == [42]
+
+
+# === PATCH_APAY_MANUAL_DUP_GUARD_V1 (ربات اصلی) ===
+@pytest.mark.asyncio
+async def test_manual_settle_blocks_probable_duplicate_unless_forced(db, monkeypatch):
+    maker, _st, _p = db
+    import sys, types
+    monkeypatch.setitem(sys.modules, "main_platform", types.SimpleNamespace(platform_bot=types.SimpleNamespace(
+        send_message=lambda *a, **k: _noop(), delete_message=lambda **k: _noop())))
+    async with maker() as s:
+        base = await s.scalar(select(models.PlatformApayCharge))
+        tg, amt = base.user_telegram_id, base.amount_toman
+        # فاکتورِ دومِ همان کاربر و همان مبلغ که چند دقیقه پیش خودکار شارژ شده
+        s.add(models.PlatformApayCharge(user_telegram_id=tg, order_id="TWIN1", amount_toman=amt, status="paid",
+                                        paid_at=datetime.utcnow() - timedelta(minutes=30), purpose="wallet"))
+        cid = base.id
+        await s.commit()
+    ok, msg = await PA.manual_settle(cid, 777)
+    assert not ok and msg.startswith("DUP:")
+    assert await _state(maker) == (0, "waiting", 0)            # هیچ شارژی انجام نشد
+    ok, _m = await PA.manual_settle(cid, 777, force=True)
+    assert ok and (await _state(maker))[1] == "paid"
+
+
+async def _noop():
+    return None
