@@ -479,7 +479,8 @@ async def save_used(bot_id: int, chat_id: int, used: dict) -> None:
                 s.add(Setting(bot_id=int(bot_id), key=f"quiz_used:{chat_id}", value=val))
             await s.commit()
     except Exception:  # noqa: BLE001
-        pass
+        import logging as _lg
+        _lg.getLogger(__name__).exception("quiz_bank: ذخیرهٔ سؤال‌هایِ استفاده‌شده ناموفق بود")
 
 
 def make_emoji(rnd=secrets) -> dict:
