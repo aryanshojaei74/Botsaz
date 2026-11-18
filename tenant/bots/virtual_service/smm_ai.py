@@ -1214,32 +1214,32 @@ async def _smm_ai_group_match(msg: Message, bot: Bot) -> bool | dict:
     from tenant import get_bot_row
     row = await get_bot_row(bot)
     if not row:
-        logger.info("[SMM_AI_GROUP] get_bot_row چیزی برنگردوند")
+        logger.debug("[SMM_AI_GROUP] get_bot_row چیزی برنگردوند")
         return False
     if not _group_ai_allowed(row):
-        logger.info(f"[SMM_AI_GROUP] نوع/پلن ربات برای دستیار گروه مجاز نیست ({row.field!r}/{row.plan!r})")
+        logger.debug(f"[SMM_AI_GROUP] نوع/پلن ربات برای دستیار گروه مجاز نیست ({row.field!r}/{row.plan!r})")
         return False
     # === PATCH_SMM_AI_GROUP_V1 ===
     connected_id = (await _get_setting(row.id, "smm_ai_group_chat_id", "")).strip()
     if not connected_id:
-        logger.info(f"[SMM_AI_GROUP] bot_id={row.id} — هنوز به هیچ گروهی وصل نشده")
+        logger.debug(f"[SMM_AI_GROUP] bot_id={row.id} — هنوز به هیچ گروهی وصل نشده")
         return False
     if str(msg.chat.id) != connected_id:
-        logger.info(f"[SMM_AI_GROUP] bot_id={row.id} — این گروه ({msg.chat.id}) وصل‌شده نیست ({connected_id})")
+        logger.debug(f"[SMM_AI_GROUP] bot_id={row.id} — این گروه ({msg.chat.id}) وصل‌شده نیست ({connected_id})")
         return False
     if (await _get_setting(row.id, "smm_ai_enabled", "0")) != "1":
-        logger.info(f"[SMM_AI_GROUP] bot_id={row.id} — دستیار غیرفعاله")
+        logger.debug(f"[SMM_AI_GROUP] bot_id={row.id} — دستیار غیرفعاله")
         return False
     group_name = (await _get_setting(row.id, "smm_ai_group_name", "")).strip()
     if not group_name:
-        logger.info(f"[SMM_AI_GROUP] bot_id={row.id} — اسمِ گروه تنظیم نشده")
+        logger.debug(f"[SMM_AI_GROUP] bot_id={row.id} — اسمِ گروه تنظیم نشده")
         return False
     text = msg.text.strip()
-    logger.info(f"[SMM_AI_GROUP] bot_id={row.id} name={group_name!r} incoming={text!r}")
+    logger.debug(f"[SMM_AI_GROUP] bot_id={row.id} name={group_name!r} incoming={text!r}")
     if not text.lower().startswith(group_name.lower()):
         if _is_answer_reply(msg, bot.id):          # PATCH_SMM_AI_REPLY_V1 — ریپلای رویِ جوابِ دستیار = سؤالِ ادامه‌دار
             return {"smm_ai_question": text, "smm_ai_row": row}
-        logger.info(f"[SMM_AI_GROUP] تطبیق نخورد — پیام با اسمِ تنظیم‌شده شروع نمی‌شه")
+        logger.debug(f"[SMM_AI_GROUP] تطبیق نخورد — پیام با اسمِ تنظیم‌شده شروع نمی‌شه")
         return False
     remainder = text[len(group_name):]
     if remainder and remainder[0].isalnum():

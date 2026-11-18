@@ -1313,7 +1313,7 @@ async def tenant_webhook(token: str, request: Request):
     try:
         _msg_dbg = data.get("message")
         if _msg_dbg:
-            logger.info(
+            logger.debug(
                 f"[RAW_UPDATE] token=…{token[-6:]} chat_id={_msg_dbg.get('chat', {}).get('id')} "
                 f"chat_type={_msg_dbg.get('chat', {}).get('type')} "
                 f"text={_msg_dbg.get('text')!r} from={_msg_dbg.get('from', {}).get('id')}")
