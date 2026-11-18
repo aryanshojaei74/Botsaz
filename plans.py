@@ -170,6 +170,8 @@ class Feature(str, Enum):
     # === PATCH_PLAN_CUSTOM_TEXT_V1 === متنِ دلخواهِ فاکتور برایِ هر پلن + عنوانِ بلندتر — فقط پلنِ حرفه‌ای.
     PLAN_INVOICE_NOTE = "plan_invoice_note"
     VPN_INVOICE_TPL = "vpn_invoice_tpl"   # PATCH_VPN_INVOICE_TPL_V1 — قالبِ دلخواهِ پیش‌فاکتور، فقط حرفه‌ای
+    MSG_CLEANUP = "msg_cleanup"   # PATCH_MSG_CLEANUP_V1 — پاک‌سازیِ خودکارِ پیام‌هایِ قبلیِ مشتری، فقط حرفه‌ای
+    APAY_INVOICE_TPL = "apay_invoice_tpl"   # PATCH_APAY_INVOICE_TPL_V1 — قالبِ دلخواهِ فاکتورِ شارژِ آپی، فقط حرفه‌ای
     PREMIUM_PRO_PRICING = "premium_pro_pricing"   # PATCH_PREMIUM_PRO_PRICING_V1
     # === PATCH_VPN_PANEL_MARKET_V1 ===
     # ثبت و فروشِ پنل (نه کانفیگِ VPN) — فقط پلنِ حرفه‌ای، فقط ربات‌هایِ فروشِ VPN.
@@ -311,6 +313,8 @@ FEATURE_LABELS = {
     Feature.PLAN_TABLE_VIEW: "📊 نمایشِ جدولیِ پلن‌ها",   # PATCH_PLAN_TABLE_VIEW_V1
     Feature.PREMIUM_PRO_PRICING: "🌟 سودِ مبلغیِ پرمیوم و پلنِ ۱ ماهه",   # PATCH_PREMIUM_PRO_PRICING_V1
     Feature.VPN_INVOICE_TPL: "🧾 قالبِ دلخواهِ پیش‌فاکتور (با متغیر)",
+    Feature.MSG_CLEANUP: "🧹 پاک‌سازیِ خودکارِ پیام‌هایِ قبلی",   # PATCH_MSG_CLEANUP_V1
+    Feature.APAY_INVOICE_TPL: "🧾 قالبِ دلخواهِ فاکتورِ شارژِ آپی (با متغیر)",   # PATCH_APAY_INVOICE_TPL_V1
     Feature.PLAN_INVOICE_NOTE: "📝 متنِ دلخواهِ فاکتورِ هر پلن",   # PATCH_PLAN_CUSTOM_TEXT_V1
     # === PATCH_VPN_PANEL_MARKET_V1 ===
     Feature.VPN_PANEL_MARKET: "🏷 ثبت و فروشِ پنل",
@@ -476,6 +480,8 @@ _PRO_EXTRA = {
     Feature.PLAN_TABLE_VIEW,   # PATCH_PLAN_TABLE_VIEW_V1
     Feature.PLAN_INVOICE_NOTE,   # PATCH_PLAN_CUSTOM_TEXT_V1
     Feature.VPN_INVOICE_TPL,   # PATCH_VPN_INVOICE_TPL_V1
+    Feature.APAY_INVOICE_TPL,   # PATCH_APAY_INVOICE_TPL_V1
+    Feature.MSG_CLEANUP,   # PATCH_MSG_CLEANUP_V1
     Feature.PREMIUM_PRO_PRICING,   # PATCH_PREMIUM_PRO_PRICING_V1
     Feature.GATEWAY_FRENZYEX,      # PATCH_FRENZYEX_GATEWAY_V1 — فقط حرفه‌ای
     # === PATCH_VPN_PANEL_MARKET_V1 === طبقِ خواستهٔ ادمین: فقط پلنِ حرفه‌ای.

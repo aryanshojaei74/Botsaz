@@ -268,6 +268,10 @@ tenant_router.include_router(product_rating_router)  # PATCH_PRODUCT_RATING_V1
 tenant_router.include_router(token_swap_router)
 tenant_router.include_router(backup_import_router)
 tenant_router.include_router(trust_report_router)
+from tenant.shared.msg_cleanup import msg_cleanup_router   # === PATCH_MSG_CLEANUP_V1 ===
+tenant_router.include_router(msg_cleanup_router)
+from tenant.shared.msg_cleanup import install_on as _mc_install_on
+_mc_install_on(tenant_router)
 tenant_router.include_router(gate_router)
 tenant_router.include_router(rpt_router)  # === PATCH_REFERRAL_POINTS_V1 ===
 from tenant_group_guard import tenant_group_guard_router  # === PATCH_TENANT_GROUP_GUARD_V1 ===
@@ -13051,6 +13055,8 @@ async def _sec_settings_kb(bot_id: int, plan: str, menu_mode_v: str, bot_paused:
     # (گزینه‌هایِ مخصوصِ VPN از settings_registry می‌آیند — PATCH_SETTINGS_REGISTRY_V2_VPN)
     # === PATCH_GATEWAY_DISPLAY_NAMES_V1 ===
     opts.append(("🏷 اسمِ نمایشیِ درگاه‌هایِ پرداخت", "gwname:menu"))
+    if ok(Feature.MSG_CLEANUP):   # PATCH_MSG_CLEANUP_V1
+        opts.append(("🧹 پاک‌سازیِ خودکارِ پیام‌هایِ قبلی", "mcl:menu"))
     if ok(Feature.CUSTOM_WELCOME):   # PATCH_FREE_PLAN_SIMPLIFY_V1
         opts.append(("✏️ متن خوش‌آمدگویی", "set:welcome"))
     if ok(Feature.CUSTOM_WELCOME):
@@ -14400,7 +14406,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "639"
+BUILD_ID = "640"
 
 
 @tenant_router.message(Command("version"))
@@ -23595,13 +23601,18 @@ async def _charge_alert(bot: Bot, row: BotRow, *, buyer: "BotUser | None",
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
 
 
+class _SkipPublic(Exception):
+    """سیگنالِ داخلیِ _purchase_alert: بخش‌های عمومی (کانالِ اعتمادسازی/لاگ) رد شوند."""
+
+
 async def _purchase_alert(bot: Bot, row: BotRow, *, buyer: "BotUser | None",
                           section: str, detail: str, amount,
                           order_id: int | None = None, product_id: int | None = None,
                           tracking_code: str | None = None, count: int = 1,
                           panel_name: str | None = None,
                           button_name: str | None = None,
-                          public_detail: str | None = None) -> None:
+                          public_detail: str | None = None,
+                          public: bool = True, extra: str = "") -> None:
     """دو کارِ مستقل انجام می‌دهد:
     ۱) اگر «اطلاع خودکار خرید» روشن باشد، به همهٔ ادمین‌ها پیامِ خرید جدید
        می‌فرستد — با یک دکمهٔ اینلاین برای بازکردنِ مستقیمِ پروفایلِ کاملِ
@@ -23625,7 +23636,10 @@ async def _purchase_alert(bot: Bot, row: BotRow, *, buyer: "BotUser | None",
     است: وقتی پاس داده شود، کانالِ اعتمادسازی از آن استفاده می‌کند (نه از
     detail)، ولی پیامِ خصوصیِ ادمین همچنان detail را نشان می‌دهد.
     """
+    # === PATCH_RESELLER_TRIAL_NO_TRUST_V1 === public=False (مثلاً تستِ رایگانِ نماینده): فقط پیامِ خصوصیِ مالک/ادمین؛ نه کانالِ اعتمادسازی نه لاگِ خرید
     try:
+        if not public:
+            raise _SkipPublic()
         from tenant.shared.trust_report import send_trust_channel_post
         await send_trust_channel_post(
             bot, row.id,
@@ -23637,13 +23651,19 @@ async def _purchase_alert(bot: Bot, row: BotRow, *, buyer: "BotUser | None",
             panel_name=panel_name,  # === PATCH_TRUST_CHANNEL_PANEL_NAME_V1 ===
             button_name=button_name,  # === PATCH_ORDER_BUTTON_ID_V1 ===
         )
+    except _SkipPublic:
+        pass
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
 
     try:
+        if not public:
+            raise _SkipPublic()
         from tenant.shared.tx_channel import tx_log_purchase
         await tx_log_purchase(bot, row.id, buyer=buyer, section=section, detail=detail, amount=amount,
                               tracking_code=tracking_code, source=(panel_name or button_name or ""))
+    except _SkipPublic:
+        pass
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده در لاگِ خرید")
 
@@ -23681,6 +23701,7 @@ async def _purchase_alert(bot: Bot, row: BotRow, *, buyer: "BotUser | None",
         f"🕒 {jdate} — {jtime}\n"
         "┈┅━━⊷⊰✨⊱⊶━━┅┈\n"
         f"{buyer_line}"
+        + (f"\n\n{extra}" if extra else "")
     )
     kb = None
     if buyer is not None:

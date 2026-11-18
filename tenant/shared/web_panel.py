@@ -921,8 +921,8 @@ def _plan_title_fa(gb, days) -> str:
 
 async def _rs_make_accounts(bot_id: int, tg_id: int, uname, panel, pkey: str,
                             gb, days: int, count: int, title: str,
-                            hours: int = 0) -> int:
-    """ساختِ count کانفیگ رویِ پنل. خروجی: تعدادِ موفق."""
+                            hours: int = 0, links_out: "list | None" = None) -> int:
+    """ساختِ count کانفیگ رویِ پنل. خروجی: تعدادِ موفق. links_out: اگر لیست بدهی، لینکِ ساب هر کانفیگِ ساخته‌شده در آن ریخته می‌شود."""
     from tenant.bots.vpn.vpn_user import (_client_from_panel, _make_config_email,
                                  new_svc_code, _expires_at_from_ms)
     from tenant.shared.panel_clients.vpn_panel import gen_uuid, gen_sub_id
@@ -967,6 +967,8 @@ async def _rs_make_accounts(bot_id: int, tg_id: int, uname, panel, pkey: str,
                         first_conn_notified=False))
                     await s3.commit()
                 made += 1
+                if links_out is not None and acc.get("sub_link"):
+                    links_out.append(str(acc.get("sub_link")))
             except Exception as e:
                 logger.warning("پنلِ نماینده: ساختِ کانفیگ ناموفق (bot=%s panel=%s): %s",
                                bot_id, pkey, e)
@@ -998,7 +1000,8 @@ async def _rs_allowed_panels(ctx) -> list:
 
 
 async def _rs_notify_owner(bot_id: int, user_row_id: int, section: str,
-                           detail: str, amount: float, count: int) -> None:
+                           detail: str, amount: float, count: int, *,
+                           public: bool = True, extra: str = "") -> None:
     """اعلانِ فروش به مالکِ ربات — این مسیر کاملاً بیرونِ تلگرام است و
     بدونِ این اعلان، فروشِ نماینده برای مالک نامرئی می‌ماند."""
     try:
@@ -1011,7 +1014,8 @@ async def _rs_notify_owner(bot_id: int, user_row_id: int, section: str,
             _tb = _AiogramBot(token=_row.token)
             try:
                 await _purchase_alert(_tb, _row, buyer=_u, section=section,
-                                      detail=detail, amount=amount, count=count)
+                                      detail=detail, amount=amount, count=count,
+                                      public=public, extra=extra)
             finally:
                 await _tb.session.close()
     except Exception:
@@ -1270,7 +1274,7 @@ def _trial_label(gb: float, days: int, hours: int) -> str:
 
 
 async def _rs_trial_report(bot_id: int, tg_id: int, uname, panel_key: str,
-                           gb: float, days: int, hours: int, count: int) -> None:
+                           gb: float, days: int, hours: int, count: int, link: str = "") -> None:
     """=== PATCH_RESELLER_TRIAL_REPORT_V1 === (ایلیا) تستِ رایگانِ نماینده هم مثلِ تستِ مشتری در کانالِ گزارشِ تست
     (و برای ادمین‌ها اگر روشن باشد) پست می‌شود. همان شرطِ پلن و تنظیماتِ گزارشِ تست؛ خطا هرگز مانعِ ساخت نمی‌شود."""
     try:
@@ -1285,7 +1289,7 @@ async def _rs_trial_report(bot_id: int, tg_id: int, uname, panel_key: str,
         vol, _sep, dur = _trial_label(gb, days, hours).partition(" / ")
         _tb = _AiogramBot(token=_row.token)
         try:
-            await _trial_report_post(_tb, bot_id, _u, uname, "", vol + (f" × {count}" if count > 1 else ""),
+            await _trial_report_post(_tb, bot_id, _u, uname, link, vol + (f" × {count}" if count > 1 else ""),
                                      dur, panel_key, "reseller")
         finally:
             await _tb.session.close()
@@ -1410,17 +1414,22 @@ async def rs_trial_create(request: Request, panel_key: str = Form(...),
             BotUser.bot_id == bot_id, BotUser.telegram_id == tg_id))
         uname, uid = (u.username if u else None), (u.id if u else 0)
 
+    _trial_links: list = []
     made = await _rs_make_accounts(bot_id, tg_id, uname, panel, panel_key,
-                                   t_gb, t_days, n, _RS_TRIAL_TITLE, hours=t_hours)
+                                   t_gb, t_days, n, _RS_TRIAL_TITLE, hours=t_hours, links_out=_trial_links)
     if made == 0:
         return _rs_back("trial", err="ساختِ تست ناموفق بود. سهمیه‌ات مصرف نشد.")
     # === PATCH_RESELLER_TRIAL_LOG_V1 === سهمیه بعد از ساختِ موفق ثبت می‌شود
     await _rs_trial_log(bot_id, tg_id, panel_key, made)
-    await _rs_trial_report(bot_id, tg_id, uname, panel_key, t_gb, t_days, t_hours, made)   # PATCH_RESELLER_TRIAL_REPORT_V1
+    await _rs_trial_report(bot_id, tg_id, uname, panel_key, t_gb, t_days, t_hours, made,
+                           link="\n".join(_trial_links))   # PATCH_RESELLER_TRIAL_REPORT_V1
     if uid:
+        # PATCH_RESELLER_TRIAL_NO_TRUST_V1: تستِ رایگان «خرید» نیست ⇒ فقط پیامِ خصوصیِ مالک/ادمین (با لینکِ ساب)، نه کانالِ اعتمادسازی
+        import html as _h2
+        _links_txt = ("🔗 لینکِ ساب:\n" + "\n".join(f"<code>{_h2.escape(l)}</code>" for l in _trial_links[:5])) if _trial_links else ""
         await _rs_notify_owner(bot_id, uid, "پنلِ وبِ نماینده (تست رایگان)",
                                f"{_trial_label(t_gb, t_days, t_hours)} × {made} عدد",
-                               0.0, made)
+                               0.0, made, public=False, extra=_links_txt)
     return _rs_back("trial", msg=f"✅ {made} تست ساخته شد. در «کانفیگ‌های من» ببینشان.")
 
 

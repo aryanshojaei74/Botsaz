@@ -327,8 +327,10 @@ async def get_fee_cfg(bot_id: int) -> tuple[str, int]:
 
 def invoice_view(*, title: str, pay_rial: int, card: str, holder: str, order_id: str,
                  pay_url: str, check_cb: str, cancel_cb: str, support_url: str = "",
-                 fee_toman: int = 0, credit_toman: int = 0, show_pay_btn: bool = True):
-    """متن و کیبوردِ فاکتور — مشترکِ رباتِ مستأجر و بات‌ساز."""
+                 fee_toman: int = 0, credit_toman: int = 0, show_pay_btn: bool = True,
+                 tpl_text: str = ""):
+    """متن و کیبوردِ فاکتور — مشترکِ رباتِ مستأجر و بات‌ساز.
+    tpl_text (PATCH_APAY_INVOICE_TPL_V1): اگر مالکِ پرو قالبِ دلخواه گذاشته، همین متن جایِ متنِ پیش‌فرض می‌نشیند؛ کیبورد دست‌نخورده."""
     from aiogram.types import CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup
     from aiogram.enums import ButtonStyle
     toman = pay_rial // 10 if pay_rial % 10 == 0 else pay_rial / 10
@@ -376,7 +378,7 @@ def invoice_view(*, title: str, pay_rial: int, card: str, holder: str, order_id:
         rows.append([InlineKeyboardButton(text="💬 پیام به پشتیبانی (در صورت شارژ نشدن)", url=support_url)])
     rows.append([InlineKeyboardButton(text="❌ لغو و بازگشت", callback_data=cancel_cb,
                                       style=ButtonStyle.DANGER)])
-    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+    return (tpl_text or "\n".join(lines)), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def webhook_url(bot_id: int) -> str:

@@ -38,6 +38,7 @@ class ApFSM(StatesGroup):
     display_name = State()   # === PATCH_APAY_DISPLAY_NAME_V1 ===
     fee_amount = State()     # === PATCH_APAY_FEE_PAYER_V1 ===
     log_channel = State()    # === PATCH_APAY_LOG_CHANNEL_V1 ===
+    invoice_tpl = State()    # === PATCH_APAY_INVOICE_TPL_V1 ===
 
 
 APAY_BOT = "APayGateBot"
@@ -72,6 +73,7 @@ async def _menu_content(bot_id: int):
     max_amount = await AP.get_max_amount(bot_id)
     disp = await get_display_name(bot_id)
     fee_payer, fee_amt = await AP.get_fee_cfg(bot_id)   # PATCH_APAY_FEE_PAYER_V1
+    _tpl_on = bool(((await AP._get(bot_id, "apay_invoice_tpl", "")) or "").strip())   # PATCH_APAY_INVOICE_TPL_V1
 
     txt = ("💳 <b>درگاهِ آپی (کارت‌به‌کارتِ آنی)</b>\n\n"
            "کاربر مبلغ را وارد می‌کند، در صفحهٔ پرداختِ آپی شمارهٔ کارتِ تو را می‌بیند و "
@@ -132,6 +134,9 @@ async def _menu_content(bot_id: int):
             text=f"💳 دکمهٔ «پرداخت» در فاکتور: {'✅ نمایش' if pay_btn else '❌ مخفی'}",
             callback_data="ap:paybtn",
             style=(ButtonStyle.SUCCESS if pay_btn else ButtonStyle.DANGER))],
+        [InlineKeyboardButton(
+            text="🧾 قالبِ فاکتورِ شارژ (متغیرها) " + ("✅ فعال" if _tpl_on else "⚪️ پیش‌فرض") + " · 💎 حرفه‌ای",
+            callback_data="ap:tpl", style=(ButtonStyle.SUCCESS if _tpl_on else ButtonStyle.PRIMARY))],
         [InlineKeyboardButton(text="📢 لاگِ پرداخت‌هایِ آپی در کانال",
                               callback_data="ap:log", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="🧪 تستِ اتصال و موجودی",
@@ -406,6 +411,64 @@ async def ap_feeamt_save(msg: Message, bot: Bot, state: FSMContext):
         return await msg.answer("عددِ نامعتبر. دوباره امتحان کن.")
     await AP._set(row.id, "apay_fee_amount", str(int(n)))
     await msg.answer(f"✅ کارمزد رویِ {int(n):,} تومان تنظیم شد.")
+    await _show(msg, row.id)
+
+
+# === PATCH_APAY_INVOICE_TPL_V1 === قالبِ دلخواهِ فاکتورِ شارژ (فقط حرفه‌ای)
+@apay_router.callback_query(F.data == "ap:tpl")
+async def ap_tpl_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok, smart_cancel_kb
+    from plans import Feature, has_feature, upgrade_hint
+    from tenant.gateways import apay_invoice_tpl as _IT
+    import html as _h
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    if not has_feature(row.plan, Feature.APAY_INVOICE_TPL):
+        return await cb.answer(upgrade_hint(Feature.APAY_INVOICE_TPL), show_alert=True)
+    cur = ((await AP._get(row.id, _IT.SETTING_KEY, "")) or "").strip()
+    await state.set_state(ApFSM.invoice_tpl)
+    extra = ("\n\n📝 متنِ فعلی:\n" + _h.escape(cur)) if cur else "\n\n📝 الان متنِ پیش‌فرض فعال است."
+    await cb.message.answer(_IT.help_text() + extra, reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
+    await cb.answer()
+
+
+@apay_router.message(ApFSM.invoice_tpl, F.text)
+async def ap_tpl_save(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok
+    from plans import Feature, has_feature, upgrade_hint
+    from tenant.gateways import apay_invoice_tpl as _IT
+    import html as _h
+    row = await _owner_ok(msg, bot)
+    if not row:
+        await state.clear()
+        return
+    raw = (msg.text or "").strip()
+    if raw in ("/cancel", "لغو", "❌ لغو", "❌ لغو / بازگشت"):
+        await state.clear()
+        await msg.answer("لغو شد.")
+        return await _show(msg, row.id)
+    if raw == "/default":
+        await state.clear()
+        await AP._set(row.id, _IT.SETTING_KEY, "")
+        await msg.answer("✅ به متنِ پیش‌فرض برگشت.")
+        return await _show(msg, row.id)
+    if not has_feature(row.plan, Feature.APAY_INVOICE_TPL):
+        await state.clear()
+        return await msg.answer(upgrade_hint(Feature.APAY_INVOICE_TPL))
+    tpl = msg.html_text or raw
+    if len(tpl) > _IT.MAX_LEN:
+        return await msg.answer(f"⚠️ متن بیش از حد طولانی است (حداکثر {_IT.MAX_LEN} کاراکتر).")
+    try:
+        await msg.answer("👀 <b>پیش‌نمایش:</b>", parse_mode="HTML")
+        await msg.answer(_IT.render(tpl, _IT.sample_values()), parse_mode="HTML")
+    except Exception as e:
+        return await msg.answer(
+            "❌ <b>ذخیره نشد.</b> قالب‌بندیِ HTML مشکل دارد:\n"
+            f"<code>{_h.escape(str(e)[:200])}</code>\nاصلاح کن و دوباره بفرست.", parse_mode="HTML")
+    await state.clear()
+    await AP._set(row.id, _IT.SETTING_KEY, tpl)
+    await msg.answer("✅ قالبِ فاکتورِ آپی ذخیره شد.")
     await _show(msg, row.id)
 
 
@@ -825,11 +888,28 @@ async def _apu_create_charge_locked(msg: Message, bot: Bot, row, amount: int, tg
         logger.debug("apay: حذفِ پیامِ انتظار ناموفق بود")
 
     card, holder = await AP.card_for(token, res)
+    # === PATCH_APAY_INVOICE_TPL_V1 === قالبِ دلخواهِ مالکِ پرو (خطا ⇒ متنِ پیش‌فرض)
+    _tpl_text = ""
+    try:
+        from tenant.gateways import apay_invoice_tpl as _IT
+        _tpl = await _IT.get_template(row.id, row.plan)
+        if _tpl:
+            async with Session() as _s:
+                _bu = await _s.scalar(select(BotUser).where(BotUser.bot_id == row.id, BotUser.telegram_id == tg_id))
+            _tpl_text = _IT.render(_tpl, _IT.values_for(
+                title=await get_display_name(row.id), pay_rial=pay_rial, fee_toman=fee, credit_toman=int(amount),
+                card=card, holder=holder, order_id=oid,
+                buyer=(_bu.full_name if _bu else ""), username=(_bu.username if _bu else ""), user_id=tg_id,
+                balance=(float(_bu.balance or 0) if _bu else 0)))
+    except Exception:
+        logger.exception("apay: ساختِ فاکتور از قالبِ دلخواه ناموفق بود؛ متنِ پیش‌فرض")
+        _tpl_text = ""
     text, kb = AP.invoice_view(
         title=await get_display_name(row.id), pay_rial=pay_rial, card=card, holder=holder,
         order_id=oid, pay_url=str(res["pay_url"]), check_cb=f"apu:check:{oid}",
         cancel_cb=f"apu:cancel:{oid}", fee_toman=fee, credit_toman=int(amount),
-        show_pay_btn=(await AP._get(row.id, "apay_pay_btn", "1")) != "0")   # PATCH_APAY_HIDE_PAY_BTN_V1
+        show_pay_btn=(await AP._get(row.id, "apay_pay_btn", "1")) != "0",   # PATCH_APAY_HIDE_PAY_BTN_V1
+        tpl_text=_tpl_text)
     sent = await msg.answer(text, reply_markup=kb, parse_mode="HTML")
     # === PATCH_APAY_FAST_WATCH_V1 ===
     try:
