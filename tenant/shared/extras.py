@@ -649,7 +649,7 @@ async def _referral_cap_allowed(sess, bot_id: int, inviter_id: int, rj, reward: 
     return reward
 
 
-async def handle_referral_join(bot_id: int, new_user: BotUser, ref_code: str, bot: Bot):
+async def handle_referral_join(bot_id: int, new_user: BotUser, ref_code: str, bot: Bot, *, _captcha_passed: bool = False):
     """وقتی کاربر جدید از لینک دعوت وارد می‌شود — فقط ثبت می‌کند.
 
     پاداش فوری داده نمی‌شود. پاداش فقط بعد از اولین خرید موفق زیرمجموعه
@@ -660,6 +660,12 @@ async def handle_referral_join(bot_id: int, new_user: BotUser, ref_code: str, bo
       • یک‌بار به ازای هر کاربر: UniqueConstraint روی (bot_id, referred_telegram_id).
     """
     from sqlalchemy.exc import IntegrityError
+
+    # === PATCH_REFERRAL_CAPTCHA_V1 === اگر مالک کپچا را روشن کرده، ثبتِ دعوت بعد از پاسخِ درست انجام می‌شود
+    if not _captcha_passed:
+        from tenant.shared.referral_captcha import gate as _rf_captcha_gate
+        if await _rf_captcha_gate(bot_id, new_user, ref_code, bot):
+            return
 
     async with Session() as s:
         ref = await s.scalar(select(ReferralLink).where(

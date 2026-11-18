@@ -268,6 +268,8 @@ tenant_router.include_router(product_rating_router)  # PATCH_PRODUCT_RATING_V1
 tenant_router.include_router(token_swap_router)
 tenant_router.include_router(backup_import_router)
 tenant_router.include_router(trust_report_router)
+from tenant.shared.referral_captcha import referral_captcha_router   # === PATCH_REFERRAL_CAPTCHA_V1 ===
+tenant_router.include_router(referral_captcha_router)
 from tenant.shared.msg_cleanup import msg_cleanup_router   # === PATCH_MSG_CLEANUP_V1 ===
 tenant_router.include_router(msg_cleanup_router)
 from tenant.shared.msg_cleanup import install_on as _mc_install_on
@@ -14415,7 +14417,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "653"
+BUILD_ID = "654"
 
 
 @tenant_router.message(Command("version"))
@@ -34676,7 +34678,7 @@ async def set_welcome_save_media(msg: Message, state: FSMContext, bot: Bot):
                      reply_markup=await tadmin_kb(row.id))
 
 
-def _ref_reward_kb(enabled: bool, mode: str = "join", plan: str = "") -> InlineKeyboardMarkup:
+def _ref_reward_kb(enabled: bool, mode: str = "join", plan: str = "", captcha: bool = False) -> InlineKeyboardMarkup:
     tog = "🔴 غیرفعال کردن پاداش" if enabled else "🟢 فعال کردن پاداش"
     mode_txt = ("⏱ زمان پرداخت: هنگام عضویت" if mode == "join"
                 else "⏱ زمان پرداخت: بعد از اولین خرید")
@@ -34686,6 +34688,9 @@ def _ref_reward_kb(enabled: bool, mode: str = "join", plan: str = "") -> InlineK
         [InlineKeyboardButton(text=tog, callback_data="refrw:toggle")],
         [InlineKeyboardButton(text="✏️ تعیین مبلغ پاداش", callback_data="refrw:amount")],
         [InlineKeyboardButton(text=mode_txt, callback_data="refrw:mode")],
+        # === PATCH_REFERRAL_CAPTCHA_V1 === (Whale Support) کپچایِ ساده برایِ کاربرِ تازهٔ واردشده با لینکِ دعوت
+        [InlineKeyboardButton(text=("🧩 کپچا برای زیرمجموعه‌گیری: ✅ روشن" if captcha else "🧩 کپچا برای زیرمجموعه‌گیری: ⬜️ خاموش"),
+                              callback_data="refrw:captcha", style=(ButtonStyle.SUCCESS if captcha else ButtonStyle.PRIMARY))],
         [InlineKeyboardButton(text="🎯 نوعِ پاداش (ثابت / درصدی)",
                               callback_data="refrw:type",
                               style=ButtonStyle.PRIMARY)],
@@ -34785,8 +34790,9 @@ async def ref_reward_days_save(msg: Message, bot: Bot, state: FSMContext):
                      parse_mode="HTML")
     _en = await get_setting(row.id, "referral_reward_enabled", "1") == "1"
     _md = await get_setting(row.id, "referral_reward_mode", "join")
+    _cap = (await get_setting(row.id, "referral_captcha", "0")) == "1"      # PATCH_REFERRAL_CAPTCHA_V1
     await msg.answer(await _ref_reward_text(row.id),
-                     reply_markup=_ref_reward_kb(_en, _md, row.plan))
+                     reply_markup=_ref_reward_kb(_en, _md, row.plan, _cap))
 
 
 # === PATCH_REF_CAP_V1 === سقفِ پاداشِ دعوت (۰ = بدونِ سقف)
@@ -34826,7 +34832,8 @@ async def ref_cap_save(msg: Message, bot: Bot, state: FSMContext):
                      + ("<b>بدونِ سقف</b>" if v == 0 else f"<b>{v:,}</b>" + ("" if n else " تومان")), parse_mode="HTML")
     _en = await get_setting(row.id, "referral_reward_enabled", "1") == "1"
     _md = await get_setting(row.id, "referral_reward_mode", "join")
-    await msg.answer(await _ref_reward_text(row.id), reply_markup=_ref_reward_kb(_en, _md, row.plan))
+    _cap = (await get_setting(row.id, "referral_captcha", "0")) == "1"      # PATCH_REFERRAL_CAPTCHA_V1
+    await msg.answer(await _ref_reward_text(row.id), reply_markup=_ref_reward_kb(_en, _md, row.plan, _cap))
 
 
 @tenant_router.message(_RefPctFSM.pct, F.text)
@@ -34843,8 +34850,9 @@ async def ref_reward_pct_save(msg: Message, bot: Bot, state: FSMContext):
     await msg.answer(f"✅ درصدِ پاداش روی <b>{v}٪</b> تنظیم شد.", parse_mode="HTML")
     _en = await get_setting(row.id, "referral_reward_enabled", "1") == "1"
     _md = await get_setting(row.id, "referral_reward_mode", "join")
+    _cap = (await get_setting(row.id, "referral_captcha", "0")) == "1"      # PATCH_REFERRAL_CAPTCHA_V1
     await msg.answer(await _ref_reward_text(row.id),
-                     reply_markup=_ref_reward_kb(_en, _md, row.plan))
+                     reply_markup=_ref_reward_kb(_en, _md, row.plan, _cap))
 
 
 async def _ref_reward_text(bot_id: int) -> str:
@@ -34897,10 +34905,11 @@ async def set_ref_reward_menu(cb: CallbackQuery, bot: Bot):
         return
     enabled = await get_setting(row.id, "referral_reward_enabled", "1") == "1"
     mode = await get_setting(row.id, "referral_reward_mode", "join")
+    _cap = (await get_setting(row.id, "referral_captcha", "0")) == "1"      # PATCH_REFERRAL_CAPTCHA_V1
     try:
-        await cb.message.edit_text(await _ref_reward_text(row.id), reply_markup=_ref_reward_kb(enabled, mode, row.plan))
+        await cb.message.edit_text(await _ref_reward_text(row.id), reply_markup=_ref_reward_kb(enabled, mode, row.plan, _cap))
     except Exception:
-        await cb.message.answer(await _ref_reward_text(row.id), reply_markup=_ref_reward_kb(enabled, mode, row.plan))
+        await cb.message.answer(await _ref_reward_text(row.id), reply_markup=_ref_reward_kb(enabled, mode, row.plan, _cap))
     await cb.answer()
 
 
