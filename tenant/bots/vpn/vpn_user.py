@@ -3453,6 +3453,19 @@ async def _vpn_pay_impl(cb: CallbackQuery, bot: Bot, state: FSMContext, plan_id:
     # پولِ مشتری همین بالا کم و commit شده؛ ساختِ نامِ کانفیگ و گرفتنِ کلاینت از استخر قبلاً *بیرونِ* try بود، پس هر خطایی
     # در آن‌ها (تنظیماتِ نامِ سرور، ساختِ کلاینتِ پنل، …) بدونِ عودتِ پول و بدونِ هیچ پیامی به مشتری از هندلر بیرون می‌زد.
     email = None
+
+    # === PATCH_PURCHASE_REFUND_ON_CANCEL_V1 === (nitroteeam / Nitro_Skybot، ۲۲:۴۴ تهران)
+    # ریستارتِ سرویس (نصبِ آپدیت) وسطِ ساختِ کانفیگ: asyncio.CancelledError یک BaseException است و از `except Exception` رد
+    # می‌شد ⇒ پول کم‌شده، اکانت ساخته‌نشده، بدونِ عودت و بدونِ پیام. حالا عودت با shield انجام می‌شود تا کنسل‌شدنِ دوباره هم قطعش نکند.
+    async def _refund_plan_purchase(_note: str) -> None:
+        async with Session() as _s:
+            _u = await _s.get(BotUser, user_db_id)
+            if _u:
+                _u.balance = float(_u.balance) + price
+                _s.add(WalletTxn(bot_id=bot_id, user_id=_u.id, amount=price, kind="refund", note=_note))
+            if disc_code_id:
+                await revert_usage(_s, code_id=disc_code_id, telegram_id=cb.from_user.id)
+            await _s.commit()
     # === PATCH_PANEL_CLIENT_POOL_V1 ===
     # قبلاً اینجا یک کلاینتِ تازه ساخته می‌شد و بلافاصله بعدِ ساخت بسته
     # می‌شد؛ یعنی هر خرید یک TLS + csrf + login از صفر. حالا نشستِ
@@ -3479,21 +3492,19 @@ async def _vpn_pay_impl(cb: CallbackQuery, bot: Bot, state: FSMContext, plan_id:
             email, gb=p_gb, days=p_days, limit_ip=_lim,
             uuid_str=gen_uuid(), sub_id=gen_sub_id(), on_hold=_poh)
         sub_link = acc.get("sub_link") or ""
+    except asyncio.CancelledError:
+        logger.warning("ساخت کانفیگ وسطِ توقفِ ربات کنسل شد؛ عودتِ پول (bot_id=%s, email=%s)", bot_id, email)
+        try:
+            await asyncio.shield(asyncio.ensure_future(_refund_plan_purchase("عودت: توقفِ ربات حینِ ساخت کانفیگ")))
+        except BaseException:      # noqa: BLE001 — حتی اگر عودت هم ناموفق شد، کنسل‌شدن باید بالا برود
+            logger.exception("عودتِ پول هنگامِ کنسل‌شدنِ خرید ناموفق بود (bot_id=%s, user=%s, price=%s)", bot_id, user_db_id, price)
+        raise
     except Exception as e:
         # === PATCH_RENEW_CATCH_ALL_V1 ===
         # همون دلیلِ نسخه‌های تمدید: قبلاً فقط PanelError گرفته می‌شد.
         logger.warning("خطای ساخت کانفیگ روی پنل (bot_id=%s, email=%s): %s", bot_id, email, e)
         # ۳) شکست ساخت → برگشت وجه + برگشت مصرف کد تخفیف
-        async with Session() as s:
-            u = await s.get(BotUser, user_db_id)
-            if u:
-                u.balance = float(u.balance) + price
-                s.add(WalletTxn(bot_id=bot_id, user_id=u.id, amount=price,
-                                kind="refund", note="عودت به‌دلیل خطای ساخت کانفیگ"))
-            if disc_code_id:
-                await revert_usage(s, code_id=disc_code_id,
-                                   telegram_id=cb.from_user.id)
-            await s.commit()
+        await _refund_plan_purchase("عودت به‌دلیل خطای ساخت کانفیگ")
         refund_note = ""
         if applied_code:
             refund_note = f"\n🏷 کد تخفیف «{applied_code}» هم آزاد شد و می‌تونی دوباره استفاده کنی."
@@ -6015,7 +6026,21 @@ async def _vc_pay_impl(cb: CallbackQuery, bot: Bot, state: FSMContext):
 
     if not panel:
         print("[VC_PAY] هیچ پنل فعالی پیدا نشد", flush=True)
-        await cb.answer("پنل یافت نشد.", show_alert=True); return
+        # === PATCH_PURCHASE_REFUND_ON_CANCEL_V1 === پول بالا کم و commit شده؛ بدونِ عودت برمی‌گشتیم ⇒ پولِ مشتری می‌سوخت
+        try:
+            async with Session() as _s:
+                _u = await _s.scalar(select(BotUser).where(
+                    BotUser.bot_id == bot_id, BotUser.telegram_id == cb.from_user.id).with_for_update())
+                if _u and paid_total > 0:
+                    _u.balance += paid_total
+                    _s.add(WalletTxn(bot_id=bot_id, user_id=_u.id, amount=paid_total, kind="refund",
+                                     note="عودت: پنلِ این خرید در دسترس نبود"))
+                if disc_code_id:
+                    await revert_usage(_s, code_id=disc_code_id, telegram_id=cb.from_user.id)
+                await _s.commit()
+        except Exception:
+            logger.exception("عودتِ پول هنگامِ نبودِ پنل ناموفق بود (bot_id=%s, user=%s, paid=%s)", bot_id, cb.from_user.id, paid_total)
+        await cb.answer("پنل در دسترس نیست؛ مبلغ به کیف پولت برگشت.", show_alert=True); return
 
     print(f"[VC_PAY] پنل انتخاب شد | panel_id={panel.id} base_url={panel.base_url}", flush=True)
     # اسم دلخواه را پیش از پاک‌کردن state بخوان
@@ -6063,6 +6088,29 @@ async def _vc_pay_impl(cb: CallbackQuery, bot: Bot, state: FSMContext):
                 failed += 1
                 last_err = str(e)[:300]
                 print(f"[VC_PAY] خطا در ساخت اکانت {i+1}/{count}:\n" + _tb.format_exc(), flush=True)
+    except asyncio.CancelledError:
+        # === PATCH_PURCHASE_REFUND_ON_CANCEL_V1 === ریستارتِ سرویس وسطِ ساخت: کانفیگ‌هایِ ساخته‌نشده را با shield عودت بده
+        _left = max(0, int(count) - len(created_ids))
+        logger.warning("خریدِ حجم/روز وسطِ توقفِ ربات کنسل شد؛ عودتِ %s از %s کانفیگ (bot_id=%s)", _left, count, bot_id)
+
+        async def _vc_cancel_refund():
+            _amt = int(round(paid_total * _left / count)) if count else 0
+            async with Session() as _s:
+                _u = await _s.scalar(select(BotUser).where(
+                    BotUser.bot_id == bot_id, BotUser.telegram_id == cb.from_user.id))
+                if _u and _amt > 0:
+                    _u.balance += _amt
+                    _s.add(WalletTxn(bot_id=bot_id, user_id=_u.id, amount=_amt, kind="refund",
+                                     note=f"عودت: توقفِ ربات حینِ ساختِ {_left} کانفیگ"))
+                if disc_code_id and _left == count:
+                    await revert_usage(_s, code_id=disc_code_id, telegram_id=cb.from_user.id)
+                await _s.commit()
+        try:
+            if _left:
+                await asyncio.shield(asyncio.ensure_future(_vc_cancel_refund()))
+        except BaseException:      # noqa: BLE001
+            logger.exception("عودتِ خریدِ حجم/روز هنگامِ کنسل‌شدن ناموفق بود (bot_id=%s)", bot_id)
+        raise
     except Exception as e:
         # خطای کلی در login یا قبل از حلقه (قبلاً اینجا بی‌صدا بالا می‌رفت)
         failed = count

@@ -85,3 +85,33 @@ async def test_failure_before_panel_call_refunds_and_tells_the_customer(env, mon
     async with env() as s:
         kinds = [t.kind for t in (await s.scalars(select(models.WalletTxn))).all()]
     assert kinds == ["purchase", "refund"]
+
+
+async def test_service_restart_cancellation_mid_build_refunds_the_customer(env, monkeypatch):
+    """Nitro_Skybot ۲۲:۴۴: ریستارتِ سرویس وسطِ ساخت ⇒ CancelledError از `except Exception` رد می‌شد ⇒ پول رفته، اکانت و عودتی نبود."""
+    import asyncio
+
+    async def cancelled(*a, **k):
+        raise asyncio.CancelledError()
+    monkeypatch.setattr(VU, "_make_config_email", cancelled)
+
+    async def noop(*a, **k): return None
+    monkeypatch.setattr(VU, "_progress_edit", noop)
+    msg = _Msg()
+    cb = types.SimpleNamespace(from_user=types.SimpleNamespace(id=500, username="u", full_name="u"), message=msg,
+                               data="vpay:9", answer=noop, bot=None)
+    with pytest.raises(asyncio.CancelledError):          # کنسل‌شدن باید بالا برود (خاموشیِ تمیزِ سرویس)
+        await VU._vpn_pay_impl(cb, types.SimpleNamespace(token="7:T"), _State(), 9, None, None, 0)
+    assert await _balance(env) == 100_000                # ولی پول برگشت
+    async with env() as s:
+        txns = (await s.scalars(select(models.WalletTxn))).all()
+    assert [t.kind for t in txns] == ["purchase", "refund"] and "توقف" in txns[1].note
+
+
+def test_custom_purchase_path_handles_cancel_and_missing_panel_in_source():
+    from pathlib import Path
+    src = Path("tenant/bots/vpn/vpn_user.py").read_text(encoding="utf-8")
+    assert src.count("PATCH_PURCHASE_REFUND_ON_CANCEL_V1") >= 3
+    i = src.index("[VC_PAY] هیچ پنل فعالی پیدا نشد")
+    seg = src[i:i + 1700]
+    assert 'kind="refund"' in seg and "return" in seg                   # پنل نبود ⇒ اول عودت، بعد return
