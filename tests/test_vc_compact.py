@@ -52,7 +52,12 @@ def test_compact_with_plans_keeps_back_to_previous_menu_and_simple_mode_wins():
     assert "vc:gb:manual" in _cbs(kb2) and "💳 پرداخت" in _texts(kb2)   # حالتِ ساده اولویت دارد؛ فشرده اثر ندارد
 
 
-def test_admin_has_the_toggle():
+def test_admin_has_the_toggle(monkeypatch):
     import asyncio
+    import tenant
+
+    async def no_style(bot_id, key):      # ibtn_style به دیتابیس می‌رود؛ تست نباید به ترتیبِ تست‌ها وابسته باشد
+        return None
+    monkeypatch.setattr(tenant, "ibtn_style", no_style)
     kb = asyncio.run(VA._vc_kb(_cfg("1"), "pasargad", 1))
     assert "tvpn:custom_compact:pasargad" in _cbs(kb)
