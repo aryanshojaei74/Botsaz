@@ -42,6 +42,7 @@ from tenant.bots.virtual_service.gift_sync import gift_sync_loop as _gift_sync_l
 from tenant.shared.daily_report import daily_report_loop as _daily_report_loop  # PATCH_DAILY_REPORT_V1
 from tenant.bots.vpn.autorenew import autorenew_loop as _autorenew_loop  # PATCH_VPN_AUTORENEW_V1
 from tenant.bots.panel_seller.loop import panel_seller_loop as _panel_seller_loop  # PATCH_PANEL_SELLER_V1
+from tenant.shared.orphan_purchases import orphan_purchase_loop as _orphan_purchase_loop  # PATCH_ORPHAN_PURCHASE_V1
 
 # === PATCH_TRAFFIC_OUT_CLEANUP_V1 ===
 # همان چرخه، این‌بار برایِ سرویس‌هایِ پولی‌ای که حجمشان تمام شده.
@@ -124,6 +125,7 @@ async def _worker_startup():
         _referral_vs_loop(),   # PATCH_REF_VS_RECONCILE_V1
         _full_backup_loop(),   # PATCH_BACKUP_FULL_V1
         _stock_alarm_loop(),
+        _orphan_purchase_loop(),   # PATCH_ORPHAN_PURCHASE_V1
         _vnum_recover_loop(),
         # === PATCH_TRAFFIC_OUT_CLEANUP_V1 ===
         _traffic_cleanup_loop(),

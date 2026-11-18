@@ -270,6 +270,10 @@ tenant_router.include_router(backup_import_router)
 tenant_router.include_router(trust_report_router)
 from tenant.shared.referral_captcha import referral_captcha_router   # === PATCH_REFERRAL_CAPTCHA_V1 ===
 tenant_router.include_router(referral_captcha_router)
+from tenant.shared.err_log import err_log_router   # === PATCH_ERR_LOG_CHANNEL_V1 ===
+tenant_router.include_router(err_log_router)
+from tenant.shared.orphan_purchases import orphan_router   # === PATCH_ORPHAN_PURCHASE_V1 ===
+tenant_router.include_router(orphan_router)
 from tenant.shared.msg_cleanup import msg_cleanup_router   # === PATCH_MSG_CLEANUP_V1 ===
 tenant_router.include_router(msg_cleanup_router)
 from tenant.shared.msg_cleanup import install_on as _mc_install_on
@@ -10596,6 +10600,15 @@ async def report_user_error(bot: Bot, bot_id: int, where: str, err, tg_id: int |
                + f"<code>{_html.escape(str(err)[:400])}</code>\n\n"
                "مشتری فقط پیامِ «دوباره امتحان کن» را دید. اگر تکرار شد پنل/تنظیمات را بررسی کن.")
         await _notify_admins(bot, row, txt)
+        # === PATCH_ERR_LOG_CHANNEL_V1 === همان خطا (با تاریخ/ساعت) در کانالِ لاگِ خطاها هم می‌نشیند (اگر مالک وصل کرده)
+        try:
+            from tenant.shared.err_log import post as _el_post
+            await _el_post(bot, bot_id,
+                           f"🚨 <b>#خطا — {_html.escape(str(where))}</b>\n"
+                           + (f"🆔 کاربر: <code>{tg_id}</code>\n" if tg_id else "")
+                           + f"<code>{_html.escape(str(err)[:400])}</code>")
+        except Exception:
+            logger.exception("report_user_error: لاگِ کانالِ خطا ناموفق بود")
     except Exception:
         logger.exception("report_user_error ناموفق بود")
 
@@ -14417,7 +14430,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "654"
+BUILD_ID = "655"
 
 
 @tenant_router.message(Command("version"))

@@ -55,6 +55,9 @@ async def _content(bot_id: int):
     rows.append([InlineKeyboardButton(text="🔗 اتصال / تغییرِ کانال",
                                       callback_data="txch:set",
                                       style=ButtonStyle.PRIMARY)])
+    rows.append([InlineKeyboardButton(text="🚨 کانالِ لاگِ خطاها و مشکلات",
+                                      callback_data="errch:menu",
+                                      style=ButtonStyle.PRIMARY)])     # PATCH_ERR_LOG_CHANNEL_V1
     rows.append([InlineKeyboardButton(text="⬅️ بازگشت",
                                       callback_data="tadm:sec:finance",
                                       style=ButtonStyle.DANGER)])

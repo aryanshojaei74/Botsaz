@@ -42,6 +42,17 @@ _DEDUCT_TAGS = {"admin_deduct"}
 _GATEWAYS = {"zarinpal", "card", "crypto", "ton", "stars", "admin", "apay"}
 
 
+def _when_line() -> str:
+    """«🕒 تاریخ: ۱۴۰۵/۰۸/۲۸ — ساعت: ۰۰:۰۱» (PATCH_TX_LOG_DATE_V1)."""
+    try:
+        import datetime as _d
+        from tenant import _jalali_date_time
+        dd, tt = _jalali_date_time(_d.datetime.utcnow())
+        return f"🕒 تاریخ: {dd} — ساعت: {tt}"
+    except Exception:
+        return ""
+
+
 def _fa(n) -> str:
     try:
         return f"{int(float(n)):,}".replace(",", "٬")
@@ -128,6 +139,7 @@ async def tx_log(bot, bot_id: int, *, buyer=None, amount=0,
         # === PATCH_TX_LOG_ALL_MOVEMENTS_V1 ===
         if note:
             lines.append(f"📝 توضیح: {_html.escape(str(note))}")
+        lines.append(_when_line())      # PATCH_TX_LOG_DATE_V1 (nitroteeam: «توی رسیدها تاریخ نمیزنه»)
 
         try:
             chat_id = int(ch)
@@ -171,6 +183,7 @@ async def tx_log_purchase(bot, bot_id: int, *, buyer=None, section: str = "", de
         lines.append(f"💰 مبلغ: {_fa(amount)} تومان")
         if tracking_code:
             lines.append(f"🧾 کد پیگیری: <code>{_html.escape(str(tracking_code))}</code>")
+        lines.append(_when_line())      # PATCH_TX_LOG_DATE_V1
         try:
             chat_id = int(ch)
         except Exception:
