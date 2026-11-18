@@ -28,17 +28,20 @@ def supports(panel_key: str | None) -> bool:
 class PanelAdminAPI:
     """نمای ساده بالای کلاینتِ پنل. client باید _request و close داشته باشد (MarzbanPanelClient یا شبیهِ آن)."""
 
-    def __init__(self, client):
+    def __init__(self, client, panel_key: str | None = None):
         self.c = client
+        self._pk = panel_key
         self._rs_obj = None
 
     # === PATCH_PSEL_RESUBS_V1 === (ABOL — RickPanel «API زیرنماینده»)
     async def _rs(self, username: str | None = None):
-        """ResubAPI اگر: پنل RickPanel است، بخشِ زیرنماینده برایِ این حساب روشن است و (برایِ حسابِ موجود) همین نام
-        یکی از زیرنماینده‌ها است؛ وگرنه None و مسیرِ قدیمیِ ادمین (رفتارِ قبلی) اجرا می‌شود."""
+        """ResubAPI اگر: پنل از خانوادهٔ مرزبان است (RickPanel، پاسارگاد، …)، بخشِ «زیرنماینده» برایِ این حساب روشن است
+        (پنل خودش با GET …/resubs/enabled می‌گوید) و (برایِ حسابِ موجود) همین نام یکی از زیرنماینده‌ها است؛ وگرنه None و
+        مسیرِ قدیمیِ ادمین (رفتارِ قبلی) اجرا می‌شود. ابول: پنلش «پاسارگاد» بود، نه RickPanel."""
         try:
-            from tenant.shared.panel_clients.rickpanel_panel import RickPanelClient
-            if not isinstance(self.c, RickPanelClient):
+            if self._pk is not None and base_key(self._pk) not in SUPPORTED_BASES:
+                return None
+            if not hasattr(self.c, "_request"):
                 return None
             from tenant.bots.panel_seller.resubs import ResubAPI
             rs = self._rs_obj or ResubAPI(self.c)
@@ -63,7 +66,7 @@ class PanelAdminAPI:
         from tenant.shared.panel_clients.vpn_panel_factory import make_panel_client
         if not supports(getattr(panel, "panel_key", None)):
             raise PanelError("این نوع پنل مفهومِ «ادمین» ندارد (فقط خانوادهٔ مرزبان).")
-        return cls(make_panel_client(panel))
+        return cls(make_panel_client(panel), getattr(panel, "panel_key", None))
 
     async def close(self) -> None:
         try:

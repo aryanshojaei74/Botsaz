@@ -93,14 +93,50 @@ async def test_not_enabled_returns_none_and_legacy_path_is_used_with_clear_403_h
 
 
 @pytest.mark.asyncio
-async def test_non_rick_clients_never_touch_resubs():
-    class Plain:
+async def test_pasarguard_family_uses_resubs_too_but_only_when_panel_says_enabled():
+    """ابول: پنلش پاسارگاد بود نه RickPanel؛ تشخیص باید برایِ کلِ خانوادهٔ مرزبان کار کند."""
+    from tenant.shared.panel_clients.pasargad_panel import PasarGuardPanelClient
+
+    class FakePG(PasarGuardPanelClient):
+        def __init__(self, enabled):
+            # کشِ «فعال‌بودن» به‌ازایِ (آدرسِ پنل، نامِ کاربری) است؛ دو پنلِ جدا ⇒ دو آدرس
+            self.base_url, self.username, self.en, self.calls = f"https://pg-{enabled}.test", OWNER, enabled, []
+
+        async def close(self):
+            pass
+
+        async def _request(self, method, path, **kw):
+            self.calls.append((method, path))
+            if path == "/accounting/api/resubs/enabled":
+                return {"prefix": OWNER} if self.en else None
+            if path == "/accounting/api/resubs" and method == "POST":
+                return {"sub": {"id": 5, "username": f"{OWNER}_{kw['json']['suffix']}"}}
+            return {}
+    on, off = FakePG(True), FakePG(False)
+    name = await AD.PanelAdminAPI(on, "pasargad").create_resub("psabcdefgh", "Ab12!xyz-Qw9", 10)
+    assert name == f"{OWNER}_psabcdefgh"
+    assert await AD.PanelAdminAPI(off, "pasargad").create_resub("psabcdefgh", "Ab12!xyz-Qw9", 10) is None
+    assert ("POST", "/accounting/api/resubs") not in off.calls            # فعال نبود ⇒ مسیرِ قدیمی، هیچ نوشتنی روی resubs
+
+
+@pytest.mark.asyncio
+async def test_html_or_empty_answers_never_count_as_enabled_and_unsupported_panels_are_skipped():
+    class Spa:
         calls = []
 
+        async def _request(self, method, path, **kw):
+            Spa.calls.append(path)
+            return {"raw": "<html>dashboard</html>"}       # SPA برایِ هر مسیرِ ناشناخته ۲۰۰ HTML می‌دهد
+    assert await AD.PanelAdminAPI(Spa(), "marzban")._rs(None) is None
+    RS.clear_cache()
+
+    class Empty:
         async def _request(self, *a, **k):
-            Plain.calls.append(a)
             return {}
-    assert await AD.PanelAdminAPI(Plain())._rs(None) is None and not Plain.calls
+    assert await AD.PanelAdminAPI(Empty(), "marzban")._rs(None) is None
+    RS.clear_cache()
+    Spa.calls.clear()
+    assert await AD.PanelAdminAPI(Spa(), "sanai")._rs(None) is None and not Spa.calls   # پنلِ غیرِ خانوادهٔ مرزبان: بدونِ هیچ درخواست
 
 
 @pytest.mark.asyncio

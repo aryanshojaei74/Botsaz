@@ -125,8 +125,9 @@ async def create_admin_on(api, panel, username: str, password: str, data_gb: int
     except PanelError as e:
         if "admins.create" in str(e):
             raise PanelError("حسابِ اتصالِ پنل اجازهٔ ساختِ ادمین ندارد (Permission denied: admins.create). "
-                             "اگر پنلت RickPanel با بخشِ «زیرنماینده» است، از پشتیبانیِ پنل بخواه آن بخش را برایِ حسابت فعال کند "
-                             "(ربات خودکار از آن استفاده می‌کند)؛ وگرنه یک حسابِ sudo وصل کن. | " + str(e)[:160]) from e
+                             "اگر پنلت بخشِ «زیرنماینده» (API: /accounting/api/resubs) دارد، از پشتیبانیِ پنل بخواه آن را برایِ حسابت فعال کند "
+                             "(ربات خودکار از آن استفاده می‌کند)؛ وگرنه نقشِ حسابِ اتصال را طوری تغییر بده که «admins.create» داشته باشد "
+                             "یا یک حسابِ sudo وصل کن. | " + str(e)[:160]) from e
         if "role_id" not in str(e):
             raise
         await api.create_admin(username, password, role_id=await role_for(api, panel),

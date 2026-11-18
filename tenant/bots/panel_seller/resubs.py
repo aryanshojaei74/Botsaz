@@ -118,11 +118,16 @@ class ResubAPI:
         try:
             res = await self.c._request("GET", f"{BASE}/enabled")
         except PanelError as e:
-            logger.info("resubs: بررسیِ فعال‌بودن ناموفق (%s)؛ مسیرِ قدیمیِ ادمین استفاده می‌شود", str(e)[:120])
-            return False                                 # خطایِ موقتی/اتصال را کش نمی‌کنیم
-        ok = res is not None                              # ۴۰۴ ⇒ None ⇒ این حساب بخش را ندارد
+            t = str(e)
+            logger.info("resubs: بررسیِ فعال‌بودن ناموفق (%s)؛ مسیرِ قدیمیِ ادمین استفاده می‌شود", t[:120])
+            if any(f"HTTP {c}" in t for c in (400, 403, 405, 410, 422)):
+                _ENABLED[key] = (False, "", now)          # پاسخِ قطعیِ «این پنل ندارد/اجازه نیست» را کش کن؛ خطایِ موقتی/اتصال را نه
+            return False
+        # فقط یک JSON واقعیِ غیرخالی «فعال» است. ۴۰۴ ⇒ None؛ پنل‌هایی که برایِ مسیرِ ناشناخته صفحهٔ HTML (SPA) برمی‌گردانند
+        # {"raw": ...} می‌دهند و هرگز نباید «فعال» حساب شوند.
+        ok = isinstance(res, dict) and bool(res) and "raw" not in res
         prefix = ""
-        if isinstance(res, dict):
+        if isinstance(res, dict) and ok:
             p = _first(res, ("prefix", "username_prefix", "username"))
             prefix = p if isinstance(p, str) else ""
         prefix = prefix or str(getattr(self.c, "username", "") or "")
