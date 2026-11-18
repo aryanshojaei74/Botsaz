@@ -519,6 +519,18 @@ async def zarinpal_manual_verify(cb: CallbackQuery):
         await cb.message.answer(f"❌ بررسی ناموفق بود: {msg}")
 
 
+async def _zp_back_cb(bot_id: int) -> str:
+    """PATCH_PARTNER_ZARINPAL_V1: رباتِ همکار پنلِ مالیِ خودش (pp:finance) را دارد؛ بقیه «tadm:sec:finance»."""
+    try:
+        from tenant import get_bot_row_by_id
+        row = await get_bot_row_by_id(bot_id)
+        if row is not None and row.plan == "partner":
+            return "pp:finance"
+    except Exception:
+        logger.exception("zarinpal: تشخیصِ مقصدِ بازگشت ناموفق بود")
+    return "tadm:sec:finance"
+
+
 async def zarinpal_admin_text(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     enabled = await _setting(bot_id, "zarinpal_enabled", "0") == "1"
     merchant = await _setting(bot_id, "zarinpal_merchant_id", "")
@@ -566,7 +578,7 @@ async def zarinpal_admin_text(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
         rows.append([InlineKeyboardButton(text="🧪 تست اتصال زرین‌پال", callback_data="zpt:test", style=ButtonStyle.SUCCESS)])
     rows.extend([
         [InlineKeyboardButton(text="📖 راهنمای اتصال زرین‌پال", callback_data="zpt:guide", style=ButtonStyle.PRIMARY)],
-        [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:finance", style=ButtonStyle.DANGER)],
+        [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=await _zp_back_cb(bot_id), style=ButtonStyle.DANGER)],
     ])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
     return text, kb

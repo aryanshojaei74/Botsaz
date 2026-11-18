@@ -710,6 +710,8 @@ async def pp_finance(cb: CallbackQuery, bot: Bot):
              style=ButtonStyle.PRIMARY)
     b.button(text="💠 درگاه تون‌پیز (TonPays)", callback_data="set:tonpays",
              style=ButtonStyle.PRIMARY)
+    # === PATCH_PARTNER_ZARINPAL_V1 === (Nexivo) زرین‌پال در پنلِ مالیِ رباتِ همکار؛ هندلر و پلنِ همکار از قبل بود، فقط دکمه نبود
+    b.button(text="🔐 درگاه زرین‌پال", callback_data="set:zarinpal", style=ButtonStyle.PRIMARY)
     b.button(
         text=("🔋 شارژ کیف‌پول در صفحهٔ خرید: ✅" if wallet_charge
               else "🔋 شارژ کیف‌پول در صفحهٔ خرید: ❌"),
@@ -721,7 +723,7 @@ async def pp_finance(cb: CallbackQuery, bot: Bot):
              style=ButtonStyle.PRIMARY)
     b.button(text="🔙 بازگشت", callback_data="pp:home",
              style=ButtonStyle.DANGER)
-    b.adjust(1, 1, 2, 2, 1, 1, 1, 1)
+    b.adjust(1, 1, 2, 2, 1, 1, 1, 1, 1)
 
     if card:
         masked = card if len(card) < 8 else f"{card[:4]}****{card[-4:]}"

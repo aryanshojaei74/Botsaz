@@ -4995,6 +4995,8 @@ async def _smm_myservices_list_content(bot_id: int, page: int = 1) -> tuple[str,
         if _n:
             rows.append([InlineKeyboardButton(text=f"💵 تغییرِ قیمت ({_n})", callback_data="smm:msel:price", style=ButtonStyle.SUCCESS),
                          InlineKeyboardButton(text=f"📂 انتقال به دسته ({_n})", callback_data="smm:msel:cat", style=ButtonStyle.SUCCESS)])
+            rows.append([InlineKeyboardButton(text=f"🗂 انتقال به پوشه (نوع) ({_n})", callback_data="smm:msel:typ",
+                                              style=ButtonStyle.SUCCESS)])     # PATCH_SMM_MOVE_FOLDER_V1
             rows.append([InlineKeyboardButton(text=f"▶️ فعال ({_n})", callback_data="smm:msel:act:on"),
                          InlineKeyboardButton(text=f"⏸ غیرفعال ({_n})", callback_data="smm:msel:act:off")])
             rows.append([InlineKeyboardButton(text=f"🗑 حذف ({_n})", callback_data="smm:msel:del", style=ButtonStyle.DANGER),
@@ -5332,6 +5334,8 @@ async def _smm_myservice_detail_content(bot_id: int, svc_id: int, back_page: int
         [InlineKeyboardButton(text=("📝 ویرایشِ توضیحات" if v.description else "📄 افزودنِ توضیحات"),
                               callback_data=f"smm:setdesc:{v.id}:{back_page}")],
         [InlineKeyboardButton(text="📦 تغییرِ دسته", callback_data=f"smm:svc:cat:{v.id}:myd:{back_page}")],
+        # === PATCH_SMM_MOVE_FOLDER_V1 === (Nexivo) انتقال به «پوشه» = نوعِ سرویس (ممبر کانال، ممبر گروه، …)
+        [InlineKeyboardButton(text="📂 انتقال به پوشه (نوعِ سرویس)", callback_data=f"smm:svc:mvtyp:{v.id}:{back_page}")],
     ]
     price_row = [InlineKeyboardButton(
         text=("💵 ویرایشِ قیمتِ دستی" if (v.sell_rate and float(v.sell_rate) > 0) else "💵 ثبتِ قیمتِ دستی"),
@@ -5519,6 +5523,111 @@ async def smm_myservices(cb: CallbackQuery, bot: Bot):
     except Exception:
         await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
     await cb.answer()
+
+
+# === PATCH_SMM_MOVE_FOLDER_V1 === (Nexivo) «از پوشهٔ ممبر/سابسکرایبر به پوشهٔ ممبر کانال منتقل کنم»
+# «پوشه» همان نوعِ سرویس (type_key) در درختِ مشتری است؛ فقط نوعِ ذخیره‌شده عوض می‌شود (پلتفرم و دسته دست‌نخورده).
+# شمارهٔ مجازی نوعِ خودش را دارد و جابه‌جا نمی‌شود.
+def _folder_types() -> list[tuple[str, str]]:
+    return [(k, label) for k, label, _kw in smm_api.SERVICE_TYPES if k not in ("other", "virtual_number")]
+
+
+def _folder_rows(prefix: str, back_cb: str) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=label, callback_data=f"{prefix}:{k}")] for k, label in _folder_types()]
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data=back_cb, style=ButtonStyle.DANGER)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _move_to_folder(bot_id: int, ids: list[int], tkey: str) -> tuple[int, int]:
+    """(تعدادِ منتقل‌شده، تعدادِ ردشده‌ها). platform_key خالی (سرویسِ قدیمی) از رویِ اسم پر می‌شود تا نوعِ ذخیره‌شده اعمال شود."""
+    if tkey not in {k for k, _l in _folder_types()}:
+        return 0, len(ids)
+    moved = skipped = 0
+    async with Session() as s:
+        for sid in ids:
+            v = await s.get(SmmService, sid)
+            if v is None or v.bot_id != bot_id or _is_vnum_service(v):
+                skipped += 1
+                continue
+            if not v.platform_key:
+                v.platform_key = smm_api.detect_platform(v.name or "", v.category or "")
+            v.type_key = tkey
+            moved += 1
+        await s.commit()
+    return moved, skipped
+
+
+@smm_router.callback_query(F.data.startswith("smm:svc:mvtyp:"))
+async def smm_svc_mvtyp(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return await cb.answer()
+    svc_id, back_page = int(cb.data.split(":")[3]), int(cb.data.split(":")[4])
+    async with Session() as s:
+        v = await s.get(SmmService, svc_id)
+    if not v or v.bot_id != row.id:
+        return await cb.answer("پیدا نشد", show_alert=True)
+    if _is_vnum_service(v):
+        return await cb.answer("شمارهٔ مجازی نوعِ خودش را دارد و جابه‌جا نمی‌شود.", show_alert=True)
+    cur = smm_api.service_type_label(_svc_platform_type(v)[1])
+    try:
+        await cb.message.edit_text(
+            f"📂 <b>انتقال به پوشه</b>\n\n🛰 {_html_escape(v.name or '')}\nپوشهٔ فعلی: <b>{cur}</b>\n\n"
+            "پوشهٔ جدید را انتخاب کن (مشتری این محصول را زیرِ همان پوشه می‌بیند):",
+            reply_markup=_folder_rows(f"smm:svc:mvset:{svc_id}:{back_page}", f"smm:svcview:{svc_id}:{back_page}"),
+            parse_mode="HTML")
+    except Exception:
+        logger.debug("[smm] نمایشِ انتخابِ پوشه ممکن نشد (بی‌اهمیت)")
+    await cb.answer()
+
+
+@smm_router.callback_query(F.data.startswith("smm:svc:mvset:"))
+async def smm_svc_mvset(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return await cb.answer()
+    parts = cb.data.split(":")
+    svc_id, back_page, tkey = int(parts[3]), int(parts[4]), parts[5]
+    moved, _sk = await _move_to_folder(row.id, [svc_id], tkey)
+    if not moved:
+        return await cb.answer("انتقال انجام نشد.", show_alert=True)
+    text, kb = await _smm_myservice_detail_content(row.id, svc_id, back_page)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
+    await cb.answer(f"✅ منتقل شد به «{smm_api.service_type_label(tkey)}»", show_alert=True)
+
+
+@smm_router.callback_query(F.data == "smm:msel:typ")
+async def smm_msel_typ(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return await cb.answer()
+    ids = await _msel_valid(row.id)
+    if not ids:
+        return await cb.answer("چیزی تیک نخورده.", show_alert=True)
+    try:
+        await cb.message.edit_text(
+            f"🗂 <b>انتقال {len(ids)} محصولِ تیک‌خورده به پوشه</b>\n\nپوشهٔ جدید را انتخاب کن "
+            "(شمارهٔ مجازی‌ها جابه‌جا نمی‌شوند):",
+            reply_markup=_folder_rows("smm:msel:typset", "smm:myservices:1"), parse_mode="HTML")
+    except Exception:
+        logger.debug("[smm] نمایشِ انتخابِ پوشهٔ گروهی ممکن نشد (بی‌اهمیت)")
+    await cb.answer()
+
+
+@smm_router.callback_query(F.data.startswith("smm:msel:typset:"))
+async def smm_msel_typset(cb: CallbackQuery, bot: Bot):
+    row = await _owner(cb, bot)
+    if not row:
+        return await cb.answer()
+    tkey = cb.data.split(":")[3]
+    ids = await _msel_valid(row.id)
+    moved, skipped = await _move_to_folder(row.id, ids, tkey)
+    await cb.answer(f"✅ {moved} محصول به «{smm_api.service_type_label(tkey)}» منتقل شد"
+                    + (f" ({skipped} مورد ردشد: شمارهٔ مجازی/نامعتبر)" if skipped else ""), show_alert=True)
+    await _msel_show(cb, row.id, 1)
 
 
 @smm_router.callback_query(F.data.startswith("smm:svcview:"))
