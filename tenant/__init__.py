@@ -1552,13 +1552,13 @@ async def check_force_join(bot: Bot, bot_id: int, user_id: int, bypass_cache: bo
             return  # این کانال به‌تازگی «غیرقابلِ‌بررسی» تشخیص داده شده — دوباره از تلگرام نمی‌پرسیم
         try:
             member = await asyncio.wait_for(
-                bot.get_chat_member(fj.chat_id, user_id), timeout=5.0)
+                bot.get_chat_member(fj.chat_id, user_id), timeout=_FORCEJOIN_CHECK_TIMEOUT)
             joined = member.status not in ("left", "kicked")
             _FORCEJOIN_BROKEN.pop(uck, None)  # PATCH_FORCEJOIN_HEALTH_V1 — دوباره سالم شد
         except asyncio.TimeoutError:
             logger.warning(
-                "force-join: کانال %s ظرفِ ۵ ثانیه پاسخ نداد (بدونِ صبر برایِ "
-                "تلاشِ مجددِ کامل) — نادیده گرفته شد تا کاربر قفل نشه.", fj.chat_id)
+                "force-join: کانال %s ظرفِ %.0f ثانیه پاسخ نداد (بدونِ صبر برایِ "
+                "تلاشِ مجددِ کامل) — نادیده گرفته شد تا کاربر قفل نشه.", _FORCEJOIN_CHECK_TIMEOUT, fj.chat_id)
             _FORCEJOIN_UNCHECKABLE_CACHE[uck] = _time.monotonic() + _FORCEJOIN_UNCHECKABLE_TTL  # PATCH_FORCEJOIN_UNCHECKABLE_CACHE_V1
             _FORCEJOIN_BROKEN[uck] = "پاسخ نداد (تایم‌اوت)"  # PATCH_FORCEJOIN_HEALTH_V1
             return
@@ -1590,6 +1590,8 @@ async def check_force_join(bot: Bot, bot_id: int, user_id: int, bypass_cache: bo
     return not_joined
 
 
+# سقفِ انتظارِ چکِ عضویتِ اجباری؛ لاگِ سرور: GetChatMember بارها دقیقاً ۵٫۰ثانیه (تایم‌اوت) و هر تپِ دکمه را کند می‌کرد.
+_FORCEJOIN_CHECK_TIMEOUT = 3.0
 _FORCEJOIN_CACHE: dict[tuple[int, int, object], tuple[bool, float]] = {}
 _FORCEJOIN_CACHE_TTL = 30.0  # ثانیه — PATCH_FORCEJOIN_FASTER_RECHECK_V1 (بود ۹۰): خروج از کانال زودتر تشخیص داده شود
 
@@ -14430,7 +14432,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "656"
+BUILD_ID = "657"
 
 
 @tenant_router.message(Command("version"))

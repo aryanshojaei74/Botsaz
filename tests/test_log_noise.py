@@ -15,3 +15,11 @@ def test_smm_group_filter_not_info():
     a = src.index("async def _smm_ai_group_match")
     b = src.index("remainder = text[len(group_name):]", a)
     assert "logger.info(" not in src[a:b]
+
+
+def test_forcejoin_timeout_short():
+    import re
+    src = (ROOT / "tenant/__init__.py").read_text()
+    m = re.search(r"^_FORCEJOIN_CHECK_TIMEOUT = ([0-9.]+)", src, re.M)
+    assert m and float(m.group(1)) <= 3.0
+    assert "get_chat_member(fj.chat_id, user_id), timeout=_FORCEJOIN_CHECK_TIMEOUT" in src
