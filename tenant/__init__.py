@@ -7906,6 +7906,9 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
             # همان باگِ همیشگی: «🏷 اسمِ نمایشیِ درگاه‌هایِ پرداخت» در
             # _sec_settings_kb ساخته می‌شد ولی اینجا ثبت نشده بود.
             "🏷 اسمِ نمایشیِ درگاه‌هایِ پرداخت": gwname_menu,
+            # === PATCH_MSG_CLEANUP_KEYBOARD_MODE_V1 === (ایلیا: «کلاً دکمه‌اش کار نمی‌کند» — همان باگِ همیشگی: در حالتِ کیبوردی
+            # دکمه ساخته می‌شد ولی اینجا ثبت نشده بود، پس زدنش هیچ واکنشی نداشت)
+            "🧹 پاک‌سازیِ خودکارِ پیام‌هایِ قبلی": _mcl_menu_entry,
         }
         # متنِ Reply Keyboard عمداً همان برچسبِ اصلی است؛ style فقط
         # روی خودِ KeyboardButton قرار دارد و نیازی به تبدیل متن نیست.
@@ -13004,6 +13007,12 @@ async def _dga_menu_entry(cb, bot, state):
     await dga_menu(cb, bot, state)
 
 
+async def _mcl_menu_entry(cb, bot):
+    """ورودیِ «🧹 پاک‌سازیِ خودکارِ پیام‌هایِ قبلی» در حالتِ کیبوردی (PATCH_MSG_CLEANUP_KEYBOARD_MODE_V1)."""
+    from tenant.shared.msg_cleanup import mcl_menu
+    await mcl_menu(_FakeCb(cb.message._real, "mcl:menu"), bot)
+
+
 async def _pemj_menu_entry(cb, bot, state):
     """ورودیِ «⭐ افزودن ایموجی پرمیوم» — همان باگِ همیشگی: این دکمه در
     _sec_settings_kb برای حالتِ کیبوردی هم ساخته می‌شد، ولی در دیکشنریِ
@@ -14406,7 +14415,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "648"
+BUILD_ID = "649"
 
 
 @tenant_router.message(Command("version"))

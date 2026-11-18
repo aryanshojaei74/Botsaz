@@ -142,3 +142,37 @@ async def test_menu_shows_staff_toggle_and_explains_owner_testing(monkeypatch):
     text, kb = await MC._menu(5, "pro")
     cbs = [b.callback_data for r in kb.inline_keyboard for b in r]
     assert "mcl:staff" in cbs and "مالک" in text and "تست" in text and "از لحظهٔ روشن‌شدن" in text
+
+
+async def test_keyboard_mode_entry_opens_the_menu_for_the_owner(monkeypatch):
+    """ایلیا: در حالتِ کیبوردی دکمهٔ «🧹 …» هیچ واکنشی نداشت؛ ورودیِ کیبوردی باید صفحه را نشان دهد."""
+    sent = []
+    row = types.SimpleNamespace(id=5, plan="pro", owner_id=77, status="active")
+
+    async def owner_ok(cb, bot): return row
+
+    async def gs(bid, key, default=""): return default
+    monkeypatch.setattr(tenant, "_owner_ok", owner_ok)
+    monkeypatch.setattr(tenant, "get_setting", gs)
+
+    class RealMsg:
+        chat = types.SimpleNamespace(id=1, type="private")
+        message_id = 9
+        from_user = types.SimpleNamespace(id=77)
+
+        async def answer(self, text, reply_markup=None, **kw):
+            sent.append((text, reply_markup))
+    fake = tenant._FakeCb(RealMsg())
+    await tenant._mcl_menu_entry(fake, object())
+    assert sent and "پاک‌سازی" in sent[0][0]
+    cbs = [b.callback_data for r in sent[0][1].inline_keyboard for b in r]
+    assert "mcl:tog" in cbs and "mcl:staff" in cbs
+
+
+def test_label_registered_in_keyboard_mode_dispatcher():
+    """هر دکمهٔ تازه در _sec_settings_kb باید در دیکشنریِ _settings_handlers هم باشد (باگِ همیشگیِ حالتِ کیبوردی)."""
+    from pathlib import Path
+    src = Path("tenant/__init__.py").read_text(encoding="utf-8")
+    label = "🧹 پاک‌سازیِ خودکارِ پیام‌هایِ قبلی"
+    assert f'("{label}", "mcl:menu")' in src                 # ساختِ دکمه در _sec_settings_kb
+    assert f'"{label}": _mcl_menu_entry' in src              # ثبتِ هندلرِ متنیِ حالتِ کیبوردی
