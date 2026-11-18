@@ -3449,20 +3449,24 @@ async def _vpn_pay_impl(cb: CallbackQuery, bot: Bot, state: FSMContext, plan_id:
     await _progress_edit(cb, "⏳ " + _bt)
 
     # ۲) ساخت روی پنل
-    email = await _make_config_email(
-        bot_id, panel_data[5], bot_username, cb.from_user.id, cb.from_user.username,
-        custom_label=_clabel_for_srvname)  # === PATCH_SRVNAME_CUSTOM_ID_V1 ===
+    # === PATCH_PURCHASE_REFUND_ON_ANY_FAILURE_V1 === (nitroteeam: «پول کم شد، نه اکانت ساخته شد نه لینک آمد»)
+    # پولِ مشتری همین بالا کم و commit شده؛ ساختِ نامِ کانفیگ و گرفتنِ کلاینت از استخر قبلاً *بیرونِ* try بود، پس هر خطایی
+    # در آن‌ها (تنظیماتِ نامِ سرور، ساختِ کلاینتِ پنل، …) بدونِ عودتِ پول و بدونِ هیچ پیامی به مشتری از هندلر بیرون می‌زد.
+    email = None
     # === PATCH_PANEL_CLIENT_POOL_V1 ===
     # قبلاً اینجا یک کلاینتِ تازه ساخته می‌شد و بلافاصله بعدِ ساخت بسته
     # می‌شد؛ یعنی هر خرید یک TLS + csrf + login از صفر. حالا نشستِ
     # لاگین‌شده بینِ خریدها مشترک است. (کلاینت را close نمی‌کنیم — مالِ
     # استخر است.)
-    from tenant.shared.panel_clients import panel_pool as _pool
+    from tenant.shared.panel_clients import panel_pool as _pool      # (بیرونِ try: بلوکِ except از _pool/_pkw استفاده می‌کند)
     _pkw = dict(sub_base=panel_data[3], inbound_ids_str=panel_data[4],
                 api_key=panel_data[6])
-    client = await _pool.get_client(
-        panel_data[5], panel_data[0], panel_data[1], panel_data[2], **_pkw)
     try:
+        email = await _make_config_email(
+            bot_id, panel_data[5], bot_username, cb.from_user.id, cb.from_user.username,
+            custom_label=_clabel_for_srvname)  # === PATCH_SRVNAME_CUSTOM_ID_V1 ===
+        client = await _pool.get_client(
+            panel_data[5], panel_data[0], panel_data[1], panel_data[2], **_pkw)
         # === PATCH_PURCHASE_ON_HOLD_V1 ===
         # همان on_hold تست، این‌بار برایِ کانفیگ‌هایِ فروشی: زمانِ اشتراک از
         # اولین اتصالِ مشتری شروع می‌شود، نه لحظهٔ خرید. کلیدش از تستْ جداست
