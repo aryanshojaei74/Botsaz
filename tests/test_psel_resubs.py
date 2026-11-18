@@ -19,9 +19,10 @@ OWNER = "abol"
 class FakeRick(RickPanelClient):
     """RickPanelClient بدونِ شبکه: _request را با یک «پنلِ ساختگی» جواب می‌دهد."""
 
-    def __init__(self, enabled=True, rows=None, legacy_403=True, detail=None):
+    def __init__(self, enabled=True, rows=None, legacy_403=True, detail=None, can_allocate=True, remaining=800 * 1024 ** 3):
         self.base_url, self.username = "https://p.test", OWNER
         self.enabled, self.rows, self.legacy_403, self.detail = enabled, list(rows or []), legacy_403, detail or {}
+        self.can_allocate, self.remaining = can_allocate, remaining
         self.calls: list = []
         self.next_id = 100
 
@@ -33,11 +34,17 @@ class FakeRick(RickPanelClient):
         if path == "/accounting/api/resubs/enabled":
             return {"enabled": True, "prefix": OWNER} if self.enabled else None
         if path == "/accounting/api/resubs" and method == "GET":
-            return {"rep": {"true_limit": 1}, "subs": self.rows, "actions": []}
+            # شکلِ واقعیِ پنلِ زنده (ابول): rep = رکوردِ خودِ مالک (id/username دارد ولی زیرنماینده نیست)
+            return {"rep": {"id": 1, "username": OWNER, "status": "active", "true_limit": 10 ** 12, "remaining": self.remaining,
+                            "min_remaining": 500 * 1024 ** 3, "can_allocate": self.can_allocate},
+                    "rules": {"min_sub": 1, "max_subs": 50, "prefix": OWNER, "suffix_pattern": "^[a-z0-9]{2,16}$"},
+                    "totals": {"subs": len(self.rows)}, "subs": self.rows,
+                    "history": [{"at": 1, "sub_username": f"{OWNER}_x", "action": "create", "delta_bytes": 0, "ok": 1}]}
         if path == "/accounting/api/resubs" and method == "POST":
             b = kw["json"]
             self.next_id += 1
-            row = {"id": self.next_id, "username": f"{OWNER}_{b['suffix']}", "cap": b["gb"] * 1024 ** 3, "usage": 0}
+            row = {"id": self.next_id, "username": f"{OWNER}_{b['suffix']}", "status": "active", "data_limit": int(b["gb"] * 1024 ** 3),
+                   "used_traffic": 0, "users_total": 0, "managed": True, "cap": int(b["gb"] * 1024 ** 3), "stopped": False}
             self.rows.append(row)
             return {"ok": True, "sub": row}
         if path.endswith("/detail"):
@@ -141,7 +148,7 @@ async def test_html_or_empty_answers_never_count_as_enabled_and_unsupported_pane
 
 @pytest.mark.asyncio
 async def test_operations_on_existing_sub_use_ids_and_status_values():
-    c = FakeRick(rows=[{"id": 7, "username": f"{OWNER}_ps1", "cap": 1, "usage": 5}])
+    c = FakeRick(rows=[{"id": 7, "username": f"{OWNER}_ps1", "cap": 1, "used_traffic": 5, "managed": True}])
     a = _api(c)
     await a.set_password(f"{OWNER}_ps1", "Zz99!hello-Q1")
     await a.disable_users(f"{OWNER}_ps1")
@@ -162,7 +169,7 @@ async def test_operations_on_existing_sub_use_ids_and_status_values():
 @pytest.mark.asyncio
 async def test_unknown_username_falls_back_to_legacy_admin_ops():
     """ادمینِ قدیمی (قبل از فعال‌شدنِ زیرنماینده) در فهرستِ زیرنماینده‌ها نیست ⇒ مسیرِ قبلی، نه خطا."""
-    c = FakeRick(rows=[{"id": 7, "username": f"{OWNER}_ps1"}])
+    c = FakeRick(rows=[{"id": 7, "username": f"{OWNER}_ps1", "managed": True}])
     a = _api(c)
     assert await a._rs("psOLDADMIN") is None                          # در فهرست نیست ⇒ مسیرِ قدیمی
     assert await a._rs(f"{OWNER}_ps1") is not None                   # زیرنماینده ⇒ resubs
@@ -170,13 +177,12 @@ async def test_unknown_username_falls_back_to_legacy_admin_ops():
 
 @pytest.mark.asyncio
 async def test_usage_and_user_count_read_defensively_and_never_guess():
-    c = FakeRick(rows=[{"id": 7, "username": f"{OWNER}_ps1", "cap": 10}],
-                 detail={"cap": 10, "used_bytes": 1234, "user_count": 3})
+    c = FakeRick(rows=[{"id": 7, "username": f"{OWNER}_ps1", "cap": 10, "used_traffic": 1234, "users_total": 3, "managed": True}])
     a = _api(c)
     assert await a.usage_bytes(f"{OWNER}_ps1") == 1234 and await a.user_count(f"{OWNER}_ps1") == 3
     snap = await a.snapshot(f"{OWNER}_ps1")
     assert snap == {"used_bytes": 1234, "users": 3, "new_style": False}
-    c2 = FakeRick(rows=[{"id": 7, "username": f"{OWNER}_ps1"}], detail={"weird": 1})
+    c2 = FakeRick(rows=[{"id": 7, "username": f"{OWNER}_ps1", "managed": True}], detail={"weird": 1})
     with pytest.raises(PanelError) as ei:
         await _api(c2).usage_bytes(f"{OWNER}_ps1")
     assert "weird" in str(ei.value)                                    # کلیدهایِ پاسخ در خطا می‌آید تا قابلِ اصلاح باشد
@@ -240,3 +246,43 @@ async def test_buy_failure_on_rule_refund_and_message(env):
     async with env() as s:
         u = await s.scalar(select(models.BotUser))
     assert int(u.balance) == 1_000_000                                    # پول برگشت
+
+
+# ───────── شکلِ واقعیِ پنلِ زنده (خروجیِ ابول) ─────────
+@pytest.mark.asyncio
+async def test_rep_record_is_not_a_sub_and_readonly_subs_fall_back_to_legacy():
+    c = FakeRick(rows=[{"id": 7, "username": f"{OWNER}_mine", "managed": True, "used_traffic": 9, "users_total": 2},
+                       {"id": 8, "username": f"{OWNER}_botmade", "managed": False, "used_traffic": 1, "users_total": 1}])
+    a = _api(c)
+    assert await a._rs(OWNER) is None                                   # «rep» (خودِ مالک) زیرنماینده نیست
+    assert await a._rs(f"{OWNER}_mine") is not None
+    assert await a._rs(f"{OWNER}_botmade") is None                      # managed=false ⇒ فقط‌خواندنی ⇒ مسیرِ قدیمی
+    rows = await RS.ResubAPI(c).list_rows()
+    assert [r["username"] for r in rows] == [f"{OWNER}_mine", f"{OWNER}_botmade"]
+
+
+@pytest.mark.asyncio
+async def test_enabled_false_in_a_200_answer_means_not_enabled():
+    class C(FakeRick):
+        async def _request(self, method, path, **kw):
+            if path.endswith("/enabled"):
+                return {"enabled": False, "prefix": OWNER}
+            return await super()._request(method, path, **kw)
+    assert await _api(C())._rs(None) is None
+
+
+@pytest.mark.asyncio
+async def test_usage_and_users_come_from_the_list_row_in_one_request():
+    c = FakeRick(rows=[{"id": 7, "username": f"{OWNER}_ps1", "managed": True, "used_traffic": 5_000, "users_total": 4, "users_active": 1}])
+    snap = await _api(c).snapshot(f"{OWNER}_ps1")
+    assert snap == {"used_bytes": 5_000, "users": 4, "new_style": False}    # users_total (نه users_active)
+    assert not any(p.endswith("/detail") for _m, p, _j in c.calls)         # لازم نبود به «detail» برود
+
+
+@pytest.mark.asyncio
+async def test_create_refuses_clearly_when_main_quota_cannot_allocate():
+    c = FakeRick(can_allocate=False, remaining=100 * 1024 ** 3)
+    with pytest.raises(PanelError) as ei:
+        await _api(c).create_resub("psabcdefgh", "Ab12!xyz-Qw9", 10)
+    assert "100 گیگ" in str(ei.value) and "500 گیگ" in str(ei.value)
+    assert not any(m == "POST" and p == "/accounting/api/resubs" for m, p, _j in c.calls)    # POSTِ بیهوده زده نشد

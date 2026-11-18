@@ -38,8 +38,10 @@ _ENABLED: dict[tuple[str, str], tuple[bool, str, float]] = {}     # (base_url, u
 
 _ID_KEYS = ("id", "sub_id", "reseller_id", "admin_id")
 _USER_KEYS = ("username", "name", "login")
-_USED_KEYS = ("usage", "used", "used_bytes", "usage_bytes", "used_traffic", "consumed", "traffic_used")
-_USERS_KEYS = ("user_count", "users_count", "users", "total_users", "num_users", "users_total")
+# نام‌هایِ واقعیِ پاسخِ پنلِ زنده (ابول، پاسارگاد): subs[i] = {id, username, status, data_limit, used_traffic, lifetime_used,
+# users_total, users_active, managed, cap, stopped, charged}؛ rep = {…, can_allocate, remaining, min_remaining}؛ rules = {…}
+_USED_KEYS = ("used_traffic", "usage", "used", "used_bytes", "usage_bytes", "consumed", "traffic_used")
+_USERS_KEYS = ("users_total", "user_count", "users_count", "total_users", "num_users", "users")
 _STATUS_KEYS = ("status", "state")
 _SUFFIX_RX = re.compile(r"[^a-z0-9]")
 
@@ -126,6 +128,8 @@ class ResubAPI:
         # فقط یک JSON واقعیِ غیرخالی «فعال» است. ۴۰۴ ⇒ None؛ پنل‌هایی که برایِ مسیرِ ناشناخته صفحهٔ HTML (SPA) برمی‌گردانند
         # {"raw": ...} می‌دهند و هرگز نباید «فعال» حساب شوند.
         ok = isinstance(res, dict) and bool(res) and "raw" not in res
+        if ok and isinstance(res.get("enabled"), bool):   # پنلِ زنده: {"enabled": bool, "prefix": str}
+            ok = res["enabled"]
         prefix = ""
         if isinstance(res, dict) and ok:
             p = _first(res, ("prefix", "username_prefix", "username"))
@@ -136,8 +140,13 @@ class ResubAPI:
         return ok
 
     # ───────── فهرست/ردیف ─────────
+    async def _list(self):
+        return await self.c._request("GET", BASE)
+
     async def _rows(self) -> list[dict]:
-        res = await self.c._request("GET", BASE)
+        res = await self._list()
+        if isinstance(res, dict) and isinstance(res.get("subs"), list):
+            return [r for r in res["subs"] if isinstance(r, dict)]      # «rep» (رکوردِ خودِ مالک) و «history» زیرنماینده نیستند
         rows = find_rows(res)
         if not rows and res:
             logger.warning("resubs: فهرستِ زیرنماینده‌ها خوانده نشد؛ کلیدهایِ پاسخ: %s",
@@ -157,7 +166,10 @@ class ResubAPI:
         return None
 
     async def has(self, username: str) -> bool:
-        return await self.row(username) is not None
+        """فقط زیرنماینده‌ای که از همین API ساخته شده (managed). «managed=false» (ساخته‌شده با رباتِ خودِ پنل) فقط‌خواندنی است
+        و تغییرش ۴۰۳ می‌دهد ⇒ مسیرِ قدیمی."""
+        r = await self.row(username)
+        return r is not None and r.get("managed") is not False
 
     async def _id(self, username: str) -> int:
         low = (username or "").lower()
@@ -188,6 +200,7 @@ class ResubAPI:
         full = f"{self.prefix}_{suffix}" if self.prefix else suffix
         if suffix in password.lower() or full.lower() in password.lower():
             raise PanelError("رمزِ تولیدشده شاملِ نامِ کاربری است؛ دوباره امتحان کن.")
+        await self._precheck()
         res = await self._post(BASE, {"suffix": suffix, "password": password, "gb": cap}, "ساختِ زیرنماینده")
         rows = find_rows(res)
         real = None
@@ -207,6 +220,22 @@ class ResubAPI:
                                  f"(انتظار: {full}).")
             real = str(_first(r, _USER_KEYS))
         return real
+
+    async def _precheck(self) -> None:
+        """سهمیهٔ حسابِ اصلی (rep.can_allocate / remaining / min_remaining) را قبل از ساخت می‌خواند تا به‌جایِ ۴۰۹ِ خام
+        پیامِ روشن بدهد. هر خطا/ساختارِ ناشناخته بی‌صدا رد می‌شود (خودِ POST تصمیم می‌گیرد)."""
+        try:
+            res = await self._list()
+        except PanelError:
+            return
+        rep = res.get("rep") if isinstance(res, dict) else None
+        if not isinstance(rep, dict) or rep.get("can_allocate") is not False:
+            return
+        gb = lambda v: f"{(int(v) / GB):,.0f}" if isinstance(v, (int, float)) else "؟"      # noqa: E731
+        raise PanelError(
+            "ساختِ زیرنماینده: سهمیهٔ باقی‌ماندهٔ حسابِ اصلی کافی نیست "
+            f"(باقی‌مانده {gb(rep.get('remaining'))} گیگ، حداقلِ لازم {gb(rep.get('min_remaining'))} گیگ). "
+            "سهمیهٔ حسابِ پنل را زیاد کن یا مصرفِ زیرنماینده‌ها را کم کن.")
 
     async def set_password(self, username: str, password: str) -> None:
         await self._post(f"{BASE}/{await self._id(username)}/password", {"password": password}, "تغییرِ رمزِ زیرنماینده")
@@ -263,25 +292,27 @@ class ResubAPI:
         logger.warning("resubs: %s در پاسخِ پنل پیدا نشد؛ کلیدها: %s", what, keys_seen)
         raise PanelError(f"{what} از پنل خوانده نشد (کلیدهایِ پاسخ: {', '.join(keys_seen)[:200]}).")
 
-    async def usage_bytes(self, username: str) -> int:
-        r = await self.row(username)
+    async def _field(self, username: str, keys: tuple, what: str, row: dict | None = None) -> int:
+        r = row if row is not None else await self.row(username)
         try:
-            d = await self._detail(username)
+            return self._num(r or {}, keys=keys, what=what)
         except PanelError:
-            d = {}
-        return self._num(d, r or {}, keys=_USED_KEYS, what="مصرفِ زیرنماینده")
+            try:
+                d = await self._detail(username)
+            except PanelError:
+                d = {}
+            return self._num(d, r or {}, keys=keys, what=what)
+
+    async def usage_bytes(self, username: str) -> int:
+        return await self._field(username, _USED_KEYS, "مصرفِ زیرنماینده")
 
     async def user_count(self, username: str) -> int:
-        r = await self.row(username)
-        try:
-            d = await self._detail(username)
-        except PanelError:
-            d = {}
-        return self._num(d, r or {}, keys=_USERS_KEYS, what="تعدادِ کاربرانِ زیرنماینده")
+        return await self._field(username, _USERS_KEYS, "تعدادِ کاربرانِ زیرنماینده")
 
     async def snapshot(self, username: str) -> dict:
-        return {"used_bytes": await self.usage_bytes(username), "users": await self.user_count(username),
-                "new_style": False}
+        r = await self.row(username)                       # یک درخواست برایِ هر دو عدد
+        return {"used_bytes": await self._field(username, _USED_KEYS, "مصرفِ زیرنماینده", r),
+                "users": await self._field(username, _USERS_KEYS, "تعدادِ کاربرانِ زیرنماینده", r), "new_style": False}
 
     async def list_rows(self) -> list[dict]:
         return await self._rows()
