@@ -37,6 +37,7 @@ class KycFSM(StatesGroup):
     l2text = State()
     user_lookup = State()
     user_card = State()
+    user_holder = State()     # PATCH_KYC_CARD_HOLDER_V1 — ثبتِ دستیِ نامِ روی کارت (کاربرانِ قدیمی)
     reject_reason = State()   # PATCH_KYC_REJECT_REASON_V1
     review_chat = State()     # PATCH_KYC_REVIEW_GROUP_V1
 
@@ -175,6 +176,10 @@ async def _user_manage_view(bot_id: int, user_id: int):
                                  callback_data=f"kyc:user:carddel:{u.id}",
                                  style=ButtonStyle.DANGER),
         ])
+    if u.kyc_card:     # PATCH_KYC_CARD_HOLDER_V1
+        rows.append([InlineKeyboardButton(
+            text=("👤 تغییرِ نامِ روی کارت" if getattr(u, "kyc_card_holder", None) else "👤 ثبتِ نامِ روی کارت"),
+            callback_data=f"kyc:user:holder:{u.id}", style=ButtonStyle.PRIMARY)])
     # === PATCH_KYC_ADMIN_LEVEL_V1 === تعیینِ دستیِ سطح + قفل/بازکردنِ حساب
     rows.append([InlineKeyboardButton(text="🎚 تعیینِ دستیِ سطحِ کاربر",
                                       callback_data=f"kyc:user:lvl:{u.id}",
@@ -331,6 +336,61 @@ async def kyc_user_card_save(msg: Message, bot: Bot, state: FSMContext):
                      "✅ کارتِ احرازِ هویتِ شما توسط مدیریت تغییر کرد.\n"
                      f"چهار رقمِ پایانیِ کارتِ جدید: <code>{card[-4:]}</code>")
     await msg.answer(f"✅ کارت تغییر کرد. کارتِ قبلی با پایانِ {old_tail} جایگزین شد.")
+    await _show_user_manage(msg, row.id, user_id)
+
+
+# === PATCH_KYC_CARD_HOLDER_V1 === ثبتِ دستیِ «نامِ روی کارت» (برایِ کاربرانی که قبل از این قابلیت احراز شده‌اند؛ تطبیقِ نامِ بلوپال با آن کار می‌کند)
+@kyc_admin_router.callback_query(F.data.startswith("kyc:user:holder:"))
+async def kyc_user_holder_ask(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok, smart_cancel_kb
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    try:
+        user_id = int(cb.data.rsplit(":", 1)[1])
+    except ValueError:
+        return await cb.answer("شناسهٔ کاربر نامعتبر است.", show_alert=True)
+    async with _S() as s:
+        u = await s.scalar(_sel(_BU).where(_BU.id == user_id, _BU.bot_id == row.id))
+    if not u or not u.kyc_card:
+        return await cb.answer("این کاربر کارتِ تأییدشدهٔ فعالی ندارد.", show_alert=True)
+    await state.update_data(kyc_admin_user_id=user_id)
+    await state.set_state(KycFSM.user_holder)
+    cur = getattr(u, "kyc_card_holder", None)
+    await cb.message.answer(
+        "👤 نام و نام‌خانوادگیِ صاحبِ کارت را همان‌طور که روی کارت است بفرستید"
+        + (f" (فعلی: <b>{_html_h.escape(str(cur))}</b>)" if cur else "") + ".\n"
+        "از این نام برایِ تشخیصِ واریزِ فقط-شبا در بلوپال استفاده می‌شود. برایِ پاک‌کردن: /clear",
+        reply_markup=await smart_cancel_kb(bot), parse_mode="HTML")
+    await cb.answer()
+
+
+@kyc_admin_router.message(KycFSM.user_holder, F.text)
+async def kyc_user_holder_save(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok
+    row = await _owner_ok(msg, bot)
+    if not row:
+        return
+    raw = (msg.text or "").strip()
+    name = None if raw == "/clear" else " ".join(raw.split())[:80]
+    if name is not None and (len(K.norm_name(name)) < 2 or any(ch.isdigit() for ch in name)):
+        return await msg.answer("نام و نام‌خانوادگی را کامل و فقط با حروف بفرستید.")
+    data = await state.get_data()
+    try:
+        user_id = int(data.get("kyc_admin_user_id"))
+    except (TypeError, ValueError):
+        await state.clear()
+        return await msg.answer("جلسه منقضی شد؛ دوباره از پنل شروع کنید.")
+    async with _S() as s:
+        u = await s.scalar(_sel(_BU).where(_BU.id == user_id, _BU.bot_id == row.id).with_for_update())
+        if not u or not u.kyc_card:
+            await state.clear()
+            return await msg.answer("کارتِ فعالِ این کاربر پیدا نشد؛ تغییری انجام نشد.")
+        u.kyc_card_holder = name
+        await s.commit()
+    await state.clear()
+    await msg.answer("✅ نامِ روی کارت پاک شد." if name is None else f"✅ نامِ روی کارت ثبت شد: {_html_h.escape(name)}",
+                     parse_mode="HTML")
     await _show_user_manage(msg, row.id, user_id)
 
 

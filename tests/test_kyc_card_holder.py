@@ -37,3 +37,10 @@ def test_flow_wiring_in_source():
     ka = Path("tenant/shared/kyc_admin.py").read_text(encoding="utf-8")
     assert "u.kyc_card_holder = getattr(r, \"card_holder\", None) or None" in ka
     assert ka.count("u.kyc_card_holder = None") >= 2                      # حذفِ کارت/ریستِ سطح نام را هم پاک می‌کند
+
+
+def test_admin_can_set_holder_manually_wiring():
+    from pathlib import Path
+    ka = Path("tenant/shared/kyc_admin.py").read_text(encoding="utf-8")
+    assert "user_holder = State()" in ka and 'callback_data=f"kyc:user:holder:{u.id}"' in ka
+    assert "u.kyc_card_holder = name" in ka and "/clear" in ka
