@@ -119,7 +119,10 @@ async def test_gate_is_pro_only_default_off_customer_private_only(monkeypatch):
     store["msg_cleanup"] = "1"
     assert await MC.enabled_for(object(), priv) == 5
     owner = types.SimpleNamespace(chat=priv.chat, from_user=types.SimpleNamespace(id=77))
-    assert await MC.enabled_for(object(), owner) is None                     # مالک/ادمین نه
+    assert await MC.enabled_for(object(), owner) is None                     # مالک/ادمین پیش‌فرض نه
+    store["msg_cleanup_staff"] = "1"                                         # با گزینهٔ «چتِ مالک/ادمین هم» (تستِ خودِ مالک)
+    assert await MC.enabled_for(object(), owner) == 5
+    store["msg_cleanup_staff"] = "0"
     group = types.SimpleNamespace(chat=types.SimpleNamespace(type="supergroup", id=-1), from_user=priv.from_user)
     assert await MC.enabled_for(object(), group) is None                     # گروه نه
     row.plan = "growth"
@@ -130,3 +133,12 @@ def test_middleware_is_installed_on_the_parent_router():
     from pathlib import Path
     src = Path("tenant/__init__.py").read_text(encoding="utf-8")
     assert "_mc_install_on(tenant_router)" in src and '"mcl:menu"' in src
+
+
+async def test_menu_shows_staff_toggle_and_explains_owner_testing(monkeypatch):
+    async def gs(bid, key, default=""):
+        return {"msg_cleanup": "1"}.get(key, default)
+    monkeypatch.setattr(tenant, "get_setting", gs)
+    text, kb = await MC._menu(5, "pro")
+    cbs = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert "mcl:staff" in cbs and "مالک" in text and "تست" in text and "از لحظهٔ روشن‌شدن" in text

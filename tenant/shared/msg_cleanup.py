@@ -24,6 +24,7 @@ from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
 
 SETTING_KEY = "msg_cleanup"
+STAFF_KEY = "msg_cleanup_staff"       # اعمال روی چتِ مالک/ادمین‌ها هم (پیش‌فرض خاموش؛ برایِ تستِ خودِ مالک)
 msg_cleanup_router = Router(name="msg_cleanup")
 
 # (bot_id, chat_id) -> {"day": "YYYY-MM-DD", "ids": [message_id, ...]}
@@ -125,7 +126,9 @@ async def enabled_for(bot, event) -> int | None:
         if (await T.get_setting(row.id, SETTING_KEY, "0")) != "1":
             return None
         if await T.is_owner_or_admin(row.id, user.id, row.owner_id):
-            return None
+            # PATCH_MSG_CLEANUP_STAFF_V1 (ایلیا: «عملیاتی انجام نمی‌دهد» — خودش با حسابِ مالک تست می‌کرد و مالک/ادمین مستثنی بود)
+            if (await T.get_setting(row.id, STAFF_KEY, "0")) != "1":
+                return None
         return row.id
     except Exception:
         logger.exception("msg_cleanup: بررسیِ فعال‌بودن ناموفق بود")
@@ -162,16 +165,22 @@ def install_on(router) -> None:
 async def _menu(bot_id: int, plan: str):
     from tenant import get_setting
     on = (await get_setting(bot_id, SETTING_KEY, "0")) == "1"
+    staff = (await get_setting(bot_id, STAFF_KEY, "0")) == "1"
     text = ("🧹 <b>پاک‌سازیِ خودکارِ پیام‌ها</b> · 💎 حرفه‌ای\n\n"
             "بعد از هر کارِ مشتری، پیام‌هایِ منو/صفحهٔ قبلیِ همان روز پاک می‌شود و فقط پیامِ کارِ جدید می‌ماند "
             "(مثلاً از «کیف پول» «بازگشت» را بزند ⇒ منویِ کیف پول پاک می‌شود و فقط منویِ اصلی می‌ماند).\n\n"
             f"وضعیت: <b>{'✅ روشن' if on else '❌ خاموش'}</b>\n\n"
             "🔒 <b>هرگز پاک نمی‌شود:</b> پیام‌هایی که خودِ ربات می‌فرستد (پیامِ اختصاصی، امتیازدهی به کانفیگ، اخطار، اطلاعیه)، "
-            "رسانه/QR/فایل، پیام‌هایِ دارایِ لینک و کانفیگ، پیام‌هایِ خودِ مشتری، و چتِ مالک و ادمین‌ها.\n"
-            "ℹ️ فقط چتِ خصوصیِ مشتری‌ها و فقط پیام‌هایِ همان روز. با ری‌استارتِ ربات، فهرستِ پیام‌هایِ قبلی از نو شروع می‌شود.")
+            "رسانه/QR/فایل، پیام‌هایِ دارایِ لینک و کانفیگ، و پیام‌هایِ خودِ مشتری.\n"
+            "ℹ️ فقط چتِ خصوصی و فقط پیام‌هایِ <b>از لحظهٔ روشن‌شدن به بعد</b> (پیام‌هایِ قدیمی‌تر پاک نمی‌شوند). با ری‌استارتِ ربات، فهرستِ پیام‌هایِ قبلی از نو شروع می‌شود.\n\n"
+            f"👮 چتِ مالک و ادمین‌ها: <b>{'✅ هم اعمال می‌شود' if staff else '❌ مستثنی (پیش‌فرض)'}</b>\n"
+            "⚠️ اگر خودت (مالک) ربات را تست می‌کنی، این گزینه را روشن کن؛ وگرنه در چتِ خودت چیزی پاک نمی‌شود. "
+            "برایِ استفادهٔ عادی خاموشش بگذار تا صفحه‌هایِ پنلِ مدیریت پاک نشوند.")
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=("🔴 خاموش‌کردن" if on else "🟢 روشن‌کردن"), callback_data="mcl:tog",
                               style=(ButtonStyle.DANGER if on else ButtonStyle.SUCCESS))],
+        [InlineKeyboardButton(text=("👮 چتِ مالک/ادمین هم: ✅ روشن" if staff else "👮 چتِ مالک/ادمین هم: ❌ خاموش"),
+                              callback_data="mcl:staff", style=(ButtonStyle.SUCCESS if staff else ButtonStyle.PRIMARY))],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:settings", style=ButtonStyle.DANGER)]])
     return text, kb
 
@@ -184,7 +193,7 @@ async def _render(cb, row):
         await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
-@msg_cleanup_router.callback_query(F.data.in_({"mcl:menu", "mcl:tog"}))
+@msg_cleanup_router.callback_query(F.data.in_({"mcl:menu", "mcl:tog", "mcl:staff"}))
 async def mcl_menu(cb, bot):
     from tenant import _owner_ok, get_setting, set_setting
     from plans import Feature, has_feature, upgrade_hint
@@ -197,6 +206,10 @@ async def mcl_menu(cb, bot):
         cur = (await get_setting(row.id, SETTING_KEY, "0")) == "1"
         await set_setting(row.id, SETTING_KEY, "0" if cur else "1")
         await cb.answer("خاموش شد" if cur else "روشن شد")
+    elif cb.data == "mcl:staff":
+        cur = (await get_setting(row.id, STAFF_KEY, "0")) == "1"
+        await set_setting(row.id, STAFF_KEY, "0" if cur else "1")
+        await cb.answer("چتِ مالک/ادمین از این به بعد هم پاک‌سازی می‌شود" if not cur else "چتِ مالک/ادمین مستثنی شد")
     else:
         await cb.answer()
     await _render(cb, row)
