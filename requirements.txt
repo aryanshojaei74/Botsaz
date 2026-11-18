@@ -31,3 +31,4 @@ python-multipart
 pyfragment
 
 telethon
+curl_cffi==0.17.0
