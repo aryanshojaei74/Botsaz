@@ -339,6 +339,7 @@ _VC_DEF = {
     # === PATCH_VC_SIMPLE_MODE_V1 === (کلیدها باید با vpn_admin._VC_DEFAULTS یکی باشند؛ تست دارد)
     "vc_simple": "0", "vc_simple_days": "30",
     "vc_wizard": "0",     # PATCH_VC_WIZARD_V1
+    "vc_compact": "0",    # PATCH_VC_COMPACT_V1
     # === PATCH_RESELLER_GB_PRICING_V1 === خالی یعنی «تنظیم نشده»
     "rs_price_gb": "0", "rs_price_day": "0",
     # حالتِ فروش: "general" (بازهٔ عمومیِ بالا) یا "tiers" (تعرفه‌های مدت‌دار)
@@ -357,7 +358,7 @@ _VC_PANEL_KEYS_U = [
     "vc_enabled", "vc_min_gb", "vc_max_gb", "vc_step_gb",
     "vc_min_days", "vc_max_days", "vc_step_days",
     "vc_max_count", "vc_price_gb", "vc_price_day", "vc_pricing_mode",
-    "vc_simple", "vc_simple_days", "vc_wizard",   # === PATCH_VC_SIMPLE_MODE_V1 / PATCH_VC_WIZARD_V1 ===
+    "vc_simple", "vc_simple_days", "vc_wizard", "vc_compact",   # === PATCH_VC_SIMPLE_MODE_V1 / PATCH_VC_WIZARD_V1 / PATCH_VC_COMPACT_V1 ===
     "renew_enabled", "renew_price_gb", "renew_price_day",
     "renew_min_gb", "renew_max_gb", "renew_step_gb",
     "renew_min_days", "renew_max_days", "renew_step_days",
@@ -4835,6 +4836,7 @@ def _vc_cfg_kb(cfg: dict, gb: int, days: int, count: int, no_plans: bool = False
     locked_gb   = mn_gb == mx_gb
     locked_days = mn_d  == mx_d
     simple = cfg.get("vc_simple") == "1"      # === PATCH_VC_SIMPLE_MODE_V1 ===
+    compact = cfg.get("vc_compact") == "1" and not simple     # === PATCH_VC_COMPACT_V1 ===
 
     rows = []
     # حجم
@@ -4848,7 +4850,8 @@ def _vc_cfg_kb(cfg: dict, gb: int, days: int, count: int, no_plans: bool = False
         rows.append([_btn(f"📦 حجم: {gb} گیگ  🔒", "vc:noop", ButtonStyle.PRIMARY)])
     else:
         # === PATCH_VC_MANUAL_ENTRY_HEADER_V1 ===
-        rows.append([_btn("🎯 انتخاب حجم دلخواه", "vc:gb:manual", ButtonStyle.PRIMARY)])
+        if not compact:
+            rows.append([_btn("🎯 انتخاب حجم دلخواه", "vc:gb:manual", ButtonStyle.PRIMARY)])
         rows.append([_btn("➖", "vc:gb-", ButtonStyle.DANGER),
                      _btn(f"📦 {gb} گیگ", "vc:gb:manual", ButtonStyle.PRIMARY),
                      _btn("➕", "vc:gb+", ButtonStyle.SUCCESS)])
@@ -4860,19 +4863,23 @@ def _vc_cfg_kb(cfg: dict, gb: int, days: int, count: int, no_plans: bool = False
         rows.append([_btn(f"📅 مدت: {days} روز  🔒", "vc:noop", ButtonStyle.PRIMARY)])
     else:
         # === PATCH_VC_MANUAL_ENTRY_HEADER_V1 ===
-        rows.append([_btn("🎯 انتخاب روز دلخواه", "vc:d:manual", ButtonStyle.PRIMARY)])
+        if not compact:
+            rows.append([_btn("🎯 انتخاب روز دلخواه", "vc:d:manual", ButtonStyle.PRIMARY)])
         rows.append([_btn("➖", "vc:d-", ButtonStyle.DANGER),
                      _btn(f"📅 {days} روز", "vc:d:manual", ButtonStyle.PRIMARY),
                      _btn("➕", "vc:d+", ButtonStyle.SUCCESS)])
     # تعداد
     if mx_c > 1 and not simple:
         # === PATCH_VC_MANUAL_ENTRY_HEADER_V1 ===
-        rows.append([_btn("🎯 انتخاب تعداد دلخواه", "vc:c:manual", ButtonStyle.PRIMARY)])
+        if not compact:
+            rows.append([_btn("🎯 انتخاب تعداد دلخواه", "vc:c:manual", ButtonStyle.PRIMARY)])
         rows.append([_btn("➖", "vc:c-", ButtonStyle.DANGER),
                      _btn(f"🔢 تعداد: {count}", "vc:c:manual", ButtonStyle.PRIMARY),
                      _btn("➕", "vc:c+", ButtonStyle.SUCCESS)])
-    # قیمت
-    if applied_code and discount > 0:
+    # قیمت (حالتِ فشرده: مبلغ بالایِ صفحه در متن هست؛ دکمهٔ تکراری حذف می‌شود)
+    if compact:
+        pass
+    elif applied_code and discount > 0:
         rows.append([_btn(f"💵 مجموع: {final_total:,} تومان (با تخفیف)", "vc:noop")])
     else:
         rows.append([_btn(f"💵 مجموع: {total:,} تومان", "vc:noop")])
@@ -4886,11 +4893,12 @@ def _vc_cfg_kb(cfg: dict, gb: int, days: int, count: int, no_plans: bool = False
     # پیشنهادِ مشتری: کدِ تخفیف فقط در مرحلهٔ پرداخت (پیش‌فاکتور) نشان داده شود، نه در انتخابِ حجم.
     # (دکمه‌هایِ vc:disc:add / vc:disc:del در صفحهٔ پیش‌فاکتور همچنان هست.)
     # خرید — یک دکمهٔ واحد؛ ابتدا اسم دلخواه پرسیده می‌شود سپس پیش‌فاکتور
-    rows.append([InlineKeyboardButton(text="💳 پرداخت",
+    rows.append([InlineKeyboardButton(text=("✅ تایید" if compact else "💳 پرداخت"),
                                       callback_data=f"vc:checkout:{gb}:{days}:{count}",
                                       style=ButtonStyle.SUCCESS)])
     if no_plans:
-        rows.append([_btn("🏠 بازگشت به خانه", "vc:home")])
+        if not compact:     # PATCH_VC_COMPACT_V1: «منوی اصلی» (از _with_home_row) همان کار را می‌کند؛ دکمهٔ تکراری حذف
+            rows.append([_btn("🏠 بازگشت به خانه", "vc:home")])
     else:
         rows.append([_btn("⬅️ بازگشت به منوی قبل", "vc:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -4995,7 +5003,7 @@ async def _vc_render(bot: Bot, bot_id: int, telegram_id: int, gb: int, days: int
             _br = await inline_back_row(bot_id)
             if _br and len(_br) == 2 and (_br[0].callback_data or "").startswith("smopen:"):
                 _rows = list(kb.inline_keyboard)
-                _rows.insert(max(len(_rows) - 1, 0), [_br[0]])
+                _rows.insert(len(_rows) if cfg.get("vc_compact") == "1" else max(len(_rows) - 1, 0), [_br[0]])
                 kb = InlineKeyboardMarkup(inline_keyboard=_rows)
         except Exception:
             logger.exception("vc: دکمهٔ بازگشت به منویِ قبل ساخته نشد")

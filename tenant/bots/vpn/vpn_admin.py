@@ -175,6 +175,7 @@ _VC_DEFAULTS = {
     # === PATCH_VC_SIMPLE_MODE_V1 === حالتِ ساده: کاربر فقط عددِ حجم را می‌فرستد؛ مدت ثابتِ ادمین است
     "vc_simple": "0", "vc_simple_days": "30",
     "vc_wizard": "0",     # PATCH_VC_WIZARD_V1: خریدِ مرحله‌ایِ پیام‌به‌پیام (حجم ← مدت ← تعداد ← نام)
+    "vc_compact": "0",    # PATCH_VC_COMPACT_V1: صفحهٔ +/− فشرده (بدونِ تیترِ دکمه‌ها و دکمهٔ مجموع، دکمهٔ «تایید»)
     "vc_price_gb": "1000", "vc_price_day": "500",
     # === PATCH_RESELLER_GB_PRICING_V1 === خالی یعنی «تنظیم نشده»
     "rs_price_gb": "0", "rs_price_day": "0",
@@ -204,7 +205,7 @@ _VC_PANEL_KEYS = [
     "vc_enabled", "vc_min_gb", "vc_max_gb", "vc_step_gb",
     "vc_min_days", "vc_max_days", "vc_step_days",
     "vc_max_count", "vc_price_gb", "vc_price_day", "vc_pricing_mode",
-    "vc_simple", "vc_simple_days", "vc_wizard",
+    "vc_simple", "vc_simple_days", "vc_wizard", "vc_compact",
     "renew_enabled", "renew_price_gb", "renew_price_day",
     "renew_min_gb", "renew_max_gb", "renew_step_gb",
     "renew_min_days", "renew_max_days", "renew_step_days",
@@ -2536,6 +2537,11 @@ async def _vc_kb(cfg: dict, panel_key: str, bot_id: int = 0) -> InlineKeyboardMa
             text=("🧭 حالتِ مرحله‌ای (پیام‌به‌پیام): ✅ روشن" if cfg.get("vc_wizard") == "1"
                   else "🧭 حالتِ مرحله‌ای (پیام‌به‌پیام): ⬜️ خاموش"),
             callback_data=f"tvpn:custom_wizard:{panel_key}", style=ButtonStyle.PRIMARY)],
+        # === PATCH_VC_COMPACT_V1 === (YOUxsell) صفحهٔ +/− فشرده: بدونِ تیترِ «انتخاب … دلخواه»، بدونِ دکمهٔ «مجموع»، دکمهٔ «تایید»
+        [InlineKeyboardButton(
+            text=("🧹 حالتِ فشرده (فقط −/+ ؛ دکمهٔ تایید): ✅ روشن" if cfg.get("vc_compact") == "1"
+                  else "🧹 حالتِ فشرده (فقط −/+ ؛ دکمهٔ تایید): ⬜️ خاموش"),
+            callback_data=f"tvpn:custom_compact:{panel_key}", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text=f"📅 مدتِ ثابتِ حالتِ ساده: {cfg.get('vc_simple_days') or 30} روز",
                               callback_data=f"tvpn:custom_simpledays:{panel_key}", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="📦 بازهٔ حجم (گیگ)", callback_data=f"tvpn:custom_gb:{panel_key}", style=ButtonStyle.PRIMARY)],
@@ -2850,6 +2856,24 @@ async def vpn_custom_wizard_toggle(cb: CallbackQuery, bot: Bot):
     await cb.answer("حالتِ مرحله‌ای " + ("روشن شد" if cur != "1" else "خاموش شد")
                     + ("\n(اگر «حالتِ ساده» هم روشن باشد، حالتِ ساده اولویت دارد.)" if cur != "1" else ""),
                     show_alert=cur != "1")
+
+
+# === PATCH_VC_COMPACT_V1 ===
+@vpn_admin_router.callback_query(F.data.startswith("tvpn:custom_compact:"))
+async def vpn_custom_compact_toggle(cb: CallbackQuery, bot: Bot):
+    panel_key = cb.data.split(":")[2]
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    cur = await _vc_get(row.id, "vc_compact", panel_key)
+    await _vc_set(row.id, "vc_compact", "0" if cur == "1" else "1", panel_key)
+    cfg = await _vc_all(row.id, panel_key)
+    try:
+        await cb.message.edit_text(_vc_text(cfg, panel_key, len(await vc_tiers_get(row.id, panel_key))),
+                                   reply_markup=await _vc_kb(cfg, panel_key, row.id))
+    except Exception:
+        logger.info("vc compact: ویرایشِ پنل ممکن نشد (بی‌اهمیت)")
+    await cb.answer("حالتِ فشرده " + ("روشن شد" if cur != "1" else "خاموش شد"))
 
 
 # === PATCH_VC_SIMPLE_MODE_V1 ===
