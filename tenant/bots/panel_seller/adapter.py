@@ -30,6 +30,33 @@ class PanelAdminAPI:
 
     def __init__(self, client):
         self.c = client
+        self._rs_obj = None
+
+    # === PATCH_PSEL_RESUBS_V1 === (ABOL — RickPanel «API زیرنماینده»)
+    async def _rs(self, username: str | None = None):
+        """ResubAPI اگر: پنل RickPanel است، بخشِ زیرنماینده برایِ این حساب روشن است و (برایِ حسابِ موجود) همین نام
+        یکی از زیرنماینده‌ها است؛ وگرنه None و مسیرِ قدیمیِ ادمین (رفتارِ قبلی) اجرا می‌شود."""
+        try:
+            from tenant.shared.panel_clients.rickpanel_panel import RickPanelClient
+            if not isinstance(self.c, RickPanelClient):
+                return None
+            from tenant.bots.panel_seller.resubs import ResubAPI
+            rs = self._rs_obj or ResubAPI(self.c)
+            self._rs_obj = rs
+            if not await rs.enabled():
+                return None
+            if username is not None and not await rs.has(username):
+                return None
+            return rs
+        except PanelError:
+            return None
+
+    async def create_resub(self, username: str, password: str, gb: int) -> str | None:
+        """ساختِ زیرنماینده. نامِ واقعیِ ساخته‌شده را برمی‌گرداند؛ None یعنی این پنل بخشِ زیرنماینده ندارد (مسیرِ قدیمی)."""
+        rs = await self._rs(None)
+        if rs is None:
+            return None
+        return await rs.create(username, password, int(gb or 0))
 
     @classmethod
     def for_panel(cls, panel) -> "PanelAdminAPI":
@@ -52,6 +79,9 @@ class PanelAdminAPI:
 
     async def test(self) -> list[dict]:
         """لیستِ ادمین‌ها؛ اگر اتصال یا دسترسیِ sudo مشکل داشته باشد PanelError می‌دهد."""
+        rs = await self._rs(None)             # PATCH_PSEL_RESUBS_V1: حسابِ ریسلر لیستِ ادمین‌ها را نمی‌بیند؛ زیرنماینده‌ها را بخوان
+        if rs is not None:
+            return await rs.list_rows()
         return await self.c.list_admins()
 
     async def create_admin(self, username: str, password: str, role_id: int | None = None,
@@ -76,6 +106,9 @@ class PanelAdminAPI:
         return [r for r in (res or []) if isinstance(r, dict) and r.get("id") is not None]
 
     async def set_password(self, username: str, password: str) -> None:
+        rs = await self._rs(username)         # PATCH_PSEL_RESUBS_V1
+        if rs is not None:
+            return await rs.set_password(username, password)
         try:
             await self.c.modify_admin_password(username, password)
         except PanelError as e:
@@ -85,12 +118,24 @@ class PanelAdminAPI:
             await self.c._request("PUT", f"/api/admin/{quote(username)}", json={"password": password})
 
     async def delete_admin(self, username: str) -> None:
+        rs = await self._rs(username)         # PATCH_PSEL_RESUBS_V1: حذف در API نیست ⇒ غیرفعال
+        if rs is not None:
+            await rs.set_disabled(username, True)
+            return
         await self.c.delete_admin(username)
 
     async def disable_users(self, username: str) -> None:
+        rs = await self._rs(username)         # PATCH_PSEL_RESUBS_V1
+        if rs is not None:
+            await rs.set_disabled(username, True)
+            return
         await self.c._request("POST", f"/api/admin/{quote(username)}/users/disable")
 
     async def activate_users(self, username: str) -> None:
+        rs = await self._rs(username)         # PATCH_PSEL_RESUBS_V1
+        if rs is not None:
+            await rs.set_disabled(username, False)
+            return
         await self.c._request("POST", f"/api/admin/{quote(username)}/users/activate")
 
     async def _admin_row(self, username: str) -> tuple[dict | None, bool]:
@@ -107,6 +152,8 @@ class PanelAdminAPI:
 
     # ── PATCH_PSEL_NATIVE_LIMIT_V1 / PATCH_PSEL_CONTACT_FIELDS_V1: قابلیت‌هایِ پاسارگاردِ جدید (مستنداتِ رسمیِ AdminModify) ──
     async def is_new_style(self, username: str) -> bool:
+        if await self._rs(username) is not None:      # PATCH_PSEL_RESUBS_V1: قابلیت‌هایِ پاسارگاردِ جدید (put_admin و …) اینجا نیست
+            return False
         try:
             _row, new_style = await self._admin_row(username)
         except PanelError:
@@ -121,6 +168,13 @@ class PanelAdminAPI:
         """PATCH_PSEL_ADMIN_DISABLE_V1 (Whale: «پنلِ تستِ رایگان منقضی و خاموش شد ولی غیرفعالش نمی‌کند») — خودِ ادمین در پاسارگاردِ جدید
         «غیرفعال» می‌شود (is_disabled؛ در پنلِ «مدیرانِ غیرفعال» دیده می‌شود)، نه فقط کاربرانش. خروجی: True = اعمال و تأیید شد،
         False = پنل نپذیرفت، None = این پنل مفهومِ غیرفعال‌شدنِ ادمین ندارد (مرزبانِ قدیمی) یا تأییدش ممکن نبود."""
+        rs = await self._rs(username)         # PATCH_PSEL_RESUBS_V1: وضعیتِ خودِ زیرنماینده
+        if rs is not None:
+            try:
+                await rs.set_disabled(username, bool(disabled))
+            except PanelError:
+                return False
+            return True
         try:
             if not await self.is_new_style(username):
                 return None
@@ -140,6 +194,12 @@ class PanelAdminAPI:
 
     async def admin_is_disabled(self, username: str) -> bool | None:
         """True/False = وضعیتِ فعلیِ «غیرفعال»بودنِ ادمین؛ None = پنل این مفهوم را ندارد یا خوانده نشد."""
+        rs = await self._rs(username)         # PATCH_PSEL_RESUBS_V1
+        if rs is not None:
+            try:
+                return await rs.is_disabled(username)
+            except PanelError:
+                return None
         try:
             row, ns = await self._admin_row(username)
         except PanelError:
@@ -152,12 +212,18 @@ class PanelAdminAPI:
 
     async def apply_data_limit(self, username: str, gb: int) -> bool:
         """سقفِ حجمِ بومیِ ادمین (بایت؛ ۰ = نامحدود). فقط روی پنلِ جدید؛ خروجی: True اگر اعمال شد."""
+        rs = await self._rs(username)         # PATCH_PSEL_RESUBS_V1: سقفِ حجمِ بومیِ زیرنماینده (گیگ)
+        if rs is not None:
+            return await rs.apply_data_limit(username, int(gb or 0))
         if not await self.is_new_style(username):
             return False
         await self.put_admin(username, data_limit=(int(gb) * (1024 ** 3) if int(gb or 0) > 0 else 0))
         return True
 
     async def reset_usage(self, username: str) -> None:
+        rs = await self._rs(username)         # PATCH_PSEL_RESUBS_V1
+        if rs is not None:
+            return await rs.reset_usage(username)
         if await self.is_new_style(username):
             await self.c._request("POST", f"/api/admin/{quote(username)}/reset")
         else:
@@ -165,6 +231,9 @@ class PanelAdminAPI:
 
     async def snapshot(self, username: str) -> dict:
         """{used_bytes, users, new_style} با یک درخواست (نمایشِ صفحهٔ پنل)."""
+        rs = await self._rs(username)         # PATCH_PSEL_RESUBS_V1
+        if rs is not None:
+            return await rs.snapshot(username)
         try:
             row, new_style = await self._admin_row(username)
         except PanelError:
@@ -175,6 +244,9 @@ class PanelAdminAPI:
 
     async def usage_bytes(self, username: str) -> int:
         """مصرفِ کلِ کاربرانِ این ادمین (بایت). پنلِ جدید: used_traffic از لیستِ ادمین‌ها (یکایِ بایت تأییدِ رسمی ندارد)."""
+        rs = await self._rs(username)         # PATCH_PSEL_RESUBS_V1
+        if rs is not None:
+            return await rs.usage_bytes(username)
         try:
             row, new_style = await self._admin_row(username)
         except PanelError:                                # پنلِ قدیمی بدونِ /api/admins ⇒ مسیرِ قدیمی (رفتارِ قبلی)
@@ -192,6 +264,9 @@ class PanelAdminAPI:
             return 0
 
     async def user_count(self, username: str) -> int:
+        rs = await self._rs(username)         # PATCH_PSEL_RESUBS_V1
+        if rs is not None:
+            return await rs.user_count(username)
         try:
             row, new_style = await self._admin_row(username)
         except PanelError:
@@ -212,6 +287,8 @@ class PanelAdminAPI:
     async def list_user_rows(self, username: str, expected: int | None = None) -> list[dict] | None:
         """کاربرانِ همین ادمین (GET /api/users?admin=…). None یعنی مطمئن نیستیم فیلتر واقعاً اعمال شده (هرگز حدس نمی‌زنیم):
         ردیفی که مالکش ادمینِ دیگری است، یا — وقتی ردیف‌ها مالک ندارند — تعدادِ ردیف‌ها با تعدادِ اعلامیِ ادمین نمی‌خواند."""
+        if await self._rs(username) is not None:      # PATCH_PSEL_RESUBS_V1: فهرستِ کاربرانِ زیرنماینده فقط‌خواندنی/ناشناخته ⇒ «مطمئن نیستیم»
+            return None
         rows: list[dict] = []
         offset = 0
         for _ in range(20):
@@ -246,6 +323,8 @@ class PanelAdminAPI:
         اندپوینتِ دسته‌جمعیِ خاموش/روشن بعضی پنل‌ها بی‌صدا اثر نمی‌گذارد (پاسِ خالی = «موفق» حساب می‌شد). این‌جا وضعیتِ واقعیِ
         کاربران خوانده می‌شود، هر کاربرِ هنوز اشتباه تکی اصلاح می‌شود و دوباره خوانده می‌شود.
         خروجی: تعدادِ کاربرانِ باقی‌مانده در وضعیتِ اشتباه (۰ = موفق)؛ None = نتوانستیم تأیید کنیم."""
+        if await self._rs(username) is not None:      # PATCH_PSEL_RESUBS_V1: وضعیتِ کاربران را خودِ زیرنماینده تعیین می‌کند
+            return None
         want = "active" if enabled else "disabled"
 
         def wrong(r: dict) -> bool:

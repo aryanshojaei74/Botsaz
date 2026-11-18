@@ -112,15 +112,26 @@ async def keep_login_on_traffic(bot_id: int) -> bool:
     return (await get_setting(bot_id, "psel_keep_login", "1")) == "1"
 
 
-async def create_admin_on(api, panel, username: str, password: str, data_gb: int = 0) -> None:
+async def create_admin_on(api, panel, username: str, password: str, data_gb: int = 0) -> str:
     """ساختِ ادمین؛ اگر پنل «role_id» خواست (پاسارگاردِ جدید) نقش را پیدا و یک‌بار دوباره (همراهِ سقفِ حجمِ بومی) امتحان می‌کند."""
+    # === PATCH_PSEL_RESUBS_V1 === (ABOL) RickPanel با «API زیرنماینده»: نامِ واقعی «<نامِ کاربریِ مالک>_<suffix>» است و برمی‌گردد
+    _cr = getattr(api, "create_resub", None)
+    if _cr is not None:
+        real = await _cr(username, password, int(data_gb or 0))
+        if real:
+            return real
     try:
         await api.create_admin(username, password)
     except PanelError as e:
+        if "admins.create" in str(e):
+            raise PanelError("حسابِ اتصالِ پنل اجازهٔ ساختِ ادمین ندارد (Permission denied: admins.create). "
+                             "اگر پنلت RickPanel با بخشِ «زیرنماینده» است، از پشتیبانیِ پنل بخواه آن بخش را برایِ حسابت فعال کند "
+                             "(ربات خودکار از آن استفاده می‌کند)؛ وگرنه یک حسابِ sudo وصل کن. | " + str(e)[:160]) from e
         if "role_id" not in str(e):
             raise
         await api.create_admin(username, password, role_id=await role_for(api, panel),
                                data_limit_bytes=(int(data_gb) * GB_BYTES if data_gb and int(data_gb) > 0 else None))
+    return username
 
 
 async def apply_native_limit(api, username: str, gb: int) -> None:
@@ -314,7 +325,7 @@ async def buy(bot_id: int, buyer_tg: int, package_id: int, api_factory=None, bot
     try:
         api = api_factory(panel)
         try:
-            await create_admin_on(api, panel, username, password, data_gb=int(pk.data_gb or 0))
+            username = await create_admin_on(api, panel, username, password, data_gb=int(pk.data_gb or 0))
         finally:
             await api.close()
     except Exception as e:  # noqa: BLE001
@@ -632,7 +643,7 @@ async def buy_test(bot_id: int, buyer_tg: int, api_factory=None, bot=None, row=N
     try:
         api = api_factory(panel)
         try:
-            await create_admin_on(api, panel, username, password, data_gb=int(cfg["gb"]))
+            username = await create_admin_on(api, panel, username, password, data_gb=int(cfg["gb"]))
         finally:
             await api.close()
     except Exception as e:  # noqa: BLE001
