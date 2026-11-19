@@ -54,6 +54,40 @@ def load_tiers_text(raw: str | None) -> list[tuple[int, Decimal]]:
         return []
 
 
+# === PATCH_FEE_BY_RANK_V1 === (سینا: «نفر اول، دوم، سوم … کارمزدشان را بر اساسِ رتبه در جدول بگذارم»)
+# مبنا سه حالت دارد: games / wins (پله بر اساسِ تعداد) و rank (هر خط «رتبه درصد»؛ رتبه در جدولِ «برترین بازیکنان» *پیش از همین بازی*).
+BASES = ("games", "wins", "rank")
+MAX_RANK = 20
+_ORD_FA = {1: "اول", 2: "دوم", 3: "سوم", 4: "چهارم", 5: "پنجم", 6: "ششم", 7: "هفتم", 8: "هشتم", 9: "نهم", 10: "دهم"}
+
+
+def _norm_basis(b: str | None) -> str:
+    b = (b or "").strip().lower()
+    return b if b in BASES else "games"
+
+
+def next_basis(b: str) -> str:
+    return BASES[(BASES.index(_norm_basis(b)) + 1) % len(BASES)]
+
+
+def basis_label(b: str) -> str:
+    return {"wins": "تعدادِ برد", "rank": "رتبه در جدول"}.get(_norm_basis(b), "تعدادِ بازی")
+
+
+def rank_name(n: int) -> str:
+    return f"نفر {_ORD_FA.get(int(n), str(int(n)))}"
+
+
+def pct_for_rank(tiers: list[tuple[int, Decimal]], rank: int | None) -> Decimal | None:
+    """مبنای «رتبه»: درصدِ همان رتبه (دقیق)؛ رتبه‌ای که خط ندارد یا بازیکنِ بی‌رتبه ⇒ None (کارمزدِ عادی)."""
+    if rank is None:
+        return None
+    for mn, pct in tiers:
+        if mn == rank:
+            return pct
+    return None
+
+
 def pct_for(tiers: list[tuple[int, Decimal]], count: int) -> Decimal | None:
     """بالاترین پله‌ای که count به آن رسیده؛ None اگر پله‌ای نیست یا به هیچ‌کدام نرسیده."""
     best = None
@@ -64,9 +98,11 @@ def pct_for(tiers: list[tuple[int, Decimal]], count: int) -> Decimal | None:
 
 
 def tiers_text_fa(tiers: list[tuple[int, Decimal]], basis: str) -> str:
-    unit = "برد" if basis == "wins" else "بازی"
     if not tiers:
         return "پله‌ای تنظیم نشده (همان کارمزد عادی)"
+    if basis == "rank":
+        return "\n".join(f"• {rank_name(mn)} جدول: {pct:g}٪" for mn, pct in tiers)
+    unit = "برد" if basis == "wins" else "بازی"
     return "\n".join(f"• از {mn} {unit} به بعد: {pct:g}٪" for mn, pct in tiers)
 
 
@@ -84,7 +120,7 @@ async def load_config(bot_id: int = 0) -> tuple[str, list[tuple[int, Decimal]]]:
     async with Session() as s:
         basis = (await _read(s, bot_id, KEY_BASIS, "games")).strip() or "games"
         tiers = load_tiers_text(await _read(s, bot_id, KEY_TIERS, ""))
-    return ("wins" if basis == "wins" else "games"), tiers
+    return _norm_basis(basis), tiers
 
 
 async def save_config(bot_id: int, *, basis: str | None = None, tiers_text: str | None = None) -> None:
@@ -143,18 +179,28 @@ async def rank_count(s, bot_id: int, uid: int, basis: str, exclude_wid: int | No
     return int(await s.scalar(q) or 0)
 
 
+async def rank_position(s, bot_id: int, uid: int) -> int | None:
+    """رتبهٔ ۱‌پایهٔ بازیکن در جدولِ «برترین بازیکنان» (مرتب بر اساسِ برد)؛ بازیِ جاری هنوز تسویه نشده پس حساب نمی‌شود. بی‌رتبه ⇒ None."""
+    for i, d in enumerate(await _player_stats_s(s, bot_id, MAX_RANK, "wins"), 1):
+        if d["uid"] == uid:
+            return i
+    return None
+
+
 async def apply_rank_fee(s, w, winner: int) -> None:
     """پیش از پرداختِ جایزه: اگر پله‌ایِ فعال هست، کارمزد/جایزهٔ همین بازی را بر اساسِ رتبهٔ برنده بازمحاسبه می‌کند."""
     bot_id = int(w.bot_id or 0)
-    basis = (await _read(s, bot_id, KEY_BASIS, "games")).strip()
-    basis = "wins" if basis == "wins" else "games"
+    basis = _norm_basis(await _read(s, bot_id, KEY_BASIS, "games"))
     tiers = load_tiers_text(await _read(s, bot_id, KEY_TIERS, ""))
     if not tiers:
         return
-    cnt = await rank_count(s, bot_id, winner, basis, exclude_wid=w.id)
-    pct = pct_for(tiers, cnt)
+    if basis == "rank":                           # PATCH_FEE_BY_RANK_V1: درصدِ رتبهٔ برنده در جدول
+        pct = pct_for_rank(tiers, await rank_position(s, bot_id, winner))
+    else:
+        cnt = await rank_count(s, bot_id, winner, basis, exclude_wid=w.id)
+        pct = pct_for(tiers, cnt)
     if pct is None:
-        return                                   # هنوز به اولین پله نرسیده ⇒ کارمزدِ عادی
+        return                                   # هنوز به اولین پله نرسیده / رتبه‌ایِ بدونِ خط ⇒ کارمزدِ عادی
     amount = int(w.amount)
     fee = int((Decimal(amount * 2) * pct / Decimal("100")).quantize(Decimal("1")))
     if amount * 2 - fee <= 0:
@@ -166,14 +212,19 @@ async def apply_rank_fee(s, w, winner: int) -> None:
 
 async def player_stats(bot_id: int = 0, limit: int = 15, order: str = "wins") -> list[dict]:
     from config import Session
+    async with Session() as s:
+        return await _player_stats_s(s, bot_id, limit, order)
+
+
+async def _player_stats_s(s, bot_id: int, limit: int, order: str) -> list[dict]:
+    """همان آمار روی یک نشستِ موجود (تا هنگامِ تسویه، نشستِ جدا باز نشود)."""
     from models import PlatformWager as W
     from sqlalchemy import func
-    async with Session() as s:
-        rows = (await s.execute(select(
-            W.creator_id, W.creator_name, W.creator_username, W.opponent_id, W.opponent_name, W.opponent_username,
-            W.winner_id, W.amount, W.fee_amount).where(
-            func.coalesce(W.bot_id, 0) == bot_id, W.status == "settled", W.winner_id.is_not(None),
-            W.opponent_id.is_not(None), W.amount > 0).order_by(W.id.desc()).limit(20000))).all()
+    rows = (await s.execute(select(
+        W.creator_id, W.creator_name, W.creator_username, W.opponent_id, W.opponent_name, W.opponent_username,
+        W.winner_id, W.amount, W.fee_amount).where(
+        func.coalesce(W.bot_id, 0) == bot_id, W.status == "settled", W.winner_id.is_not(None),
+        W.opponent_id.is_not(None), W.amount > 0).order_by(W.id.desc()).limit(20000))).all()
     st: dict[int, dict] = {}
 
     def slot(uid, name, uname):
@@ -225,7 +276,7 @@ def public_board(stats: list[dict], tiers=None, basis="games") -> str:
     for i, d in enumerate(stats[:10]):
         pre = medals[i] if i < 3 else f"{i + 1}."
         cnt = d["wins"] if basis == "wins" else d["games"]
-        pct = pct_for(tiers or [], cnt)
+        pct = pct_for_rank(tiers or [], i + 1) if basis == "rank" else pct_for(tiers or [], cnt)
         fee = f" · 💸 کارمزد {pct:g}٪" if pct is not None else ""
         lines.append(f"{_RLM}{pre} {_board_name(d)}")
         lines.append(f"{_RLM}     🎮 {d['games']} بازی · ✅ {d['wins']} برد · ❌ {d['losses']} باخت{fee}")
@@ -236,6 +287,9 @@ def tiers_footer(tiers, basis="games") -> str:
     """توضیحِ پله‌هایِ کارمزد زیرِ جدول (برایِ دکمهٔ «برترین بازیکنان»)؛ بدونِ پله ⇒ خالی."""
     if not tiers:
         return ""
+    if basis == "rank":                                         # PATCH_FEE_BY_RANK_V1
+        body = "\n".join(f"{_RLM}• {rank_name(mn)}: کارمزد {pct:g}٪" for mn, pct in tiers)
+        return f"\n\n{_RLM}💸 <b>کارمزد بر اساسِ رتبه</b> (هرچه بالاتر باشی، کارمزدِ بُردت کمتر):\n{body}"
     unit = "برد" if basis == "wins" else "بازی"
     body = "\n".join(f"{_RLM}• از {mn} {unit} به بعد: کارمزد {pct:g}٪" for mn, pct in tiers)
     return f"\n\n{_RLM}💸 <b>کارمزدِ پلکانی</b> (هرچه بیشتر بازی کنی، کارمزدِ بُردت کمتر):\n{body}"
@@ -284,6 +338,20 @@ class RankFSM(StatesGroup):
     free_fee = State()
 
 
+HELP_RANKS = (
+    "✏️ <b>کارمزد بر اساسِ رتبه</b>\n\n"
+    "هر خط: «رتبه  درصد». یعنی وقتی بازیکنی که <b>رتبهٔ N</b> جدولِ «برترین بازیکنان» است <b>برنده</b> شد، کارمزدش این درصدِ کلِ مبلغِ دو نفر است.\n\n"
+    "مثال:\n<code>1 2\n2 3\n3 4\n4 5\n5 6</code>\n"
+    "یعنی نفر اول ۲٪ · دوم ۳٪ · سوم ۴٪ · چهارم ۵٪ · پنجم ۶٪؛ بقیه کارمزدِ عادی.\n"
+    f"رتبه ۱ تا {MAX_RANK}، درصد ۰ تا ۵۰. رتبه‌بندی بر اساسِ تعدادِ برد است. برایِ حذفِ همه: /clear · انصراف: /cancel"
+)
+
+
+async def help_for(bot_id: int) -> str:
+    basis, _ = await load_config(bot_id)
+    return HELP_RANKS if basis == "rank" else HELP_TIERS
+
+
 HELP_TIERS = (
     "✏️ <b>پله‌هایِ کارمزد</b>\n\n"
     "هر خط: «حداقل  درصد». یعنی بازیکنی که به این تعداد (بازی یا برد، طبقِ «مبنا») رسیده، وقتی <b>برنده</b> شد کارمزدش این درصدِ "
@@ -296,13 +364,15 @@ HELP_TIERS = (
 
 async def _menu_view(bot_id: int, prefix: str, back_cb: str):
     basis, tiers = await load_config(bot_id)
-    unit = "تعدادِ برد" if basis == "wins" else "تعدادِ بازی"
+    unit = basis_label(basis)
     text = ("🏅 <b>کارمزدِ پلکانی و آمارِ بازیکنان</b>\n\n"
             "کارمزدِ هر بازی (از جایزهٔ برنده) بر اساسِ رتبهٔ برنده کم/زیاد می‌شود.\n\n"
             f"📏 مبنا: <b>{unit}</b>\n{tiers_text_fa(tiers, basis)}\n\n"
-            "بازیکنی که به هیچ پله‌ای نرسیده باشد، کارمزدِ عادی را می‌دهد.")
+            + ("«رتبه در جدول»: رتبهٔ برنده در جدولِ «برترین بازیکنان» (بر اساسِ تعدادِ برد، پیش از همین بازی) تعیین می‌کند. "
+               "رتبه‌ایِ که خط ندارد (و بازیکنِ بی‌رتبه) کارمزدِ عادی را می‌دهد."
+               if basis == "rank" else "بازیکنی که به هیچ پله‌ای نرسیده باشد، کارمزدِ عادی را می‌دهد."))
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"📏 مبنا: {'تعدادِ برد' if basis == 'wins' else 'تعدادِ بازی'} (تغییر)",
+        [InlineKeyboardButton(text=f"📏 مبنا: {unit} (تغییر)",
                               callback_data=f"{prefix}:basis")],
         [InlineKeyboardButton(text="✏️ تنظیمِ پله‌ها", callback_data=f"{prefix}:set", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="📊 آمارِ برترین بازیکنان", callback_data=f"{prefix}:stats", style=ButtonStyle.SUCCESS)],
@@ -400,11 +470,11 @@ async def main_rank_cb(cb: CallbackQuery, state: FSMContext):
         return
     if act == "basis":
         basis, _ = await load_config(0)
-        await save_config(0, basis=("games" if basis == "wins" else "wins"))
+        await save_config(0, basis=next_basis(basis))
     elif act == "set":
         await state.set_state(RankFSM.tiers)
         await state.update_data(rank_bot=0)
-        await cb.message.answer(HELP_TIERS, parse_mode="HTML")
+        await cb.message.answer(await help_for(0), parse_mode="HTML")
         await cb.answer()
         return
     elif act == "stats":
@@ -461,6 +531,10 @@ async def _tiers_input(msg: Message, state: FSMContext, bot_id: int, prefix: str
         return
     try:
         tiers = parse_tiers(raw)
+        if (await load_config(bot_id))[0] == "rank":            # PATCH_FEE_BY_RANK_V1: هر خط یک رتبهٔ ۱..MAX_RANK
+            bad = [mn for mn, _p in tiers if not 1 <= mn <= MAX_RANK]
+            if bad:
+                raise ValueError(f"رتبه باید بینِ ۱ و {MAX_RANK} باشد (نادرست: {bad[0]})")
     except ValueError as e:
         await msg.answer(f"⚠️ {e}\nدوباره بفرست (یا /cancel).")
         return
@@ -495,11 +569,11 @@ async def tenant_rank_cb(cb: CallbackQuery, bot: Bot, state: FSMContext):
         return
     if act == "basis":
         basis, _ = await load_config(row.id)
-        await save_config(row.id, basis=("games" if basis == "wins" else "wins"))
+        await save_config(row.id, basis=next_basis(basis))
     elif act == "set":
         await state.set_state(RankFSM.tiers)
         await state.update_data(rank_bot=row.id)
-        await cb.message.answer(HELP_TIERS, parse_mode="HTML")
+        await cb.message.answer(await help_for(row.id), parse_mode="HTML")
         await cb.answer()
         return
     elif act == "stats":
