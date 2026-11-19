@@ -3882,6 +3882,9 @@ async def _send_native_wg_files(bot, chat_id: int, client, email: str) -> int:
 _MISSING_ALERT_TS: dict = {}   # (bot_id, account_id) → زمانِ آخرین اعلان به مالک
 
 
+_SINGLE_CONFIG_DEADLINE = 60.0   # ثانیه
+
+
 @vpn_user_router.callback_query(F.data.startswith("vget:single:"))
 async def vget_single(cb: CallbackQuery, bot: Bot):
     """ارسال کانفیگ‌های تکی (لینک‌های مستقیم هر inbound)."""
@@ -3908,7 +3911,9 @@ async def vget_single(cb: CallbackQuery, bot: Bot):
     if panel:
         try:
             client = _client_from_panel(panel)
-            try:
+
+            async def _fetch_single():
+                nonlocal native_sent, links
                 # === PATCH_WG_SUB_DIRECT_SINGLE_V1 === (WhaleSupport) «کانفیگ‌هایِ تکی» هم مثلِ دکمهٔ وایرگارد اول فایل را عیناً از
                 # ساب‌لینک بگیرد (بایت‌به‌بایت، با همان اسم)؛ فقط اگر ساب وایرگارد نداد مسیرِ بومی/ساخت از لینک.
                 native_sent = await _send_sub_wg_files(bot, cb.from_user.id, _single_sub_link, panel, email)
@@ -3918,6 +3923,10 @@ async def vget_single(cb: CallbackQuery, bot: Bot):
                 if native_sent:
                     # وایرگارد قبلاً با اسمِ اصلیِ پنل فرستاده شد؛ تکراری نفرست
                     links = [l for l in links if not _is_wg_link(l)]
+            try:
+                # === PATCH_SINGLE_CONFIG_DEADLINE_V1 === لاگِ سرور: «vget:single» تا ۷۴۶ثانیه روی پنلِ کند/بی‌پاسخ گیر کرد.
+                # فقط خواندن/ارسالِ کانفیگ است (تراکنش نیست)، پس سقفِ کلی بی‌خطر است.
+                await asyncio.wait_for(_fetch_single(), timeout=_SINGLE_CONFIG_DEADLINE)
             finally:
                 await client.close()
         except Exception as e:
