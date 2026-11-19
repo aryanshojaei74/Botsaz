@@ -1373,8 +1373,8 @@ def invoice_kb(ch: "TonDirectCharge") -> InlineKeyboardMarkup:
         try:
             import base64 as _b64
             h = _b64.b64decode(h, validate=True).hex() if not re.fullmatch(r"[0-9a-fA-F]{64}", h) else h
-        except Exception:      # noqa: BLE001
-            pass
+        except Exception:      # noqa: BLE001 — هشِ غیرِ base64 ⇒ همان رشته در لینک می‌ماند
+            logger.debug("ton_direct: tx hash is not base64: %s", h[:16])
         rows.append([InlineKeyboardButton(text="🔎 مشاهدهٔ تراکنش (tonviewer)", url=f"https://tonviewer.com/transaction/{h}")])
     if ch.from_address:
         rows.append([InlineKeyboardButton(text="👤 آدرسِ مبدأ (tonviewer)", url=f"https://tonviewer.com/{ch.from_address}")])
