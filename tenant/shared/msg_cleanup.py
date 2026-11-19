@@ -24,6 +24,7 @@ from logging_setup import get_logger as _get_logger
 logger = _get_logger(__name__)
 
 SETTING_KEY = "msg_cleanup"
+START_KEY = "msg_cleanup_start"       # پاک‌کردنِ خودِ پیامِ «/start» مشتری هم (پیش‌فرض خاموش؛ AR SHOP)
 STAFF_KEY = "msg_cleanup_staff"       # اعمال روی چتِ مالک/ادمین‌ها هم (پیش‌فرض خاموش؛ برایِ تستِ خودِ مالک)
 msg_cleanup_router = Router(name="msg_cleanup")
 
@@ -135,6 +136,20 @@ async def enabled_for(bot, event) -> int | None:
         return None
 
 
+async def _delete_start_cmd(bot, bot_id: int, event) -> None:
+    """اگر مالک خواسته باشد، خودِ پیامِ «/start» مشتری (کمتر از ۴۸ ساعت) هم پاک می‌شود."""
+    text = getattr(event, "text", None)
+    if not text or not text.startswith("/start") or getattr(event, "message_id", None) is None:
+        return
+    try:
+        from tenant import get_setting
+        if (await get_setting(bot_id, START_KEY, "0")) != "1":
+            return
+        await bot.delete_message(event.chat.id, event.message_id)
+    except Exception:
+        logger.debug("msg_cleanup: پاک‌کردنِ پیامِ /start ممکن نشد")
+
+
 async def outer_mw(handler, event, data):
     bot = data.get("bot")
     bot_id = await enabled_for(bot, event) if bot is not None else None
@@ -152,6 +167,7 @@ async def outer_mw(handler, event, data):
             await finish(bot, ctx)
         except Exception:
             logger.exception("msg_cleanup: پاک‌سازی ناموفق بود (نادیده گرفته شد)")
+        await _delete_start_cmd(bot, bot_id, event)
 
 
 # نکته: outer_middleware فقط باید رویِ روترِ «والد» (tenant_router) نصب شود تا کلِ زنجیرهٔ هندلرها داخلش بماند؛
@@ -166,6 +182,7 @@ async def _menu(bot_id: int, plan: str):
     from tenant import get_setting
     on = (await get_setting(bot_id, SETTING_KEY, "0")) == "1"
     staff = (await get_setting(bot_id, STAFF_KEY, "0")) == "1"
+    st_cmd = (await get_setting(bot_id, START_KEY, "0")) == "1"
     text = ("🧹 <b>پاک‌سازیِ خودکارِ پیام‌ها</b> · 💎 حرفه‌ای\n\n"
             "بعد از هر کارِ مشتری، پیام‌هایِ منو/صفحهٔ قبلیِ همان روز پاک می‌شود و فقط پیامِ کارِ جدید می‌ماند "
             "(مثلاً از «کیف پول» «بازگشت» را بزند ⇒ منویِ کیف پول پاک می‌شود و فقط منویِ اصلی می‌ماند).\n\n"
@@ -175,12 +192,16 @@ async def _menu(bot_id: int, plan: str):
             "ℹ️ فقط چتِ خصوصی و فقط پیام‌هایِ <b>از لحظهٔ روشن‌شدن به بعد</b> (پیام‌هایِ قدیمی‌تر پاک نمی‌شوند). با ری‌استارتِ ربات، فهرستِ پیام‌هایِ قبلی از نو شروع می‌شود.\n\n"
             f"👮 چتِ مالک و ادمین‌ها: <b>{'✅ هم اعمال می‌شود' if staff else '❌ مستثنی (پیش‌فرض)'}</b>\n"
             "⚠️ اگر خودت (مالک) ربات را تست می‌کنی، این گزینه را روشن کن؛ وگرنه در چتِ خودت چیزی پاک نمی‌شود. "
-            "برایِ استفادهٔ عادی خاموشش بگذار تا صفحه‌هایِ پنلِ مدیریت پاک نشوند.")
+            "برایِ استفادهٔ عادی خاموشش بگذار تا صفحه‌هایِ پنلِ مدیریت پاک نشوند.\n\n"
+            f"🧾 پاک‌کردنِ خودِ پیامِ «/start» کاربر: <b>{'✅ روشن' if st_cmd else '❌ خاموش (پیش‌فرض)'}</b>\n"
+            "اگر روشن باشد، هر بار کاربر /start بزند، پیامِ /start خودش هم از چت پاک می‌شود (فقط کمتر از ۴۸ ساعت).")
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=("🔴 خاموش‌کردن" if on else "🟢 روشن‌کردن"), callback_data="mcl:tog",
                               style=(ButtonStyle.DANGER if on else ButtonStyle.SUCCESS))],
         [InlineKeyboardButton(text=("👮 چتِ مالک/ادمین هم: ✅ روشن" if staff else "👮 چتِ مالک/ادمین هم: ❌ خاموش"),
                               callback_data="mcl:staff", style=(ButtonStyle.SUCCESS if staff else ButtonStyle.PRIMARY))],
+        [InlineKeyboardButton(text=("🧾 پاک‌کردنِ پیامِ /start: ✅ روشن" if st_cmd else "🧾 پاک‌کردنِ پیامِ /start: ❌ خاموش"),
+                              callback_data="mcl:start", style=(ButtonStyle.SUCCESS if st_cmd else ButtonStyle.PRIMARY))],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:settings", style=ButtonStyle.DANGER)]])
     return text, kb
 
@@ -193,7 +214,7 @@ async def _render(cb, row):
         await cb.message.answer(text, reply_markup=kb, parse_mode="HTML")
 
 
-@msg_cleanup_router.callback_query(F.data.in_({"mcl:menu", "mcl:tog", "mcl:staff"}))
+@msg_cleanup_router.callback_query(F.data.in_({"mcl:menu", "mcl:tog", "mcl:staff", "mcl:start"}))
 async def mcl_menu(cb, bot):
     from tenant import _owner_ok, get_setting, set_setting
     from plans import Feature, has_feature, upgrade_hint
@@ -210,6 +231,10 @@ async def mcl_menu(cb, bot):
         cur = (await get_setting(row.id, STAFF_KEY, "0")) == "1"
         await set_setting(row.id, STAFF_KEY, "0" if cur else "1")
         await cb.answer("چتِ مالک/ادمین از این به بعد هم پاک‌سازی می‌شود" if not cur else "چتِ مالک/ادمین مستثنی شد")
+    elif cb.data == "mcl:start":
+        cur = (await get_setting(row.id, START_KEY, "0")) == "1"
+        await set_setting(row.id, START_KEY, "0" if cur else "1")
+        await cb.answer("پیامِ /start دیگر پاک نمی‌شود" if cur else "از این به بعد پیامِ /start هم پاک می‌شود")
     else:
         await cb.answer()
     await _render(cb, row)

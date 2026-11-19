@@ -130,3 +130,19 @@ async def test_feature_off_does_nothing(stack):
     await dp.feed_update(bot, _msg_update(500, "menu", 1))
     await dp.feed_update(bot, _msg_update(500, "wallet", 2))
     assert sess.deleted == []
+
+
+async def test_start_command_message_deleted_only_when_toggle_on(stack):
+    dp, bot, sess, store = stack
+
+    @dp.sub_routers[0].sub_routers[0].message(F.text == "/start")
+    async def _st(m: Message):
+        await m.answer("🏠 منوی اصلی")
+    await dp.feed_update(bot, _msg_update(500, "/start", 11))
+    assert (500, 11) not in sess.deleted                            # پیش‌فرض: پیامِ /start می‌ماند
+    store["msg_cleanup_start"] = "1"
+    MC._TRACK.clear()
+    await dp.feed_update(bot, _msg_update(500, "/start", 12))
+    assert (500, 12) in sess.deleted                                # روشن: پیامِ /start مشتری پاک شد
+    await dp.feed_update(bot, _msg_update(500, "/start", 13))
+    assert (500, 102) in sess.deleted or any(d[0] == 500 and d[1] > 100 for d in sess.deleted)   # منویِ قبلیِ ربات هم پاک شد
