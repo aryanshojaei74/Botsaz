@@ -103,6 +103,15 @@ async def gate(bot_id: int, new_user, ref_code: str, bot: Bot) -> bool:
         return False                                           # هرگز نباید کاربر/دعوت را به‌خاطرِ خطا گم کند
 
 
+async def _menu_after(cb: CallbackQuery, bot: Bot, row) -> None:
+    """کپچا تمام شد (هر نتیجه‌ای): خوش‌آمد و منوی اصلی که تا الان عمداً نیامده بود. خطا هرگز کاربر را بی‌منو نمی‌گذارد؛ فقط لاگ."""
+    try:
+        from tenant import send_welcome_menu_after_captcha
+        await send_welcome_menu_after_captcha(bot, row, cb)
+    except Exception:
+        logger.exception("rfc: ارسالِ منوی اصلی بعد از کپچا ناموفق بود")
+
+
 @referral_captcha_router.callback_query(F.data.startswith("rfc:"))
 async def rfc_answer(cb: CallbackQuery, bot: Bot):
     from tenant import get_bot_row
@@ -124,7 +133,9 @@ async def rfc_answer(cb: CallbackQuery, bot: Bot):
             await cb.message.edit_text("⌛ مهلتِ تأییدِ دعوت تمام شد. ربات را عادی استفاده کن؛ ثبتِ دعوت انجام نشد.")
         except Exception:
             logger.debug("rfc: ویرایشِ پیامِ منقضی ممکن نشد")
-        return await cb.answer()
+        await cb.answer()
+        await _menu_after(cb, bot, row)
+        return
     if val == int(st["ans"]):
         await _put(row.id, tg, None)
         from sqlalchemy import select
@@ -139,7 +150,9 @@ async def rfc_answer(cb: CallbackQuery, bot: Bot):
             await cb.message.edit_text("✅ تأیید شد؛ ورودت از طریقِ لینکِ دعوت ثبت شد.")
         except Exception:
             logger.debug("rfc: ویرایشِ پیامِ موفقیت ممکن نشد")
-        return await cb.answer("✅")
+        await cb.answer("✅")
+        await _menu_after(cb, bot, row)
+        return
     st["tries"] = int(st.get("tries", 0)) + 1
     if st["tries"] >= MAX_TRIES:
         await _put(row.id, tg, None)
@@ -147,7 +160,9 @@ async def rfc_answer(cb: CallbackQuery, bot: Bot):
             await cb.message.edit_text("❌ پاسخِ درست داده نشد؛ ثبتِ دعوت انجام نشد. می‌توانی ربات را عادی استفاده کنی.")
         except Exception:
             logger.debug("rfc: ویرایشِ پیامِ رد ممکن نشد")
-        return await cb.answer("پاسخ غلط بود.", show_alert=True)
+        await cb.answer("پاسخ غلط بود.", show_alert=True)
+        await _menu_after(cb, bot, row)
+        return
     q, ans, opts = make_question()                             # بعد از هر غلط، سؤالِ تازه (جلوگیری از حدسِ پشت‌سرهم)
     st.update(ans=ans, t=secrets.token_hex(3))
     await _put(row.id, tg, st)

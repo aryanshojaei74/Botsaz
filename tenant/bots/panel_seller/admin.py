@@ -79,6 +79,23 @@ async def _panels(bot_id: int) -> list[VpnPanel]:
         return list((await s.scalars(select(VpnPanel).where(VpnPanel.bot_id == bot_id).order_by(VpnPanel.id))).all())
 
 
+async def panel_choice_label(bot_id: int, p: VpnPanel) -> str:
+    """=== PATCH_PSEL_PANEL_PICK_LABEL_V1 === (Whale Support: «دو تا پاسارگاد دارم و نمی‌تونم انتخابشون کنم»)
+    دکمهٔ انتخابِ پنل قبلاً فقط «نوعِ پنل» را نشان می‌داد؛ دو پنلِ هم‌نوع یکسان دیده می‌شدند.
+    حالا نامِ دلخواهِ مالک (اگر گذاشته) یا نوعِ پنل + آدرسِ (دامنهٔ) همان پنل، تا هر پنل جدا و مشخص باشد."""
+    from urllib.parse import urlparse
+    from tenant.bots.vpn.vpn_admin import PANEL_LABELS, panel_label
+    custom = await panel_label(bot_id, p.panel_key)
+    base = PANEL_LABELS.get(p.panel_key) or PANEL_LABELS.get((p.panel_key or "").split("#", 1)[0], p.panel_key)
+    name = custom if custom and custom != p.panel_key else base
+    host = ""
+    try:
+        host = (urlparse(p.base_url or "").netloc or (p.base_url or "")).replace("www.", "")
+    except Exception:      # noqa: BLE001
+        host = p.base_url or ""
+    return (f"{name} — {host}" if host else name)[:60]
+
+
 # ═══════════════════════ منوی اصلی ═══════════════════════
 
 async def menu_content(row):
@@ -167,9 +184,8 @@ async def pk_detail(cb: CallbackQuery, bot: Bot):
         panel = await s.get(VpnPanel, p.panel_id) if p else None
     if not p or p.bot_id != row.id:
         return await cb.answer("پیدا نشد.", show_alert=True)
-    from tenant.bots.vpn.vpn_admin import PANEL_LABELS
     plabel = ("📝 فروشِ دستی (بدونِ پنل)" if getattr(p, "manual", False)
-              else PANEL_LABELS.get(panel.panel_key, panel.panel_key) if panel else "— حذف‌شده —")
+              else await panel_choice_label(row.id, panel) if panel else "— حذف‌شده —")
     await edit_or_send(cb, f"{pk_line(p)}\n🗂 پنل: {esc(plabel)}\nوضعیت: {'🟢 فعال' if p.active else '⚪️ غیرفعال'}",
                        kb([btn("⚪️ غیرفعال‌کردن" if p.active else "🟢 فعال‌کردن", f"psel:pkt:{pid}", style=ButtonStyle.PRIMARY)],
                           [btn("🗑 حذف", f"psel:pkd:{pid}", style=ButtonStyle.DANGER)], back_row("psel:pk")))
@@ -209,9 +225,8 @@ async def pk_new(cb: CallbackQuery, bot: Bot, state: FSMContext):
     row = await _guard(cb, bot)
     if not row:
         return
-    from tenant.bots.vpn.vpn_admin import PANEL_LABELS
     panels = [p for p in await _panels(row.id) if AD.supports(p.panel_key)]
-    rows = [[btn(PANEL_LABELS.get(p.panel_key, p.panel_key), f"psel:pkp:{p.id}", style=ButtonStyle.PRIMARY)] for p in panels]
+    rows = [[btn(await panel_choice_label(row.id, p), f"psel:pkp:{p.id}", style=ButtonStyle.PRIMARY)] for p in panels]
     rows.append([btn("📝 فروشِ دستی (بدونِ اتصال به پنل)", "psel:pkm", style=ButtonStyle.SUCCESS)])      # PATCH_PSEL_MANUAL_SALE_V1
     rows.append(back_row("psel:pk"))
     await state.clear()
@@ -705,9 +720,8 @@ async def rs_list(cb: CallbackQuery, bot: Bot):
     row = await _guard(cb, bot)
     if not row:
         return
-    from tenant.bots.vpn.vpn_admin import PANEL_LABELS
     panels = [p for p in await _panels(row.id) if AD.supports(p.panel_key)]
-    rows = [[btn(PANEL_LABELS.get(p.panel_key, p.panel_key), f"psel:rs:{p.id}", style=ButtonStyle.PRIMARY)] for p in panels]
+    rows = [[btn(await panel_choice_label(row.id, p), f"psel:rs:{p.id}", style=ButtonStyle.PRIMARY)] for p in panels]
     rows.append(back_row(MENU))
     await edit_or_send(cb, "🔄 <b>ریستارتِ هستهٔ پنل</b>\n\nکدام پنل ریستارت شود؟" + ("" if panels else "\n\nپنلِ پشتیبانی‌شده‌ای وصل نیست."),
                        kb(*rows))

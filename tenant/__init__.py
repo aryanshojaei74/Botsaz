@@ -1985,20 +1985,22 @@ async def _phone_verify_prompt(msg: Message) -> None:
         reply_markup=kb)
 
 
-async def _phone_verify_resume_pending(bot: Bot, row, u, state: FSMContext, telegram_id: int) -> None:
+async def _phone_verify_resume_pending(bot: Bot, row, u, state: FSMContext, telegram_id: int) -> bool:
     """بعدِ تاییدِ موفقِ شماره، دقیقاً مثلِ fj:check دعوت‌هایِ نگه‌داشته‌شده
     (رفرالِ عمومی/گیتِ دسترسی) رو که به‌خاطرِ این مرحله معطل مونده بودن، ثبت می‌کنه."""
     data = await state.get_data()
     pending_ref = data.get("pending_ref_code")
+    challenged = False
     if pending_ref:
         await state.update_data(pending_ref_code=None)
         from tenant.shared.extras import handle_referral_join
-        await handle_referral_join(row.id, u, pending_ref, bot)
+        challenged = bool(await handle_referral_join(row.id, u, pending_ref, bot))
     pending_gate = data.get("pending_gate_code")
     if pending_gate:
         await state.update_data(pending_gate_code=None)
         from tenant.shared.referral_gate import handle_gate_referral_join
         await handle_gate_referral_join(pending_gate, telegram_id)
+    return challenged
 
 
 # === PATCH_PHONE_LOG_CHANNEL_V1 ===
@@ -2060,7 +2062,10 @@ async def _phone_verified_ok(msg: Message, bot: Bot, state: FSMContext, row, pho
     _pay_gate_now = (await get_setting(row.id, "phone_verify_pay", "off")) == "on"
     await send_phone_log(bot, row, u, phone,
                          "پیش از پرداخت/خرید" if _pay_gate_now else "ثبت‌نام")
-    await _phone_verify_resume_pending(bot, row, u, state, msg.from_user.id)
+    _rf_challenged_pv = await _phone_verify_resume_pending(bot, row, u, state, msg.from_user.id)
+    if _rf_challenged_pv:          # PATCH_REFERRAL_CAPTCHA_MENU_AFTER_V2: شماره تأیید شد ولی منو بعد از کپچا می‌آید
+        await msg.answer("✅ شماره‌ت با موفقیت تایید شد!", reply_markup=ReplyKeyboardRemove())
+        return True
     kb = await main_kb_or_remove(row.id, row.owner_id, msg.from_user.id) \
         if (await get_setting(row.id, "menu_mode", "reply")) != "inline" else ReplyKeyboardRemove()
     # === PATCH_PAY_PHONE_VERIFY_V1 ===
@@ -3196,6 +3201,8 @@ def _nav_inject(mk, has_hist: bool, prev_is_home: bool = False, no_prev: bool = 
         return mk
     cbs = [(b, getattr(b, "callback_data", None) or "") for r in mk.inline_keyboard for b in r]
     if any(c == "nav:back" for _, c in cbs):
+        return mk
+    if cbs and all(c.startswith("rfc:") for _, c in cbs):      # کپچایِ زیرمجموعه‌گیری: دکمهٔ «🏠 منوی اصلی» نخورد (باید اول حل شود)
         return mk
     has_prev = any(c.startswith("smopen:") for _, c in cbs)
     has_home = any(c == "mbtn:home" for _, c in cbs)
@@ -5600,9 +5607,10 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
     # ثبت دعوت — فقط وقتی این کاربر همین الان (نه قبلاً) برای این ربات ساخته شده،
     # تا کاربرانِ قدیمیِ ربات با کلیک بعدی روی یک لینک دعوت اشتباهاً به‌عنوان
     # زیرمجموعهٔ جدید شمارش/پاداش‌دهی نشوند.
+    _rf_challenged = False
     if ref_code and was_created:
         from tenant.shared.extras import handle_referral_join
-        await handle_referral_join(row.id, u, ref_code, bot)
+        _rf_challenged = bool(await handle_referral_join(row.id, u, ref_code, bot))
     if gate_code and was_created:  # === PATCH_GATE_DEDICATED_LINK_V1 ===
         from tenant.shared.referral_gate import handle_gate_referral_join
         await handle_gate_referral_join(gate_code, msg.from_user.id)
@@ -5612,6 +5620,10 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
     # گیت‌ها رو رد نکرده هم می‌تونست با /start زدنِ ساده هدیه بگیره.
     if was_created:
         await grant_welcome_bonus(bot, row, u)
+    # === PATCH_REFERRAL_CAPTCHA_MENU_AFTER_V2 === (Whale Support: «اول کپچا رو میاره بعد منو اصلی؛ باید اول کپچا رو حل کنه بعد منو بیاد»)
+    # کپچا فرستاده شده ⇒ فعلاً فقط خودِ کپچا؛ خوش‌آمد و منوی اصلی بعد از جواب (درست/غلط/انقضا) فرستاده می‌شود.
+    if _rf_challenged:
+        return
 
     # === PATCH_START_REACTION_V1 ===
     # اگر ادمین از «😀 ری‌اکشن روی پیامِ استارت» چیزی تنظیم کرده باشد، همین
@@ -6175,7 +6187,9 @@ async def fj_check(cb: CallbackQuery, bot: Bot, state: FSMContext):
         u = await get_or_create_user(row.id, cb.from_user.id, cb.from_user.full_name,
                                      cb.from_user.username or "")
         from tenant.shared.extras import handle_referral_join
-        await handle_referral_join(row.id, u, pending_ref, bot)
+        _rf_challenged_fj = bool(await handle_referral_join(row.id, u, pending_ref, bot))
+    else:
+        _rf_challenged_fj = False
     # === PATCH_GATE_DEDICATED_LINK_V1 ===
     pending_gate = data.get("pending_gate_code")
     if pending_gate:
@@ -6186,6 +6200,8 @@ async def fj_check(cb: CallbackQuery, bot: Bot, state: FSMContext):
         await cb.message.delete()
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+    if _rf_challenged_fj:          # PATCH_REFERRAL_CAPTCHA_MENU_AFTER_V2: اول کپچا؛ منو بعد از جواب
+        return
 
     # === PATCH_FJ_PHONE_GATE_V1 ===
     # میدل‌ویرِ تاییدِ شماره فقط رویِ *پیام‌ها* است، و این یک
@@ -6222,6 +6238,26 @@ async def fj_check(cb: CallbackQuery, bot: Bot, state: FSMContext):
                               reply_markup=kb or ReplyKeyboardRemove())
     await _resume_pending_svc_after_gate(cb.message, bot, state)   # === PATCH_SMM_DEEPLINK_RESUME_V1 ===
     await _resume_giveaway_after_gate(cb, bot, row, state, data)
+
+
+async def send_welcome_menu_after_captcha(bot: Bot, row, cb) -> None:
+    """بعد از پایانِ کپچایِ زیرمجموعه‌گیری (درست، سه غلط، یا انقضا) خوش‌آمد و منوی اصلی را می‌فرستد.
+    همان کاری که «عضو شدم» می‌کند (PATCH_REFERRAL_CAPTCHA_MENU_AFTER_V2)."""
+    txt = await _resolve_welcome_text(row.id, cb.from_user)
+    welcome_media_id = await get_setting(row.id, "welcome_media_id", "")
+    welcome_media_type = await get_setting(row.id, "welcome_media_type", "")
+    if await get_setting(row.id, "menu_mode", "reply") == "inline":
+        ikb = await main_inline_kb(row.id, row.owner_id, cb.from_user.id)
+        _wm = await _try_merged_welcome(cb.message, row, txt, welcome_media_id, welcome_media_type, ikb, cb.from_user.id)
+        if _wm is None:
+            _wm = await _send_welcome_media(cb.message, txt, welcome_media_id, welcome_media_type,
+                                            reply_markup=ReplyKeyboardRemove())
+            if ikb:
+                await send_home_menu(cb.message, row.id, ikb, attach=_wm)
+        return
+    kb = await main_kb_or_remove(row.id, row.owner_id, cb.from_user.id)
+    await _send_welcome_media(cb.message, txt, welcome_media_id, welcome_media_type,
+                              reply_markup=kb or ReplyKeyboardRemove())
 
 
 # ─────────────────────── لغو کلی ───────────────────────
@@ -14447,7 +14483,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "666"
+BUILD_ID = "667"
 
 
 @tenant_router.message(Command("version"))

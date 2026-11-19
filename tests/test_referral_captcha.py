@@ -186,3 +186,108 @@ def test_owner_toggle_is_in_the_referral_menu_and_wired():
     assert "refrw:captcha" in [b.callback_data for r in kb.inline_keyboard for b in r]
     assert "include_router(referral_captcha_router)" in src
     assert src.count("_ref_reward_kb(_en, _md, row.plan, _cap)") >= 3          # همهٔ مسیرهایِ بازسازیِ منو وضعیتِ کپچا را نشان می‌دهند
+
+
+# ───────────── Whale Support (۱۹ نوامبر): «اول کپچا رو میاره بعد منو اصلی؛ باید اول کپچا حل بشه بعد منو بیاد» ─────────────
+async def test_join_returns_true_only_when_a_challenge_was_sent(env):
+    bot = _Bot()
+    assert not await extras.handle_referral_join(3, await _user(env, 200), "abc", bot)      # کپچا خاموش ⇒ منو همان لحظه
+    async with env() as s:
+        for j in (await s.execute(select(models.ReferralJoin))).scalars().all():
+            await s.delete(j)
+        await s.commit()
+    await _on(env)
+    assert await extras.handle_referral_join(3, await _user(env, 201), "abc", bot) is True  # چالش فرستاده شد ⇒ منو نباید بیاید
+    assert await extras.handle_referral_join(3, await _user(env, 201), "abc", bot) is True  # چالشِ فعال هم همین
+
+
+def test_captcha_keyboard_never_gets_the_main_menu_button():
+    """دکمهٔ سراسریِ «🏠 منوی اصلی» به صفحه‌هایِ شیشه‌ای اضافه می‌شود؛ برایِ کپچا نباید (وگرنه با یک دکمه کپچا دور زده می‌شد)."""
+    kb = RC._kb("abc123", [9, 10, 14, 11])
+    out = tenant._nav_inject(kb, True)
+    assert out is kb and "mbtn:home" not in [b.callback_data for r in out.inline_keyboard for b in r]
+    other = tenant._nav_inject(tenant.InlineKeyboardMarkup(inline_keyboard=[[tenant.InlineKeyboardButton(text="x", callback_data="foo:1")]]), True)
+    assert "mbtn:home" in [b.callback_data for r in other.inline_keyboard for b in r]        # صفحه‌هایِ دیگر مثلِ قبل
+
+
+async def _capture_menu(monkeypatch):
+    sent = []
+
+    async def fake(bot, row, cb): sent.append(cb.from_user.id)
+    monkeypatch.setattr(tenant, "send_welcome_menu_after_captcha", fake)
+    return sent
+
+
+async def test_menu_is_sent_after_a_correct_answer(env, monkeypatch):
+    await _on(env)
+    bot = _Bot()
+    await extras.handle_referral_join(3, await _user(env, 200), "abc", bot)
+    sent = await _capture_menu(monkeypatch)
+    st = await RC._get(3, 200)
+    await _answer(env, monkeypatch, 200, bot, st["ans"])
+    assert sent == [200]
+
+
+async def test_menu_is_sent_after_three_wrong_answers_but_not_after_a_single_wrong_one(env, monkeypatch):
+    await _on(env)
+    bot = _Bot()
+    await extras.handle_referral_join(3, await _user(env, 201), "abc", bot)
+    sent = await _capture_menu(monkeypatch)
+    st = await RC._get(3, 201)
+    await _answer(env, monkeypatch, 201, bot, st["ans"] + 100)
+    assert sent == []                                                         # غلطِ اول: هنوز فقط کپچا
+    st = await RC._get(3, 201)
+    await _answer(env, monkeypatch, 201, bot, st["ans"] + 100)
+    assert sent == []
+    st = await RC._get(3, 201)
+    await _answer(env, monkeypatch, 201, bot, st["ans"] + 100)
+    assert sent == [201]                                                      # سومی: دعوت رد شد ولی کاربر بی‌منو نمی‌ماند
+
+
+async def test_menu_is_sent_when_the_challenge_expired(env, monkeypatch):
+    await _on(env)
+    bot = _Bot()
+    await extras.handle_referral_join(3, await _user(env, 200), "abc", bot)
+    st = await RC._get(3, 200)
+    st["exp"] = 1
+    await RC._put(3, 200, st)
+    sent = await _capture_menu(monkeypatch)
+    await _answer(env, monkeypatch, 200, bot, st["ans"])
+    assert sent == [200]
+
+
+async def test_a_menu_failure_never_breaks_the_captcha_flow(env, monkeypatch):
+    await _on(env)
+    bot = _Bot()
+    await extras.handle_referral_join(3, await _user(env, 200), "abc", bot)
+
+    async def boom(bot, row, cb): raise RuntimeError("telegram down")
+    monkeypatch.setattr(tenant, "send_welcome_menu_after_captcha", boom)
+    st = await RC._get(3, 200)
+    cb, _ = await _answer(env, monkeypatch, 200, bot, st["ans"])
+    assert await _joins(env) == [200] and any("تأیید شد" in e for e in cb.edits)           # دعوت ثبت شد؛ خطا فقط لاگ شد
+
+
+async def test_phone_verify_resume_reports_a_pending_challenge(env):
+    await _on(env)
+    bot = _Bot()
+
+    class St:
+        async def get_data(self): return {"pending_ref_code": "abc"}
+
+        async def update_data(self, **k): pass
+    u = await _user(env, 200)
+    row = types.SimpleNamespace(id=3)
+    assert await tenant._phone_verify_resume_pending(bot, row, u, St(), 200) is True
+    assert await _joins(env) == []
+
+
+def test_start_flow_returns_before_the_welcome_menu_when_challenged():
+    """tenant_start: بعد از handle_referral_join اگر چالش فرستاده شد، خوش‌آمد/منو/استیکر نیاید (قبل از «استیکر/خوش‌آمد»)."""
+    from pathlib import Path
+    src = Path("tenant/__init__.py").read_text(encoding="utf-8")
+    i = src.index("_rf_challenged = bool(await handle_referral_join(row.id, u, ref_code, bot))")
+    j = src.index("if _rf_challenged:\n        return", i)
+    k = src.index("welcome = await get_setting(row.id, \"welcome_text\"", i)
+    bonus = src.index("await grant_welcome_bonus(bot, row, u)", i)
+    assert i < bonus < j < k                                                   # هدیهٔ خوش‌آمد حتماً داده می‌شود، بعد برگشت، قبل از ساختِ خوش‌آمد

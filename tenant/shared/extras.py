@@ -665,7 +665,7 @@ async def handle_referral_join(bot_id: int, new_user: BotUser, ref_code: str, bo
     if not _captcha_passed:
         from tenant.shared.referral_captcha import gate as _rf_captcha_gate
         if await _rf_captcha_gate(bot_id, new_user, ref_code, bot):
-            return
+            return True           # چالش فرستاده شد؛ فراخوان تا حلِ کپچا نباید منوی اصلی را نشان بدهد (Whale Support)
 
     async with Session() as s:
         ref = await s.scalar(select(ReferralLink).where(

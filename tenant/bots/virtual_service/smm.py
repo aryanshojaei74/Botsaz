@@ -18899,8 +18899,13 @@ async def show_ton_shop_to_user(bot: Bot, target: Message, bot_id: int,
                                 state: "FSMContext | None" = None, skip_hub: bool = False) -> None:
     # === PATCH_CRYPTO_SHOP_V1 === (Sajad) ترون/تتر روشن باشد ⇒ اول صفحهٔ «خرید رمز ارز»؛ وگرنه همان فروشِ تونِ قبلی
     if not skip_hub:
-        from tenant.bots.virtual_service import crypto_shop as _cx
-        if await _cx.enabled_coins(bot_id):
+        try:
+            from tenant.bots.virtual_service import crypto_shop as _cx
+            _coins = await _cx.enabled_coins(bot_id)
+        except Exception:
+            logger.exception("crypto_shop: بررسیِ ارزهایِ فعال ناموفق بود؛ فروشِ تونِ عادی")
+            _coins = []
+        if _coins:
             await _cx.show_hub(bot, target, bot_id, state)
             return
     rate, qmin, qmax = await _ton_sell_settings(bot_id)

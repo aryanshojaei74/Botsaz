@@ -50,13 +50,13 @@ class CxFSM(StatesGroup):
 
 # ───────────── تنظیمات و نرخ ─────────────
 async def _gs(bot_id: int, key: str, default: str = "") -> str:
-    from tenant import get_setting
-    return await get_setting(bot_id, key, default)
+    from tenant.bots.virtual_service import smm as S          # همان منبعِ تنظیماتِ فروشِ تون (یک مسیرِ خواندن)
+    return await S._get_setting(bot_id, key, default)
 
 
 async def _ss(bot_id: int, key: str, value: str) -> None:
-    from tenant import set_setting
-    await set_setting(bot_id, key, value)
+    from tenant.bots.virtual_service import smm as S
+    await S._set_setting(bot_id, key, value)
 
 
 def _f(v, default: float) -> float:
