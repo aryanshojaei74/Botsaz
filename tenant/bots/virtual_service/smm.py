@@ -6742,6 +6742,8 @@ def _vs_gift_item_label(o) -> str:
         item = f"⭐ ری‌اکشن {o.star_count or 0:,}"
     elif gid.startswith("tonsell_"):
         item = f"💎 {(o.star_count or 0) / 100:g} TON"
+    elif gid.startswith("cxsell_"):        # PATCH_CRYPTO_SHOP_V1
+        item = f"{o.gift_emoji or '🪙'} {(o.star_count or 0) / 100:g} {'TRX' if '_trx_' in gid else 'USDT'}"
     elif gid.startswith("manual"):
         item = "🔗 گیفتِ سفارشی"
     else:
@@ -6902,10 +6904,13 @@ async def _vs_gift_detail_content(bot_id: int, order_id: int,
     elif gid.startswith("tonsell_") and st in ("awaiting_admin", "pending"):
         rows.append([InlineKeyboardButton(text="✅ ارسال شد", callback_data=f"ton:done:{o.id}", style=ButtonStyle.SUCCESS),
                      InlineKeyboardButton(text="↩️ رد و بازگشتِ وجه", callback_data=f"ton:refund:{o.id}", style=ButtonStyle.DANGER)])
+    elif gid.startswith("cxsell_") and st in ("awaiting_admin", "pending"):      # PATCH_CRYPTO_SHOP_V1
+        rows.append([InlineKeyboardButton(text="✅ ارسال شد", callback_data=f"cx:done:{o.id}", style=ButtonStyle.SUCCESS),
+                     InlineKeyboardButton(text="↩️ رد و بازگشتِ وجه", callback_data=f"cx:refund:{o.id}", style=ButtonStyle.DANGER)])
     elif st == "awaiting_stars":
         rows.append([InlineKeyboardButton(text="🔄 ارسال (بعد از شارژ)", callback_data=f"gift:retry:{o.id}", style=ButtonStyle.PRIMARY),
                      InlineKeyboardButton(text="❌ رد و بازگشتِ وجه", callback_data=f"gift:cardno:{o.id}", style=ButtonStyle.DANGER)])
-    elif st in ("awaiting_admin",) and not gid.startswith(("premium_", "starsell_", "srx_", "tonsell_")):
+    elif st in ("awaiting_admin",) and not gid.startswith(("premium_", "starsell_", "srx_", "tonsell_", "cxsell_")):
         rows.append([InlineKeyboardButton(text="✅ انجام شد", callback_data=f"gift:cardok:{o.id}", style=ButtonStyle.SUCCESS),
                      InlineKeyboardButton(text="❌ رد", callback_data=f"gift:cardno:{o.id}", style=ButtonStyle.DANGER)])
     rows.append(back_btn)
@@ -8274,6 +8279,11 @@ async def _notify_gift_order_trust_success(bot: Bot, row, order_id: int) -> None
             section = 'تون (TON)'
             detail = f'💎 تون (TON) — {(o.star_count or 0) / 100:g} TON'
             _pub_detail, _count = '💎 تون (TON)', f'{(o.star_count or 0) / 100:g}'
+        elif (o.gift_id or '').startswith('cxsell_'):        # PATCH_CRYPTO_SHOP_V1
+            _sym = 'TRX' if '_trx_' in (o.gift_id or '') else 'USDT'
+            section = 'رمزارز'
+            detail = f'🪙 {_sym} — {(o.star_count or 0) / 100:g} {_sym}'
+            _pub_detail, _count = f'🪙 {_sym}', f'{(o.star_count or 0) / 100:g}'
         elif (o.gift_id or '').startswith('manual'):
             section = 'گیفت تلگرام'
             detail = f'🎁 گیفت سفارشی — {o.gift_emoji or "🎁"}'
@@ -14141,6 +14151,8 @@ def _gift_item_label(o) -> str:
         return "🔗 گیفتِ سفارشی"
     if gid.startswith("tonsell_"):
         return f"💎 {n / 100:g} TON"
+    if gid.startswith("cxsell_"):                           # PATCH_CRYPTO_SHOP_V1
+        return f"{o.gift_emoji or '🪙'} {n / 100:g} {'TRX' if '_trx_' in gid else 'USDT'}"
     if gid.startswith("starsell_"):
         return f"⭐ {n:,} استارز"
     if gid.startswith("srx_"):
@@ -14154,6 +14166,7 @@ def _gift_item_label(o) -> str:
 _LP_ROUTES = {
     ("starsell_", "ok"): ("star:done", "star_admin_done"), ("starsell_", "no"): ("star:reject", "star_admin_reject"),
     ("tonsell_", "ok"): ("ton:done", "ton_order_done"), ("tonsell_", "no"): ("ton:refund", "ton_order_refund"),
+    ("cxsell_", "ok"): ("cx:done", "cx_done"), ("cxsell_", "no"): ("cx:refund", "cx_refund"),      # PATCH_CRYPTO_SHOP_V1
     ("srx_", "ok"): ("srx:ok", "srx_admin_done"), ("srx_", "no"): ("srx:no", "srx_admin_reject"),
     ("", "ok"): ("gift:cardok", "gift_cardpay_approve"), ("", "no"): ("gift:cardno", "gift_cardpay_reject"),
 }
@@ -14174,7 +14187,7 @@ async def gift_list_pending_action(cb: CallbackQuery, bot: Bot):
     if not o or o.bot_id != row.id:
         return await cb.answer("سفارش پیدا نشد.", show_alert=True)
     gid = o.gift_id or ""
-    key = next((p for p in ("starsell_", "tonsell_", "srx_") if gid.startswith(p)), "")
+    key = next((p for p in ("starsell_", "tonsell_", "cxsell_", "srx_") if gid.startswith(p)), "")
     cb_prefix, fn_name = _LP_ROUTES[(key, act)]
     _tok = _KEEP_ADMIN_MSG.set(True)
     try:
@@ -15779,7 +15792,7 @@ async def gift_cardpay_approve(cb: CallbackQuery, bot: Bot):
     # «✅ انجام شد» فقط برایِ «تأییدِ رسیدِ کارت‌به‌کارتِ اولیه» خودکار می‌فرستد. سفارشِ کیف‌پولی (که خودکارش موقعِ ثبت اجرا شده) یا سفارشی که
     # ارسالِ خودکارش شکست خورده و به دستی برگشته (fail_reason پر است) یعنی «خودم دستی فرستادم»؛ ارسالِ خودکار فقط با دکمه‌هایِ جدایشان.
     _first_card_approval = (o.pay_method == "card") and not (o.fail_reason or "").strip()
-    if (not (o.gift_id or "").startswith(("manual", "premium_", "starsell_", "srx_", "tonsell_"))
+    if (not (o.gift_id or "").startswith(("manual", "premium_", "starsell_", "srx_", "tonsell_", "cxsell_"))
             and _first_card_approval
             and o.deliver_via != "bot" and await _auto_gift_on(row.id)):     # PATCH_ACC_GIFT_V1
         _via_lbl = "اکانتِ پشتیبانی" if await _acc_gift_on(row.id) else "TGTools"
@@ -15788,7 +15801,7 @@ async def gift_cardpay_approve(cb: CallbackQuery, bot: Bot):
         _gift_auto_spawn(bot, row, order_id)
         return
     _manual_done = ((o.pay_method != "card" or (o.fail_reason or "").strip())
-                    and not (o.gift_id or "").startswith(("premium_", "starsell_", "srx_", "tonsell_"))
+                    and not (o.gift_id or "").startswith(("premium_", "starsell_", "srx_", "tonsell_", "cxsell_"))
                     and o.deliver_via != "bot")       # PATCH_GIFT_DONE_IS_MANUAL_V1: «انجام شد» = دستی فرستادم
     if (o.gift_id or "").startswith("manual") or manual_mode or o.deliver_via == "support" or _manual_done:
         async with Session() as s:
@@ -18650,6 +18663,7 @@ async def ton_sell_admin_content(bot_id: int) -> tuple[str, InlineKeyboardMarkup
             text=f"{'✅' if _k in _types_on else '⛔️'} {_TON_TYPES[_k][0]}", callback_data=f"ton:tt:{_k}",
             style=(ButtonStyle.SUCCESS if _k in _types_on else None))] for _k in ("wallet", "tgdeposit", "balance", "tgwallet")],
         [InlineKeyboardButton(text="🧾 سفارش‌هایِ در انتظار", callback_data="ton:orders:0")],
+        [InlineKeyboardButton(text="🪙 ترون و تتر (فروشِ رمزارزِ بیشتر)", callback_data="cx:adm", style=ButtonStyle.PRIMARY)],   # PATCH_CRYPTO_SHOP_V1
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="smm:manlist", style=ButtonStyle.DANGER)],
     ])
     return text, kb
@@ -18882,7 +18896,13 @@ async def ton_setmax_save(msg: Message, bot: Bot, state: FSMContext):
 # ───────── سمتِ مشتری ─────────
 
 async def show_ton_shop_to_user(bot: Bot, target: Message, bot_id: int,
-                                state: "FSMContext | None" = None) -> None:
+                                state: "FSMContext | None" = None, skip_hub: bool = False) -> None:
+    # === PATCH_CRYPTO_SHOP_V1 === (Sajad) ترون/تتر روشن باشد ⇒ اول صفحهٔ «خرید رمز ارز»؛ وگرنه همان فروشِ تونِ قبلی
+    if not skip_hub:
+        from tenant.bots.virtual_service import crypto_shop as _cx
+        if await _cx.enabled_coins(bot_id):
+            await _cx.show_hub(bot, target, bot_id, state)
+            return
     rate, qmin, qmax = await _ton_sell_settings(bot_id)
     if not rate:
         await target.answer("💎 فروشِ تون فعلاً در دسترس نیست. بعداً دوباره سر بزن.")
@@ -21650,7 +21670,7 @@ async def _gift_admin_kb(bot_id: int, order_id: int, gift_id: str | None) -> Inl
         logger.exception("tgtools: ساختِ دکمهٔ گیفت ناموفق")
     # === PATCH_ACC_GIFT_V1 === ارسال با اکانتِ پشتیبانی (فقط اگر اکانت وصل است و گیفت کاتالوگی است)
     try:
-        if not str(gift_id or "").startswith(("manual", "premium_", "starsell_", "srx_", "tonsell_")):
+        if not str(gift_id or "").startswith(("manual", "premium_", "starsell_", "srx_", "tonsell_", "cxsell_")):
             from tenant.bots.virtual_service import acc_gift as _acc
             if await _acc.has_account(bot_id):
                 rows.append([InlineKeyboardButton(text="👤 ارسال با اکانتِ پشتیبانی", callback_data=f"gift:acc:{order_id}",
@@ -21776,7 +21796,7 @@ async def tgtools_fulfil_gift(bot: Bot, row, order_id: int, *, by_admin: bool = 
             o = await s.get(GiftOrder, order_id, with_for_update=True)
             need = "auto_processing" if resume else "awaiting_admin"
             if (not o or o.bot_id != row.id or str(o.gift_id).startswith("manual")
-                    or str(o.gift_id).startswith(("premium_", "starsell_", "srx_", "tonsell_")) or o.status != need):
+                    or str(o.gift_id).startswith(("premium_", "starsell_", "srx_", "tonsell_", "cxsell_")) or o.status != need):
                 return
             o.status = "auto_processing"
             gift_id, qty, done = o.gift_id, int(o.quantity or 1), int(o.sent_qty or 0)
@@ -21895,7 +21915,7 @@ async def acc_fulfil_gift(bot: Bot, row, order_id: int, *, by_admin: bool = Fals
         async with Session() as s:     # ادعایِ اتمیکِ سفارش (جلوگیری از تحویلِ دوبار: دستی + خودکار)
             o = await s.get(GiftOrder, order_id, with_for_update=True)
             if (not o or o.bot_id != row.id or str(o.gift_id).startswith("manual")
-                    or str(o.gift_id).startswith(("premium_", "starsell_", "srx_", "tonsell_"))
+                    or str(o.gift_id).startswith(("premium_", "starsell_", "srx_", "tonsell_", "cxsell_"))
                     or o.status != "awaiting_admin"):
                 return
             o.status = "auto_processing"
@@ -21967,7 +21987,7 @@ async def gift_acc_go(cb: CallbackQuery, bot: Bot):
     async with Session() as s:
         o = await s.get(GiftOrder, order_id)
     if (not o or o.bot_id != row.id or o.status != "awaiting_admin"
-            or str(o.gift_id).startswith(("manual", "premium_", "starsell_", "srx_", "tonsell_"))):
+            or str(o.gift_id).startswith(("manual", "premium_", "starsell_", "srx_", "tonsell_", "cxsell_"))):
         await cb.answer("این سفارش قبلاً رسیدگی شده یا برایِ ارسال با اکانت مناسب نیست.", show_alert=True)
         return
     await cb.answer("👤 در حالِ ارسال با اکانتِ پشتیبانی… نتیجه اینجا اعلام می‌شود.", show_alert=True)
@@ -22059,7 +22079,7 @@ async def gift_tgt_go(cb: CallbackQuery, bot: Bot):
     async with Session() as s:
         o = await s.get(GiftOrder, order_id)
     if (not o or o.bot_id != row.id or o.status != "awaiting_admin"
-            or str(o.gift_id).startswith(("manual", "premium_", "starsell_", "srx_", "tonsell_"))):
+            or str(o.gift_id).startswith(("manual", "premium_", "starsell_", "srx_", "tonsell_", "cxsell_"))):
         await cb.answer("این سفارش قبلاً رسیدگی شده یا برایِ TGTools مناسب نیست.", show_alert=True)
         return
     await cb.answer("🤖 در حالِ خرید با TGTools… نتیجه اینجا اعلام می‌شود.", show_alert=True)
@@ -23258,6 +23278,8 @@ def _uvo_gift_label(o) -> str:
         return "🌟 تلگرام پریمیوم " + gid.split("_")[-1] + " ماهه"
     if gid.startswith("tonsell_"):
         return "💎 TON"
+    if gid.startswith("cxsell_"):                           # PATCH_CRYPTO_SHOP_V1
+        return "🪙 TRX" if "_trx_" in gid else "🪙 USDT"
     if gid.startswith("srx_"):
         return "⭐️ ری‌اکشنِ استارزی"
     if gid.startswith("manual"):
@@ -23376,3 +23398,7 @@ async def usr_vs_orders_search_run(msg: Message, bot: Bot, state: FSMContext):
 
 
 _fapi.register(smm_router)   # PATCH_FRAGAPI_V1 — هندلرهایِ Fragment API
+
+
+# === PATCH_CRYPTO_SHOP_V1 === هندلرهایِ تحویل/بازگشتِ ترون و تتر برایِ «لیستِ سفارش‌ها» (_LP_ROUTES از globals() صدا می‌زند)
+from tenant.bots.virtual_service.crypto_shop import cx_done, cx_refund  # noqa: E402,F401

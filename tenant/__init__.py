@@ -291,6 +291,8 @@ tenant_router.include_router(wager_games_router)  # === PATCH_WAGER_TENANT_V1 ==
 from tenant.shared.wager_race import wager_race_router  # === PATCH_WAGER_RACE_TENANT_V1 ===
 tenant_router.include_router(wager_race_router)  # === PATCH_WAGER_RACE_TENANT_V1 ===
 from tenant.shared.wager_inline import wager_inline_router  # === PATCH_WAGER_INLINE_V1 ===
+from tenant.bots.virtual_service.crypto_shop import crypto_shop_router  # === PATCH_CRYPTO_SHOP_V1 ===
+tenant_router.include_router(crypto_shop_router)  # === PATCH_CRYPTO_SHOP_V1 ===
 from tenant.shared.next_discount import next_discount_router  # === PATCH_NEXT_DISCOUNT_V1 ===
 tenant_router.include_router(next_discount_router)  # === PATCH_NEXT_DISCOUNT_V1 ===
 tenant_router.include_router(wager_inline_router)  # === PATCH_WAGER_INLINE_V1 ===
@@ -14445,7 +14447,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "664"
+BUILD_ID = "665"
 
 
 @tenant_router.message(Command("version"))
@@ -15920,9 +15922,10 @@ _SIMPLE_ACTIONS: dict[str, tuple[str, str, frozenset | None]] = {
                    "این دکمه حالا از کاربر تعدادِ استارز می‌پرسد و سفارش را برایِ ادمین ثبت می‌کند.",
                    frozenset({"virtual_service"})),
     # === PATCH_TON_SELL_V1 ===
-    "ton_shop": ("💎 فروشِ تون (TON)",
-                 "این دکمه از کاربر مقدارِ تون و آدرسِ کیف‌پولش را می‌پرسد، پول را از "
-                 "کیف‌پول کم می‌کند و سفارش را برایِ ادمین ثبت می‌کند (ارسال دستی).",
+    "ton_shop": ("💎 فروشِ رمزارز (تون / ترون / تتر)",
+                 "این دکمه از کاربر ارز، مقدار و آدرسِ کیف‌پولش را می‌پرسد، پول را از "
+                 "کیف‌پول کم می‌کند و سفارش را برایِ ادمین ثبت می‌کند (ارسال دستی). "
+                 "تون همیشه هست؛ ترون و تتر از «فروشِ تون ← 🪙 ترون و تتر» روشن می‌شوند و بعد صفحهٔ انتخابِ ارز می‌آید.",
                  frozenset({"virtual_service"})),
     # === PATCH_STAR_REACTION_V1 ===
     "star_reaction_shop": ("⭐️ ری‌اکشنِ استارزیِ پست",
@@ -34200,6 +34203,9 @@ async def track_order_lookup(msg: Message, bot: Bot, state: FSMContext):
             elif go.gift_id and go.gift_id.startswith("tonsell_"):
                 # === PATCH_TON_SELL_V1 === star_count صدم‌تون است
                 item_line = f"💎 تون (TON): {(go.star_count or 0) / 100:g} TON\n"
+            elif go.gift_id and go.gift_id.startswith("cxsell_"):      # PATCH_CRYPTO_SHOP_V1
+                _cs = "TRX" if "_trx_" in go.gift_id else "USDT"
+                item_line = f"🪙 {_cs}: {(go.star_count or 0) / 100:g} {_cs}\n"
             else:
                 item_line = f"🎁 گیفت: {go.gift_emoji or '🎁'} ({go.star_count} استارز)\n"
             await msg.answer(

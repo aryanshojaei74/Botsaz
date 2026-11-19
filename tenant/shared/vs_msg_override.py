@@ -109,6 +109,8 @@ def _label(o) -> str:
         return "تلگرام پریمیوم"
     if gid.startswith("tonsell_"):
         return "TON"
+    if gid.startswith("cxsell_"):                       # PATCH_CRYPTO_SHOP_V1
+        return "TRX" if "_trx_" in gid else "USDT"
     if gid.startswith("srx_"):
         return "ری‌اکشنِ استارزی"
     if gid.startswith("manual"):
@@ -127,7 +129,7 @@ def order_shim(o, chat_id: int | None = None):
     qty = int(getattr(o, "quantity", 1) or 1)
     if gid.startswith(("starsell_", "srx_")):          # تعدادِ واقعی = تعدادِ استارز (نه ۱)
         qty = int(getattr(o, "star_count", 0) or 0) * qty
-    elif gid.startswith("tonsell_"):                   # مقدارِ تون (اعشاری؛ ذخیره‌شده به‌صورتِ صدم)
+    elif gid.startswith(("tonsell_", "cxsell_")):      # مقدارِ تون/ترون/تتر (اعشاری؛ ذخیره‌شده به‌صورتِ صدم)
         qty = (int(getattr(o, "star_count", 0) or 0)) / 100
     return SimpleNamespace(
         id=o.id, tracking_code=o.tracking_code, service_name=_label(o), quantity=qty,
