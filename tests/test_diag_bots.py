@@ -31,3 +31,53 @@ def test_classes():
     assert C(wh={**GOOD, "last_error_date": NOW - 300, "last_error_message": "Read timeout expired"}) == "DELIVERY_ERROR"
     assert C(wh={**GOOD, "last_error_date": NOW - 7200, "last_error_message": "old"}) == "OK"            # خطای قدیمی مهم نیست
     assert C(expected=None) == "OK"                                                                         # WEBHOOK_BASE خالی ⇒ آدرس چک نمی‌شود
+
+
+def test_fix_marks_dead_active_bots_but_leaves_paused_ones(monkeypatch, tmp_path):
+    """--fix: توکنِ باطل + status=active ⇒ disabled_bad_token؛ paused (خاموشیِ مالک/شریک) دست نمی‌خورد؛ هیچ تماسِ set_webhook نمی‌رود."""
+    import asyncio
+    import contextlib
+
+    from aiogram.exceptions import TelegramUnauthorizedError
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    import bot_utils
+    import config
+    import models
+
+    calls = []
+
+    class FakeTb:
+        async def get_me(self):
+            raise TelegramUnauthorizedError(method=None, message="Unauthorized")
+
+        async def set_webhook(self, *a, **k):
+            calls.append("set_webhook")
+
+    @contextlib.asynccontextmanager
+    async def fake_temp(token):
+        yield FakeTb()
+
+    async def run():
+        eng = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/d.db")
+        async with eng.begin() as c:
+            await c.run_sync(models.Base.metadata.create_all)
+        mk = async_sessionmaker(eng, expire_on_commit=False)
+        monkeypatch.setattr(config, "Session", mk)
+        monkeypatch.setattr(bot_utils, "_temp_bot", fake_temp)
+        async with mk() as s:
+            s.add_all([models.Bot(id=1, owner_id=1, token="1:A", username="a", status="active", plan="pro"),
+                       models.Bot(id=2, owner_id=1, token="2:B", username="b", status="paused", plan="partner")])
+            await s.commit()
+        res = {}
+        for bid, st in ((1, "active"), (2, "paused")):
+            res[bid] = await DB._inspect({"id": bid, "token": f"{bid}:X", "status": st}, EXP, ALL, fix=True)
+        async with mk() as s:
+            st = {b.id: b.status for b in (await s.scalars(__import__("sqlalchemy").select(models.Bot))).all()}
+        await eng.dispose()
+        return res, st
+
+    res, st = asyncio.run(run())
+    assert res[1]["cls"] == "DEAD_TOKEN" and "disabled_bad_token" in res[1]["fixed"]
+    assert res[2]["cls"] == "DEAD_TOKEN" and res[2]["fixed"] == ""
+    assert st == {1: "disabled_bad_token", 2: "paused"} and calls == []

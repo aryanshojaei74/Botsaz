@@ -81,6 +81,16 @@ async def _inspect(b, expected, allowed_all, fix: bool):
                 except Exception:  # noqa: BLE001
                     getme = "error"
             out["cls"], out["note"] = classify(b["status"], getme, wh, expected, allowed_all=allowed_all)
+            if fix and out["cls"] == "DEAD_TOKEN" and b["status"] == "active":
+                # توکنِ باطل ولی وضعیت «فعال» ⇒ در پنلِ مدیر «❌ توکن نامعتبر» نشان داده شود (selfheal اگر روزی توکن سالم شد برش می‌گرداند)
+                from config import Session
+                from models import Bot as BotRow
+                async with Session() as s:
+                    br = await s.get(BotRow, b["id"])
+                    if br and br.status == "active" and br.archived_at is None:
+                        br.status = "disabled_bad_token"
+                        await s.commit()
+                out["fixed"] = "وضعیت ⇒ disabled_bad_token (مالک باید توکنِ جدید بدهد)"
             if fix and getme == "ok" and (out["cls"] in ("WRONG_WEBHOOK", "MISSING_UPDATES") or
                                           (out["cls"] == "STATUS_BLOCKED" and b["status"] == "disabled_bad_token")):
                 if b["status"] == "disabled_bad_token":
