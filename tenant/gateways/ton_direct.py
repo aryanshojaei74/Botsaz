@@ -96,6 +96,7 @@ class TonDirectFSM(StatesGroup):
     max_amount = State()    # === PATCH_TON_DIRECT_MINMAX_V1 === ادمین: حداکثرِ مبلغ
     search = State()    # === PATCH_TON_DIRECT_INVOICES_V1 === ادمین: جستجو با کد پیگیری
     track = State()     # === PATCH_TON_DIRECT_INVOICES_V1 === کاربر: پیگیریِ فاکتورِ خودش
+    manual_tx = State()     # === PATCH_TON_DIRECT_MANAGE_V1 === ادمین: TXIDِ تأییدِ دستی
 
 
 # === PATCH_TON_DIRECT_FEE_V1 ===
@@ -446,7 +447,7 @@ async def is_available(bot_id: int) -> bool:
 # ═══════════════════ هستهٔ امن: تسویه و شارژ ═══════════════════
 
 async def _credit(bot_id: int, charge_id: int, tx_hash: str, credit_override: int | None = None,
-                  note: str = "شارژ با واریز مستقیم TON") -> int:
+                  note: str = "شارژ با واریز مستقیم TON", from_address: str | None = None, via: str = "auto") -> int:
     """شارژِ اتمیِ کیفِ پول برایِ یک فاکتور. خروجی: مبلغِ شارژشده (۰ یعنی نشد).
 
     تنها نقطه‌ای است که موجودی را زیاد می‌کند. با UPDATE شرطی قفل می‌شود تا
@@ -457,7 +458,8 @@ async def _credit(bot_id: int, charge_id: int, tx_hash: str, credit_override: in
             sa_update(TonDirectCharge)
             .where(TonDirectCharge.id == charge_id,
                    TonDirectCharge.status != "paid")
-            .values(status="paid", tx_hash=tx_hash))
+            .values(status="paid", tx_hash=tx_hash, from_address=((from_address or "")[:80] or None),
+                    paid_at=_dt.datetime.utcnow(), paid_via=via))
         if claim.rowcount == 0:
             await s.rollback()
             return 0
@@ -683,7 +685,7 @@ async def settle_bot(bot_id: int, tbot: Bot | None = None) -> int:
         async with Session() as s:
             ch = await s.get(TonDirectCharge, charge_id)
             payer, memo = int(ch.user_telegram_id), ch.memo
-        credit = await _credit(bot_id, charge_id, tx_hash, credit_override, off_note)
+        credit = await _credit(bot_id, charge_id, tx_hash, credit_override, off_note, from_address=tx.get("source"))
         if not credit:
             continue
         settled += 1
@@ -1320,7 +1322,8 @@ async def tond_setmax_save(msg: Message, bot: Bot, state: FSMContext):
 # پنلِ وضعیتِ فاکتورها برایِ مالکِ ربات: لیستِ آخرین فاکتورها + جستجو با کدِ
 # پیگیری، با مشخصاتِ خریدار (نام/یوزرنیم/آیدی) از رویِ BotUser.
 INVOICE_LIST_LIMIT = 8
-_STATUS_LABEL = {"paid": "✅ پرداخت‌شده", "waiting": "⏳ در انتظار", "expired": "⌛️ منقضی‌شده"}
+_STATUS_LABEL = {"paid": "✅ پرداخت‌شده", "waiting": "⏳ در انتظار", "expired": "⌛️ منقضی‌شده",
+                 "rejected": "❌ ردشده"}      # PATCH_TON_DIRECT_MANAGE_V1
 
 
 async def _invoice_row(ch: "TonDirectCharge", s) -> str:
@@ -1328,7 +1331,7 @@ async def _invoice_row(ch: "TonDirectCharge", s) -> str:
         BotUser.bot_id == ch.bot_id, BotUser.telegram_id == ch.user_telegram_id))
     who = (f"@{bu.username}" if bu and bu.username else
           (bu.full_name if bu and bu.full_name else str(ch.user_telegram_id)))
-    icon = {"paid": "✅", "waiting": "⏳", "expired": "⌛️"}.get(ch.status, "❔")
+    icon = {"paid": "✅", "waiting": "⏳", "expired": "⌛️", "rejected": "❌"}.get(ch.status, "❔")
     return f"{icon} <code>{ch.memo}</code> — {int(ch.amount_toman or 0):,} ت — {who}"
 
 
@@ -1337,6 +1340,12 @@ async def _invoice_detail_text(ch: "TonDirectCharge", s) -> str:
         BotUser.bot_id == ch.bot_id, BotUser.telegram_id == ch.user_telegram_id))
     uname = f"@{bu.username}" if bu and bu.username else "—"
     fname = (bu.full_name if bu else None) or "—"
+    # === PATCH_TON_DIRECT_MANAGE_V1 === (Royal) مبلغ، آدرسِ مبدأ، TXIDِ کامل، memo، زمان و وضعیت
+    tx_line = (f"🔗 TXID: <code>{ch.tx_hash}</code>\n" if ch.tx_hash else "🔗 TXID: —\n")
+    paid_line = ""
+    if ch.paid_at:
+        via = {"manual": "دستی (تأییدِ مدیر)", "auto": "خودکار"}.get(ch.paid_via or "", "—")
+        paid_line = f"✅ زمانِ تأیید: {ch.paid_at:%Y-%m-%d %H:%M} ({via})\n"
     return (
         "🧾 <b>جزئیات فاکتور</b>\n\n"
         "<blockquote>"
@@ -1344,13 +1353,54 @@ async def _invoice_detail_text(ch: "TonDirectCharge", s) -> str:
         f"🔗 یوزرنیم: {uname}\n"
         f"🆔 آیدی عددی: <code>{ch.user_telegram_id}</code>"
         "</blockquote>\n\n"
-        f"کد پیگیری: <code>{ch.memo}</code>\n"
+        f"کد پیگیری (Memo): <code>{ch.memo}</code>\n"
         f"وضعیت: <b>{_STATUS_LABEL.get(ch.status, ch.status)}</b>\n"
         f"🛒 خرید: شارژ کیف پول\n"
         f"💰 مبلغ: <b>{int(ch.amount_toman or 0):,} تومان</b>\n"
         f"💎 مبلغ TON: <code>{ch.ton_amount}</code>\n"
-        + (f"🔗 tx: <code>{ch.tx_hash[:24]}…</code>\n" if ch.tx_hash else "")
-        + f"🕒 ساخته‌شده: {ch.created_at:%Y-%m-%d %H:%M}")
+        f"📤 آدرسِ مبدأ: {('<code>' + ch.from_address + '</code>') if ch.from_address else '—'}\n"
+        + tx_line
+        + f"🕒 ساخته‌شده: {ch.created_at:%Y-%m-%d %H:%M}\n"
+        + (f"⏳ انقضا: {ch.expires_at:%Y-%m-%d %H:%M}\n" if ch.expires_at else "")
+        + paid_line)
+
+
+def invoice_kb(ch: "TonDirectCharge") -> InlineKeyboardMarkup:
+    """دکمه‌هایِ مدیریتِ یک فاکتور: لینکِ بلاک‌چین، تأییدِ دستی، ردِ فاکتور (PATCH_TON_DIRECT_MANAGE_V1)."""
+    rows = []
+    if ch.tx_hash and not str(ch.tx_hash).startswith("manual-"):
+        h = str(ch.tx_hash)
+        try:
+            import base64 as _b64
+            h = _b64.b64decode(h, validate=True).hex() if not re.fullmatch(r"[0-9a-fA-F]{64}", h) else h
+        except Exception:      # noqa: BLE001
+            pass
+        rows.append([InlineKeyboardButton(text="🔎 مشاهدهٔ تراکنش (tonviewer)", url=f"https://tonviewer.com/transaction/{h}")])
+    if ch.from_address:
+        rows.append([InlineKeyboardButton(text="👤 آدرسِ مبدأ (tonviewer)", url=f"https://tonviewer.com/{ch.from_address}")])
+    if ch.status != "paid":
+        rows.append([InlineKeyboardButton(text="✅ تأییدِ دستی", callback_data=f"tond:man:{ch.id}", style=ButtonStyle.SUCCESS)])
+    if ch.status in ("waiting", "expired"):
+        rows.append([InlineKeyboardButton(text="❌ ردِ فاکتور", callback_data=f"tond:rej:{ch.id}", style=ButtonStyle.DANGER)])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت به فاکتورها", callback_data="tond:invoices", style=ButtonStyle.DANGER)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def normalize_txid(raw: str | None) -> str | None:
+    """TXIDِ واردشده (hex ۶۴کاراکتری یا base64/base64url) ⇒ همان قالبِ base64ی که toncenter می‌دهد؛ نامعتبر ⇒ None.
+    تا یک تراکنش با دو قالبِ مختلف دوبار ثبت نشود."""
+    import base64 as _b64
+    t = (raw or "").strip()
+    try:
+        if re.fullmatch(r"[0-9a-fA-F]{64}", t):
+            return _b64.b64encode(bytes.fromhex(t)).decode()
+        if re.fullmatch(r"[A-Za-z0-9+/_-]{43}=?", t):
+            t2 = t.replace("-", "+").replace("_", "/")
+            t2 = t2 + "=" * (-len(t2) % 4)
+            return _b64.b64encode(_b64.b64decode(t2, validate=True)).decode() if len(_b64.b64decode(t2, validate=True)) == 32 else None
+    except Exception:      # noqa: BLE001
+        return None
+    return None
 
 
 @ton_direct_router.callback_query(F.data == "tond:invoices")
@@ -1371,6 +1421,8 @@ async def tond_invoices(cb: CallbackQuery, bot: Bot, state: FSMContext):
             + "\n\nبرای دیدنِ جزئیاتِ کاملِ هر فاکتور (مشخصاتِ خریدار)، کدِ "
             "پیگیری‌اش را با دکمهٔ زیر جستجو کن.")
     kb = InlineKeyboardMarkup(inline_keyboard=[
+        *[[InlineKeyboardButton(text=f"🧾 {ch.memo} — {int(ch.amount_toman or 0):,} ت", callback_data=f"tond:inv:{ch.id}")]
+          for ch in rows_[:8]],                                                 # PATCH_TON_DIRECT_MANAGE_V1: جزئیات/تأییدِ دستیِ هر فاکتور
         [InlineKeyboardButton(text="🔍 جستجو با کد پیگیری", callback_data="tond:searchinv")],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tond:menu",
                               style=ButtonStyle.DANGER)],
@@ -1416,7 +1468,200 @@ async def tond_search_save(msg: Message, bot: Bot, state: FSMContext):
             await msg.answer("❌ فاکتوری با این کد پیدا نشد.")
             return
         text = await _invoice_detail_text(ch, s)
-    await msg.answer(text)
+        kb = invoice_kb(ch)
+    await msg.answer(text, reply_markup=kb)
+
+
+
+# ═══════════════ PATCH_TON_DIRECT_MANAGE_V1 — جزئیات / تأییدِ دستی / ردِ فاکتور (Royal) ═══════════════
+async def _show_invoice(cb: CallbackQuery, bot_id: int, cid: int, note: str = "") -> None:
+    async with Session() as s:
+        ch = await s.get(TonDirectCharge, cid)
+        if not ch or ch.bot_id != bot_id:
+            return await cb.answer("فاکتور پیدا نشد.", show_alert=True)
+        text = (note + "\n\n" if note else "") + await _invoice_detail_text(ch, s)
+        kb = invoice_kb(ch)
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await cb.message.answer(text, reply_markup=kb)
+
+
+@ton_direct_router.callback_query(F.data.regexp(r"^tond:inv:\d+$"))
+async def tond_invoice_detail(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    await _show_invoice(cb, row.id, int(cb.data.split(":")[2]))
+    await cb.answer()
+
+
+@ton_direct_router.callback_query(F.data.regexp(r"^tond:man:\d+$"))
+async def tond_manual_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    """تأییدِ دستیِ یک فاکتور: مدیر TXIDِ واریز را می‌فرستد (یا «بدونِ TXID»)؛ تراکنشِ تکراری رد می‌شود."""
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        ch = await s.get(TonDirectCharge, cid)
+    if not ch or ch.bot_id != row.id:
+        return await cb.answer("فاکتور پیدا نشد.", show_alert=True)
+    if ch.status == "paid":
+        return await cb.answer("این فاکتور قبلاً پرداخت شده.", show_alert=True)
+    await state.set_state(TonDirectFSM.manual_tx)
+    await state.update_data(tond_man_id=cid)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚫 TXID ندارم (فقط تأیید)", callback_data=f"tond:mannotx:{cid}", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="⬅️ انصراف", callback_data=f"tond:inv:{cid}", style=ButtonStyle.DANGER)]])
+    await cb.message.answer(
+        f"✅ <b>تأییدِ دستیِ فاکتور <code>{ch.memo}</code></b>\n\n"
+        f"💰 مبلغِ شارژ: <b>{int(ch.amount_toman or 0):,} تومان</b> برایِ کاربرِ <code>{ch.user_telegram_id}</code>\n\n"
+        "اول واریز را در کیف‌پولت/tonviewer ببین. بعد <b>TXID</b> (هشِ تراکنش؛ hex ۶۴ حرفی یا base64) را بفرست تا یک تراکنش دوبار ثبت نشود. "
+        "اگر نداری، «🚫 TXID ندارم» را بزن.", reply_markup=kb)
+    await cb.answer()
+
+
+async def _manual_confirm_page(target, cid: int, tx: str, ch) -> None:
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ تأیید و شارژِ کیف‌پول", callback_data=f"tond:manok:{cid}", style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text="⬅️ انصراف", callback_data=f"tond:inv:{cid}", style=ButtonStyle.DANGER)]])
+    await target.answer(
+        "🧾 <b>تأییدِ نهایی</b>\n\n"
+        f"فاکتور: <code>{ch.memo}</code>\n💰 شارژ: <b>{int(ch.amount_toman or 0):,} تومان</b> → کاربر <code>{ch.user_telegram_id}</code>\n"
+        f"🔗 TXID: <code>{tx}</code>\n\nبعد از تأیید، این تراکنش دیگر برایِ هیچ فاکتورِ دیگری قابلِ ثبت نیست.", reply_markup=kb)
+
+
+async def _txid_used_by(tx: str, exclude_id: int | None = None) -> "TonDirectCharge | None":
+    async with Session() as s:
+        q = select(TonDirectCharge).where(TonDirectCharge.tx_hash == tx)
+        if exclude_id:
+            q = q.where(TonDirectCharge.id != exclude_id)
+        return (await s.scalars(q.limit(1))).first()
+
+
+@ton_direct_router.message(TonDirectFSM.manual_tx, F.text)
+async def tond_manual_txid(msg: Message, bot: Bot, state: FSMContext):
+    from tenant import get_bot_row
+    row = await get_bot_row(bot)
+    data = await state.get_data()
+    cid = data.get("tond_man_id")
+    if not row or not cid:
+        await state.clear()
+        return
+    raw = (msg.text or "").strip()
+    if raw in ("/cancel", "❌ لغو", "❌ لغو / بازگشت"):
+        await state.clear()
+        return await msg.answer("لغو شد.")
+    tx = normalize_txid(raw)
+    if tx is None:
+        return await msg.answer("❌ TXID نامعتبر است (hex ۶۴ حرفی یا base64ِ ۴۴ حرفی). دوباره بفرست یا «🚫 TXID ندارم» را بزن:")
+    used = await _txid_used_by(tx, cid)
+    if used is not None:
+        return await msg.answer(f"⛔️ این تراکنش قبلاً برایِ فاکتورِ <code>{used.memo}</code> ثبت شده و دوباره قابلِ ثبت نیست.")
+    async with Session() as s:
+        ch = await s.get(TonDirectCharge, int(cid))
+    if not ch or ch.bot_id != row.id or ch.status == "paid":
+        await state.clear()
+        return await msg.answer("این فاکتور دیگر قابلِ تأیید نیست.")
+    await state.update_data(tond_man_tx=tx)
+    await _manual_confirm_page(msg, int(cid), tx, ch)
+
+
+@ton_direct_router.callback_query(F.data.regexp(r"^tond:mannotx:\d+$"))
+async def tond_manual_notx(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        ch = await s.get(TonDirectCharge, cid)
+    if not ch or ch.bot_id != row.id or ch.status == "paid":
+        return await cb.answer("این فاکتور دیگر قابلِ تأیید نیست.", show_alert=True)
+    tx = f"manual-{cid}"
+    await state.update_data(tond_man_id=cid, tond_man_tx=tx)
+    await cb.answer()
+    await _manual_confirm_page(cb.message, cid, tx, ch)
+
+
+@ton_direct_router.callback_query(F.data.regexp(r"^tond:manok:\d+$"))
+async def tond_manual_ok(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cid = int(cb.data.split(":")[2])
+    data = await state.get_data()
+    tx = data.get("tond_man_tx")
+    if not tx or int(data.get("tond_man_id") or 0) != cid:
+        return await cb.answer("جلسه منقضی شد؛ دوباره از جزئیاتِ فاکتور شروع کن.", show_alert=True)
+    used = await _txid_used_by(tx, cid)
+    if used is not None:
+        return await cb.answer(f"این تراکنش قبلاً برایِ فاکتورِ {used.memo} ثبت شده.", show_alert=True)
+    async with Session() as s:
+        ch = await s.get(TonDirectCharge, cid)
+        payer, memo = (int(ch.user_telegram_id), ch.memo) if ch and ch.bot_id == row.id else (None, None)
+    if payer is None:
+        return await cb.answer("فاکتور پیدا نشد.", show_alert=True)
+    credit = await _credit(row.id, cid, tx, None, "شارژ دستی TON (تأییدِ مدیر)", via="manual")
+    await state.clear()
+    if not credit:
+        return await cb.answer("شارژ انجام نشد (فاکتور قبلاً پرداخت شده یا کاربرش پیدا نشد).", show_alert=True)
+    await cb.answer("✅ شارژ شد")
+    try:
+        await bot.send_message(payer, "✅ <b>پرداخت شما تایید شد</b>\n\n"
+                                      f"🧾 کد فاکتور: <code>{memo}</code>\n💰 کیف پول شما <b>{credit:,} تومان</b> شارژ شد.")
+    except Exception:      # noqa: BLE001
+        logger.exception("ton_direct: manual approve notice to the user failed")
+    logger.info("ton_direct: فاکتور %s (bot_id=%s) با تأییدِ دستیِ مدیر تسویه شد (tx %s).", memo, row.id, str(tx)[:16])
+    await _show_invoice(cb, row.id, cid, "✅ با تأییدِ دستی شارژ شد.")
+
+
+@ton_direct_router.callback_query(F.data.regexp(r"^tond:rej:\d+$"))
+async def tond_reject_ask(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        ch = await s.get(TonDirectCharge, cid)
+    if not ch or ch.bot_id != row.id or ch.status not in ("waiting", "expired"):
+        return await cb.answer("این فاکتور قابلِ رد نیست.", show_alert=True)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ بله، رد شود", callback_data=f"tond:rejok:{cid}", style=ButtonStyle.DANGER)],
+        [InlineKeyboardButton(text="⬅️ انصراف", callback_data=f"tond:inv:{cid}", style=ButtonStyle.PRIMARY)]])
+    await cb.message.answer(f"❌ فاکتورِ <code>{ch.memo}</code> رد شود؟ دیگر با هیچ واریزی خودکار شارژ نمی‌شود و کاربر خبر می‌گیرد.", reply_markup=kb)
+    await cb.answer()
+
+
+@ton_direct_router.callback_query(F.data.regexp(r"^tond:rejok:\d+$"))
+async def tond_reject_ok(cb: CallbackQuery, bot: Bot):
+    from tenant import _owner_ok
+    row = await _owner_ok(cb, bot)
+    if not row:
+        return
+    cid = int(cb.data.split(":")[2])
+    async with Session() as s:
+        res = await s.execute(sa_update(TonDirectCharge).where(
+            TonDirectCharge.id == cid, TonDirectCharge.bot_id == row.id,
+            TonDirectCharge.status.in_(("waiting", "expired"))).values(status="rejected"))
+        await s.commit()
+        changed = res.rowcount
+        ch = await s.get(TonDirectCharge, cid)
+        payer, memo = (int(ch.user_telegram_id), ch.memo) if ch else (None, None)
+    if not changed:
+        return await cb.answer("این فاکتور دیگر قابلِ رد نیست (شاید همین الان پرداخت شد).", show_alert=True)
+    await cb.answer("رد شد")
+    try:
+        await bot.send_message(payer, f"❌ فاکتورِ <code>{memo}</code> توسطِ مدیر رد شد. اگر واریز کرده‌ای، با پشتیبانی تماس بگیر و کدِ فاکتور را بفرست.")
+    except Exception:      # noqa: BLE001
+        logger.exception("ton_direct: reject notice failed")
+    await _show_invoice(cb, row.id, cid, "❌ فاکتور رد شد.")
 
 
 @ton_direct_router.callback_query(F.data == "tond:toggle")

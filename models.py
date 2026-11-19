@@ -1843,6 +1843,10 @@ class TonDirectCharge(Base):
     invoice_message_id: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    # === PATCH_TON_DIRECT_MANAGE_V1 === (Royal) نمایشِ کاملِ تراکنش در پنل + تأییدِ دستی: آدرسِ مبدأ، زمانِ تأیید، «خودکار/دستی»
+    from_address: Mapped[str | None] = mapped_column(String(80))
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime)
+    paid_via: Mapped[str | None] = mapped_column(String(10))      # auto | manual
 
 
 class StockRequest(Base):
