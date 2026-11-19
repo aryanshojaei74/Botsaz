@@ -369,6 +369,11 @@ class _PremiumEmojiMiddleware(BaseRequestMiddleware):
         return await make_request(bot, method)
 
     async def _rewrite(self, bot, method) -> None:
+        # === PATCH_INLINE_NO_PREMIUM_V1 === (سینا) ویرایشِ «پیامِ اینلاین» (بازی‌هایِ @ربات دوز در پیویِ دیگران):
+        # آیکونِ پرمیومِ دکمه/متن در چتِ دیگران برایِ بعضی کاربران رندر نمی‌شود و صفحهٔ دوز فقط مربعِ خاکستری می‌شود.
+        # پس این پیام‌ها همیشه با شکلکِ معمولی می‌روند.
+        if getattr(method, "inline_message_id", None):
+            return
         await self._rewrite_text(bot, method)
         # === PATCH_PREMIUM_EMOJI_BUTTON_ICON_V1 ===
         # جایگزینیِ خودکارِ ایموجیِ روی دکمه‌ها (کیبوردِ پایینِ صفحه و

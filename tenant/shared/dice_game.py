@@ -1266,16 +1266,11 @@ def _norm(t: str) -> str:
     return " ".join(t.split()).lower()
 
 
-async def try_play_by_name(msg: Message, bot: Bot, bot_id: int) -> bool:
-    """اگر متنِ پیام دقیقاً نامِ (یا اموجیِ) یکی از بازی‌های فعال باشد، همان بازی
-    را اجرا می‌کند. خروجی True یعنی پیام مصرف شد و نباید ادامه پردازش شود.
-
-    عمداً «تطبیقِ دقیق» است نه «شامل‌بودن»، تا پیام‌های عادیِ کاربر که اتفاقی
-    کلمهٔ «تاس» دارند بازی را راه نیندازند.
-    """
+async def _game_for_text(msg: Message, bot_id: int):
+    """بازیِ فعالِ «بازی کن و جایزه بگیر» که نامِ/ایموجیِ آن دقیقاً همین متن است (یا None)."""
     text = _norm(msg.text or "")
     if not text or len(text) > 40:
-        return False
+        return None
     in_group = msg.chat.type in ("group", "supergroup")
     async with Session() as s:
         q = select(DiceGame).where(DiceGame.bot_id == bot_id, DiceGame.active.is_(True))
@@ -1287,7 +1282,26 @@ async def try_play_by_name(msg: Message, bot: Bot, bot_id: int) -> bool:
     for g in games:
         names = {_norm(g.title), _norm(g.emoji), _norm(f"{g.emoji} {g.title}")}
         if text in names:
-            await run_play(bot, msg.chat.id, msg.from_user.id, bot_id, g.id,
-                           player_name=(msg.from_user.full_name if in_group else ""))
-            return True
-    return False
+            return g
+    return None
+
+
+async def claims_text(msg: Message, bot_id: int) -> bool:
+    """PATCH_DICE_PRIZE_VS_DUEL_V1: آیا «بازی کن و جایزه بگیر» این متن را (مثلاً «تاس») در این چت می‌خواهد؟"""
+    return await _game_for_text(msg, bot_id) is not None
+
+
+async def try_play_by_name(msg: Message, bot: Bot, bot_id: int) -> bool:
+    """اگر متنِ پیام دقیقاً نامِ (یا اموجیِ) یکی از بازی‌های فعال باشد، همان بازی
+    را اجرا می‌کند. خروجی True یعنی پیام مصرف شد و نباید ادامه پردازش شود.
+
+    عمداً «تطبیقِ دقیق» است نه «شامل‌بودن»، تا پیام‌های عادیِ کاربر که اتفاقی
+    کلمهٔ «تاس» دارند بازی را راه نیندازند.
+    """
+    g = await _game_for_text(msg, bot_id)
+    if g is None:
+        return False
+    in_group = msg.chat.type in ("group", "supergroup")
+    await run_play(bot, msg.chat.id, msg.from_user.id, bot_id, g.id,
+                   player_name=(msg.from_user.full_name if in_group else ""))
+    return True

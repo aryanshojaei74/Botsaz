@@ -109,6 +109,17 @@ async def twr_free_create(msg: Message, bot: Bot):
             raise SkipHandler
     elif not await core.game_enabled(game, row.id):
         raise SkipHandler
+    # === PATCH_DICE_PRIZE_VS_DUEL_V1 === (سینا) «تاس» هم نامِ «🎲 بازی کن و جایزه بگیر» است هم دوئلِ رایگان؛ اگر مالک
+    # بازیِ جایزهٔ تاس را برایِ این گروه فعال کرده، «تاس» به آن می‌رسد (ربات تاس می‌اندازد) و دوئل با «بازی تاس» ساخته می‌شود.
+    if game == "dice" and not R.has_play_prefix(msg.text):
+        try:
+            from tenant.shared.dice_game import claims_text
+            if await claims_text(msg, row.id):
+                raise SkipHandler
+        except SkipHandler:
+            raise
+        except Exception:  # noqa: BLE001 — خطایِ این چک نباید دوئل را از کار بیندازد
+            logger.exception("tenant free dice: prize-game check failed (bot=%s)", row.id)
     await get_or_create_user(row.id, msg.from_user.id, msg.from_user.full_name or "", msg.from_user.username or "")
     try:
         await R.free_create(msg, bot, row.id, game)

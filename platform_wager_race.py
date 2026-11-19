@@ -663,9 +663,25 @@ _FREE_MAP = {"حدسعدد": "guess", "سرعت": "speed", "ریاضی": "math",
 FREE_DUEL = ("xo", "rps", "dice")
 
 
+_PLAY_PREFIX = re.compile(r"^\s*بازی\s+")
+
+
+def has_play_prefix(text: str | None) -> bool:
+    """«بازی تاس» (با پیشوندِ «بازی») — PATCH_DICE_PRIZE_VS_DUEL_V1."""
+    return bool(_PLAY_PREFIX.match(core._norm(text or "")))
+
+
 def parse_free_command(text: str | None) -> str | None:
-    m = _FREE_RX.match(core._norm(text or ""))
-    return _FREE_MAP.get(re.sub(r"[\s‌]+", "", m.group(1)).lower()) if m else None
+    t = core._norm(text or "")
+    m = _FREE_RX.match(t)
+    if m:
+        return _FREE_MAP.get(re.sub(r"[\s‌]+", "", m.group(1)).lower())
+    # PATCH_DICE_PRIZE_VS_DUEL_V1: «بازی تاس» / «بازی دوز» / «بازی سنگ کاغذ قیچی» ⇒ بازیِ رایگانِ دونفره
+    # (فقط دونفره‌ها؛ «بازی سرعت» و … مثلِ قبل بی‌پاسخ می‌ماند چون «بازی ۱۰۰۰۰» شیر یا خط است)
+    if _PLAY_PREFIX.match(t):
+        g = parse_free_command(_PLAY_PREFIX.sub("", t, count=1))
+        return g if g in FREE_DUEL else None
+    return None
 
 
 def _is_free(m: Message) -> bool:
