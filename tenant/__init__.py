@@ -1566,7 +1566,7 @@ async def check_force_join(bot: Bot, bot_id: int, user_id: int, bypass_cache: bo
         except asyncio.TimeoutError:
             logger.warning(
                 "force-join: کانال %s ظرفِ %.0f ثانیه پاسخ نداد (بدونِ صبر برایِ "
-                "تلاشِ مجددِ کامل) — نادیده گرفته شد تا کاربر قفل نشه.", _FORCEJOIN_CHECK_TIMEOUT, fj.chat_id)
+                "تلاشِ مجددِ کامل) — نادیده گرفته شد تا کاربر قفل نشه.", fj.chat_id, float(_FORCEJOIN_CHECK_TIMEOUT))   # PATCH_FJ_LOG_ARGS_V1: ترتیبِ آرگومان‌ها برعکس بود ⇒ TypeError در لاگ
             _FORCEJOIN_UNCHECKABLE_CACHE[uck] = _time.monotonic() + _FORCEJOIN_UNCHECKABLE_TTL  # PATCH_FORCEJOIN_UNCHECKABLE_CACHE_V1
             _FORCEJOIN_BROKEN[uck] = "پاسخ نداد (تایم‌اوت)"  # PATCH_FORCEJOIN_HEALTH_V1
             return
@@ -14529,7 +14529,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "684"
+BUILD_ID = "685"
 
 
 @tenant_router.message(Command("version"))
