@@ -290,6 +290,8 @@ from tenant.shared.wager_games import wager_games_router  # === PATCH_WAGER_TENA
 tenant_router.include_router(wager_games_router)  # === PATCH_WAGER_TENANT_V1 ===
 from tenant.shared.wager_race import wager_race_router  # === PATCH_WAGER_RACE_TENANT_V1 ===
 tenant_router.include_router(wager_race_router)  # === PATCH_WAGER_RACE_TENANT_V1 ===
+from tenant.shared.wager_inline import wager_inline_router  # === PATCH_WAGER_INLINE_V1 ===
+tenant_router.include_router(wager_inline_router)  # === PATCH_WAGER_INLINE_V1 ===
 from wager_rank import tenant_rank_router  # === PATCH_WAGER_RANK_V1 ===
 tenant_router.include_router(tenant_rank_router)
 # === PATCH_SMM_AI_ALL_KINDS_V1 ===
@@ -14418,12 +14420,21 @@ async def tadm_chpost_inline(cb: CallbackQuery, bot: Bot, state: FSMContext):
 async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
     """فهرستِ پیش‌نویس‌هایِ پستِ ادمین؛ فقط مالک/ادمینِ همین ربات (برایِ بقیه نتیجهٔ خالی). PATCH_CHPOST_INLINE_V1"""
     row = await get_bot_row(bot)
+    import chpost_inline_core as _ci
+    _qq = (q.query or "").strip()
+    # === PATCH_WAGER_INLINE_V1 === بقیهٔ کوئری‌ها (بازیِ اینلاین: «دوز»، «موجودی») به روترِ بازی‌ها می‌رسند؛ آن روتر همیشه پاسخ می‌دهد.
+    _is_cp = bool(_qq and _ci.QUERY_RE.fullmatch(_qq.lower()))
     if (not row or not has_feature(row.plan, Feature.CHANNEL_POST)
             or not await is_owner_or_admin(row.id, q.from_user.id, row.owner_id)):
-        await q.answer([], cache_time=0, is_personal=True)
-        return
-    import chpost_inline_core as _ci
+        if _is_cp:                                  # کوئریِ پیش‌نویس (cp12) برایِ غیرِ ادمین همان‌طور خالی می‌ماند
+            await q.answer([], cache_time=0, is_personal=True)
+            return
+        raise SkipHandler
+    if _qq and not _is_cp:
+        raise SkipHandler
     drafts = await _chpost_drafts_for(row.id, q.from_user.id, q.query)
+    if not drafts and not _qq:
+        raise SkipHandler
 
     async def _kb(d):
         buttons, button_ids, guide_keys = _ci.draft_parts(d)
@@ -14432,7 +14443,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "661"
+BUILD_ID = "662"
 
 
 @tenant_router.message(Command("version"))

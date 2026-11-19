@@ -133,7 +133,10 @@ async def _show(cb: CallbackQuery, w: PlatformWager) -> None:
     text, kb = core.render(w)
     kb = (await core.result_kb(w)) or kb               # PATCH_WAGER_RESULT_KB_V1
     try:
-        await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+        if cb.message is None and cb.inline_message_id:      # PATCH_WAGER_INLINE_V1: بازیِ اینلاین (پیام آیدیِ چت ندارد)
+            await cb.bot.edit_message_text(text, inline_message_id=cb.inline_message_id, reply_markup=kb, parse_mode="HTML")
+        else:
+            await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     except TelegramBadRequest as e:
         if "not modified" not in str(e).lower():
             logger.warning("tenant wager edit failed: %s", e)
@@ -143,7 +146,8 @@ async def _cb_row(cb: CallbackQuery, bot: Bot):
     """ردیف ربات؛ در هر اقدامی (حتی حرکت) فقط لازم است ربات پشتیبانی کند و پیام در گروه باشد."""
     from tenant import get_bot_row
     row = await get_bot_row(bot)
-    if not row or not cb.message or cb.message.chat.type not in ("group", "supergroup"):
+    inline = bool(cb.message is None and cb.inline_message_id)       # PATCH_WAGER_INLINE_V1
+    if not row or not (inline or (cb.message and cb.message.chat.type in ("group", "supergroup"))):
         await cb.answer("قابلیت فعال نیست.", show_alert=True)
         return None
     return row
@@ -341,14 +345,18 @@ async def expire_wagers_once() -> int:
     try:
         for w in done:
             b_row = bot_rows.get(w.bot_id)
-            if not b_row or not b_row.token or not w.message_id:
+            imid = core._st(w).get("imid")                  # PATCH_WAGER_INLINE_V1: بازیِ اینلاین
+            if not b_row or not b_row.token or not (w.message_id or imid):
                 continue
             bot = bots.get(w.bot_id) or bots.setdefault(w.bot_id, Bot(token=b_row.token))
             text, kb = core.render(w)
             kb = (await core.result_kb(w)) or kb           # PATCH_WAGER_RESULT_KB_V1
             try:
-                await bot.edit_message_text(text, chat_id=w.chat_id, message_id=w.message_id,
-                                            reply_markup=kb, parse_mode="HTML")
+                if imid:
+                    await bot.edit_message_text(text, inline_message_id=imid, reply_markup=kb, parse_mode="HTML")
+                else:
+                    await bot.edit_message_text(text, chat_id=w.chat_id, message_id=w.message_id,
+                                                reply_markup=kb, parse_mode="HTML")
             except Exception as e:  # noqa: BLE001 — پیام پاک شده/بدون تغییر؛ مبلغ‌ها برگشته‌اند
                 logger.info("tenant wager #%s: final edit skipped: %s", w.id, e)
     finally:
