@@ -427,21 +427,103 @@ async def cx_pay(cb: CallbackQuery, bot: Bot, state: FSMContext):
         f"{d['icon']} مقدار: {_g(amount)} {d['sym']}\n🌐 شبکه: {net}\n🎯 آدرس: <code>{_h.escape(addr)}</code>\n"
         f"💰 پرداخت‌شده: {price:,} تومان\n🔖 کد پیگیری: <code>{trk}</code>\n\nبه‌محضِ ارسال، پیامِ تکمیل می‌آید.",
         parse_mode="HTML", reply_markup=await S._gift_support_kb(trk))
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ ارسال شد", callback_data=f"cx:done:{oid}", style=ButtonStyle.SUCCESS),
-        InlineKeyboardButton(text="↩️ رد و بازگشتِ وجه", callback_data=f"cx:refund:{oid}", style=ButtonStyle.DANGER)]])
-    uname = f"@{cb.from_user.username}" if cb.from_user.username else "ندارد"
+    # === PATCH_TRON_AUTOSEND_V1 === ترون/تتر روی شبکهٔ TRC20 و ارسالِ خودکارِ روشن ⇒ از کیف‌پولِ ترونِ ربات می‌رود
+    from tenant.bots.virtual_service import tron_autosend as TA
+    auto, auto_note = "disabled", ""
+    if net == "TRC20":
+        auto, auto_note = await TA.deliver_order(bot, row, oid)
+    if auto == "sent":
+        await _sent_notify(bot, row, oid)
+        try:
+            await S._notify_manual_order(
+                bot, row, f"🤖 <b>{d['name']}ِ سفارش #{await order_no(GiftOrder, oid)} خودکار ارسال شد</b>\n"
+                          f"{d['icon']} {_g(amount)} {d['sym']} → <code>{_h.escape(addr)}</code>\n💰 {price:,} تومان · 🔖 {trk}")
+        except Exception:  # noqa: BLE001
+            logger.exception("cx: auto-send notice failed")
+        return
+    await _admin_notice(bot, row, oid, coin, amount, price, net, addr, trk, cb.from_user, auto, auto_note)
+
+
+async def _admin_notice(bot: Bot, row, oid: int, coin: str, amount: float, price: int, net: str, addr: str, trk: str,
+                        user, auto: str = "disabled", auto_note: str = "") -> None:
+    from tenant.bots.virtual_service import smm as S
+    d = COINS[coin]
+    line = ""
+    if auto == "manual":
+        line = f"\n⚠️ ارسالِ خودکار انجام نشد: {_h.escape(auto_note)}\n"
+    elif auto == "unconfirmed":
+        line = ("\n⚠️ <b>ارسالِ خودکار نامشخص ماند</b> (" + _h.escape(auto_note) + ").\n"
+                "قبل از هر کاری هشِ تراکنش را روی بلاک‌چین (tronscan) چک کن؛ اگر رفته «ارسال شد» را بزن، اگر نه دستی بفرست و بعد تأیید کن "
+                "(یا بازپرداخت). ارسالِ خودکارِ بعدی تا ۱۵ دقیقه متوقف است.\n")
+    rows = [[InlineKeyboardButton(text="✅ ارسال شد", callback_data=f"cx:done:{oid}", style=ButtonStyle.SUCCESS),
+             InlineKeyboardButton(text="↩️ رد و بازگشتِ وجه", callback_data=f"cx:refund:{oid}", style=ButtonStyle.DANGER)]]
+    if auto == "manual":          # فقط وقتی قطعاً نرفته؛ «نامشخص» عمداً دکمهٔ تکرار ندارد (خطرِ ارسالِ دوباره)
+        rows.append([InlineKeyboardButton(text="🤖 ارسالِ خودکارِ مجدد", callback_data=f"cx:retry:{oid}", style=ButtonStyle.PRIMARY)])
+    if auto == "unconfirmed":
+        async with Session() as s:
+            o = await s.get(GiftOrder, oid)
+        if o is not None and o.tx_hash:
+            rows.append([InlineKeyboardButton(text="🔎 هشِ تراکنش (tronscan)", url=f"https://tronscan.org/#/transaction/{o.tx_hash}")])
+    uname = f"@{user.username}" if getattr(user, "username", None) else "ندارد"
     try:
         await S._notify_manual_order(
             bot, row,
             f"{d['icon']} سفارشِ {d['name']} ({d['sym']}) — #{await order_no(GiftOrder, oid)}\n"
-            f"مقدار: {_g(amount)} {d['sym']}\n💰 {price:,} تومان\n🌐 شبکه: <b>{net}</b>\n"
+            f"مقدار: {_g(amount)} {d['sym']}\n💰 {price:,} تومان\n🌐 شبکه: <b>{net}</b>\n" + line +
             f"🎯 آدرس: <code>{_h.escape(addr)}</code>\n"
-            f"👤 خریدار: {_h.escape(cb.from_user.full_name or '—')} · {uname} · <code>{cb.from_user.id}</code>\n"
+            f"👤 خریدار: {_h.escape(getattr(user, 'full_name', '') or '—')} · {uname} · <code>{user.id}</code>\n"
             f"🔖 کد: {trk}\n\nاین مقدار را باید خودت واقعاً به آدرسِ بالا (همین شبکه) بفرستی، بعد «✅ ارسال شد» را بزن.",
-            kb)
+            InlineKeyboardMarkup(inline_keyboard=rows))
     except Exception:  # noqa: BLE001
         logger.exception("cx: notifying the admin failed (order %s stays awaiting)", oid)
+
+
+async def _sent_notify(bot: Bot, row, oid: int) -> None:
+    """بعد از تحویل (دستی یا خودکار): پیام به مشتری (با دکمهٔ هشِ تراکنش اگر داریم) + گزارشِ کانالِ اعتمادسازی."""
+    from tenant.bots.virtual_service import smm as S
+    async with Session() as s:
+        o = await s.get(GiftOrder, oid)
+        buyer = await s.get(BotUser, o.buyer_user_id) if o else None
+    if o is None:
+        return
+    coin, amount, net = _parse_order(o)
+    d = COINS[coin]
+    if buyer is not None:
+        kb = (InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="هـش تـراکـنـش 👌", url=f"https://tronscan.org/#/transaction/{o.tx_hash}")]]) if o.tx_hash else None)
+        try:
+            await bot.send_message(
+                buyer.telegram_id,
+                f"✅ <b>سفارشِ {d['name']}ِ تو (#{await order_no(GiftOrder, oid)}) ارسال شد!</b>\n\n"
+                f"{d['icon']} مقدار: {_g(amount)} {d['sym']}\n🌐 شبکه: {net}\n🎯 آدرس: <code>{_h.escape(o.dest_label or '')}</code>\n"
+                f"🔖 کد پیگیری: {o.tracking_code}", parse_mode="HTML", reply_markup=kb)
+        except Exception:  # noqa: BLE001
+            logger.exception("cx: notifying the buyer failed")
+    try:
+        await S._notify_gift_order_trust_success(bot, row, oid)
+    except Exception:  # noqa: BLE001
+        logger.exception("cx: trust report failed")
+
+
+@crypto_shop_router.callback_query(F.data.startswith("cx:retry:"))
+async def cx_retry(cb: CallbackQuery, bot: Bot):
+    """«🤖 ارسالِ خودکارِ مجدد» (مالک): فقط وقتی قطعاً ارسال نشده (awaiting_admin)."""
+    from tenant.bots.virtual_service import smm as S
+    from tenant.bots.virtual_service import tron_autosend as TA
+    row = await S._owner(cb, bot)
+    if not row:
+        return
+    try:
+        oid = int(cb.data.split(":")[2])
+    except (ValueError, IndexError):
+        return await cb.answer()
+    await cb.answer("⏳ در حالِ ارسال…")
+    res, note = await TA.deliver_order(bot, row, oid, force=True)
+    if res == "sent":
+        await S._admin_msg_close(cb, "🤖 خودکار ارسال شد")
+        await _sent_notify(bot, row, oid)
+        return
+    await cb.message.answer(("⚠️ ارسالِ خودکارِ مجدد هم انجام نشد: " if res == "manual" else "⚠️ نامشخص: ") + _h.escape(note))
 
 
 # ───────────── تحویل / بازگشتِ وجه (ادمین) ─────────────
@@ -466,30 +548,14 @@ async def cx_done(cb: CallbackQuery, bot: Bot):
         o = await s.get(GiftOrder, oid, with_for_update=True)
         if not o or o.bot_id != row.id or not (o.gift_id or "").startswith(PREFIX):
             return await cb.answer("سفارش یافت نشد.", show_alert=True)
-        if o.status != "awaiting_admin":
+        if o.status not in ("awaiting_admin", "sending"):      # sending = ارسالِ خودکارِ نامشخص؛ ادمین بعد از چکِ بلاک‌چین تأیید می‌کند
             return await cb.answer("این سفارش قبلاً رسیدگی شده.", show_alert=True)
         o.status = "sent"
-        buyer = await s.get(BotUser, o.buyer_user_id)
-        coin, amount, net = _parse_order(o)
-        addr, trk = o.dest_label, o.tracking_code
-        buyer_tg = buyer.telegram_id if buyer else None
+        o.fail_reason = None
         await s.commit()
     await cb.answer("✅ به‌عنوان ارسال‌شده ثبت شد.")
     await S._admin_msg_close(cb, "✅ ارسال شد")
-    d = COINS[coin]
-    if buyer_tg:
-        try:
-            await bot.send_message(
-                buyer_tg,
-                f"✅ <b>سفارشِ {d['name']}ِ تو (#{await order_no(GiftOrder, oid)}) ارسال شد!</b>\n\n"
-                f"{d['icon']} مقدار: {_g(amount)} {d['sym']}\n🌐 شبکه: {net}\n🎯 آدرس: <code>{_h.escape(addr or '')}</code>\n"
-                f"🔖 کد پیگیری: {trk}", parse_mode="HTML")
-        except Exception:  # noqa: BLE001
-            logger.exception("cx: notifying the buyer failed")
-    try:
-        await S._notify_gift_order_trust_success(bot, row, oid)
-    except Exception:  # noqa: BLE001
-        logger.exception("cx: trust report failed")
+    await _sent_notify(bot, row, oid)
 
 
 @crypto_shop_router.callback_query(F.data.startswith("cx:refund:"))
@@ -506,7 +572,7 @@ async def cx_refund(cb: CallbackQuery, bot: Bot):
         o = await s.get(GiftOrder, oid, with_for_update=True)
         if not o or o.bot_id != row.id or not (o.gift_id or "").startswith(PREFIX):
             return await cb.answer("سفارش یافت نشد.", show_alert=True)
-        if o.status != "awaiting_admin":
+        if o.status not in ("awaiting_admin", "sending"):
             return await cb.answer("این سفارش قبلاً رسیدگی شده.", show_alert=True)
         no_txt = await order_no(GiftOrder, oid)          # پیش از هر تغییر (کوئریِ جدا وسطِ تراکنش نباید به تغییراتِ flush‌شده دست بزند)
         o.status = "refunded"
@@ -537,7 +603,7 @@ async def cx_orders(cb: CallbackQuery, bot: Bot):
         return
     async with Session() as s:
         orders = (await s.scalars(select(GiftOrder).where(
-            GiftOrder.bot_id == row.id, GiftOrder.gift_id.like(PREFIX + "%"), GiftOrder.status == "awaiting_admin")
+            GiftOrder.bot_id == row.id, GiftOrder.gift_id.like(PREFIX + "%"), GiftOrder.status.in_(("awaiting_admin", "sending")))
             .order_by(GiftOrder.id.desc()).limit(10))).all()
         data = [(o.id, _parse_order(o), o.price_toman, o.dest_label, o.tracking_code) for o in orders]
     if not data:
@@ -556,8 +622,8 @@ async def cx_orders(cb: CallbackQuery, bot: Bot):
 # ───────────── پنلِ ادمین ─────────────
 async def admin_home(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     rows, lines = [], ["🪙 <b>ترون و تتر (فروشِ رمزارز)</b>\n",
-                       "کنارِ تون، مشتری می‌تواند ترون و تتر هم بخرد. تحویل دستی است: سفارش با آدرسِ مشتری برایِ تو می‌آید، "
-                       "خودت می‌فرستی و «✅ ارسال شد» را می‌زنی.\n"]
+                       "کنارِ تون، مشتری می‌تواند ترون و تتر هم بخرد. اگر «ارسالِ خودکار» روشن و کیف‌پولِ ترون شارژ باشد، ربات خودش "
+                       "روی بلاک‌چین می‌فرستد؛ وگرنه سفارش با آدرسِ مشتری برایِ تو می‌آید و «✅ ارسال شد» را می‌زنی.\n"]
     for c, d in COINS.items():
         cfg = await coin_cfg(bot_id, c)
         rate = await rate_of(bot_id, c)
@@ -565,8 +631,20 @@ async def admin_home(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
         lines.append(f"{d['icon']} {d['name']}: {'✅ روشن' if on else ('⚠️ روشن ولی نرخ ندارد' if cfg['on'] else '⛔️ خاموش')}"
                      + (f" — {rate:,.0f} تومان" if rate > 0 else ""))
         rows.append([InlineKeyboardButton(text=f"{d['icon']} تنظیمِ {d['name']}", callback_data=f"cx:adm:{c}", style=ButtonStyle.PRIMARY)])
+    from tenant.bots.virtual_service import smm as S
+    from tenant.bots.virtual_service import tron_autosend as TA
+    ton_rate = (await S._ton_sell_settings(bot_id))[0]
+    lines.insert(2, f"💎 تون: {'✅ آماده' if ton_rate > 0 else '⚠️ نرخ ندارد'}" + (f" — {ton_rate:,.0f} تومان" if ton_rate > 0 else "")
+                 + " (تنظیمِ کامل: «💎 تنظیماتِ تون»)")
+    tcfg = await TA.settings(bot_id)
+    addr = await TA.wallet_address(bot_id)
+    lines.append("")
+    lines.append(f"👛 کیف‌پولِ ترون: {'✅ ساخته شده' if addr else '⛔️ ساخته نشده'} · ارسالِ خودکار: "
+                 f"{'✅ روشن' if (tcfg['enabled'] and addr) else '⛔️ خاموش'}")
+    rows.append([InlineKeyboardButton(text="💎 تنظیماتِ تون", callback_data="ton:menu", style=ButtonStyle.PRIMARY)])
+    rows.append([InlineKeyboardButton(text="👛 کیف‌پولِ ترون و ارسالِ خودکار", callback_data="cx:w", style=ButtonStyle.SUCCESS)])
     rows.append([InlineKeyboardButton(text="🧾 سفارش‌هایِ در انتظار", callback_data="cx:orders:0")])
-    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="ton:menu", style=ButtonStyle.DANGER)])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="smm:manlist", style=ButtonStyle.DANGER)])
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -689,6 +767,9 @@ async def cx_set_save(msg: Message, bot: Bot, state: FSMContext):
         await state.clear()
         await msg.answer("لغو شد.")
         return
+    if coin == "wallet" and field in ("cap:trx", "cap:usdt", "apikey"):
+        await wallet_field_save(msg, state, row, field)
+        return
     if coin not in COINS or field not in _FIELD_FA:
         await state.clear()
         return
@@ -705,5 +786,161 @@ async def cx_set_save(msg: Message, bot: Bot, state: FSMContext):
     await _ss(row.id, f"cx_{coin}_{field}", _g(val) if field != "rate" else str(int(round(val))))
     await state.clear()
     text, kb = await admin_coin(row.id, coin)
+    await msg.answer("✅ ذخیره شد.")
+    await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+# ───────────── کیف‌پولِ ترون و ارسالِ خودکار (مالک) ─────────────
+async def wallet_view(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    from tenant.bots.virtual_service import tron_autosend as TA
+    cfg = await TA.settings(bot_id)
+    addr = await TA.wallet_address(bot_id)
+    rows = []
+    if not addr:
+        text = ("👛 <b>کیف‌پولِ ترون (ارسالِ خودکارِ TRX و USDT)</b>\n\n"
+                "هنوز کیف‌پولی ساخته نشده. با «🆕 ساختِ کیف‌پول» یک کیف‌پولِ جدیدِ ترونِ اختصاصیِ همین ربات ساخته می‌شود؛ کلیدِ خصوصی "
+                "رمزنگاری‌شده در ربات می‌ماند. بعد آدرسش را شارژ کن (TRX برایِ کارمزد و فروشِ ترون، USDT-TRC20 برایِ فروشِ تتر).\n\n"
+                "⚠️ فقط به‌اندازهٔ لازم شارژ کن؛ این یک کیف‌پولِ داغ (هات‌ولت) است.")
+        rows.append([InlineKeyboardButton(text="🆕 ساختِ کیف‌پول", callback_data="cx:w:new", style=ButtonStyle.SUCCESS)])
+    else:
+        trx, usdt = await TA.balances(bot_id)
+        text = ("👛 <b>کیف‌پولِ ترون (ارسالِ خودکارِ TRX و USDT)</b>\n\n"
+                f"آدرس: <code>{_h.escape(addr)}</code>\n"
+                f"🔴 موجودیِ TRX: <b>{'؟' if trx is None else format(trx, ',.2f')}</b>\n"
+                f"💵 موجودیِ USDT (TRC20): <b>{'؟' if usdt is None else format(usdt, ',.2f')}</b>\n\n"
+                f"🤖 ارسالِ خودکار: <b>{'✅ روشن' if cfg['enabled'] else '⛔️ خاموش'}</b>\n"
+                f"🛡 سقفِ هر سفارش: TRX <b>{_g(cfg['cap_trx'])}</b> · USDT <b>{_g(cfg['cap_usdt'])}</b>\n"
+                f"🔑 کلیدِ TronGrid: <b>{'ثبت شده' if cfg['api_key'] else 'ندارد (محدودیتِ نرخِ عمومی)'}</b>\n\n"
+                "ℹ️ برایِ ارسالِ USDT حداقل ۳۰ TRX در همین کیف‌پول لازم است (کارمزدِ انرژیِ شبکه). فقط شبکهٔ TRC20 خودکار می‌شود؛ "
+                "سفارش‌هایِ شبکه‌هایِ دیگر دستی می‌مانند. اگر خطایِ نامشخص رخ دهد، ارسالِ خودکار ۱۵ دقیقه می‌ایستد و سفارش برایِ چکِ دستی می‌ماند.")
+        rows += [
+            [InlineKeyboardButton(text="🔴 خاموش‌کردنِ ارسالِ خودکار" if cfg["enabled"] else "🟢 روشن‌کردنِ ارسالِ خودکار",
+                                  callback_data="cx:w:auto", style=ButtonStyle.DANGER if cfg["enabled"] else ButtonStyle.SUCCESS)],
+            [InlineKeyboardButton(text="🔄 به‌روزرسانیِ موجودی", callback_data="cx:w", style=ButtonStyle.PRIMARY)],
+            [InlineKeyboardButton(text=f"🛡 سقفِ TRX ({_g(cfg['cap_trx'])})", callback_data="cx:w:cap:trx"),
+             InlineKeyboardButton(text=f"🛡 سقفِ USDT ({_g(cfg['cap_usdt'])})", callback_data="cx:w:cap:usdt")],
+            [InlineKeyboardButton(text="🔑 کلیدِ TronGrid (اختیاری)", callback_data="cx:w:apikey")],
+            [InlineKeyboardButton(text="🗝 نمایشِ کلیدِ خصوصی (پشتیبان)", callback_data="cx:w:key")],
+        ]
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="cx:adm", style=ButtonStyle.DANGER)])
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@crypto_shop_router.callback_query(F.data == "cx:w")
+async def cx_wallet(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant.bots.virtual_service import smm as S
+    row = await S._owner(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    text, kb = await wallet_view(row.id)
+    await _edit(cb, text, kb)
+    await cb.answer()
+
+
+@crypto_shop_router.callback_query(F.data == "cx:w:new")
+async def cx_wallet_new(cb: CallbackQuery, bot: Bot):
+    from tenant.bots.virtual_service import smm as S
+    from tenant.bots.virtual_service import tron_autosend as TA
+    row = await S._owner(cb, bot)
+    if not row:
+        return
+    ok, info = await TA.create_wallet(row.id)
+    if not ok:
+        return await cb.answer(info[:190], show_alert=True)
+    await cb.answer("✅ کیف‌پول ساخته شد")
+    await cb.message.answer(
+        "✅ <b>کیف‌پولِ ترون ساخته شد</b>\n\n"
+        f"آدرس: <code>{_h.escape(info)}</code>\n\n"
+        "حتماً از «🗝 نمایشِ کلیدِ خصوصی» یک نسخهٔ پشتیبان (جایِ امن، آفلاین) نگه دار؛ اگر ربات پاک شود کلید هم پاک می‌شود و پولِ داخلِ آن از دست می‌رود.",
+        parse_mode="HTML")
+    text, kb = await wallet_view(row.id)
+    await _edit(cb, text, kb)
+
+
+@crypto_shop_router.callback_query(F.data == "cx:w:auto")
+async def cx_wallet_auto(cb: CallbackQuery, bot: Bot):
+    from tenant.bots.virtual_service import smm as S
+    from tenant.bots.virtual_service import tron_autosend as TA
+    row = await S._owner(cb, bot)
+    if not row:
+        return
+    if not await TA.wallet_address(row.id):
+        return await cb.answer("اول کیف‌پول را بساز.", show_alert=True)
+    cur = (await TA.settings(row.id))["enabled"]
+    await _ss(row.id, "cx_tron_auto", "0" if cur else "1")
+    await cb.answer("خاموش شد" if cur else "ارسالِ خودکار روشن شد")
+    text, kb = await wallet_view(row.id)
+    await _edit(cb, text, kb)
+
+
+@crypto_shop_router.callback_query(F.data == "cx:w:key")
+async def cx_wallet_key(cb: CallbackQuery, bot: Bot):
+    from tenant.bots.virtual_service import smm as S
+    from tenant.bots.virtual_service import tron_autosend as TA
+    row = await S._owner(cb, bot)
+    if not row or row.owner_id != cb.from_user.id:      # فقط مالکِ اصلی (نه ادمینِ فرعی)
+        if row:
+            await cb.answer("⛔️ فقط مالکِ ربات می‌تواند کلید را ببیند.", show_alert=True)
+        return
+    key = await TA.reveal_private_key(row.id)
+    if not key:
+        return await cb.answer("کلید خوانده نشد.", show_alert=True)
+    await cb.answer()
+    m = await cb.message.answer(
+        "🗝 <b>کلیدِ خصوصیِ کیف‌پولِ ترون</b>\n\n<code>" + key + "</code>\n\n"
+        "⚠️ این کلید به‌تنهایی به همهٔ پولِ کیف‌پول دسترسی می‌دهد. جایِ امن و آفلاین نگه دار و به هیچ‌کس نده. "
+        "این پیام بعد از ۶۰ ثانیه خودکار پاک می‌شود.", parse_mode="HTML")
+    import asyncio
+
+    async def _gone():
+        await asyncio.sleep(60)
+        try:
+            await m.delete()
+        except Exception:  # noqa: BLE001
+            logger.info("cx: deleting the key message failed")
+    asyncio.create_task(_gone())
+
+
+_W_FIELDS = {"cap:trx": ("cx_tron_cap_trx", "سقفِ ارسالِ خودکارِ هر سفارشِ TRX (عدد)"),
+             "cap:usdt": ("cx_tron_cap_usdt", "سقفِ ارسالِ خودکارِ هر سفارشِ USDT (عدد)"),
+             "apikey": ("cx_tron_apikey", "کلیدِ API از trongrid.io (برایِ نرخِ بالاتر؛ «-» = حذف)")}
+
+
+@crypto_shop_router.callback_query(F.data.regexp(r"^cx:w:(cap:(trx|usdt)|apikey)$"))
+async def cx_wallet_field(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    from tenant.bots.virtual_service import smm as S
+    row = await S._owner(cb, bot)
+    if not row:
+        return
+    field = cb.data[len("cx:w:"):]
+    await state.set_state(CxFSM.adm_val)
+    await state.update_data(cx_adm_coin="wallet", cx_adm_field=field)
+    await cb.message.answer(f"✏️ {_W_FIELDS[field][1]} را بفرست (برایِ انصراف /cancel):")
+    await cb.answer()
+
+
+async def wallet_field_save(msg: Message, state: FSMContext, row, field: str) -> None:
+    key, _label = _W_FIELDS[field]
+    raw = (msg.text or "").strip()
+    if field == "apikey":
+        val = "" if raw == "-" else raw
+        if val and not re.fullmatch(r"[0-9a-fA-F-]{16,64}", val):
+            await msg.answer("❌ کلیدِ نامعتبر. (فقط حروفِ hex و خط‌تیره؛ یا «-» برایِ حذف)")
+            return
+    else:
+        t = raw.translate(_DIG).replace(",", "").replace("٬", "").replace("،", "")
+        try:
+            num = float(t)
+        except ValueError:
+            await msg.answer("❌ فقط عدد بفرست (یا /cancel):")
+            return
+        if not 0 <= num <= 1e7:
+            await msg.answer("❌ عدد باید بینِ ۰ و ۱۰٬۰۰۰٬۰۰۰ باشد:")
+            return
+        val = _g(num)
+    await _ss(row.id, key, val)
+    await state.clear()
+    text, kb = await wallet_view(row.id)
     await msg.answer("✅ ذخیره شد.")
     await msg.answer(text, reply_markup=kb, parse_mode="HTML")
