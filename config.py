@@ -155,6 +155,41 @@ try:
             print(f"[ipv4] تنظیمِ فقط‌IPv4 ناموفق بود (نادیده گرفته شد): {_v4_err}")
 
     _AiohttpSessionT.__init__ = _fast_timeout_init
+
+    # === PATCH_TG_SHARED_CONNECTOR_V1 ===
+    # لاگِ سرور: ۴۷ از ~۷۰ تایم‌اوتِ تلگرام در `_create_connection` (ساختنِ اتصالِ تازه: TCP+TLS) بود و پاکت‌لاس نداریم.
+    # هر Bot یک AiohttpSession و یک connectorِ جدا داشت (۸۵ جا Bot می‌سازد؛ حلقه‌هایِ پس‌زمینه هر دور یکی تازه) ⇒ اتصالِ
+    # keep-alive بینِ ربات‌ها/دورها قابلِ استفادهٔ مجدد نبود و تقریباً هر درخواست یک دست‌دهیِ TLS تازه می‌خواست.
+    # حالا همهٔ sessionهایِ بدونِ‌پراکسی در هر event-loop یک connectorِ مشترک (connector_owner=False) می‌گیرند.
+    # خاموش‌کردن: TG_SHARED_CONNECTOR=0 در .env + ری‌استارت.
+    _shared_conn: dict = {}
+
+    async def _shared_create_session(self):
+        import asyncio as _aio
+        from aiohttp import ClientSession as _CS
+        from aiohttp.hdrs import USER_AGENT as _UA
+        from aiohttp.http import SERVER_SOFTWARE as _SW
+        from aiogram import __version__ as _agv
+        if os.getenv("TG_SHARED_CONNECTOR", "1") == "0" or getattr(self, "_proxy", None) is not None \
+                or getattr(self, "_connector_type", None) is None or self._connector_type.__name__ != "TCPConnector":
+            return await _orig_create_session(self)
+        if self._should_reset_connector:
+            await self.close()
+        if self._session is None or self._session.closed:
+            loop = _aio.get_running_loop()
+            conn = _shared_conn.get(id(loop))
+            if conn is None or conn[0] is not loop or conn[1].closed:
+                init = dict(self._connector_init)
+                init.update(limit=0, keepalive_timeout=60, enable_cleanup_closed=True)
+                conn = (loop, self._connector_type(**init))
+                _shared_conn[id(loop)] = conn
+            self._session = _CS(connector=conn[1], connector_owner=False,
+                                headers={_UA: f"{_SW} aiogram/{_agv}"})
+            self._should_reset_connector = False
+        return self._session
+
+    _orig_create_session = _AiohttpSessionT.create_session
+    _AiohttpSessionT.create_session = _shared_create_session
     print("[timeout] تایم‌اوتِ پیش‌فرضِ درخواست‌های تلگرام به ۱۲ ثانیه کاهش یافت.")
 except Exception as _timeout_err:
     print(f"[timeout] کاهشِ تایم‌اوت ناموفق بود (نادیده گرفته شد): {_timeout_err}")
