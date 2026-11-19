@@ -207,7 +207,7 @@ _GEN_MAP = {
     "promo": ("tadm:discounts", "tadm:welcomebonus", "tadm:chgbonus", "tadm:firstbuy", "set:ref_reward", "rpt:menu", "set:productrating", "dga:menu"),
     "usr": ("tadm:users", "tadm:broadcast", "tadm:polls", "psms:menu", "set:kyc", "supp:contact", "set:phonelog"),
     "rep": ("tadm:stats", "tadm:buyinfo:today:0", "pst:menu", "tadm:trustreport", "tc:settings"),
-    "bot": ("set:bot_toggle", "set:paused_text", "tadm:backup:menu", "set:antispam", "tadm:chpost", "miniapp:panel", "miniapp:nft", "tadm:groupsettings"),
+    "bot": ("set:bot_toggle", "set:paused_text", "tadm:backup:menu", "set:antispam", "scpm:menu", "tadm:chpost", "miniapp:panel", "miniapp:nft", "tadm:groupsettings"),
 }
 _GEN_PREFIX = {   # مواردی که callbackشان پارامتر دارد یا وضعیت‌دار است
     "pay": ("tadm:txlog", "tadm:txch", "set:txlog"),
@@ -254,6 +254,7 @@ GEN_DESC = {
     "set:welcome": "متنِ پیامِ خوش‌آمدگویی که با /start می‌آید.",
     "set:startreact": "ری‌اکشنِ ایموجی روی پیامِ استارتِ کاربر.",
     "vso:menu": "ورودِ حرفه‌ای: قوانین + خوش‌آمدگویی که کاربر باید بپذیرد.",
+    "scpm:menu": "هنگامِ /start کاربر اول یک سؤالِ جمعِ ساده می‌گیرد (ضدِ رباتِ فیک)؛ منو بعد از جوابِ درست می‌آید. برایِ جدیدها یا همه.",
     "mcl:menu": "بعد از هر کارِ مشتری، پیام‌هایِ منو/صفحهٔ قبلیِ همان روز را پاک می‌کنی تا فقط پیامِ کارِ جدید بماند (پلنِ حرفه‌ای).",
     "wd:admin": "برداشتِ موجودی/پاداشِ زیرمجموعه: تنظیماتِ درخواستِ برداشت و بررسیِ درخواست‌هایِ کاربران.",
     "set:menu_mode": "منوی کاربر را بینِ «شیشه‌ای» (زیرِ پیام) و «کیبوردی» (پایین صفحه) عوض می‌کنی.",

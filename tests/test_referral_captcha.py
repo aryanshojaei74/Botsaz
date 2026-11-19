@@ -286,7 +286,7 @@ def test_start_flow_returns_before_the_welcome_menu_when_challenged():
     """tenant_start: بعد از handle_referral_join اگر چالش فرستاده شد، خوش‌آمد/منو/استیکر نیاید (قبل از «استیکر/خوش‌آمد»)."""
     from pathlib import Path
     src = Path("tenant/__init__.py").read_text(encoding="utf-8")
-    i = src.index("_rf_challenged = bool(await handle_referral_join(row.id, u, ref_code, bot))")
+    i = src.index("_rf_challenged = bool(await handle_referral_join(")
     j = src.index("if _rf_challenged:\n        return", i)
     k = src.index("welcome = await get_setting(row.id, \"welcome_text\"", i)
     bonus = src.index("await grant_welcome_bonus(bot, row, u)", i)
