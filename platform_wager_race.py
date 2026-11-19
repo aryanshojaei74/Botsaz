@@ -653,15 +653,19 @@ async def race_paid_hint(msg: Message):
 
 # ───────────────────────── بازیِ رایگان (فقط اسمِ بازی، بدونِ مبلغ) ─────────────────────────
 # PATCH_FREE_GAME_V1 (سینا): مالک روشن/خاموش می‌کند، سقفِ روزانهٔ هر نفر و هزینهٔ ورودِ هر بازی (کارمزدِ بازی) می‌گذارد.
-_FREE_RX = re.compile(r"^\s*(حدس\s*عدد|سرعت|ریاضی|الگو|رندوم|تصادفی|رندم|درهم|کوییز|کویز|کوئیز|حدس[\s‌]*ایموجی|ایموجی)\s*$")
+_FREE_RX = re.compile(r"^\s*(حدس\s*عدد|سرعت|ریاضی|الگو|رندوم|تصادفی|رندم|درهم|کوییز|کویز|کوئیز|حدس[\s‌]*ایموجی|ایموجی"
+                      r"|دوز|xo|اکس\s*او|ایکس\s*او|سنگ\s*کاغذ\s*قیچی|rps|تاس)\s*$", re.IGNORECASE)
 _FREE_MAP = {"حدسعدد": "guess", "سرعت": "speed", "ریاضی": "math", "الگو": "pattern", "رندوم": "random", "تصادفی": "random",
              "رندم": "random", "درهم": "scramble", "کوییز": "quiz", "کویز": "quiz", "کوئیز": "quiz",
-             "حدسایموجی": "emoji", "ایموجی": "emoji"}
+             "حدسایموجی": "emoji", "ایموجی": "emoji",
+             # PATCH_FREE_DUEL_V1: بازی‌هایِ دونفره هم رایگان (فقط اسمِ بازی، بدونِ مبلغ)
+             "دوز": "xo", "xo": "xo", "اکساو": "xo", "ایکساو": "xo", "سنگکاغذقیچی": "rps", "rps": "rps", "تاس": "dice"}
+FREE_DUEL = ("xo", "rps", "dice")
 
 
 def parse_free_command(text: str | None) -> str | None:
     m = _FREE_RX.match(core._norm(text or ""))
-    return _FREE_MAP.get(re.sub(r"[\s‌]+", "", m.group(1))) if m else None
+    return _FREE_MAP.get(re.sub(r"[\s‌]+", "", m.group(1)).lower()) if m else None
 
 
 def _is_free(m: Message) -> bool:
@@ -687,9 +691,12 @@ async def free_create(msg: Message, bot, bot_id: int, game: str) -> None:
     if err:
         await msg.reply(err)
         return
-    LIVE[w.id] = {"wid": w.id, "chat": msg.chat.id, "bot": bot_id, "kind": game, "players": set(), "answer": None,
-                  "n": None, "until": time.monotonic() + cfg["ttl"] + 5}
-    text, kb = render_race(w)
+    if game in FREE_DUEL:                       # PATCH_FREE_DUEL_V1: دوز/سنگ‌کاغذ‌قیچی/تاس — همان صفحه و دکمه‌هایِ بازیِ پولی
+        text, kb = core.render(w)
+    else:
+        LIVE[w.id] = {"wid": w.id, "chat": msg.chat.id, "bot": bot_id, "kind": game, "players": set(), "answer": None,
+                      "n": None, "until": time.monotonic() + cfg["ttl"] + 5}
+        text, kb = render_race(w)
     try:
         sent = await msg.reply(text, reply_markup=kb, parse_mode="HTML")
     except Exception:  # noqa: BLE001
@@ -713,7 +720,10 @@ async def race_free_create(msg: Message):
     if await _candy_on():                    # مودِ شیرینی: بازیِ رایگانِ خودِ آن (platform_group_game) این دستورها را دارد
         raise SkipHandler
     game = parse_free_command(msg.text)
-    if not await game_on(game):
+    if game in FREE_DUEL:                    # PATCH_FREE_DUEL_V1
+        if not await core.game_enabled(game, 0):
+            raise SkipHandler
+    elif not await game_on(game):
         raise SkipHandler
     await _user(msg.from_user.id, msg.from_user.full_name or "", msg.from_user.username or "")
     await free_create(msg, msg.bot, 0, game)

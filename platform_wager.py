@@ -449,13 +449,38 @@ async def join_wager(wid: int, user: tuple, move_secs: int, bot_id: int = 0, sim
             return _res(w=w, err=_t("مهلت این {bet} تمام شده؛ مبلغ به سازنده برگشت.", bot_id))
         if _needs_setup(w):
             return _res(err="سازنده هنوز انتخابش را نکرده؛ چند لحظه بعد دوباره بزن.")
+        # === PATCH_FREE_DUEL_V1 === (سینا: «برای رایگان نمیشه دوز/سنگ‌کاغذ‌قیچی/تاس بازی کرد») بازیِ رایگانِ دونفره: مبلغ ۰؛
+        # سقفِ روزانه و هزینهٔ ورودِ هر بازیکن همان تنظیماتِ «بازیِ رایگان» (مثلِ مسابقه‌ها)؛ هزینهٔ ورود برنمی‌گردد.
+        free = not _money(w.amount)
+        _st0 = _st(w)
+        pfee, plimit = int(_st0.get("pfee") or 0), int(_st0.get("plimit") or 0)
         opp = await _lock_user(s, uid, bot_id)
-        if not opp or opp.is_banned or _money(opp.balance) < _money(w.amount):
+        cre = None
+        if free:
+            if opp is not None and opp.is_banned:
+                return _res(err="این کاربر اجازهٔ بازی ندارد.")
+            if plimit and await free_used_today(s, bot_id, uid) >= plimit:
+                return _res(err=f"⛔️ سقفِ بازیِ رایگانِ امروزِ تو ({plimit} بازی) پر شده.")
+            if plimit and await free_used_today(s, bot_id, w.creator_id) >= plimit:
+                return _res(err="سقفِ بازیِ رایگانِ امروزِ سازندهٔ این بازی پر شده؛ بازیِ دیگری بساز.")
+            if pfee:
+                cre = await _lock_user(s, w.creator_id, bot_id)
+                if not opp or _money(opp.balance) < pfee:
+                    return _res(err=f"برایِ بازیِ رایگان باید {_rial(pfee)} هزینهٔ ورود در کیف پولت باشد.")
+                if not cre or _money(cre.balance) < pfee:
+                    return _res(err="موجودیِ سازنده برایِ هزینهٔ ورود کافی نیست؛ بازیِ دیگری بساز.")
+        elif not opp or opp.is_banned or _money(opp.balance) < _money(w.amount):
             return _res(err=f"موجودی کافی نیست؛ نیاز به {_rial(w.amount)} داری.")
         if await _active_count(s, uid, bot_id) >= MAX_ACTIVE:
             return _res(err=_t(f"هم‌زمان حداکثر {MAX_ACTIVE} {{bet}} باز می‌توانی داشته باشی.", bot_id))
-        opp.balance = Decimal(str(opp.balance)) - Decimal(str(w.amount))
-        _add_txn(s, bot_id, opp, -_money(w.amount), "wager_stake", f"پیوستن به {{bet}} #{w.id}")
+        if free:
+            if pfee:
+                for _u in (opp, cre):
+                    _u.balance = Decimal(str(_u.balance)) - Decimal(pfee)
+                    _add_txn(s, bot_id, _u, -pfee, "wager_fee", f"هزینهٔ ورود بازیِ رایگان #{w.id}")
+        else:
+            opp.balance = Decimal(str(opp.balance)) - Decimal(str(w.amount))
+            _add_txn(s, bot_id, opp, -_money(w.amount), "wager_stake", f"پیوستن به {{bet}} #{w.id}")
         w.opponent_id, w.opponent_name, w.opponent_username = uid, uname or "", uuser or None
         w.status = "playing"
         st = _st(w)                                    # انتخاب سازنده (opt) حفظ می‌شود
