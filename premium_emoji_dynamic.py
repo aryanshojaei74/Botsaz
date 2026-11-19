@@ -31,6 +31,8 @@ premium_emoji_dynamic.py — هستهٔ مشترکِ «جایگزینیِ خود
 """
 from __future__ import annotations
 
+import os
+
 import re
 import time
 from functools import lru_cache
@@ -363,6 +365,9 @@ NO_PREMIUM = "\u2063"   # PATCH_NO_PREMIUM_MARKER_V1
 class _PremiumEmojiMiddleware(BaseRequestMiddleware):
     async def __call__(self, make_request, bot, method):
         try:
+            if os.getenv("NO_KASRA", "1") != "0":      # PATCH_NO_KASRA_V1: پیش از هر تبدیلِ متن/entity (offsetها روی متنِ تمیز حساب شوند)؛ NO_KASRA=0 خاموشش می‌کند
+                from no_kasra import strip_method
+                strip_method(method)
             await self._rewrite(bot, method)
         except Exception:
             logger.exception("خطای نادیده‌گرفته‌شده در میان‌افزارِ ایموجیِ پرمیوم")
