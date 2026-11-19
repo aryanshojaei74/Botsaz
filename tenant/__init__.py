@@ -270,6 +270,8 @@ tenant_router.include_router(backup_import_router)
 tenant_router.include_router(trust_report_router)
 from tenant.shared.referral_captcha import referral_captcha_router   # === PATCH_REFERRAL_CAPTCHA_V1 ===
 tenant_router.include_router(referral_captcha_router)
+from tenant.shared.start_captcha import start_captcha_router   # === PATCH_START_CAPTCHA_V1 ===
+tenant_router.include_router(start_captcha_router)
 from tenant.shared.err_log import err_log_router   # === PATCH_ERR_LOG_CHANNEL_V1 ===
 tenant_router.include_router(err_log_router)
 from tenant.shared.orphan_purchases import orphan_router   # === PATCH_ORPHAN_PURCHASE_V1 ===
@@ -3202,7 +3204,7 @@ def _nav_inject(mk, has_hist: bool, prev_is_home: bool = False, no_prev: bool = 
     cbs = [(b, getattr(b, "callback_data", None) or "") for r in mk.inline_keyboard for b in r]
     if any(c == "nav:back" for _, c in cbs):
         return mk
-    if cbs and all(c.startswith("rfc:") for _, c in cbs):      # کپچایِ زیرمجموعه‌گیری: دکمهٔ «🏠 منوی اصلی» نخورد (باید اول حل شود)
+    if cbs and all(c.startswith(("rfc:", "scp:")) for _, c in cbs):      # کپچایِ زیرمجموعه‌گیری: دکمهٔ «🏠 منوی اصلی» نخورد (باید اول حل شود)
         return mk
     has_prev = any(c.startswith("smopen:") for _, c in cbs)
     has_home = any(c == "mbtn:home" for _, c in cbs)
@@ -5420,6 +5422,13 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
             if _psid:
                 await state.update_data(pending_svc_id=_psid)
             return
+    # === PATCH_START_CAPTCHA_V1 === (Royal: «کاربر چه زیرمجموعه باشه چه نباشه، ربات را استارت کرد کپچا بیاد»)
+    # بعد از /startِ بازپخش‌شده (پس از حلِ کپچا) کاربرِ تازه دوباره «تازه» حساب می‌شود تا دعوت/هدیه/دیپ‌لینک دقیقاً مثلِ حالتِ بدونِ کپچا کار کند.
+    from tenant.shared import start_captcha as _scap
+    if _scap.SCAP_REPLAY.get() == "new":
+        was_created = True
+    if await _scap.gate(msg, bot, row, was_created, command.args if command else None):
+        return
     # استخراج کد دعوت از پارامتر /start (پیش از بررسی عضویت اجباری، چون اگر
     # کاربر هنوز عضو کانال نشده و این‌جا خروج بزنیم، در دفعهٔ بعدی که از منوی
     # تلگرام دوباره /start می‌زند پارامتر را نخواهد داشت و دعوت برای همیشه از
@@ -5610,7 +5619,8 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
     _rf_challenged = False
     if ref_code and was_created:
         from tenant.shared.extras import handle_referral_join
-        _rf_challenged = bool(await handle_referral_join(row.id, u, ref_code, bot))
+        _rf_challenged = bool(await handle_referral_join(
+            row.id, u, ref_code, bot, _captcha_passed=(_scap.SCAP_REPLAY.get() is not None)))   # کپچایِ استارت حل شده؛ دوباره نپرس
     if gate_code and was_created:  # === PATCH_GATE_DEDICATED_LINK_V1 ===
         from tenant.shared.referral_gate import handle_gate_referral_join
         await handle_gate_referral_join(gate_code, msg.from_user.id)
@@ -7959,6 +7969,7 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
             # === PATCH_MSG_CLEANUP_KEYBOARD_MODE_V1 === (ایلیا: «کلاً دکمه‌اش کار نمی‌کند» — همان باگِ همیشگی: در حالتِ کیبوردی
             # دکمه ساخته می‌شد ولی اینجا ثبت نشده بود، پس زدنش هیچ واکنشی نداشت)
             "🧹 پاک‌سازیِ خودکارِ پیام‌هایِ قبلی": _mcl_menu_entry,
+            "🧩 کپچا هنگامِ استارت": _scap_menu_entry,      # PATCH_START_CAPTCHA_V1
         }
         # متنِ Reply Keyboard عمداً همان برچسبِ اصلی است؛ style فقط
         # روی خودِ KeyboardButton قرار دارد و نیازی به تبدیل متن نیست.
@@ -13072,6 +13083,12 @@ async def _mcl_menu_entry(cb, bot):
     await mcl_menu(_FakeCb(cb.message._real, "mcl:menu"), bot)
 
 
+async def _scap_menu_entry(cb, bot):
+    """ورودیِ «🧩 کپچا هنگامِ استارت» در حالتِ کیبوردی (همان باگِ همیشگیِ ثبت‌نشدنِ برچسب در _settings_handlers)."""
+    from tenant.shared.start_captcha import scp_menu
+    await scp_menu(_FakeCb(cb.message._real, "scpm:menu"), bot)
+
+
 async def _pemj_menu_entry(cb, bot, state):
     """ورودیِ «⭐ افزودن ایموجی پرمیوم» — همان باگِ همیشگی: این دکمه در
     _sec_settings_kb برای حالتِ کیبوردی هم ساخته می‌شد، ولی در دیکشنریِ
@@ -13125,6 +13142,7 @@ async def _sec_settings_kb(bot_id: int, plan: str, menu_mode_v: str, bot_paused:
     opts.append(("🏷 اسمِ نمایشیِ درگاه‌هایِ پرداخت", "gwname:menu"))
     if ok(Feature.MSG_CLEANUP):   # PATCH_MSG_CLEANUP_V1
         opts.append(("🧹 پاک‌سازیِ خودکارِ پیام‌هایِ قبلی", "mcl:menu"))
+    opts.append(("🧩 کپچا هنگامِ استارت", "scpm:menu"))      # PATCH_START_CAPTCHA_V1
     if ok(Feature.CUSTOM_WELCOME):   # PATCH_FREE_PLAN_SIMPLIFY_V1
         opts.append(("✏️ متن خوش‌آمدگویی", "set:welcome"))
     if ok(Feature.CUSTOM_WELCOME):
@@ -14483,7 +14501,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "667"
+BUILD_ID = "668"
 
 
 @tenant_router.message(Command("version"))
