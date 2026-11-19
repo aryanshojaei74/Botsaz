@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import time
+
 import asyncio
 import datetime as _dt
 import json
@@ -24,6 +26,7 @@ from config import Session
 from logging_setup import get_logger as _get_logger
 from models import Bot as BotRow, BotUser, MeteredAccount, PanelAccount, WalletTxn
 
+_PANEL_WARNED: dict[int, float] = {}
 logger = _get_logger(__name__)
 mtr_router = Router(name="vpn_metered")
 
@@ -314,8 +317,16 @@ async def run_once(defaults=None) -> int:
                         client = _N()
                     await process_one(mid, client, _notify)
                     done += 1
-                except Exception:
-                    logger.exception("metered: پردازشِ سرویسِ %s ناموفق", mid)
+                except Exception as e:  # noqa: BLE001
+                    # PATCH_METERED_PANEL_ERR_QUIET_V1: پنلِ خراب/در دسترس‌نبودن خطایِ کد نیست؛ هر سرویس ساعتی یک خط هشدار، نه traceback هر دور
+                    from tenant.shared.panel_clients.vpn_panel import PanelError
+                    if isinstance(e, PanelError):
+                        now = time.monotonic()
+                        if now - _PANEL_WARNED.get(mid, -1e9) >= 3600:
+                            _PANEL_WARNED[mid] = now
+                            logger.warning("metered: سرویسِ %s — پنل در دسترس نیست (ساعتی یک‌بار گزارش می‌شود): %s", mid, str(e)[:160])
+                    else:
+                        logger.exception("metered: پردازشِ سرویسِ %s ناموفق", mid)
         finally:
             try:
                 await tbot.session.close()

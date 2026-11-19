@@ -2380,7 +2380,7 @@ async def _ai_analyze(question: str) -> dict | None:
         router = _gr()
         if not router.configured():
             return None
-        text, usage, _route = await router.chat(_AN_SYSTEM, _an_user_prompt(question, _an_topic_index(_GG_AI_TOPICS)),
+        text, usage, _route = await router.chat(_AN_SYSTEM, _an_user_prompt(question, _an_topic_index(_GG_AI_TOPICS, question)),
                                                 max_tokens=320, timeout=20)
         res = _an_parse(text, len(_GG_AI_TOPICS))
         logger.info("group_guard_ai analysis: ok=%s topics=%s ambiguous=%s usage=%s", bool(res),

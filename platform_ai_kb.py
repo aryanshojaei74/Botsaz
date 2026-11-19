@@ -243,13 +243,26 @@ def topic_title(text: str, kws) -> str:
     return (first[:46]).strip() or " ".join(list(kws)[:3])
 
 
-def topic_index(topics) -> str:
-    """فهرستِ فشردهٔ «شماره: عنوان | چند کلیدواژه» برایِ مرحلهٔ تحلیل."""
-    lines = []
-    for i, (kws, text) in enumerate(topics):
-        extra = "، ".join(list(kws)[:3])
-        lines.append(f"{i}: {topic_title(text, kws)} | {extra}")
-    return "\n".join(lines)
+INDEX_BUDGET = 7000      # PATCH_AI_INDEX_BUDGET_V1: فهرستِ کاملِ ۲۰۰+ بخش (~۱۸ هزار نویسه) از سقفِ Groq رد می‌شد (HTTP 413)
+
+
+def topic_index(topics, question: str | None = None, budget: int = INDEX_BUDGET) -> str:
+    """فهرستِ فشردهٔ «شماره: عنوان | کلیدواژه» برایِ مرحلهٔ تحلیل. شماره‌ها همان اندیسِ اصلیِ topics است.
+    اگر سوال داده شود، اول بخش‌هایی که با کلمه‌هایِ سوال جور درمی‌آیند و بعد بقیه، تا سقفِ budget نویسه."""
+    order = list(range(len(topics)))
+    if question:
+        top = [i for _s, i in topic_scores(question, topics)]
+        order = top + [i for i in order if i not in set(top)]
+    lines, size = [], 0
+    for i in order:
+        kws, text = topics[i]
+        extra = "، ".join(list(kws)[:2])
+        line = f"{i}: {topic_title(text, kws)[:34]} | {extra}"
+        if size + len(line) + 1 > budget:
+            break
+        lines.append(line)
+        size += len(line) + 1
+    return "\n".join(sorted(lines, key=lambda l: int(l.split(":", 1)[0])))
 
 
 ANALYZE_SYSTEM = """تو تحلیل‌گرِ سوالِ کاربرانِ «بات‌ساز» هستی. جواب نمی‌دی؛ فقط منظورِ کاربر رو می‌فهمی و بخش‌هایِ دانشِ لازم رو انتخاب می‌کنی.
