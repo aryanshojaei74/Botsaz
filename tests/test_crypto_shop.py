@@ -407,3 +407,22 @@ async def test_generic_gift_screens_do_not_treat_crypto_orders_as_card_payments(
     assert src.count('"srx_", "tonsell_"') == src.count('"srx_", "tonsell_", "cxsell_"')      # هیچ فهرستِ بدونِ cxsell_ نمانده
     o = types.SimpleNamespace(gift_id="cxsell_trx_5000", star_count=5000, gift_emoji="🔴")
     assert "50" in S._gift_item_label(o) and "TRX" in S._gift_item_label(o)
+
+
+@pytest.mark.asyncio
+async def test_trx_suggestions_start_small_5_7_10(env):
+    """Sajad: «کی انقد پول داره از ۵۰ پیشنهاد می‌ده؛ بکنش ۵ و ۷ و ۱۰»."""
+    await enable("trx", 7_000)                                         # حداقلِ پیش‌فرض باید ۵ را اجازه بدهد
+    cb = Cb("cx:c:trx")
+    await CX.cx_coin(cb, Bot(), fsm())
+    kb = cb.message.out[0][1]["reply_markup"]
+    picks = [b.callback_data for r in kb.inline_keyboard for b in r if (b.callback_data or "").startswith("cx:q:")]
+    assert picks == ["cx:q:trx:5", "cx:q:trx:7", "cx:q:trx:10"]
+    texts = [b.text for r in kb.inline_keyboard for b in r if (b.callback_data or "").startswith("cx:q:")]
+    assert "35,000" in texts[0] and "70,000" in texts[2]               # ۵×۷٬۰۰۰ و ۱۰×۷٬۰۰۰
+    assert any(b.callback_data == "cx:qc:trx" for r in kb.inline_keyboard for b in r)             # مقدارِ دلخواه هنوز هست
+    st = fsm()
+    await CX.cx_coin(Cb("cx:c:trx"), Bot(), st)
+    pick = Cb("cx:q:trx:5")
+    await CX.cx_pick(pick, Bot(), st)
+    assert "آدرسِ کیف‌پولِ" in pick.message.out[0][0]                   # ۵ TRX قابلِ سفارش است

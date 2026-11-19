@@ -33,7 +33,7 @@ crypto_shop_router = Router(name="crypto_shop")
 CENTI = 100
 INVOICE_TTL = 15 * 60
 COINS: dict[str, dict] = {
-    "trx": {"sym": "TRX", "name": "ترون", "icon": "🔴", "picks": (50, 100, 250, 500, 1000), "min": 10.0, "max": 10000.0,
+    "trx": {"sym": "TRX", "name": "ترون", "icon": "🔴", "picks": (5, 7, 10), "min": 1.0, "max": 10000.0,       # Sajad: «از ۵۰ پیشنهاد نده؛ ۵ و ۷ و ۱۰»
             "net_fixed": "TRC20"},
     "usdt": {"sym": "USDT", "name": "تتر", "icon": "💵", "picks": (5, 10, 20, 50, 100), "min": 2.0, "max": 1000.0,
              "net_fixed": None},
