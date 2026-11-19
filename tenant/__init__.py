@@ -291,6 +291,8 @@ tenant_router.include_router(wager_games_router)  # === PATCH_WAGER_TENANT_V1 ==
 from tenant.shared.wager_race import wager_race_router  # === PATCH_WAGER_RACE_TENANT_V1 ===
 tenant_router.include_router(wager_race_router)  # === PATCH_WAGER_RACE_TENANT_V1 ===
 from tenant.shared.wager_inline import wager_inline_router  # === PATCH_WAGER_INLINE_V1 ===
+from tenant.shared.next_discount import next_discount_router  # === PATCH_NEXT_DISCOUNT_V1 ===
+tenant_router.include_router(next_discount_router)  # === PATCH_NEXT_DISCOUNT_V1 ===
 tenant_router.include_router(wager_inline_router)  # === PATCH_WAGER_INLINE_V1 ===
 from wager_rank import tenant_rank_router  # === PATCH_WAGER_RANK_V1 ===
 tenant_router.include_router(tenant_rank_router)
@@ -14443,7 +14445,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "663"
+BUILD_ID = "664"
 
 
 @tenant_router.message(Command("version"))
@@ -23704,6 +23706,11 @@ async def _purchase_alert(bot: Bot, row: BotRow, *, buyer: "BotUser | None",
     except Exception:
         logger.exception("خطای نادیده‌گرفته‌شده در لاگِ خرید")
 
+    # === PATCH_NEXT_DISCOUNT_V1 === (Kasra) «در خریدِ بعدی X٪ تخفیف می‌گیری» — کدِ شخصیِ یک‌بارمصرف؛ فقط خریدِ واقعی (تستِ رایگان public=False)
+    if public:
+        from tenant.shared.next_discount import issue as _nx_issue
+        await _nx_issue(bot, row, buyer, amount)
+
     try:
         if await get_setting(row.id, "purchase_notify", "1") != "1":
             return
@@ -30969,6 +30976,8 @@ async def _show_discounts(msg, bot_id: int, edit: bool = False):
         style=ButtonStyle.PRIMARY)])
     rows_kb.append([InlineKeyboardButton(
         text="🎁 تخفیف پلکانیِ زیرمجموعه‌گیری", callback_data="refdisc:menu")])
+    rows_kb.append([InlineKeyboardButton(                           # PATCH_NEXT_DISCOUNT_V1
+        text="🎁 تخفیفِ خریدِ بعدی (کدِ خودکار بعد از هر خرید)", callback_data="nxd:menu")])
 
     lines = ["🏷 <b>کدهای تخفیف</b>\n"]
     if not codes:
