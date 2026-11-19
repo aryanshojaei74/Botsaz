@@ -10357,22 +10357,45 @@ def _fmt_exp_jalali(dt, with_time: bool = True) -> str:
         return "نامعتبر"
 
 
+_EXP_FORMAT_HELP = (
+    "یکی از این شکل‌ها (شمسی، به وقتِ ایران):\n"
+    "• تاریخ: <code>1404-10-15</code>\n"
+    "• تاریخ و ساعت: <code>1404-10-15 18:30</code>\n"
+    "• از همین الان: <code>3 ساعت</code> یا <code>2 روز</code> یا <code>30 دقیقه</code>"
+)
+
+
 def _parse_exp_jalali(raw: str):
-    """تاریخِ انقضای وارد شده به شمسی (YYYY-MM-DD یا YYYY/MM/DD، به وقت ایران) را
-    می‌گیرد و datetime میلادیِ UTC (برای ذخیره در DiscountCode.expires_at) برمی‌گرداند.
-    اگر فرمت نامعتبر بود، None برمی‌گرداند."""
-    raw = (raw or "").strip().replace("/", "-")
-    if not _jdt:
-        try:
-            return _dt.datetime.strptime(raw, "%Y-%m-%d")
-        except Exception:
+    """=== PATCH_DISCOUNT_EXPIRY_TIME_V1 === زمانِ انقضایِ کد تخفیف، به یکی از این شکل‌ها، و خروجی datetimeِ میلادیِ UTC
+    (برایِ DiscountCode.expires_at) یا None اگر نامعتبر باشد:
+      • «1404-10-15» (یا با «/»)          ⇒ همان روز، ساعتِ ۰۰:۰۰ به وقتِ ایران (مثلِ قبل)
+      • «1404-10-15 18:30»                 ⇒ تاریخ و ساعتِ دقیق (به وقتِ ایران؛ جداکننده فاصله یا T)
+      • «3 ساعت» / «2 روز» / «30 دقیقه» / «3h» / «2d» / «30m» ⇒ از همین الان
+    ارقامِ فارسی/عربی هم پذیرفته می‌شود."""
+    raw = (raw or "").strip()
+    t = raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")).replace("٫", ".").lower()
+    m = re.fullmatch(r"(\d{1,4})\s*(ساعت|دقیقه|روز|h|m|d|min|hour|hours|day|days)", t)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        if n <= 0:
             return None
+        delta = (_dt.timedelta(minutes=n) if unit in ("دقیقه", "m", "min") else
+                 _dt.timedelta(hours=n) if unit in ("ساعت", "h", "hour", "hours") else _dt.timedelta(days=n))
+        return _dt.datetime.utcnow() + delta
+    m = re.fullmatch(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ t]+(\d{1,2}):(\d{2}))?", t)
+    if not m:
+        return None
+    y, mo, d = (int(m.group(i)) for i in (1, 2, 3))
+    hh, mm = (int(m.group(4)), int(m.group(5))) if m.group(4) is not None else (0, 0)
+    if hh > 23 or mm > 59:
+        return None
     try:
-        y, m, d = (int(p) for p in raw.split("-"))
-        j = _jdt.date(y, m, d)
-        g = j.togregorian()  # تاریخ میلادی معادل، به وقت ایران (نیمه‌شب محلی)
-        local_midnight = _dt.datetime(g.year, g.month, g.day)
-        return local_midnight - _dt.timedelta(hours=3, minutes=30)  # تبدیل به UTC
+        if not _jdt:
+            local = _dt.datetime(y, mo, d, hh, mm)
+        else:
+            g = _jdt.date(y, mo, d).togregorian()          # تاریخِ میلادیِ معادل
+            local = _dt.datetime(g.year, g.month, g.day, hh, mm)
+        return local - _dt.timedelta(hours=3, minutes=30)  # وقتِ ایران ⇒ UTC
     except Exception:
         return None
 
@@ -14506,7 +14529,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "676"
+BUILD_ID = "677"
 
 
 @tenant_router.message(Command("version"))
@@ -17583,7 +17606,7 @@ def _exdisc_text(mb, dc) -> str:
     status = "🟢 فعال" if dc.is_active else "🔴 غیرفعال"
     if dc.expires_at and dc.expires_at < _dt.datetime.utcnow():
         status = "⌛️ منقضی‌شده"
-    exp_disp = _fmt_exp_jalali(dc.expires_at, with_time=False) if dc.expires_at else "ندارد"
+    exp_disp = _fmt_exp_jalali(dc.expires_at) if dc.expires_at else "ندارد"
     if (dc.disc_type or "percent") == "amount":
         value_disp = f"{int(round(float(dc.amount or 0))):,} تومان"
     else:
@@ -17795,8 +17818,7 @@ async def thb_exdisc(cb: CallbackQuery, bot: Bot, state: FSMContext):
         except Exception:
             logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
         await cb.message.answer(
-            "📅 تاریخ انقضا را به شمسی و به این فرمت بفرست:\n"
-            "<code>YYYY-MM-DD</code>  مثال: <code>1404-10-15</code>",
+            "📅 زمانِ انقضا را بفرست. " + _EXP_FORMAT_HELP,
             reply_markup=await smart_cancel_kb(bot))
         await cb.answer()
         return
@@ -18051,7 +18073,7 @@ async def thb_exdisc_expire_save(msg: Message, bot: Bot, state: FSMContext):
         return
     exp_dt = _parse_exp_jalali(raw)
     if exp_dt is None:
-        await msg.answer("فرمت نامعتبر. مثال (شمسی): <code>1404-10-15</code> — دوباره بفرست:")
+        await msg.answer("فرمت نامعتبر. " + _EXP_FORMAT_HELP + "\n\nدوباره بفرست:")
         return
     async with Session() as s:
         dc = await s.scalar(select(DiscountCode).where(
@@ -18063,7 +18085,7 @@ async def thb_exdisc_expire_save(msg: Message, bot: Bot, state: FSMContext):
         dc.expires_at = exp_dt
         await s.commit()
     await state.clear()
-    await msg.answer(f"✅ تاریخ انقضا به {_fmt_exp_jalali(exp_dt, with_time=False)} تنظیم شد.",
+    await msg.answer(f"✅ انقضا روی {_fmt_exp_jalali(exp_dt)} تنظیم شد.",
                      reply_markup=kb or ReplyKeyboardRemove())
     await msg.answer("ادامهٔ مدیریت 👇", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🏷 مدیریت کد تخفیف اختصاصی", callback_data=f"thb:exdisc:{mb_id}", style=ButtonStyle.PRIMARY)
@@ -31062,7 +31084,7 @@ async def _show_discounts(msg, bot_id: int, edit: bool = False):
             # تعداد استفاده
             uses = f"{c.used_count}/{c.max_uses}" if c.max_uses else f"{c.used_count}/∞"
             # انقضا
-            exp = _fmt_exp_jalali(c.expires_at, with_time=False) if c.expires_at else "—"
+            exp = _fmt_exp_jalali(c.expires_at) if c.expires_at else "—"
             # پنل مخصوص (اگر تنظیم شده)
             panel_line = ""
             if c.panel_key:
@@ -31522,8 +31544,7 @@ async def disc_edit_expire_start(cb: CallbackQuery, bot: Bot, state: FSMContext)
         [InlineKeyboardButton(text="✖️ لغو", callback_data="disc:cancel_edit", style=ButtonStyle.DANGER)],
     ])
     await cb.message.answer(
-        "📅 تاریخ انقضا را به شمسی و به این فرمت وارد کن:\n"
-        "<code>YYYY-MM-DD</code>  مثال: <code>1404-10-15</code>\n\n"
+        "📅 زمانِ انقضا را وارد کن. " + _EXP_FORMAT_HELP + "\n\n"
         "یا اگر می‌خواهی انقضا نداشته باشد، دکمه زیر را بزن:",
         reply_markup=skip_kb)
     await cb.answer()
@@ -31567,7 +31588,7 @@ async def disc_edit_expire_save(msg: Message, bot: Bot, state: FSMContext):
     exp_dt = _parse_exp_jalali(raw)
     if exp_dt is None:
         await msg.answer(
-            "فرمت نامعتبر. لطفاً به این شکل (شمسی) وارد کن:\n<code>YYYY-MM-DD</code> مثال: <code>1404-10-15</code>",
+            "فرمت نامعتبر. " + _EXP_FORMAT_HELP,
             reply_markup=await smart_cancel_kb(bot))
         return
     dc_id = data["edit_dc_id"]
@@ -31577,7 +31598,7 @@ async def disc_edit_expire_save(msg: Message, bot: Bot, state: FSMContext):
             dc.expires_at = exp_dt
             await s.commit()
     await state.clear()
-    await msg.answer(f"✅ تاریخ انقضا به {_fmt_exp_jalali(exp_dt, with_time=False)} تنظیم شد.",
+    await msg.answer(f"✅ انقضا روی {_fmt_exp_jalali(exp_dt)} تنظیم شد.",
                      reply_markup=_disc_edit_kb(dc_id))
 
 
@@ -31718,8 +31739,7 @@ async def _ask_discount_expiry(msg, state: FSMContext):
         [InlineKeyboardButton(text="❌ لغو", callback_data="disc:cancel_edit", style=ButtonStyle.DANGER)],
     ])
     await msg.answer(
-        "📅 تاریخ انقضا (اختیاری) را به شمسی وارد کن — فرمت: <code>YYYY-MM-DD</code>\n"
-        "مثال: <code>1404-10-15</code>",
+        "📅 زمانِ انقضا (اختیاری) را وارد کن. " + _EXP_FORMAT_HELP,
         reply_markup=skip_kb)
 
 
@@ -31749,7 +31769,7 @@ async def disc_new_expire_enter(msg: Message, state: FSMContext, bot: Bot):
     exp_dt = _parse_exp_jalali(raw)
     if exp_dt is None:
         await msg.answer(
-            "فرمت نامعتبر. مثال (شمسی): <code>1404-10-15</code>",
+            "فرمت نامعتبر. " + _EXP_FORMAT_HELP,
             reply_markup=await smart_cancel_kb(bot))
         return
     await state.update_data(new_disc_expire=exp_dt.isoformat())
@@ -31782,7 +31802,7 @@ async def _save_new_discount(msg, state: FSMContext, bot: Bot):
         await s.commit()
 
     disc_disp = f"{int(amt):,} تومان" if disc_type == "amount" else f"{pct}٪"
-    exp_disp = _fmt_exp_jalali(exp_dt, with_time=False) if exp_dt else "ندارد"
+    exp_disp = _fmt_exp_jalali(exp_dt) if exp_dt else "ندارد"
     uses_disp = "نامحدود" if uses == 0 else str(uses)
     panel_disp = "همهٔ پنل‌ها"
     if panel_key:
