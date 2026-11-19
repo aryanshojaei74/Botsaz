@@ -40,8 +40,16 @@ _TITLE = {"xo": "❌⭕ دوز", "rps": "🪨📄✂️ سنگ کاغذ قیچی
 _DESC = {"xo": "هرکی یه خط سه‌تایی بسازه برنده‌ست.",
          "rps": "سنگ قیچی رو می‌شکنه، قیچی کاغذ رو می‌بره، کاغذ سنگ رو می‌پیچه. ۳ راندی؛ هرکی زودتر ۲ تا ببره برنده‌ست."}
 _AMT = r"([۰-۹0-9,،]+)"
-_RX = {g: re.compile(rf"(?:بازی\s+)?(?:{'|'.join(re.escape(n).replace(chr(92) + ' ', r'\s*') for n in names)})(?:\s+{_AMT})?",
-                     re.IGNORECASE) for g, names in _NAMES.items()}
+def _alt(names) -> str:
+    """نام‌هایِ بازی ⇒ الگوی regex (فاصله ⇒ \\s*). جدا از f-string است چون پایتونِ ۳٫۱۰ بک‌اسلش داخلِ f-string را نمی‌پذیرد."""
+    parts = []
+    for n in names:
+        parts.append(r"\s*".join(re.escape(x) for x in n.split()))
+    return "|".join(parts)
+
+
+_RX = {g: re.compile(r"(?:بازی\s+)?(?:" + _alt(names) + r")(?:\s+" + _AMT + r")?", re.IGNORECASE)
+       for g, names in _NAMES.items()}
 _locks: dict[str, asyncio.Lock] = {}
 _STARTED: dict[str, bool] = {}          # inline_message_id ⇒ بازی ساخته شد (جلویِ دو پیوستنِ هم‌زمان)
 
