@@ -1875,6 +1875,7 @@ async def zibal_tenant_callback(request: Request):
     return page("خطا", str(msg))
 
 
+@app.get("/health")        # PATCH_TENANT_HEALTH_ROUTE_V1: دکوراتور افتاده بود ⇒ /health همیشه ۴۰۴ می‌داد (nginx: /health/tenant)
 async def health():
     return {"ok": True}
 

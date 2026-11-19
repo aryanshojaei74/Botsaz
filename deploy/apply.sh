@@ -31,7 +31,9 @@ echo "SYNTAX OK"
 wait_health() {   # $1=port  $2=max seconds
   local i
   for i in $(seq 1 $(( $2 / 2 ))); do
-    curl -fs -m 2 "http://127.0.0.1:$1/health" >/dev/null && return 0
+    # no -f on purpose: ANY http answer (even 404) proves the port is open = uvicorn finished its startup.
+    # (main_tenant has no 200 on /health in older builds, which made the old check wait for the full timeout)
+    curl -s -o /dev/null -m 2 "http://127.0.0.1:$1/health" && return 0
     sleep 2
   done
   return 1
