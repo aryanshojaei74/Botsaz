@@ -24,6 +24,8 @@ from __future__ import annotations
 import asyncio
 import datetime
 import time
+
+import late_delivery as _late_delivery
 import os
 
 # === PATCH_ASYNCIO_EXECUTOR_SIZE_V1 ===
@@ -1440,9 +1442,12 @@ async def tenant_webhook(token: str, request: Request):
                 maint_text = "🗄 این ربات موقتاً غیرفعال است. لطفاً بعداً دوباره امتحان کنید."
         spawn(maintenance_reply(bot, data, text=maint_text, reply_markup=maint_kb))
         return Response()
+    _late_delivery.warn(data, token)                      # PATCH_LATE_DELIVERY_LOG_V1
     spawn(_process_tenant(bot, data, token))
     return Response()
 
+
+# PATCH_LATE_DELIVERY_LOG_V1: تأخیرِ «ارسالِ کاربر تا رسیدنِ آپدیت» در late_delivery.py
 
 
 # === PATCH_APAY_GATEWAY_V1 ===
