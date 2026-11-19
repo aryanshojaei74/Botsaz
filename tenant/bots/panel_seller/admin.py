@@ -98,29 +98,90 @@ async def panel_choice_label(bot_id: int, p: VpnPanel) -> str:
 
 # ═══════════════════════ منوی اصلی ═══════════════════════
 
-async def menu_content(row):
+# === PATCH_PSEL_PANEL_SCOPE_V1 === (Whale Support: «اول باید پنل انتخاب بشه، بعد مدیریتِ همان پنل بیاد؛ اینجا اول مدیریت میاد»)
+# وقتی بیش از یک پنلِ قابلِ‌فروش وصل است: اول «کدام پنل؟»؛ بعد صفحهٔ مدیریتِ همان پنل (بسته‌ها، ادمین‌ها، مدیریت، ریستارت، نقش فقط برایِ همان).
+# «همهٔ پنل‌ها» نمای کلیِ قبلی است (شاملِ بسته‌هایِ دستی). با یک پنل، هیچ‌چیز عوض نمی‌شود.
+async def sellable_panels(bot_id: int) -> list[VpnPanel]:
+    return [p for p in await _panels(bot_id) if AD.supports(p.panel_key)]
+
+
+async def scope_get(bot_id: int, uid: int, panels: list[VpnPanel] | None = None) -> int | None:
+    """None = هنوز انتخاب نشده (باید صفحهٔ انتخابِ پنل بیاید)؛ ۰ = همهٔ پنل‌ها؛ >۰ = شناسهٔ پنلِ انتخاب‌شده.
+    با کمتر از دو پنلِ قابلِ‌فروش همیشه ۰ (رفتارِ قبلی)."""
+    sup = panels if panels is not None else await sellable_panels(bot_id)
+    if len(sup) < 2:
+        return 0
+    from tenant import get_setting
+    raw = (await get_setting(bot_id, f"psel_scope_{uid}", "")).strip()
+    if raw == "0":
+        return 0
+    if raw.isdigit() and int(raw) in {p.id for p in sup}:
+        return int(raw)
+    return None
+
+
+async def scope_set(bot_id: int, uid: int, val: int | None) -> None:
+    from tenant import set_setting
+    await set_setting(bot_id, f"psel_scope_{uid}", "" if val is None else str(int(val)))
+
+
+async def chooser_content(row):
+    sup = await sellable_panels(row.id)
+    async with Session() as s:
+        pk = dict((await s.execute(select(PanelSellerPackage.panel_id, func.count(PanelSellerPackage.id)).where(
+            PanelSellerPackage.bot_id == row.id, PanelSellerPackage.active == True)       # noqa: E712
+            .group_by(PanelSellerPackage.panel_id))).all())
+        ac = dict((await s.execute(select(PanelSellerAccount.panel_id, func.count(PanelSellerAccount.id)).where(
+            PanelSellerAccount.bot_id == row.id, PanelSellerAccount.status == "active")
+            .group_by(PanelSellerAccount.panel_id))).all())
+    rows = []
+    for p in sup:
+        rows.append([btn(f"🖥 {await panel_choice_label(row.id, p)} · 📦{fa(pk.get(p.id, 0))} 👤{fa(ac.get(p.id, 0))}",
+                         f"psel:sc:{p.id}", style=ButtonStyle.PRIMARY)])
+    rows.append([btn("📊 همهٔ پنل‌ها (نمای کلی + فروشِ دستی)", "psel:sc:0", style=ButtonStyle.SUCCESS)])
+    rows.append([btn("🗂 پنل‌هایِ متصل (اتصال/حذف)", "pyar:menu", style=ButtonStyle.PRIMARY)])
+    rows.append(HOME_ROW)
+    text = (f"🧩 <b>مدیریتِ پنل‌فروشی</b>\n\n{await status_line(row)}\n\n"
+            "🗂 <b>اول پنلی را که می‌خواهی مدیریت کنی انتخاب کن</b>؛ بعد بسته‌ها/قیمت‌ها، ادمین‌هایِ فروخته‌شده و ابزارهایِ همان پنل می‌آید.\n"
+            "(📦 بسته‌هایِ فعال · 👤 ادمین‌هایِ فعالِ هر پنل)")
+    return text, kb(*rows)
+
+
+async def menu_content(row, scope: int = 0):
     panels = await _panels(row.id)
     sup = [p for p in panels if AD.supports(p.panel_key)]
+    scoped = next((p for p in sup if p.id == scope), None) if scope else None
     async with Session() as s:
-        pk = int(await s.scalar(select(func.count(PanelSellerPackage.id)).where(
-            PanelSellerPackage.bot_id == row.id, PanelSellerPackage.active == True)) or 0)   # noqa: E712
-        act = int(await s.scalar(select(func.count(PanelSellerAccount.id)).where(
-            PanelSellerAccount.bot_id == row.id, PanelSellerAccount.status == "active")) or 0)
-        sus = int(await s.scalar(select(func.count(PanelSellerAccount.id)).where(
-            PanelSellerAccount.bot_id == row.id, PanelSellerAccount.status == "suspended")) or 0)
+        pq = select(func.count(PanelSellerPackage.id)).where(PanelSellerPackage.bot_id == row.id, PanelSellerPackage.active == True)   # noqa: E712
+        aq = select(func.count(PanelSellerAccount.id)).where(PanelSellerAccount.bot_id == row.id, PanelSellerAccount.status == "active")
+        sq = select(func.count(PanelSellerAccount.id)).where(PanelSellerAccount.bot_id == row.id, PanelSellerAccount.status == "suspended")
+        if scoped is not None:
+            pq, aq, sq = (q.where(c == scoped.id) for q, c in ((pq, PanelSellerPackage.panel_id), (aq, PanelSellerAccount.panel_id),
+                                                              (sq, PanelSellerAccount.panel_id)))
+        pk = int(await s.scalar(pq) or 0)
+        act = int(await s.scalar(aq) or 0)
+        sus = int(await s.scalar(sq) or 0)
         pend = int(await s.scalar(select(func.count(PanelSellerOrder.id)).where(                       # PATCH_PSEL_MANUAL_SALE_V1
             PanelSellerOrder.bot_id == row.id, PanelSellerOrder.status == "pending")) or 0)
         manual_pk = int(await s.scalar(select(func.count(PanelSellerPackage.id)).where(
             PanelSellerPackage.bot_id == row.id, PanelSellerPackage.manual == True)) or 0)           # noqa: E712
-    text = (f"🧩 <b>مدیریتِ پنل‌فروشی</b>\n\n{await status_line(row)}\n\n"
-            f"🗂 پنل‌هایِ متصل: <b>{fa(len(panels))}</b> (قابلِ فروش: {fa(len(sup))})\n"
-            f"📦 بسته‌هایِ فعال: <b>{fa(pk)}</b>\n"
-            f"👤 ادمین‌هایِ فروخته‌شده: 🟢 {fa(act)} · 🔴 {fa(sus)}")
+    if scoped is not None:
+        text = (f"🧩 <b>مدیریتِ پنل‌فروشی</b>\n\n{await status_line(row)}\n\n"
+                f"🖥 پنلِ انتخاب‌شده: <b>{esc(await panel_choice_label(row.id, scoped))}</b>\n"
+                f"📦 بسته‌هایِ فعالِ این پنل: <b>{fa(pk)}</b>\n"
+                f"👤 ادمین‌هایِ فروخته‌شده: 🟢 {fa(act)} · 🔴 {fa(sus)}")
+    else:
+        text = (f"🧩 <b>مدیریتِ پنل‌فروشی</b>\n\n{await status_line(row)}\n\n"
+                f"🗂 پنل‌هایِ متصل: <b>{fa(len(panels))}</b> (قابلِ فروش: {fa(len(sup))})\n"
+                f"📦 بسته‌هایِ فعال: <b>{fa(pk)}</b>\n"
+                f"👤 ادمین‌هایِ فروخته‌شده: 🟢 {fa(act)} · 🔴 {fa(sus)}")
     if pend:
         text += f"\n\n📨 <b>{fa(pend)}</b> سفارشِ دستی منتظرِ ارسالِ مشخصات است."
     if panels and not sup and not manual_pk:
         text += "\n\n⚠️ هیچ‌کدام از پنل‌هایِ متصل «ادمین» ندارند؛ فقط خانوادهٔ مرزبان (مرزبان/ربکا/پاسارگادِ قدیمی/ریک‌پنل) قابلِ فروش است."
+    top = [[btn("🔁 تغییرِ پنل", "psel:sc:x", style=ButtonStyle.SUCCESS)]] if len(sup) >= 2 else []
     return text, kb(
+        *top,
         [btn("🗂 پنل‌هایِ متصل (اتصال/حذف)", "pyar:menu", style=ButtonStyle.PRIMARY)],
         [btn("📨 سفارش‌هایِ دستی" + (f" ({fa(pend)})" if pend else ""), "psel:mo", style=ButtonStyle.SUCCESS)],
         [btn("📦 بسته‌هایِ فروش", "psel:pk", style=ButtonStyle.SUCCESS),
@@ -133,9 +194,50 @@ async def menu_content(row):
         HOME_ROW)
 
 
-async def show_menu(event, bot: Bot, row) -> None:
-    text, markup = await menu_content(row)
+async def show_menu(event, bot: Bot, row, fresh: bool = False) -> None:
+    """fresh=True: ورودِ تازه از «سرویس‌ها و محصولات» ⇒ با چند پنل همیشه اول «کدام پنل؟»."""
+    uid = event.from_user.id if getattr(event, "from_user", None) else 0
+    sup = await sellable_panels(row.id)
+    if len(sup) >= 2:
+        if fresh:
+            await scope_set(row.id, uid, None)
+        sc = await scope_get(row.id, uid, sup)
+        if sc is None:
+            text, markup = await chooser_content(row)
+            return await edit_or_send(event, text, markup)
+        text, markup = await menu_content(row, sc)
+    else:
+        text, markup = await menu_content(row)
     await edit_or_send(event, text, markup)
+
+
+@psel_admin_router.callback_query(F.data == "psel:adm:new")
+async def adm_menu_fresh(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    await show_menu(cb, bot, row, fresh=True)
+    await cb.answer()
+
+
+@psel_admin_router.callback_query(F.data.regexp(r"^psel:sc:(\d+|x)$"))
+async def scope_pick(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _guard(cb, bot)
+    if not row:
+        return
+    await state.clear()
+    val = cb.data.split(":")[2]
+    uid = cb.from_user.id
+    if val == "x":
+        await scope_set(row.id, uid, None)
+    else:
+        pid = int(val)
+        if pid and pid not in {p.id for p in await sellable_panels(row.id)}:
+            return await cb.answer("پنل معتبر نیست.", show_alert=True)
+        await scope_set(row.id, uid, pid)
+    await show_menu(cb, bot, row)
+    await cb.answer()
 
 
 @psel_admin_router.callback_query(F.data == MENU)
@@ -162,7 +264,8 @@ async def pk_list(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if not row:
         return
     await state.clear()
-    pks = await _packages(row.id)
+    sc = await scope_get(row.id, cb.from_user.id) or 0            # PATCH_PSEL_PANEL_SCOPE_V1
+    pks = [p for p in await _packages(row.id) if not sc or p.panel_id == sc]
     rows = [[btn(("🟢 " if p.active else "⚪️ ") + p.title[:30] + f" — {n(p.price_toman)}", f"psel:pk:{p.id}")] for p in pks]
     rows.append([btn("➕ بستهٔ جدید", "psel:pk:new", style=ButtonStyle.SUCCESS)])
     rows.append(back_row(MENU))
@@ -226,6 +329,12 @@ async def pk_new(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if not row:
         return
     panels = [p for p in await _panels(row.id) if AD.supports(p.panel_key)]
+    _sc = await scope_get(row.id, cb.from_user.id, panels)          # PATCH_PSEL_PANEL_SCOPE_V1: پنل از قبل انتخاب شده ⇒ سؤالِ «کدام پنل؟» نیست
+    if _sc:
+        await state.set_state(PselFSM.title)
+        await state.update_data(psel_panel=_sc, psel_msg=(cb.message.chat.id, cb.message.message_id))
+        await edit_or_send(cb, "✏️ نامِ بسته را بفرست (مثلاً «ادمین ۱۰۰ گیگ ماهانه»):", kb(back_row("psel:pk")))
+        return await cb.answer()
     rows = [[btn(await panel_choice_label(row.id, p), f"psel:pkp:{p.id}", style=ButtonStyle.PRIMARY)] for p in panels]
     rows.append([btn("📝 فروشِ دستی (بدونِ اتصال به پنل)", "psel:pkm", style=ButtonStyle.SUCCESS)])      # PATCH_PSEL_MANUAL_SALE_V1
     rows.append(back_row("psel:pk"))
@@ -464,10 +573,12 @@ async def ac_list(cb: CallbackQuery, bot: Bot):
     if not row:
         return
     page = int(cb.data.split(":")[2])
+    sc = await scope_get(row.id, cb.from_user.id) or 0            # PATCH_PSEL_PANEL_SCOPE_V1
     async with Session() as s:
-        accs = (await s.scalars(select(PanelSellerAccount).where(
-            PanelSellerAccount.bot_id == row.id, PanelSellerAccount.status != "deleted")
-            .order_by(PanelSellerAccount.id.desc()).offset(page * PAGE).limit(PAGE + 1))).all()
+        q = select(PanelSellerAccount).where(PanelSellerAccount.bot_id == row.id, PanelSellerAccount.status != "deleted")
+        if sc:
+            q = q.where(PanelSellerAccount.panel_id == sc)
+        accs = (await s.scalars(q.order_by(PanelSellerAccount.id.desc()).offset(page * PAGE).limit(PAGE + 1))).all()
     more = len(accs) > PAGE
     accs = accs[:PAGE]
     rows = [[btn(f"{STATUS_FA.get(a.status, a.status)[:1]} {a.admin_username} · {a.buyer_tg}", f"psel:ac:v:{a.id}")] for a in accs]
@@ -721,6 +832,9 @@ async def rs_list(cb: CallbackQuery, bot: Bot):
     if not row:
         return
     panels = [p for p in await _panels(row.id) if AD.supports(p.panel_key)]
+    _sc = await scope_get(row.id, cb.from_user.id, panels)          # PATCH_PSEL_PANEL_SCOPE_V1
+    if _sc:
+        return await rs_do(cb.model_copy(update={"data": f"psel:rs:{_sc}"}), bot)
     rows = [[btn(await panel_choice_label(row.id, p), f"psel:rs:{p.id}", style=ButtonStyle.PRIMARY)] for p in panels]
     rows.append(back_row(MENU))
     await edit_or_send(cb, "🔄 <b>ریستارتِ هستهٔ پنل</b>\n\nکدام پنل ریستارت شود؟" + ("" if panels else "\n\nپنلِ پشتیبانی‌شده‌ای وصل نیست."),
@@ -983,6 +1097,9 @@ async def role_panels(cb: CallbackQuery, bot: Bot):
     sup = [p for p in await _panels(row.id) if AD.supports(p.panel_key)]
     if not sup:
         return await cb.answer("پنلِ قابلِ‌فروشی متصل نیست.", show_alert=True)
+    _sc = await scope_get(row.id, cb.from_user.id, sup)             # PATCH_PSEL_PANEL_SCOPE_V1
+    if _sc:
+        return await role_list(cb.model_copy(update={"data": f"psel:roleP:{_sc}"}), bot)
     from tenant import get_setting
     rows = []
     for p in sup:

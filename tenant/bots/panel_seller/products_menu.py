@@ -5,18 +5,18 @@ from tenant.settings_registry import ProductsMenu, register_products_menu
 
 
 async def _opts(bot_id: int, plan: str) -> list[tuple[str, str]]:
-    return [("🧩 مدیریتِ پنل‌فروشی", "psel:adm")]
+    return [("🧩 مدیریتِ پنل‌فروشی", "psel:adm:new")]       # PATCH_PSEL_PANEL_SCOPE_V1: ورودِ تازه ⇒ با چند پنل اول «کدام پنل؟»
 
 
 async def _kb_menu(msg, row, bot, state):
     from tenant.bots.panel_seller.admin import show_menu
     await state.clear()
-    await show_menu(msg, bot, row)
+    await show_menu(msg, bot, row, fresh=True)
 
 
 register_products_menu("panel_seller", ProductsMenu(
     opts=_opts,
     description="اتصالِ پنل، بسته‌هایِ فروش، ادمین‌هایِ فروخته‌شده، ریستارتِ پنل و دسترسی‌هایِ مشتری:",
-    styles={"psel:adm": "success"},
+    styles={"psel:adm:new": "success"},
     keyboard={"🧩 مدیریتِ پنل‌فروشی": _kb_menu},
 ))

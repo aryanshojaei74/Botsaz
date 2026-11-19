@@ -168,6 +168,10 @@ async def mg_home(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if len(panels) == 1:
         # CallbackQuery غیرقابلِ‌تغییر (frozen) است؛ `cb.data = ...` ValidationError می‌داد و دکمه ساکت می‌ماند
         return await _dashboard(cb, bot, row, panels[0].id)
+    from tenant.bots.panel_seller.admin import scope_get        # PATCH_PSEL_PANEL_SCOPE_V1: پنل از قبل انتخاب شده ⇒ مستقیم همان
+    _sc = await scope_get(row.id, cb.from_user.id)
+    if _sc and any(p.id == _sc for p in panels):
+        return await _dashboard(cb, bot, row, _sc)
     rows = [[btn(f"🖥 {p.panel_key} — {p.base_url.replace('https://', '').replace('http://', '')[:30]}", f"psel:mgP:{p.id}",
                  style=ButtonStyle.PRIMARY)] for p in panels]
     rows.append(back_row("psel:adm"))
