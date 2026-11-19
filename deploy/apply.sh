@@ -46,10 +46,13 @@ echo ">>> stage 2: platform + worker"
 systemctl restart botsaz-platform botsaz-tenant-worker
 wait_health 8000 120 || echo "WARNING: platform slow to come up"
 
-echo ">>> stage 3: per-kind services"
-systemctl restart botsaz-tenant-booking botsaz-tenant-community-mgmt botsaz-tenant-digital-shop \
-                  botsaz-tenant-virtual-service botsaz-tenant-vpn-test
-sleep 10
+echo ">>> stage 3: per-kind services, ONE AT A TIME (each serves the webhooks of its own bots via nginx)"
+for pair in virtual-service:8012 digital-shop:8013 community-mgmt:8015 booking:8014 vpn-test:8011; do
+  svc="botsaz-tenant-${pair%%:*}"; port="${pair##*:}"
+  T1=$(date +%s)
+  systemctl restart "$svc"
+  if wait_health "$port" 120; then echo "$svc healthy after $(( $(date +%s) - T1 )) s"; else echo "WARNING: $svc not healthy after 120 s"; fi
+done
 
 systemctl is-active botsaz-platform botsaz-tenant botsaz-tenant-worker botsaz-tenant-booking \
   botsaz-tenant-community-mgmt botsaz-tenant-digital-shop botsaz-tenant-virtual-service botsaz-tenant-vpn-test
