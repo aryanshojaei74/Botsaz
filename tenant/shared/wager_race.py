@@ -176,10 +176,13 @@ async def twr_create(msg: Message, bot: Bot):
             logger.exception("tenant race: could not report the failure")
 
 
-async def _cb_row(cb: CallbackQuery, bot: Bot):
+async def _cb_row(cb: CallbackQuery, bot: Bot, allow_inline: bool = False):
     from tenant import get_bot_row
     row = await get_bot_row(bot)
-    if (not row or not cb.message or cb.message.chat.type not in ("group", "supergroup")
+    in_group = bool(cb.message and cb.message.chat.type in ("group", "supergroup"))
+    if allow_inline and cb.message is None and cb.inline_message_id:        # PATCH_QUIZ_INLINE_V1
+        in_group = True
+    if (not row or not in_group
             or not wager_eligible(row.field, row.plan) or not await addon_active(row.id, WAGER_ADDON)
             or not await core.master_enabled(row.id)):
         await cb.answer("قابلیت فعال نیست.", show_alert=True)
@@ -239,8 +242,8 @@ async def twr_cancel(cb: CallbackQuery, bot: Bot):
 
 @wager_race_router.callback_query(F.data.startswith("twr:qz:"))
 async def twr_quiz_press(cb: CallbackQuery, bot: Bot):
-    """PATCH_QUIZ_V2: دکمهٔ گزینهٔ کوییز در ربات مستأجر."""
-    row = await _cb_row(cb, bot)
+    """PATCH_QUIZ_V2: دکمهٔ گزینهٔ کوییز در ربات مستأجر (گروه یا پیامِ اینلاین)."""
+    row = await _cb_row(cb, bot, allow_inline=True)
     if not row:
         return
     await R.quiz_press(cb, row.id)

@@ -13,8 +13,10 @@ import models
 import platform_bot
 import platform_group_money as GM
 import platform_wager as PW
+import platform_wager_race as PR
 import tenant
 import tenant.shared.wager_games as WG
+import tenant.shared.wager_race as WR
 import tenant.shared.wager_inline as WI
 import wager_rank as K
 
@@ -29,7 +31,7 @@ async def db(monkeypatch):
     async with engine.begin() as conn:
         await conn.run_sync(models.Base.metadata.create_all)
     maker = async_sessionmaker(engine, expire_on_commit=False)
-    for mod in (config, PW, GM, WG, WI, K, tenant, platform_bot):
+    for mod in (config, PW, PR, GM, WG, WI, K, tenant, platform_bot):
         monkeypatch.setattr(mod, "Session", maker, raising=False)
     tenant._SETTING_CACHE.clear()
     tenant._BOT_ROW_CACHE.clear()
@@ -417,3 +419,101 @@ async def test_inline_dice_failed_throw_can_be_retried(db, monkeypatch):
     c2 = PmCb(bot, U1, f"iwd:r:{w.id}")
     await WI.iwd_roll(c2, bot)
     assert bot.dice_sent == [U1] and not any(a[1] for a in c2.answers)                           # آزاد شده بود؛ دوباره انداخت
+
+
+# ───────────── کوییزِ اینلاین (دکمه‌هایِ شیشه‌ای؛ همه‌چیز روی همان پیام) ─────────────
+
+class QzCb(Cb):
+    """کلیکِ گزینهٔ کوییز روی پیامِ اینلاین."""
+
+
+async def _start_inline_quiz(db, monkeypatch, bot, amount=10_000, cat="foot"):
+    async def cfj(b, bid, uid, bypass_cache=False): return []
+    monkeypatch.setattr(tenant, "check_force_join", cfj)
+    spawned = []
+
+    async def keep(b, wid, secs): spawned.append((wid, secs))        # تایمرِ مهلت: فقط ثبت می‌شود
+    monkeypatch.setattr(PR, "_expire_later", keep)
+    PR.LIVE.clear()
+    cb = Cb(bot, U2, f"iwg:j:quiz:{amount}:{U1}:{cat}")
+    await WI.iwg_join(cb, bot)
+    async with db() as s:
+        w = (await s.scalars(select(models.PlatformWager))).one()
+    return w, cb, spawned
+
+
+@pytest.mark.asyncio
+async def test_inline_quiz_query_offers_topics_and_invite_shows_the_topic(db, monkeypatch):
+    bot = await _stub_bot(monkeypatch)
+    await tenant.set_setting(BOT, "group_betting_enabled", "1")
+    assert WI.parse_query("کوییز") == ("quiz", 0, True) and WI.parse_query("کویز 3000") == ("quiz", 3000, True)
+    sent = {}
+
+    class Q:
+        query = "کوییز 5000"
+        from_user = types.SimpleNamespace(id=U1, full_name="u11")
+
+        async def answer(self, results, **k): sent["r"] = results
+    await WI.iwg_query(Q(), bot)
+    ids = [r.id for r in sent["r"]]
+    assert "quiz:5000:foot" in ids and "quiz:5000:riddle" in ids and len(ids) == 6          # هر موضوع یک گزینه
+    foot = next(r for r in sent["r"] if r.id == "quiz:5000:foot")
+    assert "فوتبال" in foot.input_message_content.message_text
+    assert foot.reply_markup.inline_keyboard[0][0].callback_data == f"iwg:j:quiz:5000:{U1}:foot"
+    Q.query = ""
+    await WI.iwg_query(Q(), bot)
+    assert [r.id for r in sent["r"] if r.id.startswith("quiz")] == ["quiz:1000:general"]       # فهرستِ بدونِ متن: فقط یک موضوع (با حداقلِ مبلغ)
+
+
+@pytest.mark.asyncio
+async def test_inline_quiz_wrong_then_right_answer_settles_on_the_inline_message(db, monkeypatch):
+    bot = await _stub_bot(monkeypatch)
+    w, _cb, spawned = await _start_inline_quiz(db, monkeypatch, bot)
+    st = PW._st(w)
+    assert w.game == "quiz" and w.status == "playing" and st["cat"] == "foot" or st.get("opt") == "foot"
+    assert spawned == [(w.id, PR.SECS["quiz"])] and PR.LIVE[w.id]["chat"] == 0
+    assert await bal(db, U1) == 90_000 and await bal(db, U2) == 90_000
+    text, kw = bot.edits[-1]
+    cbs = [b.callback_data for r in kw["reply_markup"].inline_keyboard for b in r]
+    assert cbs == [f"twr:qz:{w.id}:{i}" for i in range(4)] and kw["inline_message_id"] == IMID    # ۴ گزینه روی همان پیام
+    right = int(st["a"]) - 1
+    wrong = (right + 1) % 4
+    bad = Cb(bot, U1, f"twr:qz:{w.id}:{wrong}")                                                    # u11 غلط می‌زند
+    await WR.twr_quiz_press(bad, bot)
+    assert bad.answers[0][1] and "اشتباه" in bad.answers[0][0] and PR.LIVE[w.id]["locked"] == {U1}
+    again = Cb(bot, U1, f"twr:qz:{w.id}:{right}")                                                  # فرصتِ دوم ندارد
+    await WR.twr_quiz_press(again, bot)
+    assert "فرصت" in again.answers[0][0]
+    outsider = Cb(bot, 999, f"twr:qz:{w.id}:{right}")
+    await WR.twr_quiz_press(outsider, bot)
+    assert "فقط دو بازیکن" in outsider.answers[0][0]
+    bot.edits.clear()
+    good = Cb(bot, U2, f"twr:qz:{w.id}:{right}")                                                   # u22 درست می‌زند
+    await WR.twr_quiz_press(good, bot)
+    async with db() as s:
+        w2 = await s.get(models.PlatformWager, w.id)
+    assert w2.status == "settled" and w2.winner_id == U2 and w.id not in PR.LIVE
+    assert await bal(db, U2) == 100_000 - 10_000 + 20_000 and await bal(db, U1) == 90_000
+    assert bot.edits and all(kw["inline_message_id"] == IMID for _, kw in bot.edits) and "برنده" in bot.edits[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_inline_quiz_both_wrong_refunds_everyone_without_a_chat(db, monkeypatch):
+    bot = await _stub_bot(monkeypatch)
+    w, _cb, _sp = await _start_inline_quiz(db, monkeypatch, bot)
+    wrong = (int(PW._st(w)["a"]) - 1 + 1) % 4
+    for uid in (U1, U2):
+        await WR.twr_quiz_press(Cb(bot, uid, f"twr:qz:{w.id}:{wrong}"), bot)
+    async with db() as s:
+        w2 = await s.get(models.PlatformWager, w.id)
+    assert w2.status != "playing" and await bal(db, U1) == 100_000 and await bal(db, U2) == 100_000   # مبلغِ هر دو برگشت
+    assert "برنده نشد" in bot.edits[-1][0] and bot.edits[-1][1]["inline_message_id"] == IMID
+
+
+@pytest.mark.asyncio
+async def test_quiz_buttons_still_refuse_foreign_inline_clicks_when_wager_is_not_live(db, monkeypatch):
+    bot = await _stub_bot(monkeypatch)
+    PR.LIVE.clear()
+    c = Cb(bot, U1, "twr:qz:999:0")
+    await WR.twr_quiz_press(c, bot)
+    assert c.answers[0][1] and "تمام شده" in c.answers[0][0]

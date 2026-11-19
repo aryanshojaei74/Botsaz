@@ -550,7 +550,7 @@ async def _end_now(bot: Bot, wid: int) -> None:
         if w is not None:
             LIVE.pop(w.id, None)
             await _edit(bot, w)
-            await bot.send_message(w.chat_id, "⌛ هر دو نفر اشتباه جواب دادند؛ مبلغِ هر دو نفر برگشت. 👻")
+            await _say(bot, w, "⌛ هر دو نفر اشتباه جواب دادند؛ مبلغِ هر دو نفر برگشت. 👻")
     except Exception:  # noqa: BLE001
         logger.exception("quiz end #%s failed", wid)
 
@@ -798,13 +798,23 @@ async def _still_active(wid: int) -> bool:
     return bool(w and w.status in core.ACTIVE)
 
 
+async def _say(bot: Bot, w: PlatformWager, text: str, **kw) -> None:
+    """پیامِ جدید در چتِ بازی؛ بازیِ اینلاین (chat_id=0) چتی ندارد و نتیجه فقط روی همان پیامِ اینلاین می‌آید."""
+    if w.chat_id:
+        await bot.send_message(w.chat_id, text, **kw)
+
+
 async def _edit(bot: Bot, w: PlatformWager) -> None:
-    if not w.message_id:
+    imid = core._st(w).get("imid") if not w.message_id else None          # PATCH_QUIZ_INLINE_V1: بازیِ اینلاین
+    if not w.message_id and not imid:
         return
     text, kb = render_race(w)
     kb = (await core.result_kb(w)) or kb               # PATCH_WAGER_RESULT_KB_V1 (فقط ربات‌هایِ مستأجر)
     try:
-        await bot.edit_message_text(text, chat_id=w.chat_id, message_id=w.message_id, reply_markup=kb, parse_mode="HTML")
+        if imid:
+            await bot.edit_message_text(text, inline_message_id=imid, reply_markup=kb, parse_mode="HTML")
+        else:
+            await bot.edit_message_text(text, chat_id=w.chat_id, message_id=w.message_id, reply_markup=kb, parse_mode="HTML")
     except TelegramBadRequest as e:
         if "not modified" not in str(e).lower():
             logger.warning("race edit failed: %s", e)
@@ -877,12 +887,12 @@ async def _expire_later(bot: Bot, wid: int, secs: int) -> None:
             await _edit(bot, w)
             if w.status == "settled" and w.end_reason == "forfeit":      # حدس عددِ نوبتی: نوبتِ‌دارِ ساکت باخت
                 loser = w.opponent_id if w.winner_id == w.creator_id else w.creator_id
-                await bot.send_message(
-                    w.chat_id, f"⏰ <b>{core._who(w, loser)}</b> در ۳ دقیقه حدس نزد و باخت.\n"
-                               f"🏁 <b>{core._who(w, w.winner_id)}</b> برنده شد! {prize_line(w)}",
+                await _say(
+                    bot, w, f"⏰ <b>{core._who(w, loser)}</b> در ۳ دقیقه حدس نزد و باخت.\n"
+                            f"🏁 <b>{core._who(w, w.winner_id)}</b> برنده شد! {prize_line(w)}",
                     parse_mode="HTML", reply_markup=await core.result_kb(w))
             else:
-                await bot.send_message(w.chat_id, "⌛ کسی برنده نشد؛ مبلغِ هر دو نفر برگشت. 👻")
+                await _say(bot, w, "⌛ کسی برنده نشد؛ مبلغِ هر دو نفر برگشت. 👻")
     except Exception:  # noqa: BLE001
         logger.exception("race expire #%s failed", wid)
 
@@ -962,7 +972,8 @@ async def quiz_press(cb: CallbackQuery, bot_id: int = 0) -> None:
     parts = (cb.data or "").split(":")
     wid, idx = (_int(parts[2]) if len(parts) > 2 else 0), (_int(parts[3]) if len(parts) > 3 else -1)
     lv = LIVE.get(wid)
-    if not lv or lv.get("kind") != "quiz" or (lv.get("bot") or 0) != bot_id or not cb.message:
+    inline = cb.message is None and bool(cb.inline_message_id)            # PATCH_QUIZ_INLINE_V1
+    if not lv or lv.get("kind") != "quiz" or (lv.get("bot") or 0) != bot_id or not (cb.message or inline):
         await cb.answer("این بازی تمام شده است.", show_alert=True)
         return
     uid = cb.from_user.id
@@ -982,13 +993,13 @@ async def quiz_press(cb: CallbackQuery, bot_id: int = 0) -> None:
             return
         LIVE.pop(wid, None)
         await _edit(cb.bot, w)
-        await cb.bot.send_message(
-            w.chat_id, f"🏁 <b>{_html.escape(cb.from_user.full_name or str(uid))}</b> برنده شد!\n"
+        await _say(
+            cb.bot, w, f"🏁 <b>{_html.escape(cb.from_user.full_name or str(uid))}</b> برنده شد!\n"
                        f"{prize_line(w)}", parse_mode="HTML",
             reply_markup=await core.result_kb(w))
         return
     locked.add(uid)
-    await cb.answer("❌ اشتباه بود!")
+    await cb.answer("❌ اشتباه بود؛ از بازی حذف شدی." if inline else "❌ اشتباه بود!", show_alert=inline)
     who = f'<a href="tg://user?id={uid}">{_html.escape(cb.from_user.full_name or str(uid))}</a>'
     # PATCH_QUIZ_CATS_V1 (سینا): بگو کدام گزینه را زد
     try:
@@ -997,7 +1008,8 @@ async def quiz_press(cb: CallbackQuery, bot_id: int = 0) -> None:
         chosen = ""
     chosen_txt = f"\nگزینهٔ انتخابی: «{_html.escape(chosen)}»" if chosen else ""
     try:
-        await cb.bot.send_message(cb.message.chat.id, f"❌ {who} اشتباه زدی و از بازی حذف شدی.{chosen_txt}", parse_mode="HTML")
+        if cb.message:                                      # اینلاین: چتی نیست؛ همان هشدارِ بالا کافی است
+            await cb.bot.send_message(cb.message.chat.id, f"❌ {who} اشتباه زدی و از بازی حذف شدی.{chosen_txt}", parse_mode="HTML")
     except Exception:  # noqa: BLE001
         logger.info("quiz: wrong-answer notice skipped")
     if locked >= set(lv["players"]):

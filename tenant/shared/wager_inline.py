@@ -16,6 +16,7 @@ import asyncio
 import html as _h
 import json
 import re
+import time
 
 from aiogram import Bot, F, Router
 from aiogram.dispatcher.event.bases import SkipHandler
@@ -34,12 +35,13 @@ logger = _get_logger(__name__)
 
 wager_inline_router = Router(name="wager_inline")
 
-INLINE_GAMES = ("xo", "rps", "dice")
-_NAMES = {"xo": ("دوز", "xo", "اکس او", "ایکس او"), "rps": ("سنگ کاغذ قیچی", "rps"), "dice": ("تاس", "dice")}
-_TITLE = {"xo": "❌⭕ دوز", "rps": "🪨📄✂️ سنگ کاغذ قیچی", "dice": "🎲 تاس"}
+INLINE_GAMES = ("xo", "rps", "dice", "quiz")
+_NAMES = {"xo": ("دوز", "xo", "اکس او", "ایکس او"), "rps": ("سنگ کاغذ قیچی", "rps"), "dice": ("تاس", "dice"), "quiz": ("کوییز", "کویز", "کوئیز", "quiz")}
+_TITLE = {"xo": "❌⭕ دوز", "rps": "🪨📄✂️ سنگ کاغذ قیچی", "dice": "🎲 تاس", "quiz": "❓ کوییز"}
 _DESC = {"xo": "هرکی یه خط سه‌تایی بسازه برنده‌ست.",
          "rps": "سنگ قیچی رو می‌شکنه، قیچی کاغذ رو می‌بره، کاغذ سنگ رو می‌پیچه. ۳ راندی؛ هرکی زودتر ۲ تا ببره برنده‌ست.",
-         "dice": "هر نفر یک تاس می‌اندازد؛ عددِ بزرگ‌تر برنده است. پرتاب داخلِ پیویِ ربات انجام می‌شود."}
+         "dice": "هر نفر یک تاس می‌اندازد؛ عددِ بزرگ‌تر برنده است. پرتاب داخلِ پیویِ ربات انجام می‌شود.",
+         "quiz": "یک سؤال با ۴ گزینه؛ هر کس زودتر گزینهٔ درست را بزند برنده است (هر نفر یک فرصت؛ غلط = حذف)."}
 _AMT = r"([۰-۹0-9,،]+)"
 def _alt(names) -> str:
     """نام‌هایِ بازی ⇒ الگوی regex (فاصله ⇒ \\s*). جدا از f-string است چون پایتونِ ۳٫۱۰ بک‌اسلش داخلِ f-string را نمی‌پذیرد."""
@@ -85,16 +87,29 @@ async def _ctx(bot: Bot):
     return row
 
 
-def _invite_text(game: str, amount: int, name: str, free: bool) -> str:
+def _invite_text(game: str, amount: int, name: str, free: bool, cat: str = "") -> str:
+    topic = ""
+    if cat:
+        import quiz_bank as QB
+        topic = f"🏷 موضوع: <b>{_h.escape(QB.CAT_NAME.get(cat, cat))}</b>\n"
     money = ("🆓 <b>بازیِ رایگان</b> — جایزهٔ پولی ندارد" if free
              else f"💰 مبلغ ورودی هر نفر: <b>{core._rial(amount)}</b>")
-    return (f"🎮 <b>{_h.escape(_TITLE[game])}</b>\n{_DESC[game]}\n\n{money}\n"
+    return (f"🎮 <b>{_h.escape(_TITLE[game])}</b>\n{_DESC[game]}\n\n{topic}{money}\n"
             f"👤 میزبان: <b>{_h.escape(name)}</b>\n\nبرای بازی، دکمهٔ زیر را بزن 👇")
 
 
-def _join_kb(game: str, amount: int, creator: int) -> InlineKeyboardMarkup:
+def _join_kb(game: str, amount: int, creator: int, cat: str = "") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-        text="➕ پیوستن به بازی", callback_data=f"iwg:j:{game}:{amount}:{creator}", style=ButtonStyle.SUCCESS)]])
+        text="➕ پیوستن به بازی", callback_data=f"iwg:j:{game}:{amount}:{creator}" + (f":{cat}" if cat else ""),
+        style=ButtonStyle.SUCCESS)]])
+
+
+def _topics(game: str, exact: bool) -> list[str]:
+    """موضوع‌هایِ پیشنهادیِ کوییز: «کوییز» تایپ شده ⇒ همهٔ موضوع‌ها؛ فهرستِ بدونِ متن ⇒ فقط «اطلاعات عمومی»."""
+    if game != "quiz":
+        return [""]
+    import quiz_bank as QB
+    return list(QB.CATS) if exact else ["general"]
 
 
 @wager_inline_router.inline_query()
@@ -130,17 +145,22 @@ async def iwg_query(q: InlineQuery, bot: Bot):
                 offers.append(0)
             if not exact:
                 offers.append(int(cfg["min"]))
-        for amt in offers:
-            if amt and (amt < int(cfg["min"]) or (cfg.get("max") and amt > int(cfg["max"]))):
-                continue
-            free = amt == 0
-            title = _TITLE[g] + (" — رایگان" if free else f" — {core._rial(amt)}")
-            results.append(InlineQueryResultArticle(
-                id=f"{g}:{amt}", title=title,
-                description=(_DESC[g] if free else _DESC[g] + f"  (برایِ مبلغِ دیگر بنویس: {_NAMES[g][0]} ۵۰۰۰)"),
-                input_message_content=InputTextMessageContent(
-                    message_text=_invite_text(g, amt, name, free), parse_mode="HTML"),
-                reply_markup=_join_kb(g, amt, q.from_user.id)))
+        for cat in _topics(g, bool(game)):
+            for amt in offers:
+                if amt and (amt < int(cfg["min"]) or (cfg.get("max") and amt > int(cfg["max"]))):
+                    continue
+                free = amt == 0
+                tn = ""
+                if cat:
+                    import quiz_bank as QB
+                    tn = " — " + QB.CATS.get(cat, cat)
+                title = _TITLE[g] + tn + (" — رایگان" if free else f" — {core._rial(amt)}")
+                results.append(InlineQueryResultArticle(
+                    id=f"{g}:{amt}" + (f":{cat}" if cat else ""), title=title,
+                    description=(_DESC[g] if free else _DESC[g] + f"  (برایِ مبلغِ دیگر بنویس: {_NAMES[g][0]} ۵۰۰۰)"),
+                    input_message_content=InputTextMessageContent(
+                        message_text=_invite_text(g, amt, name, free, cat), parse_mode="HTML"),
+                    reply_markup=_join_kb(g, amt, q.from_user.id, cat)))
     await q.answer(results, cache_time=0, is_personal=True)
 
 
@@ -192,11 +212,16 @@ async def iwg_join(cb: CallbackQuery, bot: Bot):
         await cb.answer("قابلیت فعال نیست.", show_alert=True)
         return
     try:
-        _, _, game, amt_s, cre_s = cb.data.split(":")
-        amount, creator = int(amt_s), int(cre_s)
-    except ValueError:
+        parts = cb.data.split(":")
+        game, amount, creator = parts[2], int(parts[3]), int(parts[4])
+        cat = parts[5] if len(parts) > 5 else ""
+    except (ValueError, IndexError):
         await cb.answer("دکمه نامعتبر است.", show_alert=True)
         return
+    if game == "quiz":
+        import quiz_bank as QB
+        if cat not in QB.CATS:
+            cat = "general"
     if game not in INLINE_GAMES or not await core.game_enabled(game, row.id):
         await cb.answer("این بازی فعال نیست.", show_alert=True)
         return
@@ -258,12 +283,16 @@ async def iwg_join(cb: CallbackQuery, bot: Bot):
             await cb.answer(err.replace("<b>", "").replace("</b>", ""), show_alert=True)
             return
         try:
-            if game in ("xo", "dice"):                                   # دوز: X؛ تاس: عدد بزرگ‌تر برنده
-                o = await core.set_option(w.id, creator, "X" if game == "xo" else "hi", bot_id=row.id)
+            if game in ("xo", "dice", "quiz"):                           # دوز: X؛ تاس: عدد بزرگ‌تر؛ کوییز: موضوع
+                o = await core.set_option(w.id, creator, {"xo": "X", "dice": "hi"}.get(game, cat), bot_id=row.id)
                 if o.err:
                     raise RuntimeError(o.err)
-            r = await core.join_wager(w.id, (joiner.id, joiner.full_name or "", joiner.username or ""), cfg["move"],
-                                      bot_id=row.id, sim_secs=cfg["move_sim"])
+            if game == "quiz":
+                import platform_wager_race as R
+                r = await R.join_race(w.id, (joiner.id, joiner.full_name or "", joiner.username or ""), row.id)
+            else:
+                r = await core.join_wager(w.id, (joiner.id, joiner.full_name or "", joiner.username or ""), cfg["move"],
+                                          bot_id=row.id, sim_secs=cfg["move_sim"])
             if r.err:
                 async with core._wlock(w.id):
                     await core.cancel_wager(w.id, creator, row.id)         # مبلغِ رزروشدهٔ میزبان برمی‌گردد
@@ -287,6 +316,13 @@ async def iwg_join(cb: CallbackQuery, bot: Bot):
         _STARTED[imid] = True
         if len(_STARTED) > 5000:
             _STARTED.clear()
+        if game == "quiz":                                  # مسابقه‌ها «زنده» در حافظه ثبت می‌شوند؛ مهلت هم با تایمر
+            import platform_wager_race as R
+            qst = core._st(r.w)
+            R.LIVE[r.w.id] = {"wid": r.w.id, "chat": 0, "bot": row.id, "kind": "quiz",
+                              "players": {r.w.creator_id, r.w.opponent_id}, "answer": qst.get("a"), "n": qst.get("n"),
+                              "st": qst, "alts": qst.get("alts"), "until": time.monotonic() + R.SECS["quiz"] + 5}
+            asyncio.create_task(R._expire_later(bot, r.w.id, R.SECS["quiz"]))
         text, kb = core.render(r.w)
         kb = await inline_kb(bot, r.w, kb)
         await _edit(bot, imid, text, kb)
