@@ -14529,7 +14529,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "681"
+BUILD_ID = "682"
 
 
 @tenant_router.message(Command("version"))
@@ -31719,8 +31719,9 @@ async def disc_uses_enter(msg: Message, state: FSMContext, bot: Bot):
     if len(panels) >= 2:
         await state.set_state(AdminFSM.discount_panel)
         rows = [[InlineKeyboardButton(text="🌐 همهٔ پنل‌ها", callback_data="disc:newpanel:", style=ButtonStyle.PRIMARY)]]
+        from tenant.bots.panel_seller.admin import panel_choice_label       # PATCH_PANEL_LABEL_INSTANCE_V1
         for p in panels:
-            lbl = PANEL_LABELS.get(p.panel_key, p.panel_key)
+            lbl = await panel_choice_label(row.id, p)
             rows.append([InlineKeyboardButton(text=lbl, callback_data=f"disc:newpanel:{p.panel_key}", style=ButtonStyle.PRIMARY)])
         await msg.answer(
             "🛰 این کد تخفیف فقط برای کدام پنل معتبر باشد؟\n"

@@ -172,8 +172,9 @@ async def _panels_menu_content(bot_id: int, *, show_back: bool = False,
         )
     else:
         lines = ["🗂 <b>پنل‌یار VPN</b>\n", "پنل‌هایِ ثبت‌شده:"]
+        from tenant.bots.panel_seller.admin import panel_choice_label       # PATCH_PANEL_LABEL_INSTANCE_V1: نام + آدرس، تا چند پنلِ هم‌نوع یکسان دیده نشوند
         for p in panels:
-            label = PANEL_LABELS.get(p.panel_key, p.panel_key)
+            label = await panel_choice_label(bot_id, p)
             lines.append(f"• {label}")
             rows.append([InlineKeyboardButton(
                 text=label, callback_data=f"pyar:panel:{p.id}", style=ButtonStyle.PRIMARY)])

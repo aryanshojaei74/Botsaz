@@ -84,10 +84,9 @@ async def panel_choice_label(bot_id: int, p: VpnPanel) -> str:
     دکمهٔ انتخابِ پنل قبلاً فقط «نوعِ پنل» را نشان می‌داد؛ دو پنلِ هم‌نوع یکسان دیده می‌شدند.
     حالا نامِ دلخواهِ مالک (اگر گذاشته) یا نوعِ پنل + آدرسِ (دامنهٔ) همان پنل، تا هر پنل جدا و مشخص باشد."""
     from urllib.parse import urlparse
-    from tenant.bots.vpn.vpn_admin import PANEL_LABELS, panel_label
+    from tenant.bots.vpn.vpn_admin import default_panel_label, panel_label
     custom = await panel_label(bot_id, p.panel_key)
-    base = PANEL_LABELS.get(p.panel_key) or PANEL_LABELS.get((p.panel_key or "").split("#", 1)[0], p.panel_key)
-    name = custom if custom and custom != p.panel_key else base
+    name = custom if custom and custom != p.panel_key else default_panel_label(p.panel_key)
     host = ""
     try:
         host = (urlparse(p.base_url or "").netloc or (p.base_url or "")).replace("www.", "")

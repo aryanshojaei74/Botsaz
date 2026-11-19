@@ -687,7 +687,17 @@ async def panel_label(bot_id: int, key: str) -> str:
             return custom
     except Exception:
         logger.exception("خواندنِ نامِ دلخواهِ پنل ناموفق بود؛ نامِ پیش‌فرض استفاده شد")
-    return PANEL_LABELS.get(key, key)
+    return default_panel_label(key)
+
+
+def default_panel_label(key: str) -> str:
+    """PATCH_PANEL_LABEL_INSTANCE_V1 (وهیل: چند پاسارگاد): «pasargad#2» دیگر خام نمایش داده نمی‌شود ⇒ «پاسارگارد #2»."""
+    if key in PANEL_LABELS:
+        return PANEL_LABELS[key]
+    base, _, n = (key or "").partition("#")
+    if n and base in PANEL_LABELS:
+        return f"{PANEL_LABELS[base]} #{n}"
+    return key
 
 
 # ─────────────── ساخت متن اطلاعات پنل‌های متصل ───────────────

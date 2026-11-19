@@ -88,3 +88,22 @@ async def test_package_panel_picker_lists_every_panel_with_its_own_callback(env,
     assert set(pick) == {"psel:pkp:1", "psel:pkp:2", "psel:pkp:3"}
     assert len(set(pick.values())) == 3                                          # هر پنل متنِ جدا دارد
     assert "psel:pkm" in [b.callback_data for b in btns]                         # فروشِ دستی هنوز هست
+
+
+def test_default_panel_label_never_shows_raw_instance_keys():
+    """PATCH_PANEL_LABEL_INSTANCE_V1: «pasargad#2» ⇒ «پاسارگارد #2»؛ نوعِ ناشناخته دست‌نخورده."""
+    from tenant.bots.vpn.vpn_admin import PANEL_LABELS, default_panel_label
+    assert default_panel_label("pasargad") == PANEL_LABELS["pasargad"]
+    assert default_panel_label("pasargad#2") == f"{PANEL_LABELS['pasargad']} #2"
+    assert default_panel_label("weird#3") == "weird#3" and default_panel_label("nope") == "nope"
+
+
+@pytest.mark.asyncio
+async def test_panelyar_list_shows_name_and_address_for_each_panel(env):
+    """وهیل (WHALESHOP1BOT با ۶ پاسارگارد): لیستِ «پنل‌یار» هم هر پنل را با نام + آدرس نشان می‌دهد."""
+    from tenant.shared.panel_clients.panelyar import _panels_menu_content
+    txt, kb = await _panels_menu_content(BOT)
+    labels = [b.text for r in kb.inline_keyboard for b in r if (b.callback_data or "").startswith("pyar:panel:")]
+    assert len(labels) == 3 and len(set(labels)) == 3
+    assert any("panel1.example.com" in x for x in labels) and any("panel2.example.org:8443" in x for x in labels)
+    assert "pasargad#2" not in txt and all("pasargad#2" not in x for x in labels)
