@@ -5359,6 +5359,11 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
     if not row:
         await msg.answer("این ربات فعال نیست.")
         return
+    # === PATCH_INLINE_DICE_PM_V1 === (سینا) تاسِ بازیِ اینلاین از راهِ پیویِ ربات: /start iwd_<id>
+    if (command.args or "").startswith("iwd_") and msg.chat.type == "private":
+        from tenant.shared.wager_inline import dice_deeplink
+        if await dice_deeplink(msg, bot, row, command.args):
+            return
     # === PATCH_SMM_AI_GROUP_V1 ===
     # وقتی دکمه‌ی «🔗 اتصالِ گروه با دکمه» زده بشه، تلگرام یه انتخاب‌گرِ
     # «به کدوم گروه اضافه بشه» نشون می‌ده؛ بعدِ انتخاب، همین /start با
@@ -14501,7 +14506,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "674"
+BUILD_ID = "675"
 
 
 @tenant_router.message(Command("version"))

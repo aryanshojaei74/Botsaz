@@ -134,6 +134,8 @@ async def _show(cb: CallbackQuery, w: PlatformWager) -> None:
     kb = (await core.result_kb(w)) or kb               # PATCH_WAGER_RESULT_KB_V1
     try:
         if cb.message is None and cb.inline_message_id:      # PATCH_WAGER_INLINE_V1: بازیِ اینلاین (پیام آیدیِ چت ندارد)
+            from tenant.shared.wager_inline import inline_kb
+            kb = await inline_kb(cb.bot, w, kb)               # تاس: دکمهٔ لینک به پیویِ ربات
             await cb.bot.edit_message_text(text, inline_message_id=cb.inline_message_id, reply_markup=kb, parse_mode="HTML")
         else:
             await cb.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -252,6 +254,9 @@ async def tw_dice(cb: CallbackQuery, bot: Bot):
     if not row:
         return
     wid, uid = _wid(cb), cb.from_user.id
+    if cb.message is None and cb.inline_message_id:           # پیامِ اینلاین چت‌آیدی ندارد؛ پرتاب فقط از پیویِ ربات است
+        await cb.answer("برای انداختنِ تاس دکمهٔ «🎲 انداختن تاس (در پیویِ ربات)» را بزن.", show_alert=True)
+        return
     async with core._wlock(wid):
         r = await core.dice_claim(wid, uid, bot_id=row.id)
     if r.err:

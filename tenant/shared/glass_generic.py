@@ -32,6 +32,7 @@ logger = _get_logger(__name__)
 # هندلرهایی که پس از ارسالِ صفحهٔ تازه پیامِ قبلی را ویرایش/حذف می‌کنند (با AST استخراج شده؛
 # tests/test_glass_generic.py تازه‌بودنِ این فهرست را بررسی می‌کند و هندلرِ جدیدِ پرریسک را می‌گیرد).
 SKIP_HANDLERS = frozenset({
+    "tenant.shared.wager_inline.iwd_roll",          # PATCH_INLINE_DICE_PM_V1: پیامِ «انداختن تاس» را خودش بعد از پرتاب ویرایش می‌کند
     "tenant.tadm_cfgguide_inherit",
     "tenant.bots.booking.handlers.book_back",
     "tenant.bots.digital_shop.handlers.sadm_gifts_list",

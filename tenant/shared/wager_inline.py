@@ -34,11 +34,12 @@ logger = _get_logger(__name__)
 
 wager_inline_router = Router(name="wager_inline")
 
-INLINE_GAMES = ("xo", "rps")
-_NAMES = {"xo": ("دوز", "xo", "اکس او", "ایکس او"), "rps": ("سنگ کاغذ قیچی", "rps")}
-_TITLE = {"xo": "❌⭕ دوز", "rps": "🪨📄✂️ سنگ کاغذ قیچی"}
+INLINE_GAMES = ("xo", "rps", "dice")
+_NAMES = {"xo": ("دوز", "xo", "اکس او", "ایکس او"), "rps": ("سنگ کاغذ قیچی", "rps"), "dice": ("تاس", "dice")}
+_TITLE = {"xo": "❌⭕ دوز", "rps": "🪨📄✂️ سنگ کاغذ قیچی", "dice": "🎲 تاس"}
 _DESC = {"xo": "هرکی یه خط سه‌تایی بسازه برنده‌ست.",
-         "rps": "سنگ قیچی رو می‌شکنه، قیچی کاغذ رو می‌بره، کاغذ سنگ رو می‌پیچه. ۳ راندی؛ هرکی زودتر ۲ تا ببره برنده‌ست."}
+         "rps": "سنگ قیچی رو می‌شکنه، قیچی کاغذ رو می‌بره، کاغذ سنگ رو می‌پیچه. ۳ راندی؛ هرکی زودتر ۲ تا ببره برنده‌ست.",
+         "dice": "هر نفر یک تاس می‌اندازد؛ عددِ بزرگ‌تر برنده است. پرتاب داخلِ پیویِ ربات انجام می‌شود."}
 _AMT = r"([۰-۹0-9,،]+)"
 def _alt(names) -> str:
     """نام‌هایِ بازی ⇒ الگوی regex (فاصله ⇒ \\s*). جدا از f-string است چون پایتونِ ۳٫۱۰ بک‌اسلش داخلِ f-string را نمی‌پذیرد."""
@@ -257,8 +258,8 @@ async def iwg_join(cb: CallbackQuery, bot: Bot):
             await cb.answer(err.replace("<b>", "").replace("</b>", ""), show_alert=True)
             return
         try:
-            if game == "xo":
-                o = await core.set_option(w.id, creator, "X", bot_id=row.id)
+            if game in ("xo", "dice"):                                   # دوز: X؛ تاس: عدد بزرگ‌تر برنده
+                o = await core.set_option(w.id, creator, "X" if game == "xo" else "hi", bot_id=row.id)
                 if o.err:
                     raise RuntimeError(o.err)
             r = await core.join_wager(w.id, (joiner.id, joiner.full_name or "", joiner.username or ""), cfg["move"],
@@ -287,5 +288,127 @@ async def iwg_join(cb: CallbackQuery, bot: Bot):
         if len(_STARTED) > 5000:
             _STARTED.clear()
         text, kb = core.render(r.w)
+        kb = await inline_kb(bot, r.w, kb)
         await _edit(bot, imid, text, kb)
     await cb.answer("به بازی پیوستی؛ موفق باشی!")
+
+
+# ───────────────────────── تاس از راهِ پیویِ ربات (ترفندِ سینا) ─────────────────────────
+# پیامِ اینلاین آیدیِ چت ندارد و ربات نمی‌تواند در آن تاس بفرستد. پس زیرِ پیام یک دکمهٔ «لینک» می‌آید که بازیکن را به
+# پیویِ ربات می‌برد (`/start iwd_<شناسهٔ بازی>`)؛ آنجا دکمهٔ «🎲 انداختن تاس» می‌آید، ربات تاس را در پیوی می‌فرستد،
+# نتیجه را ثبت می‌کند و همان پیامِ اینلاین را (با inline_message_id) ویرایش می‌کند.
+_UNAME: dict[str, str] = {}
+
+
+async def _username(bot: Bot) -> str | None:
+    tok = getattr(bot, "token", "") or ""
+    if tok not in _UNAME:
+        me = await bot.me()
+        if not me.username:
+            return None
+        _UNAME[tok] = me.username
+    return _UNAME[tok]
+
+
+async def inline_kb(bot: Bot, w: PlatformWager, kb):
+    """کیبوردِ بازیِ اینلاین: دکمهٔ «پرتاب تاس» (callback) ⇒ دکمهٔ لینک به پیویِ ربات. بقیهٔ بازی‌ها دست‌نخورده."""
+    if kb is None or w.game != "dice" or w.status != "playing":
+        return kb
+    try:
+        uname = await _username(bot)
+    except Exception:  # noqa: BLE001 — بدونِ نامِ کاربریِ ربات لینک نمی‌شود؛ همان کیبورد می‌ماند
+        logger.exception("wager inline: bot username lookup failed")
+        return kb
+    if not uname:
+        return kb
+    rows = []
+    for r in kb.inline_keyboard:
+        rows.append([InlineKeyboardButton(text="🎲 انداختن تاس (در پیویِ ربات)", url=f"https://t.me/{uname}?start=iwd_{w.id}",
+                                          style=ButtonStyle.SUCCESS)
+                     if (b.callback_data or "").startswith("twg:d:") else b for b in r])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _roll_kb(wid: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text="🎲 انداختن تاس", callback_data=f"iwd:r:{wid}", style=ButtonStyle.SUCCESS)]])
+
+
+async def dice_deeplink(msg, bot: Bot, row, payload: str) -> bool:
+    """`/start iwd_<id>` در پیوی. True ⇒ پیام مصرف شد."""
+    from tenant import get_or_create_user
+    try:
+        wid = int(payload[4:])
+    except ValueError:
+        return False
+    if await _ctx(bot) is None:
+        await msg.answer("این قابلیت فعال نیست.")
+        return True
+    u = await get_or_create_user(row.id, msg.from_user.id, msg.from_user.full_name or "", msg.from_user.username or "")
+    if getattr(u, "is_banned", False):
+        await msg.answer("شما از این ربات مسدود شده‌اید.")
+        return True
+    async with Session() as s:
+        w = await s.get(PlatformWager, wid)
+    uid = msg.from_user.id
+    if not w or (w.bot_id or 0) != row.id or w.game != "dice":
+        await msg.answer("❌ این بازی پیدا نشد.")
+    elif uid not in (w.creator_id, w.opponent_id):
+        await msg.answer("❌ تو بازیکنِ این بازی نیستی.")
+    elif w.status != "playing":
+        await msg.answer("⌛ این بازی تمام شده است؛ نتیجه را در همان پیامِ بازی ببین.")
+    elif str((core._st(w).get("rolls") or {}).get(str(uid), "")):
+        await msg.answer(f"🎲 تاسِ تو را انداخته‌ای: <b>{core._st(w)['rolls'][str(uid)]}</b>\nمنتظرِ حریف بمان؛ نتیجه در پیامِ بازی اعلام می‌شود.",
+                         parse_mode="HTML")
+    else:
+        await msg.answer(f"🎲 <b>نوبتِ پرتابِ تو</b>\n\n{core._rule_line(w)}\n\nدکمهٔ زیر را بزن؛ ربات همین‌جا برایت تاس می‌اندازد.",
+                         reply_markup=_roll_kb(wid), parse_mode="HTML")
+    return True
+
+
+@wager_inline_router.callback_query(F.data.startswith("iwd:r:"))
+async def iwd_roll(cb: CallbackQuery, bot: Bot):
+    row = await _ctx(bot)
+    if row is None or cb.message is None:
+        await cb.answer("قابلیت فعال نیست.", show_alert=True)
+        return
+    try:
+        wid = int(cb.data.split(":")[2])
+    except (ValueError, IndexError):
+        await cb.answer("دکمه نامعتبر است.", show_alert=True)
+        return
+    uid = cb.from_user.id
+    async with core._wlock(wid):
+        r = await core.dice_claim(wid, uid, bot_id=row.id)
+    if r.err:
+        await cb.answer(r.err, show_alert=True)
+        return
+    await cb.answer("🎲")
+    try:
+        sent = await bot.send_dice(cb.message.chat.id, emoji="🎲")
+        value = int(sent.dice.value)
+    except Exception:  # noqa: BLE001 — پرتاب نشد: دوباره اجازه بده
+        logger.exception("wager inline dice #%s: send_dice failed", wid)
+        await core.dice_release(wid, uid, bot_id=row.id)
+        await cb.message.answer("❌ پرتاب تاس انجام نشد؛ دوباره امتحان کن.", reply_markup=_roll_kb(wid))
+        return
+    async with core._wlock(wid):
+        r = await core.dice_record(wid, uid, value, bot_id=row.id)
+    try:
+        await cb.message.edit_reply_markup(reply_markup=None)       # دکمه یک‌بارمصرف است
+    except Exception as e:  # noqa: BLE001
+        logger.info("wager inline dice #%s: keyboard removal skipped: %s", wid, e)
+    if r.w is None:
+        return
+    imid = core._st(r.w).get("imid")
+    done = r.w.status != "playing"
+    await asyncio.sleep(4)                                          # بگذار انیمیشنِ تاس تمام شود
+    try:
+        await cb.message.answer(f"🎲 تاسِ تو: <b>{value}</b>\n" + ("نتیجه در پیامِ بازی اعلام شد." if done
+                                else "منتظرِ حریف بمان؛ نتیجه در پیامِ بازی اعلام می‌شود."), parse_mode="HTML")
+    except Exception as e:  # noqa: BLE001
+        logger.info("wager inline dice #%s: pm notice skipped: %s", wid, e)
+    if imid:
+        text, kb = core.render(r.w)
+        kb = (await core.result_kb(r.w)) or await inline_kb(bot, r.w, kb)
+        await _edit(bot, imid, text, kb)

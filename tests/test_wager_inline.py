@@ -60,6 +60,17 @@ class FakeBot:
     async def edit_message_text(self, text, **kw):
         self.edits.append((text, kw))
 
+    async def me(self):
+        return types.SimpleNamespace(username="shop_bot")
+
+    async def send_dice(self, chat_id, emoji="🎲"):
+        v = self.dice_values.pop(0)
+        self.dice_sent.append(chat_id)
+        return types.SimpleNamespace(dice=types.SimpleNamespace(value=v))
+
+    dice_values: list = []
+    dice_sent: list = []
+
 
 class Cb:
     def __init__(self, bot, uid, data, imid=IMID):
@@ -300,3 +311,109 @@ async def test_parent_inline_handler_skip_falls_through_to_the_games_router():
     await dp.feed_update(bot, Update(update_id=1, inline_query=q))
     assert seen == ["parent", "child"]
     await bot.session.close()
+
+
+# ───────────── تاسِ اینلاین از راهِ پیوی (ترفندِ سینا) ─────────────
+
+class PmMsg:
+    """پیامِ پیویِ بازیکن (برایِ دکمهٔ «انداختن تاس» و جوابِ /start iwd_…)."""
+    def __init__(self, uid, chat=None):
+        self.chat = types.SimpleNamespace(id=uid, type="private")
+        self.from_user = types.SimpleNamespace(id=uid, full_name=f"u{uid}", username=f"u{uid}", is_bot=False)
+        self.text = ""
+        self.sent = []
+
+    async def answer(self, text, **k):
+        self.sent.append((text, k.get("reply_markup")))
+
+    async def edit_reply_markup(self, reply_markup=None):
+        self.cleared = True
+
+
+class PmCb:
+    def __init__(self, bot, uid, data):
+        self.bot, self.data, self.inline_message_id = bot, data, None
+        self.message = PmMsg(uid)
+        self.from_user = self.message.from_user
+        self.answers = []
+
+    async def answer(self, text="", show_alert=False, **k):
+        self.answers.append((text, show_alert))
+
+
+async def _start_inline_dice(db, monkeypatch, bot, amount=10_000):
+    async def cfj(b, bid, uid, bypass_cache=False): return []
+    monkeypatch.setattr(tenant, "check_force_join", cfj)
+    cb = Cb(bot, U2, f"iwg:j:dice:{amount}:{U1}")
+    await WI.iwg_join(cb, bot)
+    async with db() as s:
+        w = (await s.scalars(select(models.PlatformWager))).one()
+    return w, cb
+
+
+@pytest.mark.asyncio
+async def test_inline_dice_lists_and_starts_with_a_link_button_to_the_bot_pm(db, monkeypatch):
+    bot = await _stub_bot(monkeypatch)
+    assert WI.parse_query("تاس") == ("dice", 0, True) and WI.parse_query("تاس 5000") == ("dice", 5000, True)
+    w, _cb = await _start_inline_dice(db, monkeypatch, bot)
+    assert w.game == "dice" and w.status == "playing" and await bal(db, U1) == 90_000 and await bal(db, U2) == 90_000
+    text, kw = bot.edits[-1]
+    btns = [b for r in kw["reply_markup"].inline_keyboard for b in r]
+    assert [b.url for b in btns if b.url] == [f"https://t.me/shop_bot?start=iwd_{w.id}"]      # لینک به پیوی
+    assert not any((b.callback_data or "").startswith("twg:d:") for b in btns)                 # callbackِ بی‌چت‌آیدی نیست
+    old_btn = Cb(bot, U1, f"twg:d:{w.id}")                                                    # پیامِ قدیمیِ اینلاین ⇒ راهنما
+    await WG.tw_dice(old_btn, bot)
+    assert old_btn.answers[0][1] and "پیوی" in old_btn.answers[0][0]
+
+
+@pytest.mark.asyncio
+async def test_inline_dice_full_game_via_pm_edits_the_inline_message_and_pays_the_winner(db, monkeypatch):
+    bot = await _stub_bot(monkeypatch)
+    bot.dice_values, bot.dice_sent = [2, 5], []
+    w, _ = await _start_inline_dice(db, monkeypatch, bot)
+
+    async def no_sleep(_): return None
+    monkeypatch.setattr(WI.asyncio, "sleep", no_sleep)
+    from tenant.shared.wager_inline import dice_deeplink
+    row = types.SimpleNamespace(id=BOT)
+    for uid in (U1, U2):                                                                         # /start iwd_<id> ⇒ دکمهٔ انداختن
+        m = PmMsg(uid)
+        assert await dice_deeplink(m, bot, row, f"iwd_{w.id}")
+        assert f"iwd:r:{w.id}" in m.sent[0][1].inline_keyboard[0][0].callback_data
+    outsider = PmMsg(999)
+    await dice_deeplink(outsider, bot, row, f"iwd_{w.id}")
+    assert "بازیکنِ این بازی نیستی" in outsider.sent[0][0]
+    bot.edits.clear()
+    c1 = PmCb(bot, U1, f"iwd:r:{w.id}")                                                          # اول u11 می‌اندازد: ۲
+    await WI.iwd_roll(c1, bot)
+    assert bot.dice_sent == [U1] and "۲" not in c1.answers and any("2" in t for t, _ in c1.message.sent)
+    assert bot.edits and bot.edits[-1][1]["inline_message_id"] == IMID and "2" in bot.edits[-1][0]
+    again = PmCb(bot, U1, f"iwd:r:{w.id}")                                                       # دوباره نمی‌شود انداخت
+    await WI.iwd_roll(again, bot)
+    assert again.answers[0][1] and bot.dice_sent == [U1]
+    c2 = PmCb(bot, U2, f"iwd:r:{w.id}")                                                          # u22 می‌اندازد: ۵ ⇒ برنده
+    await WI.iwd_roll(c2, bot)
+    async with db() as s:
+        w2 = await s.get(models.PlatformWager, w.id)
+    assert w2.status == "settled" and w2.winner_id == U2
+    assert await bal(db, U2) == 100_000 - 10_000 + 20_000 and await bal(db, U1) == 90_000
+    assert bot.edits[-1][1]["inline_message_id"] == IMID
+    m = PmMsg(U1)                                                                                # بعد از پایان: پیامِ «تمام شده»
+    await dice_deeplink(m, bot, row, f"iwd_{w.id}")
+    assert "تمام شده" in m.sent[0][0]
+
+
+@pytest.mark.asyncio
+async def test_inline_dice_failed_throw_can_be_retried(db, monkeypatch):
+    bot = await _stub_bot(monkeypatch)
+    w, _ = await _start_inline_dice(db, monkeypatch, bot)
+    bot.dice_values = []                                                                         # send_dice با IndexError می‌ترکد
+    c = PmCb(bot, U1, f"iwd:r:{w.id}")
+    await WI.iwd_roll(c, bot)
+    assert any("انجام نشد" in t for t, _ in c.message.sent)
+    bot.dice_values, bot.dice_sent = [4], []
+    async def no_sleep(_): return None
+    monkeypatch.setattr(WI.asyncio, "sleep", no_sleep)
+    c2 = PmCb(bot, U1, f"iwd:r:{w.id}")
+    await WI.iwd_roll(c2, bot)
+    assert bot.dice_sent == [U1] and not any(a[1] for a in c2.answers)                           # آزاد شده بود؛ دوباره انداخت
