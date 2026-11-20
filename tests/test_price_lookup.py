@@ -3,6 +3,15 @@ import pytest
 
 from tenant.shared import price_lookup as pl
 
+@pytest.fixture(autouse=True)
+def _no_live_rate(monkeypatch):
+    """نرخ زنده (والکس/نوبیتکس) در تست به شبکه نرود؛ همان نرخ ساختگی crypto_pay استفاده شود."""
+    from tenant.shared import price_lookup as _pl
+    monkeypatch.setattr(_pl, "RATE_SOURCES", [])
+    monkeypatch.setitem(_pl._LIVE, "v", 0.0)
+    monkeypatch.setitem(_pl._LIVE, "ts", 0.0)
+
+
 
 @pytest.mark.parametrize("text,exp", [
     ("تون", (1.0, "ton")), ("5 تون", (5.0, "ton")), ("۲ گرم طلا", (2.0, "gold18")),

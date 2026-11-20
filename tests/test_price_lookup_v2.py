@@ -6,6 +6,15 @@ import pytest
 from tenant.shared import coin_data as cd
 from tenant.shared import price_lookup as pl
 
+@pytest.fixture(autouse=True)
+def _no_live_rate(monkeypatch):
+    """نرخ زنده (والکس/نوبیتکس) در تست به شبکه نرود؛ همان نرخ ساختگی crypto_pay استفاده شود."""
+    from tenant.shared import price_lookup as _pl
+    monkeypatch.setattr(_pl, "RATE_SOURCES", [])
+    monkeypatch.setitem(_pl._LIVE, "v", 0.0)
+    monkeypatch.setitem(_pl._LIVE, "ts", 0.0)
+
+
 T0 = time.time() - 86400
 OHLC = [[(T0 + i * 1800) * 1000, 1.0 + i * 0.001, 1.01 + i * 0.001, 0.99 + i * 0.001, 1.005 + i * 0.001] for i in range(48)]
 MARKET = [{"id": "the-open-network", "symbol": "ton", "name": "Gram", "current_price": 1.017, "market_cap": 2919748709,

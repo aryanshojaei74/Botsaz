@@ -6,7 +6,7 @@
 قابلیت (نه نوع ربات): برای هر ربات جدا روشن/خاموش می‌شود (پیش‌فرض خاموش)؛ مسیر: پنل ← 🎛 دکمه‌ها و تنظیمات ← 🔎 قیمت‌یاب.
 
 منابع:
-  • دلار به تومان: همان crypto_pay.get_usd_to_toman_rate (BrsApi / والکس / …) که برای فروش هم استفاده می‌شود.
+  • دلار به تومان: نرخ زندهٔ تتر در والکس ← نوبیتکس (کش ۶۰ ثانیه)؛ اگر هیچ‌کدام نبود نرخ ذخیره‌شدهٔ سیستم.
   • کریپتو: CoinGecko (عمومی، بدون کلید) — قیمت دلاری + درصد تغییر ۲۴ ساعته.
   • طلا، سکه و ارزهای دیگر: BrsApi (با کلید «brsapi_key» ربات یا پلتفرم؛ بدون کلید، نسخهٔ رایگانش). اگر در دسترس نبود
     پیام «فعلاً در دسترس نیست» می‌رود و هیچ عدد ساختگی ساخته نمی‌شود.
@@ -342,6 +342,8 @@ def render(qty: float, key: str, usd: float | None, toman: float | None, change:
             d_usd = abs(usd - usd / (1 + change / 100))
             d_tm = f" / {_tm(d_usd * usd_toman)}" if usd_toman else ""
             lines.append(f"┙{'🔺 مقدار سود' if up else '🔻 مقدار ضرر'}: {_fmt_usd(d_usd)}{d_tm}")
+    if _RATE_SRC.get():
+        lines += ["", f"💱 نرخ دلار: {_RATE_SRC.get()}"]
     lines += ["", f"⏰ {_now_fa()}"]
     return "\n".join(lines)
 
@@ -391,16 +393,65 @@ def render_crypto(qty: float, coin, usd_toman: float | None, title: str = "") ->
         stats.append(f"⛓ شبکه: {coin.chain}")
     if stats:
         lines += ["", "📊 آمار 24 ساعته:"] + [f"┤{x}" for x in stats[:-1]] + [f"┙{stats[-1]}"]
+    if _RATE_SRC.get():
+        lines += ["", f"💱 نرخ دلار: {_RATE_SRC.get()}"]
     lines += ["", f"⏰ {_now_fa()}"]
     return "\n".join(lines)
 
 
-async def _usd_toman() -> float | None:
+# ───────── نرخ زندهٔ دلار (PATCH_PRICE_LIVE_RATE_V1): تتر/تومان صرافی‌های داخلی، تازه هر ۶۰ ثانیه ─────────
+# نرخ مشترک فروش (crypto_pay) یک ساعت کش و تا ۴۸ ساعت «کهنه ولی قابل‌استفاده» است؛ برای نمایش قیمت کافی نیست.
+RATE_TTL = 60
+_RATE_MIN, _RATE_MAX = 50_000, 5_000_000
+_LIVE: dict = {"v": 0.0, "ts": 0.0, "src": ""}
+_RATE_SRC: contextvars.ContextVar = contextvars.ContextVar("pq_rate_src", default="")
+
+
+async def _rate_wallex() -> float:
+    from tenant.gateways import crypto_pay
+    return float(await crypto_pay._rate_from_wallex() or 0)
+
+
+async def _rate_nobitex() -> float:
+    d = await _http_json("https://apiv2.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls")
+    try:
+        return float(str(d["stats"]["usdt-rls"]["latest"]).replace(",", "")) / 10     # ریال ⇒ تومان
+    except (TypeError, KeyError, ValueError):
+        return 0.0
+
+
+RATE_SOURCES = [("والکس", _rate_wallex), ("نوبیتکس", _rate_nobitex)]
+
+
+async def live_rate() -> tuple[float, str]:
+    """(تومان به‌ازای یک دلار/تتر، نام منبع). ترتیب: والکس ← نوبیتکس ← نرخ ذخیره‌شدهٔ سیستم."""
+    if _LIVE["v"] and time.time() - _LIVE["ts"] < RATE_TTL:
+        return _LIVE["v"], _LIVE["src"]
+    for name, fn in RATE_SOURCES:
+        try:
+            v = await asyncio.wait_for(fn(), timeout=6)
+        except Exception:  # noqa: BLE001
+            logger.info("price_lookup: نرخ %s در دسترس نیست", name, exc_info=True)
+            continue
+        if _RATE_MIN < v < _RATE_MAX:
+            _LIVE.update(v=v, ts=time.time(), src=name)
+            return v, name
     from tenant.gateways import crypto_pay
     try:
-        return await asyncio.wait_for(crypto_pay.get_usd_to_toman_rate(), timeout=10) or None
+        v = float(await asyncio.wait_for(crypto_pay.get_usd_to_toman_rate(), timeout=10) or 0)
     except Exception:  # noqa: BLE001
-        return None
+        v = 0.0
+    if _RATE_MIN < v < _RATE_MAX:
+        return v, "نرخ ذخیره‌شده"
+    if _LIVE["v"]:                                     # آخرین نرخ زندهٔ موفق، حتی اگر کمی قدیمی است
+        return _LIVE["v"], _LIVE["src"]
+    return 0.0, ""
+
+
+async def _usd_toman() -> float | None:
+    v, src = await live_rate()
+    _RATE_SRC.set(f"{v:,.0f} تومان ({src})" if v else "")
+    return v or None
 
 
 def _card(coin, bot_username: str) -> bytes | None:
@@ -443,12 +494,8 @@ async def answer_for(bot_id: int, q, bot_username: str = "") -> tuple[str, bytes
 
 async def quote(bot_id: int, qty: float, key: str) -> str:
     """متن پیام قیمت (هرگز استثنا نمی‌دهد)."""
-    from tenant.gateways import crypto_pay
     kind, ident, title, _em, _n = ASSETS[key]
-    try:
-        usd_toman = await asyncio.wait_for(crypto_pay.get_usd_to_toman_rate(), timeout=10)
-    except Exception:  # noqa: BLE001
-        usd_toman = None
+    usd_toman = await _usd_toman()
     if kind == "crypto":
         from tenant.shared import coin_data
         coin = await coin_data.lookup(key, cg_id=ident, with_candles=False)
