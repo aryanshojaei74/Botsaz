@@ -97,3 +97,13 @@ def test_platform_bot_enforces_per_type_and_auto_approve_default():
     assert src.count("trial_blocked_for_field") >= 2                 # لیستِ پلن‌ها + choose_plan
     assert 'get_pset("trial_auto_approve", "off")' not in src
     assert "هر نوعِ ربات یک‌بار" in inspect.getsource(PB.trial_request_start)
+
+
+def test_blocked_trial_falls_back_to_paid_purchase():
+    """PATCH_TRIAL_BLOCKED_BUY_V1 (Amir Hosin): لیست قیمت عادی نشان می‌داد ولی زدنش با «تست را قبلاً گرفته‌ای» بسته می‌شد."""
+    import inspect
+    import platform_bot as PB
+    src = inspect.getsource(PB)
+    i = src.index("trial_blocked_for_field(cb.from_user.id, _fd)")
+    block = src[i:i + 600]
+    assert "trial = None" in block and "return" not in block.split("if trial:")[0]

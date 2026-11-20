@@ -5812,10 +5812,9 @@ async def choose_plan(cb: CallbackQuery, state: FSMContext):
         # اگر کاربر تستِ تاییدشدهٔ فعال برای این پلن دارد، رایگان و بدون نیاز به موجودی
         trial = await plan_trials.active_trial_for(cb.from_user.id, plan)
         if trial and await plan_trials.trial_blocked_for_field(cb.from_user.id, _fd):
-            # PATCH_MAIN_TRIAL_PER_TYPE_V1: هر نوعِ ربات فقط یک‌بار با تست ساخته می‌شود (callbackِ دست‌ساز هم نتواند دورش بزند)
-            await cb.answer("تستِ این نوعِ ربات را قبلاً گرفته‌ای. این تست را برایِ نوعِ دیگری از ربات استفاده کن یا پلن را بخر.",
-                            show_alert=True)
-            return
+            # PATCH_MAIN_TRIAL_PER_TYPE_V1: هر نوعِ ربات فقط یک‌بار با تست ساخته می‌شود؛ PATCH_TRIAL_BLOCKED_BUY_V1: به‌جایِ
+            # بستنِ راه (Amir Hosin: «شارژ کردم، نمی‌ذاره بسازم»)، مثلِ خریدِ عادی از کیف پول ادامه می‌دهد — همان قیمتی که در لیست دید
+            trial = None
         if trial:
             trial_req_id = trial["id"]
             trial_expires = trial["expires_at"]
