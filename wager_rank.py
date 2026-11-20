@@ -138,6 +138,20 @@ async def save_config(bot_id: int, *, basis: str | None = None, tiers_text: str 
             await core._set(f"platform_wager_{KEY_TIERS}", tiers_text)
 
 
+BOARD_ORDERS = ("wins", "games")          # PATCH_BOARD_ORDER_V1 (سینا): ترتیب جدول «برترین بازیکنان»
+
+
+def board_order_label(o: str) -> str:
+    return "بیشترین بازی" if o == "games" else "بیشترین برد"
+
+
+async def board_order(bot_id: int = 0) -> str:
+    from config import Session
+    async with Session() as s:
+        v = (await _read(s, bot_id, "board_order", "wins")).strip()
+    return v if v in BOARD_ORDERS else "wins"
+
+
 async def save_kv(bot_id: int, key: str, value: str) -> None:
     import platform_wager as core
     if bot_id:
@@ -181,7 +195,8 @@ async def rank_count(s, bot_id: int, uid: int, basis: str, exclude_wid: int | No
 
 async def rank_position(s, bot_id: int, uid: int) -> int | None:
     """رتبهٔ ۱‌پایهٔ بازیکن در جدولِ «برترین بازیکنان» (مرتب بر اساسِ برد)؛ بازیِ جاری هنوز تسویه نشده پس حساب نمی‌شود. بی‌رتبه ⇒ None."""
-    for i, d in enumerate(await _player_stats_s(s, bot_id, MAX_RANK, "wins"), 1):
+    order = (await _read(s, bot_id, "board_order", "wins")).strip()
+    for i, d in enumerate(await _player_stats_s(s, bot_id, MAX_RANK, order if order in BOARD_ORDERS else "wins"), 1):
         if d["uid"] == uid:
             return i
     return None
@@ -298,13 +313,13 @@ def tiers_footer(tiers, basis="games") -> str:
 async def board_page_text(bot_id: int) -> str:
     """متنِ کاملِ صفحهٔ «برترین بازیکنان» برایِ دکمهٔ منو: جدول + پله‌هایِ کارمزد."""
     basis, tiers = await load_config(bot_id)
-    return public_board(await player_stats(bot_id, 10), tiers, basis) + tiers_footer(tiers, basis)
+    return public_board(await player_stats(bot_id, 10, await board_order(bot_id)), tiers, basis) + tiers_footer(tiers, basis)
 
 
-def admin_board(stats: list[dict]) -> str:
+def admin_board(stats: list[dict], order: str = "wins") -> str:
     if not stats:
         return "📊 هنوز بازیِ تمام‌شده‌ای ثبت نشده."
-    lines = ["📊 <b>آمار برترین بازیکنان</b> (بر اساس برد)", ""]
+    lines = [f"📊 <b>آمار برترین بازیکنان</b> (بر اساس {board_order_label(order)})", ""]
     for i, d in enumerate(stats):
         lines += [f"{i + 1}. <b>{_nm(d)}</b> (<code>{d['uid']}</code>)",
                   f"   بازی: {d['games']} به مبلغ {_t(d['games_amt'])} تومان",
@@ -343,7 +358,7 @@ HELP_RANKS = (
     "هر خط: «رتبه  درصد». یعنی وقتی بازیکنی که <b>رتبهٔ N</b> جدولِ «برترین بازیکنان» است <b>برنده</b> شد، کارمزدش این درصدِ کلِ مبلغِ دو نفر است.\n\n"
     "مثال:\n<code>1 2\n2 3\n3 4\n4 5\n5 6</code>\n"
     "یعنی نفر اول ۲٪ · دوم ۳٪ · سوم ۴٪ · چهارم ۵٪ · پنجم ۶٪؛ بقیه کارمزدِ عادی.\n"
-    f"رتبه ۱ تا {MAX_RANK}، درصد ۰ تا ۵۰. رتبه‌بندی بر اساسِ تعدادِ برد است. برایِ حذفِ همه: /clear · انصراف: /cancel"
+    f"رتبه ۱ تا {MAX_RANK}، درصد ۰ تا ۵۰. ترتیب جدول (برد یا بازی) با دکمهٔ «🏆 ترتیب جدول» عوض می‌شود. برایِ حذفِ همه: /clear · انصراف: /cancel"
 )
 
 
@@ -365,10 +380,11 @@ HELP_TIERS = (
 async def _menu_view(bot_id: int, prefix: str, back_cb: str):
     basis, tiers = await load_config(bot_id)
     unit = basis_label(basis)
+    order = await board_order(bot_id)
     text = ("🏅 <b>کارمزدِ پلکانی و آمارِ بازیکنان</b>\n\n"
             "کارمزدِ هر بازی (از جایزهٔ برنده) بر اساسِ رتبهٔ برنده کم/زیاد می‌شود.\n\n"
             f"📏 مبنا: <b>{unit}</b>\n{tiers_text_fa(tiers, basis)}\n\n"
-            + ("«رتبه در جدول»: رتبهٔ برنده در جدولِ «برترین بازیکنان» (بر اساسِ تعدادِ برد، پیش از همین بازی) تعیین می‌کند. "
+            + (f"«رتبه در جدول»: رتبهٔ برنده در جدولِ «برترین بازیکنان» (بر اساس {board_order_label(order)}، پیش از همین بازی) تعیین می‌کند. "
                "رتبه‌ایِ که خط ندارد (و بازیکنِ بی‌رتبه) کارمزدِ عادی را می‌دهد."
                if basis == "rank" else "بازیکنی که به هیچ پله‌ای نرسیده باشد، کارمزدِ عادی را می‌دهد."))
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -376,6 +392,7 @@ async def _menu_view(bot_id: int, prefix: str, back_cb: str):
                               callback_data=f"{prefix}:basis")],
         [InlineKeyboardButton(text="✏️ تنظیمِ پله‌ها", callback_data=f"{prefix}:set", style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="📊 آمارِ برترین بازیکنان", callback_data=f"{prefix}:stats", style=ButtonStyle.SUCCESS)],
+        [InlineKeyboardButton(text=f"🏆 ترتیب جدول: {board_order_label(order)} (تغییر)", callback_data=f"{prefix}:order")],
         [InlineKeyboardButton(text="🆓 بازیِ رایگان (سقف روزانه و هزینهٔ ورود)", callback_data=f"{prefix}:free")],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=back_cb, style=ButtonStyle.DANGER)]])
     return text, kb
@@ -454,7 +471,7 @@ def _main_admin(uid: int) -> bool:
     return uid == PLATFORM_ADMIN_ID
 
 
-@platform_rank_router.callback_query(F.data.in_({"pgrk:menu", "pgrk:basis", "pgrk:set", "pgrk:stats", "pgrk:back",
+@platform_rank_router.callback_query(F.data.in_({"pgrk:menu", "pgrk:basis", "pgrk:set", "pgrk:stats", "pgrk:back", "pgrk:order",
                                                   "pgrk:free", "pgrk:fon", "pgrk:flim", "pgrk:ffee"}))
 async def main_rank_cb(cb: CallbackQuery, state: FSMContext):
     if not _main_admin(cb.from_user.id):
@@ -471,6 +488,8 @@ async def main_rank_cb(cb: CallbackQuery, state: FSMContext):
     if act == "basis":
         basis, _ = await load_config(0)
         await save_config(0, basis=next_basis(basis))
+    elif act == "order":
+        await save_kv(0, "board_order", "games" if await board_order(0) == "wins" else "wins")
     elif act == "set":
         await state.set_state(RankFSM.tiers)
         await state.update_data(rank_bot=0)
@@ -478,7 +497,8 @@ async def main_rank_cb(cb: CallbackQuery, state: FSMContext):
         await cb.answer()
         return
     elif act == "stats":
-        text = admin_board(await player_stats(0, 15))
+        _o = await board_order(0)
+        text = admin_board(await player_stats(0, 15, _o), _o)
         await cb.message.answer(text, parse_mode="HTML")
         await cb.answer()
         return
@@ -513,7 +533,7 @@ async def main_board(msg: Message):
     if not msg.from_user or msg.from_user.is_bot or not await _group_allowed(msg.chat.id) or not await R.enabled():
         raise SkipHandler
     basis, tiers = await load_config(0)
-    await msg.reply(public_board(await player_stats(0, 10), tiers, basis), parse_mode="HTML")
+    await msg.reply(public_board(await player_stats(0, 10, await board_order(0)), tiers, basis), parse_mode="HTML")
 
 
 async def _tiers_input(msg: Message, state: FSMContext, bot_id: int, prefix: str, back_cb: str):
@@ -556,7 +576,7 @@ async def _tenant_row(bot: Bot, uid: int, need_admin: bool = True):
     return row
 
 
-@tenant_rank_router.callback_query(F.data.in_({"twrk:menu", "twrk:basis", "twrk:set", "twrk:stats",
+@tenant_rank_router.callback_query(F.data.in_({"twrk:menu", "twrk:basis", "twrk:set", "twrk:stats", "twrk:order",
                                                 "twrk:free", "twrk:fon", "twrk:flim", "twrk:ffee"}))
 async def tenant_rank_cb(cb: CallbackQuery, bot: Bot, state: FSMContext):
     row = await _tenant_row(bot, cb.from_user.id)
@@ -570,6 +590,8 @@ async def tenant_rank_cb(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if act == "basis":
         basis, _ = await load_config(row.id)
         await save_config(row.id, basis=next_basis(basis))
+    elif act == "order":
+        await save_kv(row.id, "board_order", "games" if await board_order(row.id) == "wins" else "wins")
     elif act == "set":
         await state.set_state(RankFSM.tiers)
         await state.update_data(rank_bot=row.id)
@@ -577,7 +599,8 @@ async def tenant_rank_cb(cb: CallbackQuery, bot: Bot, state: FSMContext):
         await cb.answer()
         return
     elif act == "stats":
-        await cb.message.answer(admin_board(await player_stats(row.id, 15)), parse_mode="HTML")
+        _o = await board_order(row.id)
+        await cb.message.answer(admin_board(await player_stats(row.id, 15, _o), _o), parse_mode="HTML")
         await cb.answer()
         return
     text, kb = await _menu_view(row.id, "twrk", "gset:betmenu")
@@ -621,4 +644,4 @@ async def tenant_board(msg: Message, bot: Bot):
             or not await core.master_enabled(row.id)):
         raise SkipHandler
     basis, tiers = await load_config(row.id)
-    await msg.reply(public_board(await player_stats(row.id, 10), tiers, basis), parse_mode="HTML")
+    await msg.reply(public_board(await player_stats(row.id, 10, await board_order(row.id)), tiers, basis), parse_mode="HTML")

@@ -855,18 +855,30 @@ def _final_text(w: PlatformWager) -> str:
     elif w.game == "xo":
         lines.append(f"{SYM[_xo_sym(w, w.creator_id)]} {_who(w, w.creator_id)}   {SYM[_xo_sym(w, w.opponent_id)]} {_who(w, w.opponent_id)}")
     lines.append("")
+    free = is_free(w)                     # PATCH_FREE_GAME_TEXTS_V1 (سینا): بازی رایگان حرفی از مبلغ/کارمزد/برگشت پول نمی‌زند
     if w.status == "settled":
         why = "\n⏱ حریف در مهلت بازی نکرد." if w.end_reason == "forfeit" else ""
         lines += [f"🏁 برنده: <b>{_who(w, w.winner_id)}</b>{why}",
-                  f"🎁 دریافتی برنده: <b>{_rial(w.payout_amount)}</b> (کارمزد {_rial(w.fee_amount)})"]
+                  ("🆓 بازی رایگان بود؛ جایزه پولی ندارد." if free
+                   else f"🎁 دریافتی برنده: <b>{_rial(w.payout_amount)}</b> (کارمزد {_rial(w.fee_amount)})")]
     elif w.status == "draw":
         if w.game == "rps" and w.end_reason == "draw" and len(st.get("hist") or []) >= RPS_MAX_ROUNDS:
-            lines.append(f"🤝 بعد از {RPS_MAX_ROUNDS} راند کسی به {RPS_WINS} برد نرسید؛ {wd['stake']} به هر دو نفر برگشت (بدون کارمزد).")
+            lines.append(f"🤝 بعد از {RPS_MAX_ROUNDS} راند کسی به {RPS_WINS} برد نرسید"
+                         + ("." if free else f"؛ {wd['stake']} به هر دو نفر برگشت (بدون کارمزد)."))
         else:
-            lines.append(f"🤝 مساوی شد؛ {wd['stake']} به هر دو نفر برگشت (بدون کارمزد).")
+            lines.append("🤝 مساوی شد." if free else f"🤝 مساوی شد؛ {wd['stake']} به هر دو نفر برگشت (بدون کارمزد).")
     else:
-        lines.append(f"⏰ مهلت تمام شد و کسی بازی نکرد؛ {wd['stake']} به هر دو نفر برگشت.")
+        lines.append("⏰ مهلت تمام شد و کسی بازی نکرد." if free
+                     else f"⏰ مهلت تمام شد و کسی بازی نکرد؛ {wd['stake']} به هر دو نفر برگشت.")
     return "\n".join(lines)
+
+
+def is_free(w: PlatformWager) -> bool:
+    """بازی رایگان (مبلغ ۰)."""
+    try:
+        return not _money(getattr(w, "amount", 0) or 0)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _opt_keyboard(w: PlatformWager) -> list[list[InlineKeyboardButton]]:
@@ -920,7 +932,7 @@ def render(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
         rule = _rule_line(w)
         text = (f"{_head(w)}\n\n👤 سازنده: {_who(w, w.creator_id)}\n{target}"
                 + (f"{rule}\n" if rule else "")
-                + f"{_money_lines(w)}\n\n⏳ منتظر حریف…\n\n{wd['notice']}")
+                + f"{_money_lines(w)}\n\n⏳ منتظر حریف…" + ("" if is_free(w) else f"\n\n{wd['notice']}"))
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             _btn(w, "✅ قبول و پیوستن", callback_data=f"{_px(w)}:join:{w.id}", style=ButtonStyle.SUCCESS), cancel]])
         return text, kb

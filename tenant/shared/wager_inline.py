@@ -99,9 +99,36 @@ def _invite_text(game: str, amount: int, name: str, free: bool, cat: str = "") -
 
 
 def _join_kb(game: str, amount: int, creator: int, cat: str = "") -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-        text="➕ پیوستن به بازی", callback_data=f"iwg:j:{game}:{amount}:{creator}" + (f":{cat}" if cat else ""),
-        style=ButtonStyle.SUCCESS)]])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ پیوستن به بازی", callback_data=f"iwg:j:{game}:{amount}:{creator}" + (f":{cat}" if cat else ""),
+                              style=ButtonStyle.SUCCESS)],
+        # PATCH_INLINE_CANCEL_V1 (سینا): میزبان پیش از پیوستن حریف می‌تواند لغو کند (هنوز پولی جابه‌جا نشده)
+        [InlineKeyboardButton(text="❌ لغو بازی (فقط میزبان)", callback_data=f"iwg:x:{creator}", style=ButtonStyle.DANGER)]])
+
+
+async def _balance(bot_id: int, uid: int) -> int:
+    async with Session() as s:
+        u = await s.scalar(select(BotUser).where(BotUser.bot_id == bot_id, BotUser.telegram_id == uid))
+    try:
+        return int(u.balance or 0) if u else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _no_balance_result(rid: str, title: str, need: int, have: int, uname: str | None):
+    """PATCH_INLINE_BALANCE_CHECK_V1 (سینا): میزبانِ بی‌موجودی دعوتِ پولی نمی‌فرستد؛ پیامِ «موجودی کافی نیست» با دکمهٔ شارژ."""
+    kb = None
+    if uname:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="➕ شارژ موجودی در ربات", url=f"https://t.me/{uname}?start=iwc", style=ButtonStyle.SUCCESS)]])
+    return InlineQueryResultArticle(
+        id=rid, title="⚠️ " + title + " — موجودی کافی نیست",
+        description=f"موجودی تو {core._rial(have)}؛ برای این بازی {core._rial(need)} لازم است.",
+        input_message_content=InputTextMessageContent(
+            message_text=(f"⚠️ <b>موجودی کافی نیست</b>\n\nبرای ساختن این بازی {core._rial(need)} لازم است و موجودی فعلی "
+                          f"{core._rial(have)} است.\nاول موجودی را شارژ کن، بعد دوباره بازی را بساز."),
+            parse_mode="HTML"),
+        reply_markup=kb)
 
 
 def _topics(game: str, exact: bool) -> list[str]:
@@ -125,6 +152,11 @@ async def iwg_query(q: InlineQuery, bot: Bot):
     game, amount, exact = parse_query(q.query)
     name = q.from_user.full_name or "—"
     results = []
+    have = await _balance(row.id, q.from_user.id)
+    try:
+        uname = await _username(bot)
+    except Exception:  # noqa: BLE001
+        uname = None
     if not (q.query or "").strip():
         results.append(InlineQueryResultArticle(
             id="bal", title="💰 موجودی", description="نمایشِ موجودیِ کیف پولت (فقط خودت می‌بینی)",
@@ -155,6 +187,10 @@ async def iwg_query(q: InlineQuery, bot: Bot):
                     import quiz_bank as QB
                     tn = " — " + QB.CATS.get(cat, cat)
                 title = _TITLE[g] + tn + (" — رایگان" if free else f" — {core._rial(amt)}")
+                if not free and have < amt:
+                    results.append(_no_balance_result(f"{g}:{amt}" + (f":{cat}" if cat else "") + ":nb",
+                                                      _TITLE[g] + tn + f" — {core._rial(amt)}", amt, have, uname))
+                    continue
                 results.append(InlineQueryResultArticle(
                     id=f"{g}:{amt}" + (f":{cat}" if cat else ""), title=title,
                     description=(_DESC[g] if free else _DESC[g] + f"  (برایِ مبلغِ دیگر بنویس: {_NAMES[g][0]} ۵۰۰۰)"),
@@ -448,3 +484,38 @@ async def iwd_roll(cb: CallbackQuery, bot: Bot):
         text, kb = core.render(r.w)
         kb = (await core.result_kb(r.w)) or await inline_kb(bot, r.w, kb)
         await _edit(bot, imid, text, kb)
+
+
+# ───────────────────────── لغو دعوت و شارژ موجودی ─────────────────────────
+
+@wager_inline_router.callback_query(F.data.startswith("iwg:x:"))
+async def iwg_cancel(cb: CallbackQuery, bot: Bot):
+    """PATCH_INLINE_CANCEL_V1: فقط میزبان، فقط پیش از شروع بازی (هنوز مبلغی رزرو نشده)."""
+    imid = cb.inline_message_id
+    try:
+        creator = int(cb.data.split(":")[2])
+    except (ValueError, IndexError):
+        await cb.answer("دکمه نامعتبر است.", show_alert=True)
+        return
+    if not imid:
+        await cb.answer()
+        return
+    if cb.from_user.id != creator:
+        await cb.answer("فقط میزبان می‌تواند این بازی را لغو کند.", show_alert=True)
+        return
+    lock = _locks.setdefault(imid, asyncio.Lock())
+    async with lock:
+        if _STARTED.get(imid):
+            await cb.answer("بازی شروع شده و دیگر لغو نمی‌شود.", show_alert=True)
+            return
+        _STARTED[imid] = True                 # پیوستنِ هم‌زمان دیگر بازی نمی‌سازد
+        await _edit(bot, imid, "❌ <b>بازی توسط میزبان لغو شد.</b>\nمبلغی از کسی کم نشده بود.", None)
+    await cb.answer("بازی لغو شد.")
+
+
+async def wallet_deeplink(msg, bot: Bot, row) -> bool:
+    """`/start iwc` (دکمهٔ «شارژ موجودی» در پیامِ «موجودی کافی نیست») ⇒ صفحهٔ کیف پول."""
+    from tenant import get_or_create_user, show_wallet
+    u = await get_or_create_user(row.id, msg.from_user.id, msg.from_user.full_name or "", msg.from_user.username or "")
+    await show_wallet(msg, row.id, u)
+    return True

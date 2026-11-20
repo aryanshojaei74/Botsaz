@@ -5364,6 +5364,10 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
         from tenant.shared.wager_inline import dice_deeplink
         if await dice_deeplink(msg, bot, row, command.args):
             return
+    if (command.args or "") == "iwc" and msg.chat.type == "private":       # PATCH_INLINE_BALANCE_CHECK_V1: شارژ موجودی
+        from tenant.shared.wager_inline import wallet_deeplink
+        if await wallet_deeplink(msg, bot, row):
+            return
     # === PATCH_SMM_AI_GROUP_V1 ===
     # وقتی دکمه‌ی «🔗 اتصالِ گروه با دکمه» زده بشه، تلگرام یه انتخاب‌گرِ
     # «به کدوم گروه اضافه بشه» نشون می‌ده؛ بعدِ انتخاب، همین /start با
@@ -14529,7 +14533,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "686"
+BUILD_ID = "687"
 
 
 @tenant_router.message(Command("version"))

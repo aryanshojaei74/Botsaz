@@ -149,3 +149,25 @@ async def test_admin_input_validates_rank_lines_and_help_changes_with_basis(env)
     assert "رتبه در جدول" in text and "نفر پنجم جدول: 6٪" in text
     await K.save_config(0, basis="games")
     assert "حداقل" in await K.help_for(0)                                                    # مبنای قدیمی: راهنمای قبلی
+
+
+@pytest.mark.asyncio
+async def test_board_order_by_games_changes_table_and_rank_fee(env):
+    """سینا: ترتیب جدول بر اساس «بیشترین بازی» یا «بیشترین برد»؛ کارمزد رتبه هم از همان ترتیب پیروی می‌کند."""
+    for _ in range(3):
+        await play(1, 3, 3)          # u1 سه بازی، صفر برد؛ u3 سه برد
+    await play(2, 4, 2)              # u2 یک برد
+    assert [d["uid"] for d in await K.player_stats(0, 5, "wins")][0] == 3
+    await K.save_kv(0, "board_order", "games")
+    assert await K.board_order(0) == "games"
+    top = [d["uid"] for d in await K.player_stats(0, 5, await K.board_order(0))]
+    assert top[:2] in ([1, 3], [3, 1])                                    # هر دو ۳ بازی؛ برد بیشتر جلوتر
+    await K.save_config(0, basis="rank", tiers_text="1:1;2:2")
+    from config import Session
+    async with Session() as s:
+        assert await K.rank_position(s, 0, 2) == 3                      # u2 فقط ۱ بازی ⇒ نفر سوم در ترتیب «بازی»
+    await K.save_kv(0, "board_order", "wins")
+    async with Session() as s:
+        assert await K.rank_position(s, 0, 2) == 2                      # در ترتیب «برد» نفر دوم
+    text = await K.board_page_text(0)
+    assert "نفر اول" in text

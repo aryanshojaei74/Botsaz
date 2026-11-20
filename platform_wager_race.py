@@ -292,7 +292,7 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
             if _tn:
                 _topic = f"🏷 موضوعِ سؤال‌ها: <b>{_tn}</b>\n"
         text = (f"{head}\n\n👤 سازنده: {core._who(w, w.creator_id)}\n{target}{_topic}📜 {_rule(w)}\n"
-                f"{core._money_lines(w)}\n\n⏳ منتظر حریف…\n\n{wd['notice']}")
+                f"{core._money_lines(w)}\n\n⏳ منتظر حریف…" + ("" if core.is_free(w) else f"\n\n{wd['notice']}"))
         return text, _kb_pending(w)
     if w.status == "playing":
         q = ""
@@ -327,7 +327,7 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
         else:
             q = f"🧮 جواب چیست؟\n\n👉 <b>{_html.escape(str(st.get('q', '')))} = ؟</b>"
         foot = ("⏱ هر نوبت ۳ دقیقه مهلت دارد؛ در مهلت حدس نزنی می‌بازی." if w.game == "guess" and w.turn_id
-                else f"⏱ مهلت: {core._mins_left(w)}؛ کسی برنده نشد ⇒ مبلغِ هر دو برمی‌گردد.")
+                else f"⏱ مهلت: {core._mins_left(w)}؛ کسی برنده نشد ⇒ " + ("بازی تمام می‌شود." if core.is_free(w) else "مبلغِ هر دو برمی‌گردد."))
         text = (f"{head}\n\n{core._who(w, w.creator_id)}  ⚔️  {core._who(w, w.opponent_id)}\n{core._money_lines(w)}\n\n"
                 f"{q}\n\n{foot}")
         return text, (_qkb or InlineKeyboardMarkup(inline_keyboard=[]))
@@ -358,7 +358,8 @@ def render_race(w: PlatformWager) -> tuple[str, InlineKeyboardMarkup]:
                   (f"🎁 دریافتی برنده: <b>{_rial(w.payout_amount)}</b> (کارمزد {_rial(w.fee_amount)})" if _money(w.amount)
                    else "🆓 بازیِ رایگان بود؛ جایزهٔ پولی ندارد.")]
     else:
-        lines += ["", f"⏰ کسی در مهلت برنده نشد؛ {wd['stake']} به هر دو نفر برگشت (بدون کارمزد)."]
+        lines += ["", "⏰ کسی در مهلت برنده نشد." if core.is_free(w)
+                  else f"⏰ کسی در مهلت برنده نشد؛ {wd['stake']} به هر دو نفر برگشت (بدون کارمزد)."]
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=[])
 
 
@@ -550,7 +551,7 @@ async def _end_now(bot: Bot, wid: int) -> None:
         if w is not None:
             LIVE.pop(w.id, None)
             await _edit(bot, w)
-            await _say(bot, w, "⌛ هر دو نفر اشتباه جواب دادند؛ مبلغِ هر دو نفر برگشت. 👻")
+            await _say(bot, w, "⌛ هر دو نفر اشتباه جواب دادند" + ("." if core.is_free(w) else "؛ مبلغِ هر دو نفر برگشت. 👻"))
     except Exception:  # noqa: BLE001
         logger.exception("quiz end #%s failed", wid)
 
@@ -892,7 +893,7 @@ async def _expire_later(bot: Bot, wid: int, secs: int) -> None:
                             f"🏁 <b>{core._who(w, w.winner_id)}</b> برنده شد! {prize_line(w)}",
                     parse_mode="HTML", reply_markup=await core.result_kb(w))
             else:
-                await _say(bot, w, "⌛ کسی برنده نشد؛ مبلغِ هر دو نفر برگشت. 👻")
+                await _say(bot, w, "⌛ کسی برنده نشد" + ("." if core.is_free(w) else "؛ مبلغِ هر دو نفر برگشت. 👻"))
     except Exception:  # noqa: BLE001
         logger.exception("race expire #%s failed", wid)
 

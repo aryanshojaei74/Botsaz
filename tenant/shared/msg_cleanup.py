@@ -46,7 +46,27 @@ def trackable(method) -> bool:
         return False
     if getattr(method, "protect_content", None) is True:     # (مقدارِ پیش‌فرضِ aiogram یک شیٔ Default است، نه True)
         return False
-    return "://" not in (method.text or "")
+    text = method.text or ""
+    if is_order_message(text):          # PATCH_MSG_CLEANUP_KEEP_ORDERS_V1 (سینا): پیام ثبت/تکمیل/لغو سفارش هرگز پاک نمی‌شود
+        return False
+    return "://" not in text
+
+
+_ORDER_MARKERS = ("کد پیگیری", "کدِ پیگیری", "شماره سفارش", "شمارهٔ سفارش")
+
+
+def is_order_message(text: str) -> bool:
+    """پیام سفارش: هر پیامی که سفارش را ثبت/تکمیل/لغو اعلام می‌کند (الگوهای vs_msg_override) یا کد پیگیری دارد."""
+    if not text:
+        return False
+    try:
+        from tenant.shared.vs_msg_override import rule_keys
+        if rule_keys(text):
+            return True
+    except Exception:  # noqa: BLE001
+        logger.debug("msg_cleanup: تشخیص پیام سفارش ممکن نشد", exc_info=True)
+    flat = text.replace("\u0650", "")
+    return any(m.replace("\u0650", "") in flat for m in _ORDER_MARKERS)
 
 
 def begin(bot_id: int, chat_id: int) -> dict:

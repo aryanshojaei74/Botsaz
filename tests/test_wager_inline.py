@@ -517,3 +517,66 @@ async def test_quiz_buttons_still_refuse_foreign_inline_clicks_when_wager_is_not
     c = Cb(bot, U1, "twr:qz:999:0")
     await WR.twr_quiz_press(c, bot)
     assert c.answers[0][1] and "تمام شده" in c.answers[0][0]
+
+
+# ───────────── سینا: لغو میزبان، چکِ موجودی، متنِ بازیِ رایگان ─────────────
+
+@pytest.mark.asyncio
+async def test_host_can_cancel_invite_before_anyone_joins_and_join_is_then_blocked(db, monkeypatch):
+    bot = await _stub_bot(monkeypatch)
+    other = Cb(bot, U2, f"iwg:x:{U1}")
+    await WI.iwg_cancel(other, bot)
+    assert other.answers[0][1] and "فقط میزبان" in other.answers[0][0]
+    c = Cb(bot, U1, f"iwg:x:{U1}")
+    await WI.iwg_cancel(c, bot)
+    assert "لغو شد" in bot.edits[-1][0] and bot.edits[-1][1]["inline_message_id"] == IMID
+
+    async def cfj(b, bid, uid, bypass_cache=False): return []
+    monkeypatch.setattr(tenant, "check_force_join", cfj)
+    j = Cb(bot, U2, f"iwg:j:xo:10000:{U1}")
+    await WI.iwg_join(j, bot)
+    assert await bal(db, U1) == 100_000 and await bal(db, U2) == 100_000          # بازی‌ای ساخته نشد
+
+
+@pytest.mark.asyncio
+async def test_paid_offer_is_replaced_by_a_charge_prompt_when_host_balance_is_low(db, monkeypatch):
+    bot = await _stub_bot(monkeypatch)
+    sent = {}
+
+    class Q:
+        query = "دوز 500000"
+        from_user = types.SimpleNamespace(id=U1, full_name="u11")
+
+        async def answer(self, results, **k): sent["r"] = results
+    await WI.iwg_query(Q(), bot)
+    r = sent["r"][0]
+    assert r.id.endswith(":nb") and "موجودی کافی نیست" in r.title
+    assert r.reply_markup.inline_keyboard[0][0].url == "https://t.me/shop_bot?start=iwc"
+    assert not any((b.callback_data or "").startswith("iwg:j:") for row in r.reply_markup.inline_keyboard for b in row)
+    Q.query = "دوز 5000"                                                             # موجودی کافی ⇒ دعوتِ عادی + دکمهٔ لغو
+    await WI.iwg_query(Q(), bot)
+    cbs = [b.callback_data for row in sent["r"][0].reply_markup.inline_keyboard for b in row]
+    assert cbs == [f"iwg:j:xo:5000:{U1}", f"iwg:x:{U1}"]
+
+
+def test_free_game_texts_do_not_mention_money():
+    from types import SimpleNamespace as NS
+    from decimal import Decimal as D
+    import platform_wager as W
+    import platform_wager_race as R
+
+    def w(**k):
+        base = dict(id=1, bot_id=5, game="xo", amount=D(0), status="draw", end_reason="draw", state="{}",
+                    creator_id=1, opponent_id=2, creator_name="a", opponent_name="b", creator_username=None,
+                    opponent_username=None, winner_id=None, payout_amount=D(0), fee_amount=D(0), target_id=None,
+                    target_name=None, target_username=None, turn_id=None, expires_at=None, chat_id=0)
+        base.update(k)
+        return NS(**base)
+    for st in ("draw", "expired"):
+        t = W._final_text(w(status=st))
+        assert "برگشت" not in t and "کارمزد" not in t
+    t = W._final_text(w(status="settled", winner_id=1, end_reason="win"))
+    assert "رایگان" in t and "دریافتی" not in t
+    assert "برگشت" in W._final_text(w(status="draw", amount=D(10000)))             # پولی مثل قبل
+    t, _ = R.render_race(w(game="speed", status="expired"))
+    assert "برگشت" not in t

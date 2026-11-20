@@ -46,8 +46,24 @@ _DEFAULT_SLICES = [
 
 def _default_cfg() -> dict:
     return {"enabled": False, "title": "🎡 گردونهٔ شانس", "per_period": 1,
-            "period_hours": 24, "max_total": 0,
+            "period_hours": 24, "max_total": 0, "code_hours": 720,
             "slices": [dict(x) for x in _DEFAULT_SLICES]}
+
+
+CODE_EXPIRY_STEPS = (24, 72, 168, 720)          # PATCH_WHEEL_CODE_EXPIRY_V1: ۱ روز، ۳ روز، ۷ روز، ۳۰ روز
+
+
+def code_expiry_label(hours: int) -> str:
+    h = int(hours or 720)
+    return f"{h // 24} روز" if h % 24 == 0 else f"{h} ساعت"
+
+
+def next_code_hours(hours: int) -> int:
+    h = int(hours or 720)
+    for x in CODE_EXPIRY_STEPS:
+        if x > h:
+            return x
+    return CODE_EXPIRY_STEPS[0]
 
 
 def slice_label(sl: dict) -> str:
@@ -68,7 +84,8 @@ def _norm(cfg: dict) -> dict:
     out = dict(base)
     out["enabled"] = bool(cfg.get("enabled"))
     out["title"] = (str(cfg.get("title") or base["title"]))[:40]
-    for k, lo, hi in (("per_period", 1, 100), ("period_hours", 1, 24 * 90), ("max_total", 0, 100000)):
+    for k, lo, hi in (("per_period", 1, 100), ("period_hours", 1, 24 * 90), ("max_total", 0, 100000),
+                      ("code_hours", 1, 24 * 365)):           # PATCH_WHEEL_CODE_EXPIRY_V1
         try:
             out[k] = max(lo, min(hi, int(cfg.get(k, base[k]))))
         except Exception:
@@ -189,7 +206,7 @@ async def spin(bot_id: int, user_id: int) -> dict:
                 disc_type=("percent" if t == "pct" else "amount"),
                 percent=(min(v, 100) if t == "pct" else 0),
                 amount=(v if t == "amt" else 0),
-                expires_at=datetime.utcnow() + timedelta(days=30)))
+                expires_at=datetime.utcnow() + timedelta(hours=int(cfg.get("code_hours") or 720))))
         s.add(WheelSpin(bot_id=bot_id, user_id=u.id, slice_idx=idx,
                         prize_type=t, value=v, code=code))
         await s.commit()
@@ -278,7 +295,8 @@ async def _menu(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
              f"عنوان: {c['title']}",
              f"تعداد اسلاید: <b>{n}</b>",
              f"هر کاربر: <b>{c['per_period']}</b> بار در هر <b>{c['period_hours']}</b> ساعت",
-             f"سقفِ کلِ دفعاتِ هر کاربر: <b>{c['max_total'] or 'نامحدود'}</b>\n",
+             f"سقفِ کلِ دفعاتِ هر کاربر: <b>{c['max_total'] or 'نامحدود'}</b>",
+             f"اعتبار کد تخفیف برنده: <b>{code_expiry_label(c['code_hours'])}</b>\n",
              "اسلایدها (شانس):"]
     for i, sl in enumerate(c["slices"], 1):
         lines.append(f"{i}. {slice_label(sl)} — {sl['w'] * 100 / tw:.1f}٪")
@@ -292,6 +310,7 @@ async def _menu(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     rows += [
         [_btn("🔁 تعدادِ دفعات در هر بازه", "wheel:per"), _btn("⏱ طولِ بازه (ساعت)", "wheel:hours")],
         [_btn("🔢 سقفِ کلِ دفعاتِ هر کاربر", "wheel:maxt")],
+        [_btn(f"⏳ اعتبار کد تخفیف: {code_expiry_label(c['code_hours'])} (زدن = تغییر)", "wheel:codeexp")],
         [_btn("🏷 عنوان", "wheel:title")],
         [_btn("♻️ بازگشت به پیش‌فرض", "wheel:reset", ButtonStyle.DANGER)],
         [_btn("⬅️ بازگشت", "miniapp:panel", ButtonStyle.DANGER)],
@@ -326,6 +345,19 @@ async def wheel_toggle(cb: CallbackQuery, bot: Bot):
     await save_cfg(row.id, c)
     await _show(cb, row.id)
     await cb.answer("روشن شد" if c["enabled"] else "خاموش شد")
+
+
+@wheel_admin_router.callback_query(F.data == "wheel:codeexp")
+async def wheel_code_expiry(cb: CallbackQuery, bot: Bot):
+    """PATCH_WHEEL_CODE_EXPIRY_V1 (سینا): اعتبار کد تخفیف جایزهٔ گردونه — ۱ / ۳ / ۷ / ۳۰ روز."""
+    row = await _owner(cb, bot)
+    if not row:
+        return
+    c = await load_cfg(row.id)
+    c["code_hours"] = next_code_hours(c["code_hours"])
+    await save_cfg(row.id, c)
+    await _show(cb, row.id)
+    await cb.answer(f"اعتبار کد: {code_expiry_label(c['code_hours'])}")
 
 
 @wheel_admin_router.callback_query(F.data == "wheel:reset")
