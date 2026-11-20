@@ -374,6 +374,7 @@ async def _group_settings_content(bot_id: int) -> tuple[str, InlineKeyboardMarku
                                           style=ButtonStyle.DANGER)])
     rows.append([InlineKeyboardButton(text="🛡 محافظ گروه، دستورات و گزارش‌ها", callback_data="tgg:menu")])
     rows.append([InlineKeyboardButton(text="🎲 تنظیمات بازی", callback_data="gset:betmenu")])
+    rows.append([InlineKeyboardButton(text="🔎 قیمت‌یاب در گروه", callback_data="pq:menu")])   # PATCH_PRICE_GROUP_STATUS_V1
     rows.append([InlineKeyboardButton(
         text=("💸 غیرفعال‌کردنِ کارمزدِ انتقال" if fee_enabled else "💸 فعال‌کردنِ کارمزدِ انتقال"),
         callback_data="gset:feetoggle")])

@@ -564,7 +564,7 @@ async def _owner(event, bot: Bot):
     return row
 
 
-async def _menu(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
+async def _menu(bot_id: int, bot: Bot | None = None) -> tuple[str, InlineKeyboardMarkup]:
     from tenant import get_setting
     if not await purchased(bot_id):
         return ("🔎 <b>قیمت‌یاب</b>\n\n"
@@ -586,17 +586,117 @@ async def _menu(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
             "منبع ارز دیجیتال: CoinGecko و DexScreener (رایگان، با کش و منبع جایگزین).\n"
             "راهنمای کاربران: در گروه یا پیوی بنویسند «راهنما قیمت». «به ریال» در آخر پیام ⇒ مبلغ به ریال.\n"
             "قیمت طلا، سکه و ارزهای غیر دلار از BrsApi خوانده می‌شود؛ برای دقیق‌تر بودن کلید BrsApi را در تنظیمات ثبت کنید.")
-    kb = InlineKeyboardMarkup(inline_keyboard=[
+    gtext, uname = await group_status(bot_id, bot)
+    text += "\n\n" + gtext
+    rows = [
         [InlineKeyboardButton(text=("🔴 خاموش کردن" if on else "🟢 روشن کردن"), callback_data="pq:toggle",
                               style=ButtonStyle.DANGER if on else ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="🔘 دکمه‌های زیر پیام (افزودن، رنگ، جابه‌جایی)", callback_data="pq:btns",
-                              style=ButtonStyle.PRIMARY)],
-        [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:settings", style=ButtonStyle.DANGER)]])
-    return text, kb
+                              style=ButtonStyle.PRIMARY)]]
+    if uname:
+        rows.append([InlineKeyboardButton(text="➕ افزودن ربات به گروه (با دسترسی ادمین)",
+                                          url=f"https://t.me/{uname}?startgroup=pq&admin=delete_messages",
+                                          style=ButtonStyle.SUCCESS)])
+    rows.append([InlineKeyboardButton(text="🔄 بررسی دوبارهٔ گروه‌ها", callback_data="pq:menu")])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:settings", style=ButtonStyle.DANGER)])
+    return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _show(target, bot_id: int):
-    text, kb = await _menu(bot_id)
+# ───────── گروه‌های ربات (PATCH_PRICE_GROUP_STATUS_V1): ربات خودش گروه‌ها را تشخیص می‌دهد و وضعیت را نشان می‌دهد ─────────
+GROUPS_KEY = "pq_groups"
+MAX_GROUPS = 10
+_SEEN_GROUPS: set[tuple[int, int]] = set()
+
+
+def _load_groups(raw: str) -> dict[str, str]:
+    import json
+    try:
+        d = json.loads(raw or "{}")
+        return {str(k): str(v) for k, v in d.items()} if isinstance(d, dict) else {}
+    except ValueError:
+        return {}
+
+
+async def _save_group(bot_id: int, chat_id: int, title: str) -> None:
+    import json
+    from tenant import get_setting, set_setting
+    groups = _load_groups(await get_setting(bot_id, GROUPS_KEY, ""))
+    if groups.get(str(chat_id)) == title:
+        return
+    groups.pop(str(chat_id), None)
+    groups[str(chat_id)] = title
+    while len(groups) > MAX_GROUPS:
+        groups.pop(next(iter(groups)))
+    await set_setting(bot_id, GROUPS_KEY, json.dumps(groups, ensure_ascii=False))
+
+
+def remember_group(msg: Message, bot: Bot) -> None:
+    """هر بار اولین پیام یک گروه (در این پروسه) دیده شد، اگر قیمت‌یاب خریداری شده، گروه ذخیره شود. بدون انتظار."""
+    chat = getattr(msg, "chat", None)
+    if chat is None or chat.type not in ("group", "supergroup"):
+        return
+    key = (getattr(bot, "id", 0), chat.id)
+    if key in _SEEN_GROUPS:
+        return
+    _SEEN_GROUPS.add(key)
+
+    async def go():
+        try:
+            from tenant import get_bot_row
+            row = await get_bot_row(bot)
+            if row and await purchased(row.id):
+                await _save_group(row.id, chat.id, (chat.title or str(chat.id))[:60])
+        except Exception:  # noqa: BLE001
+            logger.info("price_lookup: ذخیرهٔ گروه ممکن نشد", exc_info=True)
+    try:
+        asyncio.get_running_loop().create_task(go())
+    except RuntimeError:
+        logger.debug("price_lookup: حلقه‌ای برای ذخیرهٔ گروه نیست")
+
+
+async def group_status(bot_id: int, bot: Bot | None) -> tuple[str, str]:
+    """متن وضعیت گروه‌ها + یوزرنیم ربات (برای دکمهٔ افزودن به گروه)."""
+    if bot is None:
+        return "", ""
+    import json
+    from tenant import get_setting, set_setting
+    try:
+        me = await bot.me()
+    except Exception:  # noqa: BLE001
+        return "", ""
+    reads_all = bool(getattr(me, "can_read_all_group_messages", False))
+    lines = ["👥 <b>گروه‌ها</b>",
+             ("🔓 Group Privacy خاموش است: ربات پیام‌های همهٔ گروه‌هایش را می‌بیند." if reads_all else
+              "🔒 Group Privacy روشن است: ربات فقط در گروه‌هایی که ادمین است پیام‌ها را می‌بیند "
+              "(یا در @BotFather ← Bot Settings ← Group Privacy ← Turn off).")]
+    groups = _load_groups(await get_setting(bot_id, GROUPS_KEY, ""))
+    if not groups:
+        lines.append("هنوز گروهی دیده نشده؛ ربات را به گروه اضافه کن و یک پیام در گروه بفرست، بعد «🔄 بررسی دوباره» را بزن.")
+        return "\n".join(lines), me.username or ""
+    changed = False
+    for cid, title in list(groups.items())[:MAX_GROUPS]:
+        try:
+            m = await bot.get_chat_member(int(cid), me.id)
+            st = str(getattr(m, "status", ""))
+        except Exception:  # noqa: BLE001
+            st = "error"
+        st = st.split(".")[-1].lower()
+        if st in ("administrator", "creator"):
+            lines.append(f"• {title} — ✅ ادمین؛ جواب می‌دهد")
+        elif st in ("member", "restricted"):
+            lines.append(f"• {title} — " + ("✅ عضو؛ جواب می‌دهد" if reads_all else "⚠️ عضو ولی ادمین نیست؛ پیام‌ها را نمی‌بیند"))
+        else:
+            groups.pop(cid, None)
+            changed = True
+    if changed:
+        await set_setting(bot_id, GROUPS_KEY, json.dumps(groups, ensure_ascii=False))
+    if not groups:
+        lines.append("ربات دیگر در گروه‌های قبلی نیست.")
+    return "\n".join(lines), me.username or ""
+
+
+async def _show(target, bot_id: int, bot: Bot | None = None):
+    text, kb = await _menu(bot_id, bot)
     m = getattr(target, "message", None) or target
     try:
         if getattr(target, "message", None) is not None:
@@ -634,7 +734,7 @@ async def pq_cb(cb: CallbackQuery, bot: Bot, state: FSMContext):
                                 "برای حذف همه: «پاک» · انصراف: /cancel", parse_mode="HTML")
         await cb.answer()
         return
-    await _show(cb, row.id)
+    await _show(cb, row.id, bot)
     await cb.answer()
 
 
@@ -648,7 +748,7 @@ async def pq_buttons_input(msg: Message, bot: Bot, state: FSMContext):
     raw = (msg.text or "").strip()
     if raw in ("/cancel", "لغو"):
         await state.clear()
-        await _show(msg, row.id)
+        await _show(msg, row.id, bot)
         return
     if raw == "پاک":
         await set_setting(row.id, BTN_KEY, "")
@@ -662,7 +762,7 @@ async def pq_buttons_input(msg: Message, bot: Bot, state: FSMContext):
             [InlineKeyboardButton(text=t, url=u) for t, u in r] for r in rows]))
     await state.clear()
     await msg.answer("✅ ذخیره شد.")
-    await _show(msg, row.id)
+    await _show(msg, row.id, bot)
 
 
 # ───────────────────────── پاسخ به پیام کاربر ─────────────────────────
@@ -712,7 +812,7 @@ async def pq_open(msg: Message, bot: Bot):
     """ورودی منو از حالت کیبوردی (_settings_handlers)."""
     row = await _owner(msg, bot)
     if row:
-        await _show(msg, row.id)
+        await _show(msg, row.id, bot)
 
 
 # ───────────────────────── ویرایشگر دکمه‌ها (PATCH_PRICE_BUTTONS_EDITOR_V1) ─────────────────────────
