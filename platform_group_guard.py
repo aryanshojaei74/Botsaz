@@ -1564,6 +1564,7 @@ async def _gg_main_text_kb() -> tuple[str, InlineKeyboardMarkup]:
             [hx_button("🔗 اتصال از طریقِ کانالِ لینک‌شده", callback_data="gg:connect_via_channel")],
             [hx_button("👤 ادمین‌هایِ اضافه", callback_data="gg:extra_admins")],
             [hx_button("🔎 قیمت‌یاب گروه", callback_data="ppg:menu")],   # PATCH_PRICE_LOOKUP_PLATFORM_GROUP_V1
+            [hx_button("💳 شارژ کیف پول از گروه", callback_data="pgc:menu")],   # PATCH_GROUP_ADMIN_CHARGE_V1
             [hx_button("⬅️ بازگشت به پنل", callback_data="adm:back", style=ButtonStyle.DANGER)],
         ])
         return text, kb
@@ -1608,6 +1609,7 @@ async def _gg_main_text_kb() -> tuple[str, InlineKeyboardMarkup]:
         [hx_button("📋 راهنمایِ دستورات", callback_data="gg:help")],
         [hx_button("🤖 هوش مصنوعی", callback_data="gg:ai")],
         [hx_button("🔎 قیمت‌یاب گروه", callback_data="ppg:menu")],   # PATCH_PRICE_LOOKUP_PLATFORM_GROUP_V1
+        [hx_button("💳 شارژ کیف پول از گروه", callback_data="pgc:menu")],   # PATCH_GROUP_ADMIN_CHARGE_V1
         # === PATCH_GROUP_GUARD_CAPTCHA_V1 ===
         [hx_button(f"🔰 کپچایِ عضوِ جدید: {captcha_status}", callback_data="gg:captcha_toggle")],
         [hx_button("⏱ تنظیمِ مهلتِ کپچا", callback_data="gg:captcha_timeout")],

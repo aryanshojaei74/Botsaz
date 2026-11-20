@@ -136,6 +136,8 @@ router.include_router(ticket_router)
 # === PATCH_PLATFORM_GROUP_MONEY_V1 ===
 # باید قبل از catch-all محافظ گروه ثبت شود تا پیام‌های مالی گروه مصرف نشوند.
 from platform_group_help import platform_group_help_router   # === PATCH_PLATFORM_GROUP_HELP_V1 ===
+from platform_group_charge import platform_group_charge_router   # PATCH_GROUP_ADMIN_CHARGE_V1 (قبل از بقیهٔ گروهی‌ها)
+router.include_router(platform_group_charge_router)
 router.include_router(platform_group_help_router)
 # === PATCH_GIVEAWAY_PRO_V1 === قرعه‌کشیِ حرفهٔ ربات مادر (فقط اینجا؛ ربات‌هایِ مستأجر ندارند)
 try:
