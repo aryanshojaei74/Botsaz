@@ -30,6 +30,7 @@ import re
 import html as _html_escape_mod  # برای escape کردنِ متنِ خامِ پاسخِ پنل قبل از ارسال در پیامِ HTML
 
 import asyncio  # PATCH_QR_BACKGROUND_V1
+import socket  # PATCH_TCP_PRECHECK_DNS_V1
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ButtonStyle
@@ -1892,14 +1893,8 @@ async def vpn_setup_inbounds(msg: Message, bot: Bot, state: FSMContext):
             _port = _u.port or (443 if _u.scheme == "https" else 80)
             print(f"[vpn_setup_inbounds] TCP pre-check host={_host} port={_port}", flush=True)
             if _host:
-                _fut = _asyncio.open_connection(_host, _port)
-                _reader, _writer = await _asyncio.wait_for(_fut, timeout=8)
+                await tcp_reach(_host, _port, 8)          # PATCH_TCP_PRECHECK_DNS_V1
                 print("[vpn_setup_inbounds] TCP pre-check connected OK", flush=True)
-                # فقط close() کافیست؛ منتظرِ wait_closed() نمی‌مانیم چون این یک
-                # اتصالِ TCP خامِ یک‌بارمصرف است (نه هندشیکِ TLS) و بدونِ timeout
-                # ممکن است close شدنش هیچ‌وقت تمام نشود و کل مرحله ساکت گیر کند.
-                _writer.close()
-                print("[vpn_setup_inbounds] TCP pre-check writer closed", flush=True)
         except Exception as e:
             print(f"[vpn_setup_inbounds] TCP pre-check failed for key={key} bot={row.id} "
                   f"url={data.get('base_url')}: {e!r}", flush=True)
@@ -2088,6 +2083,30 @@ def _ib_render(ibp: dict, label: str) -> tuple[str, InlineKeyboardMarkup]:
     return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _swallow(fut) -> None:
+    """نتیجهٔ future رهاشده را بخوان تا «Future exception was never retrieved» در لاگ نیاید."""
+    try:
+        if not fut.cancelled():
+            fut.exception()
+    except Exception:  # noqa: BLE001
+        logger.debug("future رهاشده", exc_info=True)
+
+
+async def tcp_reach(host: str, port: int, timeout: float = 8) -> None:
+    """PATCH_TCP_PRECHECK_DNS_V1: اتصال TCP خام با سقف زمان. DNS جدا و با task انجام می‌شود تا وقتی تایم‌اوت شد،
+    خطای دیررسِ getaddrinfo (مثلاً «No address associated with hostname») بی‌صاحب در لاگ نیفتد. خطا ⇒ استثنا."""
+    loop = asyncio.get_running_loop()
+    dns = asyncio.ensure_future(loop.getaddrinfo(host, port, type=socket.SOCK_STREAM))
+    dns.add_done_callback(_swallow)
+    infos = await asyncio.wait_for(asyncio.shield(dns), timeout=timeout)
+    if not infos:
+        raise OSError("no address")
+    conn = asyncio.ensure_future(asyncio.open_connection(infos[0][4][0], port))
+    conn.add_done_callback(_swallow)
+    _r, w = await asyncio.wait_for(asyncio.shield(conn), timeout=timeout)
+    w.close()
+
+
 async def _tcp_precheck(base_url: str, timeout: float = 8) -> str | None:
     """متن خطا اگر سرور ربات اصلا به آدرس/پورت پنل نرسد؛ وگرنه None."""
     from urllib.parse import urlparse as _urlparse
@@ -2095,8 +2114,7 @@ async def _tcp_precheck(base_url: str, timeout: float = 8) -> str | None:
         u = _urlparse(base_url)
         port = u.port or (443 if u.scheme == "https" else 80)
         if u.hostname:
-            _r, w = await asyncio.wait_for(asyncio.open_connection(u.hostname, port), timeout=timeout)
-            w.close()
+            await tcp_reach(u.hostname, port, timeout)
     except Exception as e:
         print(f"[inbound_picker] TCP pre-check failed url={base_url}: {e!r}", flush=True)
         return ("سرور ربات اصلا نمی‌تواند به آدرس/پورت این پنل وصل شود "
