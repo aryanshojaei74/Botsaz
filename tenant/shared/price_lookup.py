@@ -402,7 +402,9 @@ def render_crypto(qty: float, coin, usd_toman: float | None, title: str = "") ->
     if coin.chain:
         stats.append(f"⛓ شبکه: {coin.chain}")
     if stats:
-        lines += ["", "📊 آمار 24 ساعته:"] + [f"┤{x}" for x in stats[:-1]] + [f"┙{stats[-1]}"]
+        # PATCH_PRICE_COMPACT_V1 (مدیر: «پیام خیلی بزرگه»): آمار در نقل‌قول جمع‌شونده؛ با زدن فلش باز می‌شود
+        body = "\n".join([f"┤{x}" for x in stats[:-1]] + [f"┙{stats[-1]}"])
+        lines += ["", "<b>📊 آمار 24 ساعته:</b>", f"<blockquote expandable>{body}</blockquote>"]
     if _RATE_SRC.get():
         lines += ["", f"💱 نرخ دلار: {_RATE_SRC.get()}"]
     lines += ["", f"⏰ {_now_fa()}"]
@@ -460,7 +462,7 @@ async def live_rate() -> tuple[float, str]:
 
 async def _usd_toman() -> float | None:
     v, src = await live_rate()
-    _RATE_SRC.set(f"{v:,.0f} تومان ({src})" if v else "")
+    _RATE_SRC.set(f"{v:,.0f} تومان" if v else "")          # نام منبع نمایش داده نمی‌شود (مدیر)
     return v or None
 
 

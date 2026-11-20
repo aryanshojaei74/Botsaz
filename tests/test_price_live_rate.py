@@ -55,4 +55,15 @@ async def test_rate_line_in_message(monkeypatch):
     monkeypatch.setattr(pl, "RATE_SOURCES", [("والکس", _src(274_300, [], "w"))])
     rate = await pl._usd_toman()
     t = pl.render_crypto(1, Coin(name="Gram", symbol="TON", price=1.0), rate, title="GRAM (ton)")
-    assert "قیمت تومانی: 274,300 تومان" in t and "💱 نرخ دلار: 274,300 تومان (والکس)" in t
+    assert "قیمت تومانی: 274,300 تومان" in t and "💱 نرخ دلار: 274,300 تومان\n" in t and "والکس" not in t
+
+
+def test_stats_in_expandable_quote():
+    from tenant.shared.coin_data import Coin
+    t = pl.render_crypto(1.5, Coin(name="Gram", symbol="TON", price=0.998542, change_pct=-1.82, rank=28, high=1.038,
+                                   low=0.98765, volume=38980890, supply=2870989533, cap=2866055710), 274_206,
+                         title="GRAM (ton)")
+    assert "<b>📊 آمار 24 ساعته:</b>\n<blockquote expandable>┤🏆 رتبه: #28" in t
+    assert "┙💎 کپ: 2,866,055,710 $</blockquote>" in t
+    head = t.split("<blockquote")[0]
+    assert "قیمت تومانی" in head and "سقف" not in head          # بالای نقل‌قول کوتاه می‌ماند
