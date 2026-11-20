@@ -158,6 +158,8 @@ router.include_router(platform_rank_router)
 # === PATCH_WAGER_ADDON_V1 === فروش «بازی‌های شرط‌بندی» به ربات‌های مشتری
 from platform_wager_sale import platform_wager_sale_router
 router.include_router(platform_wager_sale_router)
+from platform_price_sale import platform_price_sale_router   # PATCH_PRICE_LOOKUP_SALE_V1
+router.include_router(platform_price_sale_router)
 # === PATCH_GROUP_REPORT_V1 === «گزارش» اعضا؛ باید قبل از catch-all محافظ گروه ثبت شود
 from platform_group_report import platform_group_report_router
 router.include_router(platform_group_report_router)
@@ -7288,6 +7290,13 @@ async def my_bot_detail(cb: CallbackQuery, state: FSMContext):
                 kb_rows.append([_wb])
         except Exception:
             logger.exception("دکمهٔ بازی‌های شرط‌بندی ساخته نشد (نادیده گرفته شد)")
+        try:                                  # PATCH_PRICE_LOOKUP_SALE_V1
+            from platform_price_sale import mybot_button as _pq_btn
+            _pb = await _pq_btn(bot_id)
+            if _pb is not None:
+                kb_rows.append([_pb])
+        except Exception:
+            logger.exception("دکمهٔ قیمت‌یاب ساخته نشد (نادیده گرفته شد)")
         # === PATCH_SELF_SERVICE_TOKEN_OWNER_V1 ===
         # درخواستِ تعویضِ توکن/واگذاریِ مالکیت (خودسرویس، بدونِ نیاز به تاییدِ
         # دستیِ ادمین) فقط برایِ پلن‌هایِ رشد/حرفه‌ای در دسترسه.

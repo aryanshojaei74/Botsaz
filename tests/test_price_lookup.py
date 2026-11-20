@@ -77,6 +77,10 @@ async def test_maybe_answer_respects_toggle(monkeypatch):
     import tenant
     monkeypatch.setattr(tenant, "get_setting", gs)
     monkeypatch.setattr(pl, "answer_for", q)
+
+    async def bought(bid):
+        return True
+    monkeypatch.setattr(pl, "purchased", bought)
     assert await pl.maybe_answer(M(), None, 1) is False and not sent
     store[pl.ON_KEY] = "1"
     assert await pl.maybe_answer(M(), None, 1) is True and sent == ["Q 5.0 ton"]

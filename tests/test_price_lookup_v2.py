@@ -138,3 +138,29 @@ async def test_maybe_answer_sends_photo(monkeypatch):
     monkeypatch.setattr(pl, "answer_for", af)
     monkeypatch.setattr(pl, "buttons_kb", kb)
     assert await pl.maybe_answer(M(), None, 1) is True and sent == {"photo": "CAP"}
+
+
+@pytest.mark.asyncio
+async def test_not_purchased_means_silent(monkeypatch):
+    import bot_addons
+    import tenant
+    store = {pl.ON_KEY: "1"}
+
+    async def gs(bid, k, d=""):
+        return store.get(k, d)
+    state = {"v": "none"}
+
+    async def st(bid, addon):
+        return state["v"]
+    monkeypatch.setattr(tenant, "get_setting", gs)
+    monkeypatch.setattr(bot_addons, "addon_state", st)
+    assert await pl.enabled(1) is False
+    state["v"] = "off"
+    assert await pl.enabled(1) is False                  # مدیر غیرفعال کرده
+    state["v"] = "on"
+    assert await pl.enabled(1) is True
+    text, _kb = await pl._menu(1)
+    assert "روشن" in text
+    state["v"] = "none"
+    text, _kb = await pl._menu(1)
+    assert "خریداری نشده" in text and "ربات‌های من" in text

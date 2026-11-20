@@ -52,3 +52,25 @@ async def active_count(addon: str = WAGER_ADDON) -> int:
     from sqlalchemy import func
     async with config.Session() as s:
         return int(await s.scalar(select(func.count(BotAddon.id)).where(BotAddon.addon == addon)) or 0)
+
+
+# === PATCH_PRICE_LOOKUP_SALE_V1 === افزونهٔ پولی «🔎 قیمت‌یاب». source="off" ⇒ خریده شده ولی مدیر اصلی غیرفعالش کرده.
+PRICE_ADDON = "price_lookup"
+
+
+async def addon_state(bot_id: int, addon: str) -> str:
+    """"none" | "on" | "off" (با همان کش ۱۵ ثانیه‌ای)."""
+    key = (int(bot_id), addon + ":state")
+    hit = _cache.get(key)
+    now = time.monotonic()
+    if hit is not None and hit[1] > now:
+        return hit[0]
+    async with config.Session() as s:
+        src = await s.scalar(select(BotAddon.source).where(BotAddon.bot_id == int(bot_id), BotAddon.addon == addon))
+    val = "none" if src is None else ("off" if src == "off" else "on")
+    _cache[key] = (val, now + _TTL)
+    return val
+
+
+async def price_active(bot_id: int) -> bool:
+    return await addon_state(bot_id, PRICE_ADDON) == "on"

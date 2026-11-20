@@ -109,6 +109,7 @@ ADMIN_SECTIONS: list[dict] = [
         "items": [
             ("⚙️ تنظیمات پلتفرم",   "adm:settings",      ButtonStyle.PRIMARY, True),
             ("🔧 قابلیت‌های پلن‌ها",  "adm:plan_features", ButtonStyle.PRIMARY, True),
+            ("🔎 فروش قیمت‌یاب",      "ppq:hub",           ButtonStyle.SUCCESS, True),   # PATCH_PRICE_LOOKUP_SALE_V1
             ("✏️ ویرایش آموزش",     "adm:tutorial",      ButtonStyle.SUCCESS, True),
             ("🧩 مدیریت سلف‌ساز",     "adm:selfsaz",       ButtonStyle.PRIMARY, True),  # SELFSaz_ADMIN_ITEM
             # === PATCH_PLATFORM_PREMIUM_EMOJI_V1 ===

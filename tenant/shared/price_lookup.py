@@ -429,9 +429,19 @@ class PqFSM(StatesGroup):
     buttons = State()
 
 
+async def purchased(bot_id: int) -> bool:
+    """PATCH_PRICE_LOOKUP_SALE_V1: پولی است؛ فقط ربات‌هایی که از ربات اصلی خریده‌اند (و مدیر غیرفعالش نکرده)."""
+    try:
+        import bot_addons
+        return await bot_addons.price_active(bot_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("price_lookup: بررسی خرید ممکن نشد", exc_info=True)
+        return False
+
+
 async def enabled(bot_id: int) -> bool:
     from tenant import get_setting
-    return (await get_setting(bot_id, ON_KEY, "0")) == "1"
+    return (await get_setting(bot_id, ON_KEY, "0")) == "1" and await purchased(bot_id)
 
 
 def parse_button_rows(raw: str) -> list[list[tuple[str, str]]]:
@@ -476,7 +486,16 @@ async def _owner(event, bot: Bot):
 
 async def _menu(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     from tenant import get_setting
-    on = await enabled(bot_id)
+    if not await purchased(bot_id):
+        return ("🔎 <b>قیمت‌یاب</b>\n\n"
+                "کاربران ربات در پیوی یا گروه اسم، نماد یا آدرس هر ارز (و طلا، سکه، دلار) را می‌نویسند و ربات قیمت دلاری و "
+                "تومانی، آمار 24 ساعته و تصویر نمودار کندلی را می‌فرستد؛ با دکمه‌های دلخواه زیر پیام.\n\n"
+                "🔒 این قابلیت برای این ربات خریداری نشده است.\n"
+                "خرید: ربات اصلی بات‌ساز ← ربات‌های من ← همین ربات ← «🔎 قیمت‌یاب» ← پرداخت و فعال‌سازی."), \
+            InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                text="⬅️ بازگشت", callback_data="tadm:sec:settings", style=ButtonStyle.DANGER)]])
+    from tenant import get_setting as _gs
+    on = (await _gs(bot_id, ON_KEY, "0")) == "1"
     btns = parse_buttons(await get_setting(bot_id, BTN_KEY, ""))
     text = ("🔎 <b>قیمت‌یاب</b>\n\n"
             "کاربر در پیوی یا گروه بنویسد «تون»، «5 تون»، «not»، «2 گرم طلا»، «5 دلار»، «سکه امامی» یا «قیمت pepe» یا آدرس "
@@ -513,8 +532,12 @@ async def pq_cb(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if not row:
         await cb.answer("فقط مالک یا ادمین ربات", show_alert=True)
         return
+    if cb.data != "pq:menu" and not await purchased(row.id):
+        await cb.answer("🔒 اول باید از ربات اصلی بات‌ساز خریداری شود.", show_alert=True)
+        return
     if cb.data == "pq:toggle":
-        await set_setting(row.id, ON_KEY, "0" if await enabled(row.id) else "1")
+        from tenant import get_setting
+        await set_setting(row.id, ON_KEY, "0" if (await get_setting(row.id, ON_KEY, "0")) == "1" else "1")
     elif cb.data == "pq:btns":
         await state.set_state(PqFSM.buttons)
         await cb.message.answer("دکمه‌های زیر پیام قیمت را بفرست. هر خط یک ردیف است و هر دکمه «متن | لینک»؛ برای چند دکمه "
