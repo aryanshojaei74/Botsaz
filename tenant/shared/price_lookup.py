@@ -641,19 +641,30 @@ async def answer_for(bot_id: int, q, bot_username: str = "") -> tuple[str, bytes
             text = await quote(bot_id, qty, key)
             img = None if text.startswith("⚠️") else await asset_card(bot_id, key, bot_username)
             return text, img
+        # PATCH_PRICE_PARALLEL_V1: نرخ دلار هم‌زمان با قیمت ارز (نه پشت سر هم) — کندیِ ۲ تا ۳ ثانیه‌ای کم می‌شود
+        rate_task = asyncio.ensure_future(live_rate())
         coin = await coin_data.lookup(key, cg_id=ident, ex_symbol=key.upper())
         if coin is None:
+            rate_task.cancel()
             return f"⚠️ قیمت {title} فعلاً در دسترس نیست؛ کمی بعد دوباره امتحان کن.", None
     else:
         _k, qty, query, strict = q
+        rate_task = asyncio.ensure_future(live_rate())
         coin = await coin_data.lookup(query, strict=strict)
         if coin is None:
+            rate_task.cancel()
             return None if strict else ("⚠️ ارزی با این نام، نماد یا آدرس پیدا نشد (یا منبع قیمت فعلاً جواب نمی‌دهد).", None)
         title = ""
-    text = render_crypto(qty, coin, await _usd_toman(), title=title)
+    logo_task = asyncio.ensure_future(coin_data.fetch_image(coin.image)) if (coin.candles and coin.image) else None
+    try:
+        v, _src = await rate_task
+    except Exception:  # noqa: BLE001
+        v = 0.0
+    _RATE_SRC.set(f"{v:,.0f} تومان" if v else "")
+    text = render_crypto(qty, coin, v or None, title=title)
     img = None
     if coin.candles:
-        logo = await coin_data.fetch_image(coin.image) if coin.image else None
+        logo = await logo_task if logo_task else None
         img = await asyncio.to_thread(_card, coin, bot_username, logo)
     return text, img
 

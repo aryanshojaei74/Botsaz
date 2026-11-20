@@ -573,8 +573,11 @@ async def subscription_loop():
                             try:
                                 async with _temp_bot(token) as tb:
                                     await tb.delete_webhook()
-                            except Exception:
-                                logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
+                            except Exception as _e:
+                                if "Unauthorized" in str(_e):          # PATCH_QUIET_TIMEOUTS_V1: توکنِ رباتِ حذف‌شده باطل است؛ عادی
+                                    logger.info("purge: توکنِ ربات %s باطل است؛ حذفِ وب‌هوک لازم نیست", bot_id)
+                                else:
+                                    logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
                         try:
                             await platform_bot.send_message(
                                 owner_id,

@@ -441,6 +441,10 @@ async def pk_price(msg: Message, bot: Bot, state: FSMContext):
         return await msg.answer("یک عددِ صحیح بفرست.")
     d = await state.get_data()
     await state.clear()
+    # PATCH_PSEL_PKG_LOST_DATA_V1: اگر دادهٔ مراحلِ قبل گم شده بود (ری‌استارت/مسیرِ دیگر)، قبلاً KeyError و بی‌جواب
+    if any(k not in d for k in ("psel_panel", "psel_title", "psel_gb", "psel_users", "psel_days")):
+        return await msg.answer("⚠️ اطلاعاتِ مراحلِ قبلِ این بسته پاک شده است؛ لطفاً ساختِ بسته را از اول شروع کن.",
+                                reply_markup=kb([btn("📦 بسته‌ها", "psel:pk", style=ButtonStyle.PRIMARY)], back_row(MENU)))
     async with Session() as s:
         p = PanelSellerPackage(bot_id=row.id, panel_id=int(d["psel_panel"]), title=d["psel_title"], data_gb=int(d["psel_gb"]),
                                max_users=int(d["psel_users"]), days=int(d["psel_days"]), price_toman=v, active=True,

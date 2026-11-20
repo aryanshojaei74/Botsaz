@@ -6,7 +6,7 @@ from datetime import datetime
 import time
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramUnauthorizedError
+from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from sqlalchemy import select
@@ -122,6 +122,8 @@ async def refresh_counters_once(now: float | None = None) -> int:
             if g.id not in _unauth_logged:
                 _unauth_logged.add(g.id)
                 logger.warning("giveaway refresh: توکنِ رباتِ قرعه‌کشی %s (bot %s) نامعتبر است؛ تا ۶ ساعت دوباره تلاش نمی‌شود", g.id, g.bot_id)
+        except (asyncio.TimeoutError, TelegramNetworkError) as e:      # PATCH_QUIET_TIMEOUTS_V1: قطعیِ شبکه، دورِ بعد دوباره
+            logger.warning("giveaway refresh: تایم‌اوت (gid=%s): %s", g.id, type(e).__name__)
         except Exception:      # noqa: BLE001
             logger.exception("giveaway refresh counters failed (gid=%s)", g.id)
     return n

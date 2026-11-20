@@ -5684,6 +5684,8 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
             # تولید کند یا مسیر /start را شلوغ کند.
             if 'REACTION_INVALID' in str(e):
                 logger.info('ری‌اکشن شروع نامعتبر بود و نادیده گرفته شد')
+            elif isinstance(e, (asyncio.TimeoutError, asyncio.CancelledError)) or "timeout" in str(e).lower():
+                logger.info('ری‌اکشن /start: تایم‌اوتِ تلگرام (نادیده)')      # PATCH_QUIET_TIMEOUTS_V1
             else:
                 logger.exception('ری‌اکشن‌زدن رویِ پیامِ /start ناموفق بود')
 
@@ -14607,7 +14609,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "708"
+BUILD_ID = "709"
 
 
 @tenant_router.message(Command("version"))
