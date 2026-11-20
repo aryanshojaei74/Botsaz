@@ -7347,8 +7347,8 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         if _PM_RACE and await pm_race_answer(msg, bot):
             return
     try:                                     # PATCH_PRICE_LOOKUP_V1: «5 تون» / «2 گرم طلا» (فقط اگر مالک روشن کرده باشد)
-        from tenant.shared.price_lookup import parse_query as _pq_parse, maybe_answer as _pq_answer
-        if _pq_parse(msg.text) is not None:
+        from tenant.shared.price_lookup import looks_like as _pq_looks, maybe_answer as _pq_answer
+        if _pq_looks(msg.text):
             _pq_row = await get_bot_row(bot)
             if _pq_row and await _pq_answer(msg, bot, _pq_row.id):
                 return
@@ -14572,7 +14572,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "696"
+BUILD_ID = "697"
 
 
 @tenant_router.message(Command("version"))

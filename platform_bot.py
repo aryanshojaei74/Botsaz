@@ -160,6 +160,8 @@ from platform_wager_sale import platform_wager_sale_router
 router.include_router(platform_wager_sale_router)
 from platform_price_sale import platform_price_sale_router   # PATCH_PRICE_LOOKUP_SALE_V1
 router.include_router(platform_price_sale_router)
+from platform_price_group import platform_price_group_router   # PATCH_PRICE_LOOKUP_PLATFORM_GROUP_V1
+router.include_router(platform_price_group_router)
 # === PATCH_GROUP_REPORT_V1 === «گزارش» اعضا؛ باید قبل از catch-all محافظ گروه ثبت شود
 from platform_group_report import platform_group_report_router
 router.include_router(platform_group_report_router)

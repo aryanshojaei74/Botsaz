@@ -15,11 +15,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import re
 import time
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ButtonStyle
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -213,8 +215,10 @@ def parse_brs(data) -> list[dict]:
 
 
 async def brs_items(bot_id: int) -> list[dict]:
-    from tenant import get_setting
-    key = (await get_setting(bot_id, "brsapi_key", "") or "").strip()
+    key = ""
+    if bot_id:
+        from tenant import get_setting
+        key = (await get_setting(bot_id, "brsapi_key", "") or "").strip()
     if not key:
         try:
             from platform_bot import get_pset
@@ -259,6 +263,47 @@ def find_brs(rows: list[dict], kind: str, ident: str) -> dict | None:
 
 
 # ───────────────────────── ساخت پیام ─────────────────────────
+_RIAL = contextvars.ContextVar("pq_rial", default=False)   # «… به ریال» ⇒ مبلغ‌های ایرانی به ریال
+
+
+def _tm(v: float) -> str:
+    return f"{v * (10 if _RIAL.get() else 1):,.0f} {'ریال' if _RIAL.get() else 'تومان'}"
+
+
+def _tm_label() -> str:
+    return "قیمت ریالی" if _RIAL.get() else "قیمت تومانی"
+
+
+_UNIT_RE = re.compile(r"\s*(?:به|بر حسب|برحسب)\s*(ریال|تومان|تومن)\s*[؟?]?\s*$")
+
+
+def split_unit(text: str | None) -> tuple[str, bool]:
+    """«قیمت 5 تون به ریال» ⇒ («قیمت 5 تون»، True)."""
+    t = (text or "").strip()
+    m = _UNIT_RE.search(t)
+    if not m:
+        return t, False
+    return t[:m.start()].strip(), m.group(1) == "ریال"
+
+
+HELP_TRIGGERS = {"راهنما قیمت", "راهنمای قیمت", "راهنمای قیمت یاب", "راهنما قیمت یاب", "قیمت", "/price", "/p",
+                 "price", "help price", "راهنمای قیمتیاب", "قیمت یاب", "قیمتیاب"}
+HELP_TEXT = ("🔎 <b>راهنمای قیمت‌یاب</b>\n\n"
+             "🪙 <b>ارز دیجیتال</b>\n"
+             "┤ <code>تون</code> · <code>5 تون</code> · <code>btc</code> · <code>2.5 eth</code> · <code>not</code>\n"
+             "┤ هر ارز دیگر: <code>قیمت pepe</code> یا <code>$pepe</code>\n"
+             "┙ توکن تازه: آدرس قرارداد (TON، اتریوم، BSC، سولانا، ترون، بیس)\n\n"
+             "🏅 <b>طلا، سکه و ارز</b>\n"
+             "┤ <code>2 گرم طلا</code> · <code>طلای 24</code> · <code>انس طلا</code>\n"
+             "┤ <code>سکه امامی</code> · <code>نیم سکه</code> · <code>ربع سکه</code>\n"
+             "┙ <code>5 دلار</code> · <code>100 یورو</code> · <code>درهم</code> · <code>لیر</code> · <code>پوند</code>\n\n"
+             "💱 <b>به ریال یا تومان</b>\n"
+             "┙ آخرش بنویس «به ریال»: <code>قیمت 5 تون به ریال</code> (پیش‌فرض تومان)\n\n"
+             "📊 جواب: قیمت دلاری و تومانی، تغییر و سود و ضرر 24 ساعته، رتبه، سقف و کف، حجم، ساپلای، کپ و نمودار کندلی.")
+
+
+def is_help(text: str | None) -> bool:
+    return _norm(text or "").replace("‌", " ") in {_norm(x) for x in HELP_TRIGGERS}
 def _fmt_usd(x: float) -> str:
     return f"${x:,.2f}" if x >= 1 else f"${x:,.6f}".rstrip("0").rstrip(".")
 
@@ -289,13 +334,13 @@ def render(qty: float, key: str, usd: float | None, toman: float | None, change:
         head = f"{em} قیمت {q} {title}" if qty != 1 else f"{em} قیمت {title}"
     lines = [f"<b>{head}</b>", "", "💰 جزئیات قیمت:"]
     lines.append(f"┤💵 قیمت دلاری: {_fmt_usd(usd) if usd else '—'}")
-    lines.append(f"┙🇮🇷 قیمت تومانی: {f'{toman:,.0f} تومان' if toman else '—'}")
+    lines.append(f"┙🇮🇷 {_tm_label()}: {_tm(toman) if toman else '—'}")
     if change is not None:
         up = change >= 0
         lines += ["", "📊 تغییرات روزانه:", f"┤{'🟢' if up else '🔴'} درصد تغییر: {change:+.2f}%"]
         if usd:
             d_usd = abs(usd - usd / (1 + change / 100))
-            d_tm = f" / {d_usd * usd_toman:,.0f} تومان" if usd_toman else ""
+            d_tm = f" / {_tm(d_usd * usd_toman)}" if usd_toman else ""
             lines.append(f"┙{'🔺 مقدار سود' if up else '🔻 مقدار ضرر'}: {_fmt_usd(d_usd)}{d_tm}")
     lines += ["", f"⏰ {_now_fa()}"]
     return "\n".join(lines)
@@ -320,7 +365,7 @@ def render_crypto(qty: float, coin, usd_toman: float | None, title: str = "") ->
     head = f"🪙 قیمت {q} {name}" if qty != 1 else f"🪙 قیمت {name}"
     lines = [f"<b>{head}</b>", "", "💰 جزئیات قیمت:",
              f"┤💵 قیمت دلاری: {_fmt_usd(usd)}",
-             f"┙🇮🇷 قیمت تومانی: {f'{usd * usd_toman:,.0f} تومان' if usd_toman else '—'}"]
+             f"┙🇮🇷 {_tm_label()}: {_tm(usd * usd_toman) if usd_toman else '—'}"]
     if qty != 1:
         lines.insert(4, f"┤🔹 هر واحد: {_fmt_usd(coin.price)}")
     stats = []
@@ -330,7 +375,7 @@ def render_crypto(qty: float, coin, usd_toman: float | None, title: str = "") ->
         up = coin.change_pct >= 0
         stats.append(f"{'🟢' if up else '🔴'} تغییرات: {coin.change_pct:+.2f}%")
         d_usd = abs(usd - usd / (1 + coin.change_pct / 100)) if coin.change_pct > -100 else 0
-        d_tm = f" / {d_usd * usd_toman:,.0f} تومان" if usd_toman else ""
+        d_tm = f" / {_tm(d_usd * usd_toman)}" if usd_toman else ""
         stats.append(f"{'🔺 مقدار سود' if up else '🔻 مقدار ضرر'}: {_fmt_usd(d_usd)}{d_tm}")
     if coin.high:
         stats.append(f"📈 سقف: {_p(coin.high)}")
@@ -445,19 +490,9 @@ async def enabled(bot_id: int) -> bool:
 
 
 def parse_button_rows(raw: str) -> list[list[tuple[str, str]]]:
-    """هر خط یک ردیف؛ چند دکمه در یک ردیف با «&&» جدا می‌شوند: «متن | لینک && متن2 | لینک2». فقط https/http/tg."""
-    rows = []
-    for line in (raw or "").splitlines():
-        row = []
-        for part in line.split("&&"):
-            if "|" not in part:
-                continue
-            text, url = (x.strip() for x in part.split("|", 1))
-            if text and re.match(r"^(https?://|tg://)", url):
-                row.append((text[:40], url[:300]))
-        if row:
-            rows.append(row[:3])
-    return rows[:8]
+    """هر خط یک ردیف؛ چند دکمه در یک ردیف با «&&»: «متن | لینک [| رنگ] && …» (جزئیات: price_buttons)."""
+    from tenant.shared import price_buttons as pb
+    return [[(b[0], b[1]) for b in r] for r in pb.parse(raw)]
 
 
 def parse_buttons(raw: str) -> list[tuple[str, str]]:
@@ -470,10 +505,8 @@ def rows_to_raw(rows) -> str:
 
 async def buttons_kb(bot_id: int) -> InlineKeyboardMarkup | None:
     from tenant import get_setting
-    rows = parse_button_rows(await get_setting(bot_id, BTN_KEY, ""))
-    if not rows:
-        return None
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t, url=u) for t, u in r] for r in rows])
+    from tenant.shared import price_buttons as pb
+    return pb.keyboard(pb.parse(await get_setting(bot_id, BTN_KEY, "")))
 
 
 async def _owner(event, bot: Bot):
@@ -504,11 +537,13 @@ async def _menu(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
             f"وضعیت: <b>{'✅ روشن' if on else '❌ خاموش'}</b>\n"
             f"دکمه‌های زیر پیام: <b>{len(btns)}</b>\n\n"
             "منبع ارز دیجیتال: CoinGecko و DexScreener (رایگان، با کش و منبع جایگزین).\n"
+            "راهنمای کاربران: در گروه یا پیوی بنویسند «راهنما قیمت». «به ریال» در آخر پیام ⇒ مبلغ به ریال.\n"
             "قیمت طلا، سکه و ارزهای غیر دلار از BrsApi خوانده می‌شود؛ برای دقیق‌تر بودن کلید BrsApi را در تنظیمات ثبت کنید.")
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=("🔴 خاموش کردن" if on else "🟢 روشن کردن"), callback_data="pq:toggle",
                               style=ButtonStyle.DANGER if on else ButtonStyle.SUCCESS)],
-        [InlineKeyboardButton(text="🔘 دکمه‌های زیر پیام قیمت", callback_data="pq:btns", style=ButtonStyle.PRIMARY)],
+        [InlineKeyboardButton(text="🔘 دکمه‌های زیر پیام (افزودن، رنگ، جابه‌جایی)", callback_data="pq:btns",
+                              style=ButtonStyle.PRIMARY)],
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data="tadm:sec:settings", style=ButtonStyle.DANGER)]])
     return text, kb
 
@@ -539,6 +574,11 @@ async def pq_cb(cb: CallbackQuery, bot: Bot, state: FSMContext):
         from tenant import get_setting
         await set_setting(row.id, ON_KEY, "0" if (await get_setting(row.id, ON_KEY, "0")) == "1" else "1")
     elif cb.data == "pq:btns":
+        from tenant.shared import price_buttons as pb
+        await pb.show_editor(cb.message, TenantStore(row, bot), "pqb", "pq:menu", True)
+        await cb.answer()
+        return
+    elif cb.data == "pq:btns_text":
         await state.set_state(PqFSM.buttons)
         await cb.message.answer("دکمه‌های زیر پیام قیمت را بفرست. هر خط یک ردیف است و هر دکمه «متن | لینک»؛ برای چند دکمه "
                                 "کنار هم در یک ردیف، بینشان <code>&&</code> بگذار (حداکثر 3 دکمه در ردیف، 8 ردیف). مثال:\n"
@@ -579,11 +619,28 @@ async def pq_buttons_input(msg: Message, bot: Bot, state: FSMContext):
 
 
 # ───────────────────────── پاسخ به پیام کاربر ─────────────────────────
+def looks_like(text: str | None) -> bool:
+    """بررسی سریع و بدون شبکه/دیتابیس: آیا پیام درخواست قیمت یا راهنماست؟"""
+    body, _r = split_unit(text)
+    return is_help(body) or parse_query(body) is not None
+
+
 async def maybe_answer(msg: Message, bot: Bot, bot_id: int) -> bool:
     """True ⇒ پیام، درخواست قیمت بود و جواب داده شد."""
-    q = parse_query(msg.text)
-    if q is None or not await enabled(bot_id):
+    body, rial = split_unit(msg.text)
+    help_req = is_help(body)
+    q = None if help_req else parse_query(body)
+    if (q is None and not help_req) or not await enabled(bot_id):
         return False
+    return await answer_core(msg, bot, bot_id, q, rial, await buttons_kb(bot_id))
+
+
+async def answer_core(msg: Message, bot, bot_id: int, q, rial: bool, kb) -> bool:
+    """پاسخ مشترک ربات مشتری و گروه بات‌ساز اصلی (bot_id=0). q=None ⇒ راهنما."""
+    if q is None:
+        await msg.reply(HELP_TEXT, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
+        return True
+    _RIAL.set(rial)
     uname = ""
     try:
         uname = (await bot.me()).username or "" if bot is not None else ""
@@ -593,7 +650,6 @@ async def maybe_answer(msg: Message, bot: Bot, bot_id: int) -> bool:
     if res is None:
         return False
     text, img = res
-    kb = await buttons_kb(bot_id)
     if img:
         from aiogram.types import BufferedInputFile
         try:
@@ -610,3 +666,59 @@ async def pq_open(msg: Message, bot: Bot):
     row = await _owner(msg, bot)
     if row:
         await _show(msg, row.id)
+
+
+# ───────────────────────── ویرایشگر دکمه‌ها (PATCH_PRICE_BUTTONS_EDITOR_V1) ─────────────────────────
+from tenant.shared import price_buttons as _pb  # noqa: E402
+
+
+class TenantStore(_pb.Store):
+    def __init__(self, row, bot: Bot):
+        self.row, self.bot = row, bot
+
+    async def get(self) -> str:
+        from tenant import get_setting
+        return await get_setting(self.row.id, BTN_KEY, "")
+
+    async def set(self, raw: str) -> None:
+        from tenant import set_setting
+        await set_setting(self.row.id, BTN_KEY, raw)
+
+    async def main_buttons(self) -> list[tuple[str, str]]:
+        """دکمه‌های صفحهٔ اصلی ربات ⇒ لینک t.me/<ربات>?start=mbtn_<id> (با زدن، همان دکمه در ربات باز می‌شود)."""
+        from sqlalchemy import select
+        from config import Session
+        from models import MainButton
+        uname = getattr(self.row, "username", "") or ""
+        if not uname:
+            try:
+                uname = (await self.bot.me()).username or ""
+            except Exception:  # noqa: BLE001
+                uname = ""
+        if not uname:
+            return []
+        async with Session() as s:
+            rows = (await s.execute(select(MainButton.id, MainButton.label).where(MainButton.bot_id == self.row.id)
+                                    .order_by(MainButton.row, MainButton.col))).all()
+        return [(str(lbl)[:40], f"https://t.me/{uname}?start=mbtn_{bid}") for bid, lbl in rows if lbl]
+
+
+@price_router.callback_query(F.data.startswith("pqb:"))
+async def pqb_cb(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _owner(cb, bot)
+    if not row:
+        await cb.answer("فقط مالک یا ادمین ربات", show_alert=True)
+        return
+    if not await purchased(row.id):
+        await cb.answer("🔒 اول باید از ربات اصلی بات‌ساز خریداری شود.", show_alert=True)
+        return
+    await _pb.on_cb(cb, state, TenantStore(row, bot), "pqb", "pq:menu", True)
+
+
+@price_router.message(StateFilter(_pb.PbFSM.text, _pb.PbFSM.label, _pb.PbFSM.url))
+async def pqb_msg(msg: Message, bot: Bot, state: FSMContext):
+    row = await _owner(msg, bot)
+    if not row:
+        await state.clear()
+        return
+    await _pb.on_msg(msg, state, TenantStore(row, bot), "pqb", "pq:menu", True)
