@@ -394,6 +394,8 @@ async def _menu_view(bot_id: int, prefix: str, back_cb: str):
         [InlineKeyboardButton(text="📊 آمارِ برترین بازیکنان", callback_data=f"{prefix}:stats", style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text=f"🏆 ترتیب جدول: {board_order_label(order)} (تغییر)", callback_data=f"{prefix}:order")],
         [InlineKeyboardButton(text="🆓 بازیِ رایگان (سقف روزانه و هزینهٔ ورود)", callback_data=f"{prefix}:free")],
+        *([[InlineKeyboardButton(text="📢 عضویت اجباری بازی اینلاین", callback_data="iwfj:menu")]]
+          if prefix == "twrk" else []),                                    # PATCH_INLINE_FJ_V1
         [InlineKeyboardButton(text="⬅️ بازگشت", callback_data=back_cb, style=ButtonStyle.DANGER)]])
     return text, kb
 

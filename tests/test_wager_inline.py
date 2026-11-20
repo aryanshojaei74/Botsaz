@@ -632,3 +632,86 @@ async def test_inline_typed_game_answer_in_pm_settles_on_the_inline_message(db, 
 def test_parse_query_typed_games():
     assert WI.parse_query("سرعت") == ("speed", 0, True) and WI.parse_query("ریاضی 5000") == ("math", 5000, True)
     assert WI.parse_query("حدس ایموجی") == ("emoji", 0, True)
+
+
+# ───────────── عضویت اجباری جدا برای بازی اینلاین (PATCH_INLINE_FJ_V1) ─────────────
+
+class FjBot(FakeBot):
+    def __init__(self, members=()):
+        super().__init__()
+        self.members = set(members)
+
+    async def get_chat_member(self, chat_id, uid):
+        if uid == 99:                                            # خود ربات
+            return types.SimpleNamespace(status="administrator")
+        return types.SimpleNamespace(status="member" if (str(chat_id), uid) in self.members else "left")
+
+    async def get_chat(self, cid):
+        return types.SimpleNamespace(id=-1009, title="کانال بازی", username="gamech", invite_link=None)
+
+    async def me(self):
+        return types.SimpleNamespace(id=99, username="shop_bot")
+
+
+class FjState:
+    def __init__(self):
+        self.st = None
+
+    async def set_state(self, s): self.st = s
+    async def clear(self): self.st = None
+
+
+@pytest.mark.asyncio
+async def test_inline_force_join_modes_bot_custom_off(db, monkeypatch):
+    bot = FjBot()
+
+    async def get_bot_row(b):
+        async with config.Session() as s:
+            return await s.get(models.Bot, BOT)
+    monkeypatch.setattr(tenant, "get_bot_row", get_bot_row)
+    calls = []
+
+    async def cfj(b, bid, uid, bypass_cache=False):
+        calls.append(uid)
+        return [{"chat_id": "@main", "title": "اصلی", "invite_link": None}]
+    monkeypatch.setattr(tenant, "check_force_join", cfj)
+    assert (await WI.fj_missing(bot, BOT, U1))[0]["chat_id"] == "@main" and calls == [U1]      # پیش‌فرض: کانال‌های ربات
+    await WI.fj_save(BOT, {"mode": "off", "ch": []})
+    assert await WI.fj_missing(bot, BOT, U1) == []                                              # خاموش
+    await WI.fj_save(BOT, {"mode": "custom", "ch": [{"chat_id": "-1009", "title": "کانال بازی", "invite_link": "https://t.me/gamech"}]})
+    miss = await WI.fj_missing(bot, BOT, U1)
+    assert [m["chat_id"] for m in miss] == ["-1009"] and len(calls) == 1                       # کانال جدا؛ کانال ربات چک نمی‌شود
+    bot.members.add(("-1009", U1))
+    assert await WI.fj_missing(bot, BOT, U1) == []
+    assert await WI.fj_missing(bot, BOT, OWNER) == []                                           # مالک معاف
+
+
+@pytest.mark.asyncio
+async def test_inline_force_join_admin_add_channel_and_menu(db, monkeypatch):
+    bot = FjBot()
+
+    async def get_bot_row(b):
+        async with config.Session() as s:
+            return await s.get(models.Bot, BOT)
+    monkeypatch.setattr(tenant, "get_bot_row", get_bot_row)
+    st = FjState()
+    m = PmMsg(OWNER)
+    m.text = "@gamech"
+    st.st = WI.IwFjFSM.add
+    await WI.iwfj_add_input(m, bot, st)
+    cfg = await WI.fj_cfg(BOT)
+    assert cfg["mode"] == "custom" and cfg["ch"][0]["chat_id"] == "-1009" and cfg["ch"][0]["invite_link"] == "https://t.me/gamech"
+    assert st.st is None and any("اضافه شد" in t for t, _ in m.sent)
+    text, kb = await WI._fj_view(BOT)
+    cbs = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert "کانال بازی" in text and "iwfj:del:0" in cbs and "iwfj:add" in cbs
+    intruder = PmMsg(U2)
+    intruder.text = "@gamech"
+    await WI.iwfj_add_input(intruder, bot, FjState())
+    assert intruder.sent == []                                                                  # فقط مالک/ادمین
+
+
+def test_rank_menu_has_inline_fj_button_only_for_tenant():
+    import inspect
+    import wager_rank as WR2
+    assert "iwfj:menu" in inspect.getsource(WR2._menu_view) and 'prefix == "twrk"' in inspect.getsource(WR2._menu_view)

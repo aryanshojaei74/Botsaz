@@ -21,6 +21,8 @@ import time
 from aiogram import Bot, F, Router
 from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.enums import ButtonStyle
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, InlineQuery,
                            InlineQueryResultArticle, InputTextMessageContent)
 from sqlalchemy import select
@@ -285,8 +287,8 @@ async def iwg_join(cb: CallbackQuery, bot: Bot):
         await cb.answer("مبلغِ این بازی مجاز نیست.", show_alert=True)
         return
     cre_name = await _name_of(row.id, creator)
-    miss_c = await check_force_join(bot, row.id, creator)
-    miss_j = await check_force_join(bot, row.id, joiner.id)
+    miss_c = await fj_missing(bot, row.id, creator)          # PATCH_INLINE_FJ_V1: کانال‌های مخصوص بازی اینلاین
+    miss_j = await fj_missing(bot, row.id, joiner.id)
     if miss_c or miss_j:
         chans: dict = {}
         for ch in (miss_c or []) + (miss_j or []):
@@ -602,3 +604,160 @@ async def pm_race_answer(msg, bot: Bot) -> bool:
     await R._edit(bot, w)
     await msg.answer("🏁 درست بود؛ <b>برنده شدی!</b>\n" + R.prize_line(w), parse_mode="HTML")
     return True
+
+
+# ───────────────────────── عضویت اجباری مخصوص بازی اینلاین (PATCH_INLINE_FJ_V1، سینا) ─────────────────────────
+# حالت‌ها: «bot» = همان کانال‌های عضویت اجباری ربات (رفتار قبلی، پیش‌فرض) · «custom» = فهرست جدا که مالک تنظیم می‌کند ·
+# «off» = بازی اینلاین عضویت نمی‌خواهد. مالک و ادمین‌ها معاف‌اند (مثل عضویت اجباری اصلی).
+FJ_KEY = "wager_inline_fj"
+FJ_MODES = ("bot", "custom", "off")
+FJ_MODE_FA = {"bot": "همان کانال‌های ربات", "custom": "کانال‌های جدا", "off": "خاموش (بدون عضویت)"}
+FJ_MAX = 10
+
+
+class IwFjFSM(StatesGroup):
+    add = State()
+
+
+async def fj_cfg(bot_id: int) -> dict:
+    from tenant import get_setting
+    try:
+        d = json.loads((await get_setting(bot_id, FJ_KEY, "")) or "{}")
+    except ValueError:
+        d = {}
+    mode = d.get("mode") if d.get("mode") in FJ_MODES else "bot"
+    ch = [c for c in (d.get("ch") or []) if isinstance(c, dict) and c.get("chat_id")][:FJ_MAX]
+    return {"mode": mode, "ch": ch}
+
+
+async def fj_save(bot_id: int, cfg: dict) -> None:
+    from tenant import set_setting
+    await set_setting(bot_id, FJ_KEY, json.dumps({"mode": cfg["mode"], "ch": cfg["ch"][:FJ_MAX]}, ensure_ascii=False))
+
+
+async def fj_missing(bot: Bot, bot_id: int, uid: int) -> list[dict]:
+    """کانال‌هایی که این کاربر برای بازی اینلاین هنوز عضو نشده (همان قالب check_force_join)."""
+    from tenant import check_force_join, get_bot_row, is_owner_or_admin
+    cfg = await fj_cfg(bot_id)
+    if cfg["mode"] == "bot":
+        return await check_force_join(bot, bot_id, uid)
+    if cfg["mode"] == "off" or not cfg["ch"]:
+        return []
+    row = await get_bot_row(bot)
+    if row and await is_owner_or_admin(bot_id, uid, row.owner_id):
+        return []
+
+    async def one(c):
+        try:
+            m = await asyncio.wait_for(bot.get_chat_member(c["chat_id"], uid), timeout=6)
+            return None if m.status not in ("left", "kicked") else c
+        except Exception as e:  # noqa: BLE001 — کانال قابل بررسی نیست (ربات ادمین نیست، …) ⇒ کاربر قفل نشود
+            logger.info("inline fj: کانال %s قابل بررسی نیست: %s", c.get("chat_id"), e)
+            return None
+    res = await asyncio.gather(*(one(c) for c in cfg["ch"]))
+    return [{"chat_id": c["chat_id"], "title": c.get("title") or c["chat_id"], "invite_link": c.get("invite_link"),
+             "btn_color": None} for c in res if c]
+
+
+async def _fj_owner(event, bot: Bot):
+    from tenant import get_bot_row, is_owner_or_admin
+    row = await get_bot_row(bot)
+    if not row or not await is_owner_or_admin(row.id, event.from_user.id, row.owner_id):
+        return None
+    return row
+
+
+async def _fj_view(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    cfg = await fj_cfg(bot_id)
+    lines = ["📢 <b>عضویت اجباری بازی اینلاین</b>", "",
+             "پیش از شروع بازی اینلاین (@ربات دوز و …) هر دو بازیکن باید عضو این کانال‌ها باشند.", "",
+             f"حالت: <b>{FJ_MODE_FA[cfg['mode']]}</b>"]
+    if cfg["mode"] == "custom":
+        lines.append("")
+        lines += ([f"• {_h.escape(str(c.get('title') or c['chat_id']))}" for c in cfg["ch"]]
+                  or ["هنوز کانالی اضافه نشده (تا اضافه نکنی، عضویت خواسته نمی‌شود)."])
+        lines += ["", "ربات باید در هر کانال ادمین باشد تا بتواند عضویت را بررسی کند."]
+    rows = [[InlineKeyboardButton(text=f"🔁 حالت: {FJ_MODE_FA[cfg['mode']]} (تغییر)", callback_data="iwfj:mode")]]
+    if cfg["mode"] == "custom":
+        for i, c in enumerate(cfg["ch"]):
+            rows.append([InlineKeyboardButton(text=f"🗑 {str(c.get('title') or c['chat_id'])[:40]}", callback_data=f"iwfj:del:{i}",
+                                              style=ButtonStyle.DANGER)])
+        if len(cfg["ch"]) < FJ_MAX:
+            rows.append([InlineKeyboardButton(text="➕ افزودن کانال", callback_data="iwfj:add", style=ButtonStyle.SUCCESS)])
+    rows.append([InlineKeyboardButton(text="⬅️ بازگشت", callback_data="twrk:menu", style=ButtonStyle.DANGER)])
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _fj_show(target, bot_id: int) -> None:
+    text, kb = await _fj_view(bot_id)
+    m = getattr(target, "message", None) or target
+    try:
+        if getattr(target, "message", None) is not None:
+            await m.edit_text(text, reply_markup=kb, parse_mode="HTML")
+            return
+    except Exception:  # noqa: BLE001
+        logger.debug("inline fj: ویرایش صفحه ممکن نشد", exc_info=True)
+    await m.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+@wager_inline_router.callback_query(F.data.in_({"iwfj:menu", "iwfj:mode", "iwfj:add"}) | F.data.startswith("iwfj:del:"))
+async def iwfj_cb(cb: CallbackQuery, bot: Bot, state: FSMContext):
+    row = await _fj_owner(cb, bot)
+    if not row:
+        await cb.answer("فقط مالک یا ادمین ربات", show_alert=True)
+        return
+    cfg = await fj_cfg(row.id)
+    if cb.data == "iwfj:mode":
+        cfg["mode"] = FJ_MODES[(FJ_MODES.index(cfg["mode"]) + 1) % len(FJ_MODES)]
+        await fj_save(row.id, cfg)
+    elif cb.data == "iwfj:add":
+        await state.set_state(IwFjFSM.add)
+        await cb.message.answer("آیدی کانال را بفرست (مثلاً <code>@mychannel</code> یا <code>-1001234567890</code>).\n"
+                                "اول ربات را در آن کانال ادمین کن. انصراف: /cancel", parse_mode="HTML")
+        await cb.answer()
+        return
+    elif cb.data.startswith("iwfj:del:"):
+        try:
+            cfg["ch"].pop(int(cb.data.split(":")[2]))
+        except (ValueError, IndexError):
+            pass
+        await fj_save(row.id, cfg)
+    await _fj_show(cb, row.id)
+    await cb.answer()
+
+
+@wager_inline_router.message(IwFjFSM.add)
+async def iwfj_add_input(msg, bot: Bot, state: FSMContext):
+    row = await _fj_owner(msg, bot)
+    if not row:
+        await state.clear()
+        return
+    raw = (msg.text or "").strip()
+    if raw in ("/cancel", "لغو", "❌ لغو"):
+        await state.clear()
+        await _fj_show(msg, row.id)
+        return
+    cid = raw.replace("https://t.me/", "@").split("?")[0]
+    if cid and not cid.startswith(("@", "-")):
+        cid = "@" + cid
+    try:
+        chat = await bot.get_chat(cid)
+        me = await bot.get_chat_member(chat.id, (await bot.me()).id)
+        if me.status not in ("administrator", "creator"):
+            await msg.answer("❌ ربات در این کانال ادمین نیست؛ اول ادمینش کن و دوباره بفرست.")
+            return
+    except Exception as e:  # noqa: BLE001
+        await msg.answer(f"❌ این کانال پیدا نشد یا ربات به آن دسترسی ندارد ({_h.escape(str(e)[:80])}). دوباره بفرست یا /cancel.",
+                         parse_mode="HTML")
+        return
+    link = f"https://t.me/{chat.username}" if getattr(chat, "username", None) else getattr(chat, "invite_link", None)
+    cfg = await fj_cfg(row.id)
+    if any(str(c["chat_id"]) == str(chat.id) for c in cfg["ch"]):
+        await msg.answer("این کانال از قبل در فهرست است.")
+    else:
+        cfg["ch"].append({"chat_id": str(chat.id), "title": chat.title or str(chat.id), "invite_link": link})
+        cfg["mode"] = "custom"
+        await fj_save(row.id, cfg)
+        await msg.answer(f"✅ «{_h.escape(chat.title or str(chat.id))}» اضافه شد.", parse_mode="HTML")
+    await state.clear()
+    await _fj_show(msg, row.id)
