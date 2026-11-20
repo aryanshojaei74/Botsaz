@@ -22,9 +22,14 @@ DEX = "https://api.dexscreener.com"
 GT = "https://api.geckoterminal.com/api/v2"
 CMC = "https://pro-api.coinmarketcap.com"
 
-TTL_QUOTE = 60
-TTL_SEARCH = 6 * 3600
-TTL_CANDLES = 300
+TTL_QUOTE = 120
+TTL_SEARCH = 12 * 3600
+TTL_CANDLES = 900
+STALE_MAX = 3600                 # PATCH_PRICE_SOURCES_V2: اگر منبع جواب نداد، دادهٔ تا یک ساعت قبل
+BINANCE = "https://api.binance.com/api/v3"
+OKX = "https://www.okx.com/api/v5/market"
+_CG_BLOCKED_UNTIL = [0.0]        # بعد از 429 کوین‌گکو، تا مدتی اصلا درخواست نفرست
+CG_BACKOFF = 120
 
 # آدرس قرارداد
 ADDR_RE = re.compile(r"^(?:(?:EQ|UQ|kQ|0Q)[A-Za-z0-9_-]{46}|0x[a-fA-F0-9]{40}|T[1-9A-HJ-NP-Za-km-z]{33}|[1-9A-HJ-NP-Za-km-z]{32,44})$")
@@ -73,18 +78,29 @@ def _put_c(key: str, val):
 
 async def _json(url: str, headers: dict | None = None):
     import aiohttp
+    is_cg = url.startswith(CG)
+    if is_cg and time.time() < _CG_BLOCKED_UNTIL[0]:
+        return None
     h = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
     h.update(headers or {})
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as s:
             async with s.get(url, headers=h) as r:
                 if r.status != 200:
+                    if is_cg and r.status == 429:
+                        _CG_BLOCKED_UNTIL[0] = time.time() + CG_BACKOFF
                     logger.info("coin_data: %s ⇒ HTTP %s", url.split("?")[0], r.status)
                     return None
                 return await r.json(content_type=None)
-    except Exception:  # noqa: BLE001
-        logger.info("coin_data: درخواست ناموفق %s", url.split("?")[0], exc_info=True)
+    except Exception as e:  # noqa: BLE001
+        logger.info("coin_data: درخواست ناموفق %s (%s)", url.split("?")[0], type(e).__name__)
         return None
+
+
+def _stale(key: str):
+    """آخرین مقدار موفق (حتی اگر TTL گذشته) تا STALE_MAX."""
+    hit = _CACHE.get(key)
+    return hit[1] if hit and time.time() - hit[0] < STALE_MAX else None
 
 
 def _f(v) -> float | None:
@@ -127,6 +143,7 @@ async def top_map() -> dict[str, str]:
     if ok:
         return val
     m: dict[str, str] = {}
+    old = _stale("top")
     for page in (1, 2, 3, 4):
         d = await _json(f"{CG}/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page={page}")
         if not isinstance(d, list):
@@ -137,7 +154,7 @@ async def top_map() -> dict[str, str]:
             for k in (str(c.get("symbol") or "").lower(), str(c.get("name") or "").lower()):
                 if k and k not in m:
                     m[k] = c["id"]
-    return _put_c("top", m) or {}
+    return _put_c("top", m) if len(m) > 200 else (old or m)
 
 
 async def cg_coin(cg_id: str) -> Coin | None:
@@ -146,7 +163,7 @@ async def cg_coin(cg_id: str) -> Coin | None:
         return val
     d = await _json(f"{CG}/coins/markets?vs_currency=usd&ids={cg_id}")
     if not isinstance(d, list) or not d or not isinstance(d[0], dict):
-        return None
+        return _stale(f"cgm:{cg_id}")
     m = d[0]
     price = _f(m.get("current_price"))
     if not price:
@@ -166,7 +183,7 @@ async def cg_candles(cg_id: str, days: int = 1) -> list:
     d = await _json(f"{CG}/coins/{cg_id}/ohlc?vs_currency=usd&days={days}")
     rows = [(r[0] / 1000, float(r[1]), float(r[2]), float(r[3]), float(r[4]))
             for r in (d or []) if isinstance(r, list) and len(r) >= 5 and None not in r[:5]]
-    return _put_c(f"cgo:{cg_id}:{days}", rows) or []
+    return _put_c(f"cgo:{cg_id}:{days}", rows) or _stale(f"cgo:{cg_id}:{days}") or []
 
 
 # ───────────────────────── DexScreener / GeckoTerminal ─────────────────────────
@@ -252,9 +269,82 @@ async def cmc_coin(symbol: str) -> Coin | None:
                 supply=_f(e.get("circulating_supply")), cap=_f(q.get("market_cap")), source="coinmarketcap")
 
 
+# ───────── صرافی‌های جهانی (بدون کلید): بایننس، بعد OKX — برای وقتی کوین‌گکو محدود کرد ─────────
+_BAR_SEC = {"15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
+
+
+async def ex_candles(symbol: str, bar: str = "30m", limit: int = 48) -> list:
+    sym = (symbol or "").upper()
+    if not re.fullmatch(r"[A-Z0-9]{2,12}", sym) or sym in ("USDT", "USDC"):
+        return []
+    key = f"exk:{sym}:{bar}:{limit}"
+    val, ok = _get_c(key, TTL_CANDLES)
+    if ok:
+        return val
+    d = await _json(f"{BINANCE}/klines?symbol={sym}USDT&interval={bar}&limit={limit}")
+    rows = []
+    if isinstance(d, list):
+        rows = [(r[0] / 1000, float(r[1]), float(r[2]), float(r[3]), float(r[4])) for r in d if isinstance(r, list) and len(r) >= 5]
+    if not rows:
+        okx_bar = {"1h": "1H", "4h": "4H", "1d": "1D"}.get(bar, bar)
+        d = await _json(f"{OKX}/candles?instId={sym}-USDT&bar={okx_bar}&limit={limit}")
+        data = (d or {}).get("data") if isinstance(d, dict) else None
+        if isinstance(data, list):
+            rows = sorted((float(r[0]) / 1000, float(r[1]), float(r[2]), float(r[3]), float(r[4]))
+                          for r in data if isinstance(r, list) and len(r) >= 5)
+    return _put_c(key, rows) or _stale(key) or []
+
+
+async def ex_coin(symbol: str, name: str = "") -> Coin | None:
+    """قیمت و آمار ۲۴ ساعته از بایننس/OKX (بدون رتبه و ساپلای)."""
+    sym = (symbol or "").upper()
+    if not re.fullmatch(r"[A-Z0-9]{2,12}", sym):
+        return None
+    key = f"ext:{sym}"
+    val, ok = _get_c(key, TTL_QUOTE)
+    if ok:
+        return val
+    c = None
+    if sym in ("USDT", "USDC"):
+        c = Coin(name=name or sym, symbol=sym, price=1.0, change_pct=0.0, source="peg")
+    else:
+        d = await _json(f"{BINANCE}/ticker/24hr?symbol={sym}USDT")
+        if isinstance(d, dict) and _f(d.get("lastPrice")):
+            c = Coin(name=name or sym, symbol=sym, price=_f(d["lastPrice"]), change_pct=_f(d.get("priceChangePercent")),
+                     high=_f(d.get("highPrice")), low=_f(d.get("lowPrice")), volume=_f(d.get("quoteVolume")), source="binance")
+        else:
+            d = await _json(f"{OKX}/ticker?instId={sym}-USDT")
+            t = ((d or {}).get("data") or [None])[0] if isinstance(d, dict) else None
+            if isinstance(t, dict) and _f(t.get("last")):
+                last, op = _f(t["last"]), _f(t.get("open24h"))
+                c = Coin(name=name or sym, symbol=sym, price=last, change_pct=((last - op) / op * 100) if op else None,
+                         high=_f(t.get("high24h")), low=_f(t.get("low24h")),
+                         volume=_f(t.get("volCcy24h")), source="okx")      # اسپات: volCcy24h به ارز مقابل (USDT)
+    return _put_c(key, c) or _stale(key)
+
+
+COINCAP_ICON = "https://assets.coincap.io/assets/icons/{s}@2x.png"
+
+
 # ───────────────────────── ورودی اصلی ─────────────────────────
-async def lookup(query: str, *, cg_id: str | None = None, strict: bool = False, with_candles: bool = True) -> Coin | None:
-    """query: نام/نماد/آدرس. cg_id: اگر از قبل معلوم است (دارایی‌های شناخته‌شده). strict: کلمهٔ لاتین بی‌پیشوند در گفتگو."""
+async def lookup(query: str, *, cg_id: str | None = None, strict: bool = False, with_candles: bool = True,
+                 ex_symbol: str = "") -> Coin | None:
+    """query: نام/نماد/آدرس. cg_id: اگر از قبل معلوم است (دارایی‌های شناخته‌شده). strict: کلمهٔ لاتین بی‌پیشوند در گفتگو.
+    ex_symbol: نماد در صرافی‌ها (مثلا TON) برای جایگزین وقتی کوین‌گکو جواب نداد."""
+    coin = await _lookup(query, cg_id=cg_id, strict=strict, with_candles=with_candles, ex_symbol=ex_symbol)
+    if coin is None and ex_symbol:
+        coin = await ex_coin(ex_symbol)
+    if coin is None:
+        return None
+    sym = ex_symbol or coin.symbol
+    if with_candles and not coin.candles and coin.source != "dexscreener":
+        coin.candles, coin.candle_label = await ex_candles(sym, "30m", 48), "30m"
+    if not coin.image and sym:
+        coin.image = COINCAP_ICON.format(s=sym.lower())
+    return coin
+
+
+async def _lookup(query: str, *, cg_id: str | None, strict: bool, with_candles: bool, ex_symbol: str) -> Coin | None:
     query = (query or "").strip()
     if not cg_id and ADDR_RE.match(query):
         r = await dex_lookup(query)
@@ -280,6 +370,10 @@ async def lookup(query: str, *, cg_id: str | None = None, strict: bool = False, 
         return coin
     if strict:
         return None
+    if re.fullmatch(r"[A-Za-z0-9]{2,12}", query):     # کوین‌گکو جواب نداد ⇒ اول صرافی‌های معتبر، بعد دکس
+        c = await ex_coin(query)
+        if c is not None:
+            return c
     r = await dex_lookup(query)                         # توکن تازه که در CoinGecko نیست
     if not r:
         return None
@@ -320,12 +414,20 @@ async def usdt_irt_daily(days: int = 90) -> list:
     if ok:
         return val
     now = int(time.time())
-    d = await _json(f"https://apiv2.nobitex.ir/market/udf/history?symbol=USDTIRT&resolution=D&from={now - days * 86400}&to={now}")
-    try:
-        if d.get("s") != "ok":
-            return []
-        rows = [(float(t), float(o) / 10, float(h) / 10, float(lo) / 10, float(c) / 10)
-                for t, o, h, lo, c in zip(d["t"], d["o"], d["h"], d["l"], d["c"])]
-    except (AttributeError, KeyError, TypeError, ValueError):
-        return []
-    return _put_c(f"nbx:{days}", rows) or []
+    rng = f"from={now - days * 86400}&to={now}"
+    rows: list = []
+    # والکس (تومان) اول — از سرور خارج از ایران هم جواب می‌دهد؛ نوبیتکس (ریال) جایگزین
+    for url, div in ((f"https://api.wallex.ir/v1/udf/history?symbol=USDTTMN&resolution=1D&{rng}", 1),
+                     (f"https://apiv2.nobitex.ir/market/udf/history?symbol=USDTIRT&resolution=D&{rng}", 10)):
+        d = await _json(url)
+        try:
+            if not isinstance(d, dict) or d.get("s") != "ok":
+                continue
+            rows = [(float(t), float(o) / div, float(h) / div, float(lo) / div, float(c) / div)
+                    for t, o, h, lo, c in zip(d["t"], d["o"], d["h"], d["l"], d["c"])]
+        except (KeyError, TypeError, ValueError):
+            rows = []
+        rows = [r for r in rows if 10_000 < r[4] < 10_000_000]          # بازهٔ عقلانی تومان
+        if rows:
+            break
+    return _put_c(f"nbx:{days}", rows) or _stale(f"nbx:{days}") or []

@@ -159,12 +159,9 @@ async def _cached(key: str, fn):
 
 
 async def _http_json(url: str):
-    import aiohttp
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as s:
-        async with s.get(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}) as r:
-            if r.status != 200:
-                return None
-            return await r.json(content_type=None)
+    """همان درخواست coin_data (بدون traceback در لاگ، با رعایت محدودیت کوین‌گکو)؛ None اگر جواب درست نیامد."""
+    from tenant.shared import coin_data as cd
+    return await cd._json(url)
 
 
 async def _unused_crypto_quotes() -> dict:
@@ -503,7 +500,7 @@ async def unit_value(bot_id: int, key: str, usd_toman: float | None) -> tuple[fl
         per = await _fx_usd_per(_FX_CODE.get(key, ""))
         return (per * usd_toman if per and usd_toman else None), "irt"
     from tenant.shared import coin_data as cd
-    paxg = await cd.cg_coin("pax-gold")
+    paxg = await paxg_coin()
     if paxg is None or not paxg.price:
         return None, "irt"
     if key == "ons":
@@ -540,7 +537,7 @@ async def asset_card(bot_id: int, key: str, bot_username: str) -> bytes | None:
         k = value / base[-1][4] if base and base[-1][4] else 0
         cs, label = [(t, o * k, h * k, lo * k, c * k) for t, o, h, lo, c in base] if k else [], "1d"
     else:
-        base = await cd.cg_candles("pax-gold", 30)
+        base = await cd.cg_candles("pax-gold", 30) or await cd.ex_candles("PAXG", "4h", 180)
         k = value / base[-1][4] if base and base[-1][4] else 0
         cs, label = [(t, o * k, h * k, lo * k, c * k) for t, o, h, lo, c in base] if k else [], "4h"
     if cs:                                               # آخرین کندل دقیقاً همان قیمت نمایش‌داده‌شده
@@ -569,7 +566,7 @@ async def answer_for(bot_id: int, q, bot_username: str = "") -> tuple[str, bytes
             text = await quote(bot_id, qty, key)
             img = None if text.startswith("⚠️") else await asset_card(bot_id, key, bot_username)
             return text, img
-        coin = await coin_data.lookup(key, cg_id=ident)
+        coin = await coin_data.lookup(key, cg_id=ident, ex_symbol=key.upper())
         if coin is None:
             return f"⚠️ قیمت {title} فعلاً در دسترس نیست؛ کمی بعد دوباره امتحان کن.", None
     else:
@@ -592,7 +589,7 @@ async def quote(bot_id: int, qty: float, key: str) -> str:
     usd_toman = await _usd_toman()
     if kind == "crypto":
         from tenant.shared import coin_data
-        coin = await coin_data.lookup(key, cg_id=ident, with_candles=False)
+        coin = await coin_data.lookup(key, cg_id=ident, with_candles=False, ex_symbol=key.upper())
         if coin is None:
             return f"⚠️ قیمت {title} فعلاً در دسترس نیست؛ کمی بعد دوباره امتحان کن."
         return render_crypto(qty, coin, usd_toman, title=title)
@@ -628,7 +625,18 @@ async def _fx_usd_per(code: str) -> float | None:
     try:
         rates = await _cached("cg_fx", go)
         usd, other = float(rates["usd"]["value"]), float(rates[code]["value"])
-        return usd / other if other else None
+        if other:
+            return usd / other
+    except Exception:  # noqa: BLE001
+        logger.debug("price_lookup: نرخ جهانی کوین‌گکو نشد؛ open.er-api")
+
+    async def go2():                                     # جایگزین رایگان بدون کلید
+        d = await _http_json("https://open.er-api.com/v6/latest/USD")
+        return (d or {}).get("rates") if isinstance(d, dict) else None
+    try:
+        r2 = await _cached("er_fx", go2)
+        per_usd = float(r2[code.upper()])                # چند واحد ارز به‌ازای یک دلار
+        return 1 / per_usd if per_usd else None
     except Exception:  # noqa: BLE001
         return None
 
@@ -644,7 +652,7 @@ async def global_fallback(qty: float, key: str, usd_toman: float | None) -> str:
         note = "ℹ️ محاسبه از نرخ جهانی × نرخ زندهٔ دلار؛ ممکن است با بازار آزاد کمی فرق کند."
         return _with_note(render(qty, key, usd, usd * usd_toman if usd_toman else None, None, usd_toman), note)
     from tenant.shared import coin_data as cd
-    paxg = await cd.cg_coin("pax-gold")
+    paxg = await paxg_coin()
     if paxg is None or not paxg.price:
         return unavailable
     ounce = paxg.price
@@ -658,6 +666,12 @@ async def global_fallback(qty: float, key: str, usd_toman: float | None) -> str:
         usd = ounce / OUNCE_G * COIN_GOLD_G[key] * qty
         note = "ℹ️ ارزش طلای خالص سکه (بدون حباب بازار)؛ قیمت بازار سکه معمولا بیشتر است."
     return _with_note(render(qty, key, usd, usd * usd_toman if usd_toman else None, paxg.change_pct, usd_toman), note)
+
+
+async def paxg_coin():
+    """انس جهانی: کوین‌گکو (PAX Gold)، اگر محدود کرد بایننس/OKX (PAXGUSDT)."""
+    from tenant.shared import coin_data as cd
+    return await cd.cg_coin("pax-gold") or await cd.ex_coin("PAXG", "PAX Gold")
 
 
 def _with_note(text: str, note: str) -> str:
