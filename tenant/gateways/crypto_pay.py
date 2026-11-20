@@ -93,8 +93,8 @@ async def _rate_from_wallex() -> float:
         rate = float(str(val).replace(",", ""))
         # عددِ والکس تومان است. بازهٔ عقلانی تا غلطِ فاحش وارد نشود.
         return rate if 50000 < rate < 5000000 else 0
-    except Exception:
-        logger.exception("wallex rate failed")
+    except Exception as e:                       # قطعیِ شبکه/پاسخِ غیر JSON: یک خط، بدونِ traceback
+        logger.warning("wallex rate failed: %s", type(e).__name__)
         return 0
 
 

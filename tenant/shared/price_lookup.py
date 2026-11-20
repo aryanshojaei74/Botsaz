@@ -236,7 +236,7 @@ async def _unused_crypto_quotes() -> dict:
     try:
         return await _cached("cg", go) or {}
     except Exception:  # noqa: BLE001
-        logger.info("price_lookup: CoinGecko در دسترس نیست", exc_info=True)
+        logger.info("price_lookup: CoinGecko در دسترس نیست")
         return {}
 
 
@@ -292,7 +292,7 @@ async def brs_items(bot_id: int) -> list[dict]:
                 if rows:
                     return rows
             except Exception:  # noqa: BLE001
-                logger.info("price_lookup: BrsApi پاسخ نداد (%s)", u.split("?")[0], exc_info=True)
+                logger.info("price_lookup: BrsApi پاسخ نداد (%s)", u.split("?")[0])
         return None
     return await _cached(f"brs:{key[:6]}", go) or []
 
@@ -513,7 +513,7 @@ async def live_rate() -> tuple[float, str]:
         try:
             v = await asyncio.wait_for(fn(), timeout=6)
         except Exception:  # noqa: BLE001
-            logger.info("price_lookup: نرخ %s در دسترس نیست", name, exc_info=True)
+            logger.info("price_lookup: نرخ %s در دسترس نیست", name)
             continue
         if _RATE_MIN < v < _RATE_MAX:
             _LIVE.update(v=v, ts=time.time(), src=name)
@@ -1037,13 +1037,25 @@ async def answer_core(msg: Message, bot, bot_id: int, q, rial: bool, kb) -> bool
     text, img = res
     if img:
         from aiogram.types import BufferedInputFile
+        # PATCH_PRICE_PHOTO_FALLBACK_V1: کپشن تلگرام حداکثر ۱۰۲۴ نویسه است؛ متن بلندتر ⇒ عکس جدا، متن جدا
         try:
-            await msg.reply_photo(BufferedInputFile(img, "price.jpg"), caption=text, parse_mode="HTML", reply_markup=kb)
+            if len(_plain(text)) <= 1000:
+                await msg.reply_photo(BufferedInputFile(img, "price.jpg"), caption=text, parse_mode="HTML", reply_markup=kb)
+            else:
+                await msg.reply_photo(BufferedInputFile(img, "price.jpg"))
+                await msg.reply(text, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
             return True
-        except Exception:  # noqa: BLE001
-            logger.warning("price_lookup: ارسال تصویر ناموفق؛ فقط متن", exc_info=True)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("price_lookup: ارسال تصویر ناموفق؛ فقط متن (%s: %s)", type(e).__name__, str(e)[:200])
     await msg.reply(text, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
     return True
+
+
+def _plain(html_text: str) -> str:
+    """طول متن بعد از حذف تگ‌ها (همان چیزی که تلگرام برای سقف کپشن می‌شمارد)."""
+    import html as _h
+    t = _h.unescape(re.sub(r"<[^>]+>", "", html_text or ""))
+    return t.encode("utf-16-le").decode("latin-1")          # طول به واحد UTF-16 (ایموجی = ۲)، مثل شمارش تلگرام
 
 
 async def pq_open(msg: Message, bot: Bot):

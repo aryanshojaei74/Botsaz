@@ -74,6 +74,9 @@ def pick_model(ids: list[str]) -> str | None:
     return ok[0] if ok else None
 
 
+_DISCOVERED: dict[tuple[str, str], str] = {}   # (سرویس، مدل ردشده) ⇒ مدلی که کار کرد؛ تا هشدار هر بار تکرار نشود
+
+
 @dataclass
 class Route:
     name: str
@@ -154,6 +157,9 @@ class Router:
                                      headers={"Accept-Encoding": "identity"}, **kw) as client:
             for r in self._order():
                 resp = None
+                _known = _DISCOVERED.get((r.name, r.model))      # PATCH_AI_MODEL_MEMO_V1: کشف قبلی در همین پروسه
+                if _known and r.name in PRESETS:
+                    r.model, r.discovered = _known, True
                 for _try in range(2):          # بارِ دوم فقط بعد از انتخابِ خودکارِ مدل
                     try:
                         resp = await client.post(
@@ -170,6 +176,7 @@ class Router:
                         new_model = await self._discover_model(client, r)
                         if new_model and new_model != r.model:
                             logger.warning("ai_router: مدلِ %s برایِ %s پذیرفته نشد؛ %s انتخاب شد", r.model, r.name, new_model)
+                            _DISCOVERED[(r.name, r.model)] = new_model
                             r.model = new_model
                             continue
                     break
