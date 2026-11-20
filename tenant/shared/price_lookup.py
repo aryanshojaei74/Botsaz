@@ -98,6 +98,50 @@ def parse(text: str | None) -> tuple[float, str] | None:
     return qty, key
 
 
+# کلمه‌های رایج گفتگو که نباید به‌عنوان نماد ارز جواب بگیرند
+_STOP = {"hi", "hello", "ok", "okay", "no", "yes", "the", "lol", "gm", "gn", "me", "you", "it", "is", "a", "an", "and", "or",
+         "so", "go", "up", "hey", "bye", "thanks", "thx", "wow", "good", "nice", "love", "one", "all", "get", "any", "new",
+         "now", "win", "test", "bot", "start", "help", "admin", "free", "pls", "plz", "my", "we", "in", "on", "of", "to"}
+_PREFIX = re.compile(r"^(?:قیمت|price|/p|/price|\$)\s*(.+)$", re.I)
+
+
+def parse_query(text: str | None):
+    """None | ("asset", qty, key) | ("coin", qty, query, strict).
+    strict=True: کلمهٔ لاتین بی‌پیشوند (مثلاً «not» در گفتگو) — فقط اگر نماد یکی از ۱۰۰۰ ارز برتر باشد جواب می‌گیرد."""
+    from tenant.shared.coin_data import ADDR_RE
+    p = parse(text)
+    if p:
+        return ("asset", p[0], p[1])
+    raw = (text or "").strip()
+    if not raw or len(raw) > 80 or "\n" in raw:
+        return None
+    strict = True
+    m = _PREFIX.match(raw)
+    if m:
+        raw, strict = m.group(1).strip(), False
+        p = parse(raw)                                  # «قیمت تون»
+        if p:
+            return ("asset", p[0], p[1])
+    if ADDR_RE.match(raw) and (not strict or not raw.isalpha()):
+        return ("coin", 1.0, raw, False)
+    t = _norm(raw)
+    qty = 1.0
+    m = re.fullmatch(_NUM + r"\s*([a-z][a-z0-9._-]{0,29})", t) or re.fullmatch(r"([a-z][a-z0-9._-]{0,29})\s+" + _NUM, t)
+    if m:
+        a, b = m.group(1), m.group(2)
+        num, name = (a, b) if a[0].isdigit() else (b, a)
+        qty = float(num.replace(",", ".").replace("/", ".").replace("٫", "."))
+    elif re.fullmatch(r"[a-z][a-z0-9._ -]{0,29}", t):
+        name = t
+    else:
+        return None
+    if qty <= 0 or qty > 1e12:
+        return None
+    if strict and (name in _STOP or " " in name or len(name) < 2 or len(name) > 12):
+        return None
+    return ("coin", qty, name, strict)
+
+
 # ───────────────────────── منابع داده (با کش) ─────────────────────────
 _CACHE: dict[str, tuple[float, object]] = {}
 
@@ -121,7 +165,7 @@ async def _http_json(url: str):
             return await r.json(content_type=None)
 
 
-async def crypto_quotes() -> dict:
+async def _unused_crypto_quotes() -> dict:
     """{coingecko_id: (usd, change_pct_24h)}"""
     ids = ",".join(sorted({a[1] for a in ASSETS.values() if a[0] == "crypto"}))
 
@@ -257,6 +301,101 @@ def render(qty: float, key: str, usd: float | None, toman: float | None, change:
     return "\n".join(lines)
 
 
+def _big(x: float | None, usd: bool = False) -> str:
+    if x is None:
+        return "—"
+    return f"{x:,.0f} $" if usd else f"{x:,.0f}"
+
+
+def _p(x: float | None) -> str:
+    from tenant.shared.price_chart import fmt_price
+    return "—" if x is None else f"{fmt_price(x)} $"
+
+
+def render_crypto(qty: float, coin, usd_toman: float | None, title: str = "") -> str:
+    """متن کامل (مثل نمونهٔ سینا): قیمت دلاری/تومانی، تغییر و سود/ضرر، رتبه، سقف، کف، حجم، ساپلای، کپ."""
+    q = _fmt_q(qty)
+    name = title or (f"{coin.name} ({coin.symbol})" if coin.symbol and coin.symbol.lower() != coin.name.lower() else coin.name)
+    usd = coin.price * qty
+    head = f"🪙 قیمت {q} {name}" if qty != 1 else f"🪙 قیمت {name}"
+    lines = [f"<b>{head}</b>", "", "💰 جزئیات قیمت:",
+             f"┤💵 قیمت دلاری: {_fmt_usd(usd)}",
+             f"┙🇮🇷 قیمت تومانی: {f'{usd * usd_toman:,.0f} تومان' if usd_toman else '—'}"]
+    if qty != 1:
+        lines.insert(4, f"┤🔹 هر واحد: {_fmt_usd(coin.price)}")
+    stats = []
+    if coin.rank:
+        stats.append(f"🏆 رتبه: #{coin.rank}")
+    if coin.change_pct is not None:
+        up = coin.change_pct >= 0
+        stats.append(f"{'🟢' if up else '🔴'} تغییرات: {coin.change_pct:+.2f}%")
+        d_usd = abs(usd - usd / (1 + coin.change_pct / 100)) if coin.change_pct > -100 else 0
+        d_tm = f" / {d_usd * usd_toman:,.0f} تومان" if usd_toman else ""
+        stats.append(f"{'🔺 مقدار سود' if up else '🔻 مقدار ضرر'}: {_fmt_usd(d_usd)}{d_tm}")
+    if coin.high:
+        stats.append(f"📈 سقف: {_p(coin.high)}")
+    if coin.low:
+        stats.append(f"📉 کف: {_p(coin.low)}")
+    if coin.volume:
+        stats.append(f"📊 حجم: {_big(coin.volume, True)}")
+    if coin.supply:
+        stats.append(f"🪙 ساپلای: {_big(coin.supply)}")
+    if coin.cap:
+        stats.append(f"💎 کپ: {_big(coin.cap, True)}")
+    if coin.chain:
+        stats.append(f"⛓ شبکه: {coin.chain}")
+    if stats:
+        lines += ["", "📊 آمار 24 ساعته:"] + [f"┤{x}" for x in stats[:-1]] + [f"┙{stats[-1]}"]
+    lines += ["", f"⏰ {_now_fa()}"]
+    return "\n".join(lines)
+
+
+async def _usd_toman() -> float | None:
+    from tenant.gateways import crypto_pay
+    try:
+        return await asyncio.wait_for(crypto_pay.get_usd_to_toman_rate(), timeout=10) or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _card(coin, bot_username: str) -> bytes | None:
+    import datetime as dt
+    from tenant.shared.price_chart import render_card
+    sub = " • ".join(x for x in (f"#{coin.rank}" if coin.rank else "", f"{coin.supply:,.0f} supply" if coin.supply else "",
+                                 coin.chain, coin.candle_label) if x)
+    now = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=3, minutes=30)
+    title = f"{coin.name} ({coin.symbol.lower()})" if coin.symbol and len(coin.name) + len(coin.symbol) <= 22 else (coin.symbol or coin.name)
+    ch_usd = (coin.price - coin.price / (1 + coin.change_pct / 100)) if coin.change_pct not in (None,) and coin.change_pct > -100 else None
+    try:
+        return render_card(title=title, subtitle=sub, price=coin.price, change_pct=coin.change_pct, change_usd=ch_usd,
+                           candles=coin.candles, bot_username=bot_username, stamp=now.strftime("%d %b %Y • %H:%M"))
+    except Exception:  # noqa: BLE001
+        logger.warning("price_lookup: ساخت تصویر نمودار ناموفق", exc_info=True)
+        return None
+
+
+async def answer_for(bot_id: int, q, bot_username: str = "") -> tuple[str, bytes | None] | None:
+    """q از parse_query. None ⇒ جواب نده (کلمهٔ گفتگو بود)."""
+    from tenant.shared import coin_data
+    if q[0] == "asset":
+        _k, qty, key = q
+        kind, ident, title, _em, _n = ASSETS[key]
+        if kind != "crypto":
+            return await quote(bot_id, qty, key), None
+        coin = await coin_data.lookup(key, cg_id=ident)
+        if coin is None:
+            return f"⚠️ قیمت {title} فعلاً در دسترس نیست؛ کمی بعد دوباره امتحان کن.", None
+    else:
+        _k, qty, query, strict = q
+        coin = await coin_data.lookup(query, strict=strict)
+        if coin is None:
+            return None if strict else ("⚠️ ارزی با این نام، نماد یا آدرس پیدا نشد (یا منبع قیمت فعلاً جواب نمی‌دهد).", None)
+        title = ""
+    text = render_crypto(qty, coin, await _usd_toman(), title=title)
+    img = await asyncio.to_thread(_card, coin, bot_username) if coin.candles else None
+    return text, img
+
+
 async def quote(bot_id: int, qty: float, key: str) -> str:
     """متن پیام قیمت (هرگز استثنا نمی‌دهد)."""
     from tenant.gateways import crypto_pay
@@ -266,11 +405,11 @@ async def quote(bot_id: int, qty: float, key: str) -> str:
     except Exception:  # noqa: BLE001
         usd_toman = None
     if kind == "crypto":
-        q = (await crypto_quotes()).get(ident)
-        if not q or not q[0]:
+        from tenant.shared import coin_data
+        coin = await coin_data.lookup(key, cg_id=ident, with_candles=False)
+        if coin is None:
             return f"⚠️ قیمت {title} فعلاً در دسترس نیست؛ کمی بعد دوباره امتحان کن."
-        usd = q[0] * qty
-        return render(qty, key, usd, usd * usd_toman if usd_toman else None, q[1], usd_toman)
+        return render_crypto(qty, coin, usd_toman, title=title)
     if key == "usd":
         if not usd_toman:
             return "⚠️ نرخ دلار فعلاً در دسترس نیست."
@@ -295,24 +434,36 @@ async def enabled(bot_id: int) -> bool:
     return (await get_setting(bot_id, ON_KEY, "0")) == "1"
 
 
-def parse_buttons(raw: str) -> list[tuple[str, str]]:
-    """هر خط: «متن | لینک» (فقط http/https و t.me)."""
-    out = []
+def parse_button_rows(raw: str) -> list[list[tuple[str, str]]]:
+    """هر خط یک ردیف؛ چند دکمه در یک ردیف با «&&» جدا می‌شوند: «متن | لینک && متن2 | لینک2». فقط https/http/tg."""
+    rows = []
     for line in (raw or "").splitlines():
-        if "|" not in line:
-            continue
-        text, url = (p.strip() for p in line.split("|", 1))
-        if text and re.match(r"^(https?://|tg://)", url):
-            out.append((text[:40], url[:300]))
-    return out[:8]
+        row = []
+        for part in line.split("&&"):
+            if "|" not in part:
+                continue
+            text, url = (x.strip() for x in part.split("|", 1))
+            if text and re.match(r"^(https?://|tg://)", url):
+                row.append((text[:40], url[:300]))
+        if row:
+            rows.append(row[:3])
+    return rows[:8]
+
+
+def parse_buttons(raw: str) -> list[tuple[str, str]]:
+    return [b for r in parse_button_rows(raw) for b in r]
+
+
+def rows_to_raw(rows) -> str:
+    return "\n".join(" && ".join(f"{t} | {u}" for t, u in r) for r in rows)
 
 
 async def buttons_kb(bot_id: int) -> InlineKeyboardMarkup | None:
     from tenant import get_setting
-    btns = parse_buttons(await get_setting(bot_id, BTN_KEY, ""))
-    if not btns:
+    rows = parse_button_rows(await get_setting(bot_id, BTN_KEY, ""))
+    if not rows:
         return None
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t, url=u)] for t, u in btns])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t, url=u) for t, u in r] for r in rows])
 
 
 async def _owner(event, bot: Bot):
@@ -328,10 +479,12 @@ async def _menu(bot_id: int) -> tuple[str, InlineKeyboardMarkup]:
     on = await enabled(bot_id)
     btns = parse_buttons(await get_setting(bot_id, BTN_KEY, ""))
     text = ("🔎 <b>قیمت‌یاب</b>\n\n"
-            "کاربر در پیوی یا گروه بنویسد «تون»، «5 تون»، «2 گرم طلا»، «5 دلار»، «سکه امامی»، «بیت کوین» … و ربات قیمت دلاری و "
-            "تومانی را می‌فرستد.\n\n"
+            "کاربر در پیوی یا گروه بنویسد «تون»، «5 تون»، «not»، «2 گرم طلا»، «5 دلار»، «سکه امامی» یا «قیمت pepe» یا آدرس "
+            "قرارداد یک توکن، و ربات قیمت دلاری و تومانی، آمار 24 ساعته و نمودار کندلی را می‌فرستد.\n"
+            "نماد لاتین تنها (مثل btc) فقط برای 1000 ارز برتر جواب می‌گیرد؛ برای بقیه «قیمت نام‌ارز» یا آدرس قرارداد.\n\n"
             f"وضعیت: <b>{'✅ روشن' if on else '❌ خاموش'}</b>\n"
             f"دکمه‌های زیر پیام: <b>{len(btns)}</b>\n\n"
+            "منبع ارز دیجیتال: CoinGecko و DexScreener (رایگان، با کش و منبع جایگزین).\n"
             "قیمت طلا، سکه و ارزهای غیر دلار از BrsApi خوانده می‌شود؛ برای دقیق‌تر بودن کلید BrsApi را در تنظیمات ثبت کنید.")
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=("🔴 خاموش کردن" if on else "🟢 روشن کردن"), callback_data="pq:toggle",
@@ -364,9 +517,10 @@ async def pq_cb(cb: CallbackQuery, bot: Bot, state: FSMContext):
         await set_setting(row.id, ON_KEY, "0" if await enabled(row.id) else "1")
     elif cb.data == "pq:btns":
         await state.set_state(PqFSM.buttons)
-        await cb.message.answer("دکمه‌های زیر پیام قیمت را بفرست؛ هر خط یک دکمه به شکل «متن | لینک». مثال:\n"
+        await cb.message.answer("دکمه‌های زیر پیام قیمت را بفرست. هر خط یک ردیف است و هر دکمه «متن | لینک»؛ برای چند دکمه "
+                                "کنار هم در یک ردیف، بینشان <code>&&</code> بگذار (حداکثر 3 دکمه در ردیف، 8 ردیف). مثال:\n"
                                 "<code>خرید استارز کف قیمت | https://t.me/mybot?start=stars</code>\n"
-                                "<code>کانال ما | https://t.me/mychannel</code>\n\n"
+                                "<code>کانال ما | https://t.me/mychannel && پشتیبانی | https://t.me/support</code>\n\n"
                                 "برای حذف همه: «پاک» · انصراف: /cancel", parse_mode="HTML")
         await cb.answer()
         return
@@ -389,11 +543,13 @@ async def pq_buttons_input(msg: Message, bot: Bot, state: FSMContext):
     if raw == "پاک":
         await set_setting(row.id, BTN_KEY, "")
     else:
-        btns = parse_buttons(raw)
-        if not btns:
+        rows = parse_button_rows(raw)
+        if not rows:
             await msg.answer("❌ هیچ خط درستی پیدا نشد. هر خط: «متن | https://…». دوباره بفرست یا /cancel.")
             return
-        await set_setting(row.id, BTN_KEY, "\n".join(f"{t} | {u}" for t, u in btns))
+        await set_setting(row.id, BTN_KEY, rows_to_raw(rows))
+        await msg.answer("پیش‌نمایش دکمه‌ها 👇", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t, url=u) for t, u in r] for r in rows]))
     await state.clear()
     await msg.answer("✅ ذخیره شد.")
     await _show(msg, row.id)
@@ -402,11 +558,27 @@ async def pq_buttons_input(msg: Message, bot: Bot, state: FSMContext):
 # ───────────────────────── پاسخ به پیام کاربر ─────────────────────────
 async def maybe_answer(msg: Message, bot: Bot, bot_id: int) -> bool:
     """True ⇒ پیام، درخواست قیمت بود و جواب داده شد."""
-    p = parse(msg.text)
-    if p is None or not await enabled(bot_id):
+    q = parse_query(msg.text)
+    if q is None or not await enabled(bot_id):
         return False
-    text = await quote(bot_id, p[0], p[1])
-    await msg.reply(text, parse_mode="HTML", reply_markup=await buttons_kb(bot_id), disable_web_page_preview=True)
+    uname = ""
+    try:
+        uname = (await bot.me()).username or "" if bot is not None else ""
+    except Exception:  # noqa: BLE001
+        uname = ""
+    res = await answer_for(bot_id, q, uname)
+    if res is None:
+        return False
+    text, img = res
+    kb = await buttons_kb(bot_id)
+    if img:
+        from aiogram.types import BufferedInputFile
+        try:
+            await msg.reply_photo(BufferedInputFile(img, "price.jpg"), caption=text, parse_mode="HTML", reply_markup=kb)
+            return True
+        except Exception:  # noqa: BLE001
+            logger.warning("price_lookup: ارسال تصویر ناموفق؛ فقط متن", exc_info=True)
+    await msg.reply(text, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
     return True
 
 

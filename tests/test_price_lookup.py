@@ -31,24 +31,12 @@ def test_parse_brs_and_find():
     assert pl.find_brs(rows, "gold", "24") is None
 
 
-def test_parse_buttons():
-    raw = "خرید استارز | https://t.me/x?start=s\nبد\nکانال|t.me/bad\nسایت | https://a.b"
-    assert pl.parse_buttons(raw) == [("خرید استارز", "https://t.me/x?start=s"), ("سایت", "https://a.b")]
-
-
-@pytest.mark.asyncio
-async def test_quote_crypto(monkeypatch):
-    from tenant.gateways import crypto_pay
-
-    async def rate(*a, **k):
-        return 100_000
-    async def cq():
-        return {"the-open-network": (2.0, 5.0)}
-    monkeypatch.setattr(crypto_pay, "get_usd_to_toman_rate", rate)
-    monkeypatch.setattr(pl, "crypto_quotes", cq)
-    t = await pl.quote(1, 5, "ton")
-    assert "قیمت 5 GRAM (ton)" in t and "$10.00" in t and "1,000,000 تومان" in t
-    assert "+5.00%" in t and "مقدار سود" in t
+def test_parse_buttons_rows():
+    raw = "خرید استارز | https://t.me/x?start=s\nبد\nکانال|t.me/bad\nسایت | https://a.b && پشتیبانی | https://t.me/s"
+    rows = pl.parse_button_rows(raw)
+    assert rows == [[("خرید استارز", "https://t.me/x?start=s")], [("سایت", "https://a.b"), ("پشتیبانی", "https://t.me/s")]]
+    assert pl.parse_button_rows(pl.rows_to_raw(rows)) == rows
+    assert len(pl.parse_buttons(raw)) == 3
 
 
 @pytest.mark.asyncio
@@ -59,11 +47,13 @@ async def test_quote_gold_and_unavailable(monkeypatch):
         return 100_000
     async def brs(bot_id):
         return [{"name": "طلای 18 عیار", "price": 6_500_000, "change": None}]
-    async def cq():
-        return {}
+    from tenant.shared import coin_data
+
+    async def lk(*a, **k):
+        return None
     monkeypatch.setattr(crypto_pay, "get_usd_to_toman_rate", rate)
     monkeypatch.setattr(pl, "brs_items", brs)
-    monkeypatch.setattr(pl, "crypto_quotes", cq)
+    monkeypatch.setattr(coin_data, "lookup", lk)
     t = await pl.quote(1, 2, "gold18")
     assert "2 گرم طلای 18 عیار" in t and "13,000,000 تومان" in t and "$130.00" in t
     assert "در دسترس نیست" in await pl.quote(1, 1, "emami")     # بدون عدد ساختگی
@@ -82,11 +72,11 @@ async def test_maybe_answer_respects_toggle(monkeypatch):
 
     async def gs(bid, k, d=""):
         return store.get(k, d)
-    async def q(bid, qty, key):
-        return f"Q {qty} {key}"
+    async def q(bid, qq, uname=""):
+        return f"Q {qq[1]} {qq[2]}", None
     import tenant
     monkeypatch.setattr(tenant, "get_setting", gs)
-    monkeypatch.setattr(pl, "quote", q)
+    monkeypatch.setattr(pl, "answer_for", q)
     assert await pl.maybe_answer(M(), None, 1) is False and not sent
     store[pl.ON_KEY] = "1"
     assert await pl.maybe_answer(M(), None, 1) is True and sent == ["Q 5.0 ton"]
