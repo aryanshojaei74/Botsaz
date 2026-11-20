@@ -272,6 +272,8 @@ from tenant.shared.referral_captcha import referral_captcha_router   # === PATCH
 tenant_router.include_router(referral_captcha_router)
 from tenant.shared.start_captcha import start_captcha_router   # === PATCH_START_CAPTCHA_V1 ===
 tenant_router.include_router(start_captcha_router)
+from tenant.shared.price_lookup import price_router   # === PATCH_PRICE_LOOKUP_V1 ===
+tenant_router.include_router(price_router)
 from tenant.shared.err_log import err_log_router   # === PATCH_ERR_LOG_CHANNEL_V1 ===
 tenant_router.include_router(err_log_router)
 from tenant.shared.orphan_purchases import orphan_router   # === PATCH_ORPHAN_PURCHASE_V1 ===
@@ -7344,6 +7346,14 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
         from tenant.shared.wager_inline import _PM_RACE, pm_race_answer
         if _PM_RACE and await pm_race_answer(msg, bot):
             return
+    try:                                     # PATCH_PRICE_LOOKUP_V1: «5 تون» / «2 گرم طلا» (فقط اگر مالک روشن کرده باشد)
+        from tenant.shared.price_lookup import parse as _pq_parse, maybe_answer as _pq_answer
+        if _pq_parse(msg.text) is not None:
+            _pq_row = await get_bot_row(bot)
+            if _pq_row and await _pq_answer(msg, bot, _pq_row.id):
+                return
+    except Exception:  # noqa: BLE001
+        logger.warning("price_lookup hook failed", exc_info=True)
     # === PATCH_COMMUNITY_GROUP_BUTTONS_BYPASS_V1 ===
     # علتِ ریشه‌ایِ گزارشِ «سکوت/اخطار/بن کلاً کار نمی‌کنند»، پیدا شد —
     # هیچ ربطی به Privacy Mode یا آنتی‌اسپم نداشت (آن دو باگ هم واقعی
@@ -8001,6 +8011,7 @@ async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
             # دکمه ساخته می‌شد ولی اینجا ثبت نشده بود، پس زدنش هیچ واکنشی نداشت)
             "🧹 پاک‌سازیِ خودکارِ پیام‌هایِ قبلی": _mcl_menu_entry,
             "🧩 کپچا هنگامِ استارت": _scap_menu_entry,      # PATCH_START_CAPTCHA_V1
+            "🔎 قیمت‌یاب": _pq_menu_entry,                    # PATCH_PRICE_LOOKUP_V1
         }
         # متنِ Reply Keyboard عمداً همان برچسبِ اصلی است؛ style فقط
         # روی خودِ KeyboardButton قرار دارد و نیازی به تبدیل متن نیست.
@@ -13137,6 +13148,11 @@ async def _mcl_menu_entry(cb, bot):
     await mcl_menu(_FakeCb(cb.message._real, "mcl:menu"), bot)
 
 
+async def _pq_menu_entry(cb, bot):
+    from tenant.shared.price_lookup import pq_open
+    await pq_open(cb.message._real, bot)
+
+
 async def _scap_menu_entry(cb, bot):
     """ورودیِ «🧩 کپچا هنگامِ استارت» در حالتِ کیبوردی (همان باگِ همیشگیِ ثبت‌نشدنِ برچسب در _settings_handlers)."""
     from tenant.shared.start_captcha import scp_menu
@@ -13197,6 +13213,7 @@ async def _sec_settings_kb(bot_id: int, plan: str, menu_mode_v: str, bot_paused:
     if ok(Feature.MSG_CLEANUP):   # PATCH_MSG_CLEANUP_V1
         opts.append(("🧹 پاک‌سازیِ خودکارِ پیام‌هایِ قبلی", "mcl:menu"))
     opts.append(("🧩 کپچا هنگامِ استارت", "scpm:menu"))      # PATCH_START_CAPTCHA_V1
+    opts.append(("🔎 قیمت‌یاب", "pq:menu"))                   # PATCH_PRICE_LOOKUP_V1
     if ok(Feature.CUSTOM_WELCOME):   # PATCH_FREE_PLAN_SIMPLIFY_V1
         opts.append(("✏️ متن خوش‌آمدگویی", "set:welcome"))
     if ok(Feature.CUSTOM_WELCOME):
@@ -14555,7 +14572,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "692"
+BUILD_ID = "693"
 
 
 @tenant_router.message(Command("version"))
