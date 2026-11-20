@@ -375,6 +375,10 @@ async def test_typed_all_marks_follow_mode(env, monkeypatch):
     async def fake_open(host, port):
         return object(), W()
     monkeypatch.setattr(asyncio, "open_connection", fake_open)
+
+    async def reach_ok(host, port, timeout=8):            # PATCH_TCP_PRECHECK_DNS_V1: DNS هم جدا انجام می‌شود
+        return None
+    monkeypatch.setattr(VA, "tcp_reach", reach_ok)
     from tenant.shared.panel_clients import vpn_panel_factory as F
     monkeypatch.setattr(F, "make_panel_client_from_fields", lambda *a, **k: FakeClient())
     await env.state.update_data(panel_key="sanai", base_url="https://p.example:54321", username="u", password="p",
