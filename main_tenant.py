@@ -857,6 +857,9 @@ async def vpn_first_connect_loop(interval: int = 90):
                     _panel_skip_until[_pk] = asyncio.get_event_loop().time() + _PANEL_SKIP_SECONDS
                     continue
                 _panel_skip_until.pop(_pk, None)
+                # PATCH_FIRSTCONN_BAD_LIST_V1: بعضی پنل‌ها به‌جایِ لیستِ dict، رشته/پیامِ خطا برمی‌گردانند؛ قبلاً
+                # «'str' object has no attribute 'get'» کلِ دورِ حلقه را (برایِ همهٔ ربات‌هایِ بعدی) متوقف می‌کرد.
+                clients = [c for c in clients if isinstance(c, dict)] if isinstance(clients, (list, tuple)) else []
                 by_email = {c.get("email"): c for c in clients if c.get("email")}
 
                 tbot = Bot(token=brow.token, default=DEFAULTS)

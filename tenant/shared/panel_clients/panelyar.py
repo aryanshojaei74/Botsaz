@@ -352,20 +352,24 @@ async def pyar_set_password(msg: Message, state: FSMContext, bot):
         return
 
     testing = await msg.answer("🔄 در حالِ تستِ اتصال به پنل…")
+    client = None
     try:
         client = make_panel_client_from_fields(
             panel_base_key(key), base_url, username, password)
         ok = await client.test_connection()
-        try:
-            await client.close()
-        except Exception:
-            logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود)")
     except PanelError as e:
         ok = False
         logger.warning("[panelyar] تستِ اتصال ناموفق: %s", e)
     except Exception:
         ok = False
         logger.exception("[panelyar] خطایِ غیرمنتظره در تستِ اتصال")
+    finally:
+        # PATCH_PYAR_TEST_CLOSE_V1: قبلاً فقط در حالتِ موفق بسته می‌شد ⇒ «Unclosed client session» در لاگ
+        if client is not None:
+            try:
+                await client.close()
+            except Exception:
+                logger.debug("[panelyar] بستنِ کلاینتِ تست ممکن نشد", exc_info=True)
 
     if not ok:
         await testing.edit_text(

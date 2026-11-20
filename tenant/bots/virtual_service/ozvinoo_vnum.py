@@ -1833,7 +1833,11 @@ async def _process_code(bot: Bot, order: SmmOrder, provider: dict, api_order_id:
     ref = order.panel_order_id if _phone_keyed(provider) else api_order_id
     kind, code, _why = await _pv_fetch_code(provider, ref)
     if kind in ("nobalance", "noaccess"):         # PATCH_OZV_CODE_STATUSES_V1
-        logger.warning("[ozv-code] order=%s provider-status=%s %s", order.id, kind, _why)
+        import time as _t
+        _k = (order.id, kind)
+        if _t.monotonic() - _FETCH_LOG_AT.get(_k, -1e9) > 600:      # PATCH_OZV_NOBALANCE_LOG_QUIET_V1: هر ۱۰ دقیقه یک خط، نه هر ۳۵ ثانیه
+            _FETCH_LOG_AT[_k] = _t.monotonic()
+            logger.warning("[ozv-code] order=%s provider-status=%s %s", order.id, kind, _why)
         await _ozv_alert_provider(order, provider, kind, _why)
         return kind
     if kind in ("missing", "error"):                # PATCH_OZV_GET_QUERY_V1: قبلاً بی‌صدا بود ⇒ علتِ «کد نمی‌رسد» دیده نمی‌شد
