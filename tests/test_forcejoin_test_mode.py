@@ -164,3 +164,19 @@ async def test_diag_shows_real_reason_when_live_check_fails(env, monkeypatch):
     await tenant.fj_diag(cb, Bad())
     text = [x[1] for x in out if x[0] == "msg"][0]
     assert "علت" in text and "پیدا نشد" in text
+
+
+@pytest.mark.asyncio
+async def test_platform_support_and_platform_admin_never_see_force_join_even_in_test_mode(env, monkeypatch):
+    """PATCH_FJ_PLATFORM_SUPPORT_EXEMPT_V1: «دسترسی پشتیبانی فعال کردم ولی هنوز عضویت اجباری می‌خواد»."""
+    import config
+    b = FakeBot("left")
+    async with env() as s:
+        s.add(models.AdminSupport(bot_id=1, telegram_id=777, full_name=tenant.PLATFORM_SUPPORT_NAME))
+        s.add(models.AdminSupport(bot_id=1, telegram_id=888, full_name="ادمین عادی"))
+        await s.commit()
+    await tenant.set_setting(1, "fj_test_mode", "1")
+    assert await tenant.check_force_join(b, 1, 777, bypass_cache=True) == []              # پشتیبانی بات‌ساز
+    assert len(await tenant.check_force_join(b, 1, 888, bypass_cache=True)) == 1          # ادمین عادی در حالت تست می‌بیند
+    monkeypatch.setattr(config, "PLATFORM_ADMIN_ID", 4242)
+    assert await tenant.check_force_join(b, 1, 4242, bypass_cache=True) == []             # مدیر اصلی

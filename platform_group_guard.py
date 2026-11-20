@@ -2455,7 +2455,9 @@ async def _ask_ai(question: str) -> str:
     _router = _get_router()
     if _router.configured():
         _analysis = await _ai_analyze(question)          # PATCH_AI_TWO_STAGE_V1
-        if _analysis and _analysis.get("ambiguous") and _analysis.get("clarify"):
+        # PATCH_AI_NO_NEEDLESS_CLARIFY_V1: سوالِ برگشتی فقط برایِ پیامِ خیلی کوتاه (≤ ۳ کلمه)؛ بقیه مستقیم جواب می‌گیرند
+        if (_analysis and _analysis.get("ambiguous") and _analysis.get("clarify")
+                and len(_gg_normalize_for_match(question).split()) <= 3):
             return _gg_clean_ai_text(_analysis["clarify"]) or "منظورت دقیقاً چیه؟"
         system_prompt = await _build_ai_system_prompt(question, _analysis)
         text, usage, route = await _router.chat(system_prompt, question, max_tokens=600)

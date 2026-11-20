@@ -52,11 +52,30 @@ def _patch_router(monkeypatch, router):
     GG._AN_CACHE.clear()
 
 
-def test_ambiguous_question_gets_clarifying_question_without_second_call(monkeypatch):
-    r = _Router(lambda s, u: json.dumps({"intent": "؟", "ambiguous": True, "clarify": "منظورت پنل رباتِ خودته یا ربات همکاری؟", "topics": []}))
+def test_very_short_ambiguous_question_gets_clarifying_question_without_second_call(monkeypatch):
+    r = _Router(lambda s, u: json.dumps({"intent": "؟", "ambiguous": True, "clarify": "دربارهٔ کدوم قابلیت؟", "topics": []}))
     _patch_router(monkeypatch, r)
-    out = asyncio.run(GG._ask_ai("چطوری تخفیف بزارم"))
-    assert "ربات همکاری" in out and len(r.calls) == 1
+    out = asyncio.run(GG._ask_ai("بات ساز"))
+    assert "کدوم قابلیت" in out and len(r.calls) == 1
+
+
+def test_real_question_is_answered_even_if_analysis_wants_to_clarify(monkeypatch):
+    """PATCH_AI_NO_NEEDLESS_CLARIFY_V1 (مدیر: «چرا گیج می‌زنه، منظورت ربات اصلیه یا همکار؟»)."""
+    def reply(system, user):
+        if system.startswith("تو تحلیل‌گرِ"):
+            return json.dumps({"intent": "؟", "ambiguous": True, "clarify": "منظورت پنل رباتِ خودته یا ربات همکاری؟", "topics": []})
+        return "مسیر: پنل مدیریت ← مالی و کیف پول ← کدهای تخفیف"
+    r = _Router(reply)
+    _patch_router(monkeypatch, r)
+    out = asyncio.run(GG._ask_ai("چطوری تو ربات خدمات مجازی تخفیف بزارم"))
+    assert "همکار" not in out and "کدهای تخفیف" in out and len(r.calls) == 2
+
+
+def test_prompts_forbid_main_vs_partner_question_and_map_bot_types():
+    import platform_ai_kb as K
+    assert "هرگز نپرس «منظورت ربات اصلیه یا همکار؟»" in K.ALWAYS
+    assert "پنل فروشی" in K.ALWAYS and "خدمات مجازی" in K.ALWAYS
+    assert "panel_seller" in K.ANALYZE_SYSTEM and "هرگز برای «ربات اصلی یا همکار»" in K.ANALYZE_SYSTEM
 
 
 def test_final_prompt_contains_analysis_and_exact_menu(monkeypatch):

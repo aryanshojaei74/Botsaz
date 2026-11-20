@@ -1486,6 +1486,16 @@ def _fj_broken_reason(e: Exception) -> str:
     return "خطای تلگرام: " + str(e).replace("Bad Request: ", "")[:90]
 
 
+PLATFORM_SUPPORT_NAME = "پشتیبانی بات‌ساز"     # همان نامی که دکمهٔ «دسترسی پشتیبانی» در پنل بات‌ساز ثبت می‌کند
+
+
+async def _is_platform_support(bot_id: int, tg_id: int) -> bool:
+    async with Session() as s:
+        name = await s.scalar(select(AdminSupport.full_name).where(
+            AdminSupport.bot_id == bot_id, AdminSupport.telegram_id == tg_id))
+    return name == PLATFORM_SUPPORT_NAME
+
+
 async def check_force_join(bot: Bot, bot_id: int, user_id: int, bypass_cache: bool = False) -> list[dict]:
     """لیست کانال‌هایی که کاربر هنوز عضو نشده.
 
@@ -1501,6 +1511,10 @@ async def check_force_join(bot: Bot, bot_id: int, user_id: int, bypass_cache: bo
             select(ForceJoin).where(ForceJoin.bot_id == bot_id, ForceJoin.is_active == True)
         )).all()
         bot_row = await s.scalar(select(BotRow).where(BotRow.id == bot_id))
+    # === PATCH_FJ_PLATFORM_SUPPORT_EXEMPT_V1 === مدیر و پشتیبانی بات‌ساز (دسترسی پشتیبانی) هرگز عضویت اجباری نمی‌بینند،
+    # حتی وقتی مالک «حالت تست» را روشن کرده (آن حالت فقط برای خود مالک و ادمین‌هایش است).
+    if _is_platform_admin(user_id) or await _is_platform_support(bot_id, user_id):
+        return []
     # ادمین و اونر از بررسی عضویت معاف هستند
     # === PATCH_FJ_TEST_MODE_V1 === (محمد، رباتِ قرعه‌کشی: «اصلاً کار نمی‌کند») مالک با حسابِ خودش تست می‌کرد و چون معاف است
     # هیچ‌وقت صفحهٔ عضویت را نمی‌دید؛ «حالتِ تست» این معافیت را برایِ خودِ مالک/ادمین برمی‌دارد.
@@ -14533,7 +14547,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "688"
+BUILD_ID = "689"
 
 
 @tenant_router.message(Command("version"))
