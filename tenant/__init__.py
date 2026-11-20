@@ -10801,10 +10801,44 @@ async def _notify_receipt_admins(bot: Bot, row: BotRow, text: str,
             else:
                 await bot.send_message(int(channel_id), text, reply_markup=kb, parse_mode="HTML")  # === PATCH_RECEIPT_HTML_PARSEMODE ===
             return
-        except Exception:
-            logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود) — "
-                             "ارسال به کانالِ تاییدِ رسید شکست خورد؛ برمی‌گردیم به DM ادمین‌ها")
+        except Exception as e:
+            # PATCH_RECEIPT_CHANNEL_GONE_V1: کانال حذف شده یا ربات از آن بیرون است ⇒ یک خط هشدار (نه traceback در هر رسید)
+            # و روزی یک‌بار به مالک خبر بده؛ رسید همچنان به پیوی ادمین‌ها می‌رود و تنظیم مالک دست نمی‌خورد.
+            if _receipt_channel_gone(e):
+                logger.warning("receipt channel unreachable: bot @%s (id %s) channel %s — %s",
+                               getattr(row, "username", ""), row.id, channel_id, e)
+                await _warn_owner_receipt_channel(bot, row)
+            else:
+                logger.exception("خطای نادیده‌گرفته‌شده (قبلاً فقط pass بود) — "
+                                 "ارسال به کانالِ تاییدِ رسید شکست خورد؛ برمی‌گردیم به DM ادمین‌ها")
     await _notify_admins(bot, row, text, kb, photo_file_id)
+
+
+_RECEIPT_CH_WARNED: dict[int, float] = {}
+_RECEIPT_GONE_MARKERS = ("chat not found", "bot was kicked", "not a member", "have no rights", "not enough rights",
+                         "need administrator rights", "chat_write_forbidden", "bot is not a member")
+
+
+def _receipt_channel_gone(e: Exception) -> bool:
+    msg = str(e).lower()
+    return any(m in msg for m in _RECEIPT_GONE_MARKERS)
+
+
+async def _warn_owner_receipt_channel(bot: Bot, row) -> None:
+    import time as _t
+    now = _t.time()
+    if now - _RECEIPT_CH_WARNED.get(row.id, 0) < 86400:
+        return
+    _RECEIPT_CH_WARNED[row.id] = now
+    try:
+        await bot.send_message(
+            row.owner_id,
+            "⚠️ کانال تایید رسید این ربات در دسترس نیست (کانال حذف شده یا ربات دیگر ادمین آن نیست).\n"
+            "رسیدها فعلا به پیوی ادمین‌ها فرستاده می‌شود و چیزی گم نمی‌شود.\n\n"
+            "برای درست‌کردن: ربات را دوباره ادمین همان کانال کن، یا از پنل مدیریت ربات کانال تایید رسید را دوباره وصل یا "
+            "خاموش کن.")
+    except Exception:  # noqa: BLE001
+        logger.info("receipt channel: owner notice skipped (bot %s)", row.id)
 
 
 # ─────────────────────── خرید (تنظیم +/-) ───────────────────────
@@ -14573,7 +14607,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "699"
+BUILD_ID = "700"
 
 
 @tenant_router.message(Command("version"))
