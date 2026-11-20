@@ -105,15 +105,59 @@ async def group_charge(msg: Message, bot: Bot):
     from aiogram.dispatcher.event.bases import SkipHandler
     if not await can_charge(msg):
         sc = getattr(msg, "sender_chat", None)
-        if sc is not None and sc.id != msg.chat.id:
-            try:
-                await bot.send_message(PLATFORM_ADMIN_ID,
-                                       f"⚠️ دستور «{(msg.text or '')[:40]}» از کانال «{sc.title}» (<code>{sc.id}</code>) در گروه "
-                                       f"«{msg.chat.title}» اجرا نشد چون این کانال برای شارژ مجاز نیست.\n"
-                                       "برای مجازکردن: پنل ← محافظ گروه ← 💳 شارژ از گروه ← افزودن کانال.", parse_mode="HTML")
-            except Exception:  # noqa: BLE001
-                logger.info("group charge: admin notice skipped")
-        raise SkipHandler
+        if sc is None:                                  # کاربر عادی ⇒ بی‌صدا
+            raise SkipHandler
+        # PATCH_GROUP_CHARGE_APPROVE_V1: کانال/ادمین ناشناس ⇒ دکمهٔ تایید؛ فقط مدیر اصلی با اکانت خودش می‌تواند بزند.
+        import secrets
+        import time as _t
+        for k in [k for k, v in _PENDING.items() if _t.time() - v[2] > PENDING_TTL]:
+            _PENDING.pop(k, None)
+        token = secrets.token_hex(5)
+        is_channel = sc.id != msg.chat.id
+        _PENDING[token] = (msg, sc.id if is_channel else None, _t.time())
+        hint = (f"این کانال («{sc.title}») هنوز برای شارژ مجاز نیست. مدیر اصلی با اکانت شخصی «تایید» را بزند تا کانال "
+                "مجاز شود و همین شارژ انجام شود (دفعه‌های بعد بدون تایید)." if is_channel else
+                "پیام از «ادمین ناشناس» است. مدیر اصلی با اکانت شخصی «تایید» را بزند تا همین یک شارژ انجام شود.")
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            hx_button("✅ تایید (فقط مدیر اصلی)", callback_data=f"pgc:ok:{token}", style=ButtonStyle.SUCCESS),
+            hx_button("❌ لغو", callback_data=f"pgc:no:{token}", style=ButtonStyle.DANGER)]])
+        await msg.reply("🔐 " + hint, reply_markup=kb)
+        return
+    await execute(msg, bot)
+
+
+_PENDING: dict[str, tuple] = {}
+PENDING_TTL = 600
+
+
+@platform_group_charge_router.callback_query(F.data.startswith("pgc:ok:") | F.data.startswith("pgc:no:"))
+async def approve(cb: CallbackQuery, bot: Bot):
+    if cb.from_user.id != PLATFORM_ADMIN_ID:
+        await cb.answer("فقط مدیر اصلی با اکانت شخصی", show_alert=True)
+        return
+    import time as _t
+    _p, action, token = cb.data.split(":", 2)
+    item = _PENDING.pop(token, None)
+    if item is None or _t.time() - item[2] > PENDING_TTL:
+        await cb.answer("منقضی شده؛ دوباره دستور را بنویس.", show_alert=True)
+        return
+    try:
+        await cb.message.delete()
+    except Exception:  # noqa: BLE001
+        logger.info("group charge: approval message not deleted")
+    if action == "no":
+        await cb.answer("لغو شد")
+        return
+    msg, channel_id, _ts = item
+    if channel_id is not None:
+        chs = await allowed_channels()
+        if str(channel_id) not in chs:
+            await _sp(CH_KEY, ",".join(chs + [str(channel_id)]))
+    await cb.answer("✅ تایید شد")
+    await execute(msg, bot)
+
+
+async def execute(msg: Message, bot: Bot):
     sign, amount, ref = parse(msg.text)
     cap = int((await _gp(MAX_KEY, str(DEFAULT_MAX))) or DEFAULT_MAX)
     if amount > cap:
@@ -208,7 +252,7 @@ async def menu_content():
     return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-@platform_group_charge_router.callback_query(F.data.startswith("pgc:") & ~F.data.startswith("pgc:undo:"))
+@platform_group_charge_router.callback_query(F.data.startswith("pgc:") & ~F.data.startswith("pgc:undo:") & ~F.data.startswith("pgc:ok:") & ~F.data.startswith("pgc:no:"))
 async def pgc_cb(cb: CallbackQuery, state: FSMContext):
     if cb.from_user.id != PLATFORM_ADMIN_ID:
         await cb.answer("فقط مدیر اصلی", show_alert=True)

@@ -141,16 +141,70 @@ async def test_admin_by_username_deduct_and_limits(db):
 
 
 @pytest.mark.asyncio
-async def test_unauthorized_is_skipped_and_unknown_channel_reported(db):
-    S, _ = db
+async def test_unauthorized_user_skipped_unknown_channel_gets_approve_button(db):
+    S, pset = db
     bot = _Bot()
     with pytest.raises(SkipHandler):
         await G.group_charge(_Msg("50000 شارژ", _U(12345), reply_to=_Reply(_U(55))), bot)
-    with pytest.raises(SkipHandler):
-        await G.group_charge(_Msg("50000 شارژ", _U(136817688), sender_chat=_Chat(-1008888, "غریبه"),
-                                  reply_to=_Reply(_U(55))), bot)
-    assert await _bal(S, 55) == 1000
-    assert bot.sent and bot.sent[-1][0] == ADMIN and "-1008888" in bot.sent[-1][1]
+    m = _Msg("شارژ ۵۰۰۰۰", _U(136817688), sender_chat=_Chat(-1008888, "کانال من"), reply_to=_Reply(_U(55)))
+    m.reply_markup = None
+
+    async def reply(text, **kw):
+        m.replies.append(text)
+        m.reply_markup = kw.get("reply_markup")
+    m.reply = reply
+    await G.group_charge(m, bot)
+    assert await _bal(S, 55) == 1000 and "تایید" in m.replies[-1]
+    data = m.reply_markup.inline_keyboard[0][0].callback_data
+    assert data.startswith("pgc:ok:")
+
+    class _CbMsg:
+        async def delete(self):
+            pass
+
+    class _Cb:
+        def __init__(self, uid):
+            self.from_user, self.data, self.message, self.alerts = _U(uid), data, _CbMsg(), []
+
+        async def answer(self, text=None, **k):
+            self.alerts.append(text)
+    stranger = _Cb(12345)
+    await G.approve(stranger, bot)
+    assert await _bal(S, 55) == 1000 and "فقط مدیر" in stranger.alerts[-1]
+    await G.approve(_Cb(ADMIN), bot)
+    assert await _bal(S, 55) == 51000 and "-1008888" in pset[G.CH_KEY]          # شارژ شد و کانال مجاز شد
+    again = _Cb(ADMIN)
+    await G.approve(again, bot)
+    assert await _bal(S, 55) == 51000 and "منقضی" in again.alerts[-1]           # یک‌بار مصرف
+    m2 = _Msg("شارژ 1000", _U(136817688), sender_chat=_Chat(-1008888, "کانال من"), reply_to=_Reply(_U(55)))
+    await G.group_charge(m2, bot)                                               # دفعهٔ بعد بدون تایید
+    assert await _bal(S, 55) == 52000
+
+
+@pytest.mark.asyncio
+async def test_anonymous_admin_approval_does_not_allowlist_group(db):
+    S, pset = db
+    bot = _Bot()
+    m = _Msg("شارژ 2000", _U(1087968824), sender_chat=_Chat(GROUP), reply_to=_Reply(_U(55)))
+    kb = {}
+
+    async def reply(text, **kw):
+        kb["k"] = kw.get("reply_markup")
+    m.reply = reply
+    await G.group_charge(m, bot)
+    token_data = kb["k"].inline_keyboard[0][0].callback_data
+
+    class _CbMsg:
+        async def delete(self):
+            pass
+
+    class _Cb:
+        from_user, data, message = _U(ADMIN), token_data, _CbMsg()
+
+        async def answer(self, *a, **k):
+            pass
+    await G.approve(_Cb(), bot)
+    assert await _bal(S, 55) == 3000 and str(GROUP) not in pset[G.CH_KEY]
 
 
 def test_wired():
