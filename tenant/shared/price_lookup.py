@@ -50,7 +50,7 @@ ASSETS: dict[str, tuple[str, str, str, str, tuple[str, ...]]] = {
     "eur": ("fiat", "یورو", "یورو", "🇪🇺", ("یورو", "eur", "euro")),
     "gbp": ("fiat", "پوند", "پوند انگلیس", "🇬🇧", ("پوند", "gbp")),
     "aed": ("fiat", "درهم", "درهم امارات", "🇦🇪", ("درهم", "aed")),
-    "try": ("fiat", "لیر", "لیر ترکیه", "🇹🇷", ("لیر", "لیر ترکیه", "try")),
+    "try": ("fiat", "لیر", "لیر ترکیه", "🇹🇷", ("لیر", "لیر ترکیه")),      # «try» کلمهٔ انگلیسی رایج است
     "gold18": ("gold", "18", "طلای 18 عیار", "⚜️", ("طلا", "گرم طلا", "طلای 18", "طلای 18 عیار", "طلا 18")),
     "gold24": ("gold", "24", "طلای 24 عیار", "⚜️", ("طلای 24", "طلای 24 عیار", "طلا 24")),
     "emami": ("gold", "امامی", "سکه امامی", "🪙", ("سکه", "سکه امامی", "سکه تمام")),
@@ -58,6 +58,66 @@ ASSETS: dict[str, tuple[str, str, str, str, tuple[str, ...]]] = {
     "rob": ("gold", "ربع", "ربع سکه", "🪙", ("ربع سکه",)),
     "ons": ("gold", "انس", "انس طلا", "🌐", ("انس", "انس طلا", "اونس", "اونس طلا")),
 }
+# ───────── همهٔ پول‌های مهم جهان (PATCH_PRICE_WORLD_FIAT_V1، مدیر: «حتی افغانی»): کد ⇒ (نام، پرچم، نام‌های دیگر)
+# نرخ: BrsApi (بازار ایران، اگر داشت) وگرنه نسبت جهانی × دلار زندهٔ والکس.
+WORLD_FIAT = {
+    "afn": ("افغانی", "af", ("افغانی", "افغانی افغانستان", "پول افغانستان", "afn")),
+    "cny": ("یوان چین", "cn", ("یوان", "یوان چین", "cny", "rmb")),
+    "rub": ("روبل روسیه", "ru", ("روبل", "روبل روسیه", "rub")),
+    "jpy": ("ین ژاپن", "jp", ("ین", "ین ژاپن", "jpy")),
+    "iqd": ("دینار عراق", "iq", ("دینار", "دینار عراق", "iqd")),
+    "kwd": ("دینار کویت", "kw", ("دینار کویت", "kwd")),
+    "bhd": ("دینار بحرین", "bh", ("دینار بحرین", "bhd")),
+    "jod": ("دینار اردن", "jo", ("دینار اردن", "jod")),
+    "sar": ("ریال عربستان", "sa", ("ریال عربستان", "ریال سعودی", "sar")),
+    "qar": ("ریال قطر", "qa", ("ریال قطر", "qar")),
+    "omr": ("ریال عمان", "om", ("ریال عمان", "omr")),
+    "azn": ("منات آذربایجان", "az", ("منات", "منات آذربایجان", "azn")),
+    "tmt": ("منات ترکمنستان", "tm", ("منات ترکمنستان", "tmt")),
+    "amd": ("درام ارمنستان", "am", ("درام", "درام ارمنستان")),
+    "gel": ("لاری گرجستان", "ge", ("لاری", "لاری گرجستان", "gel")),
+    "inr": ("روپیه هند", "in", ("روپیه", "روپیه هند", "inr")),
+    "pkr": ("روپیه پاکستان", "pk", ("روپیه پاکستان", "pkr")),
+    "idr": ("روپیه اندونزی", "id", ("روپیه اندونزی", "idr")),
+    "cad": ("دلار کانادا", "ca", ("دلار کانادا", "cad")),
+    "aud": ("دلار استرالیا", "au", ("دلار استرالیا", "aud")),
+    "nzd": ("دلار نیوزیلند", "nz", ("دلار نیوزیلند", "nzd")),
+    "hkd": ("دلار هنگ کنگ", "hk", ("دلار هنگ کنگ", "hkd")),
+    "sgd": ("دلار سنگاپور", "sg", ("دلار سنگاپور", "sgd")),
+    "chf": ("فرانک سوئیس", "ch", ("فرانک", "فرانک سوئیس", "chf")),
+    "sek": ("کرون سوئد", "se", ("کرون سوئد", "sek")),
+    "nok": ("کرون نروژ", "no", ("کرون نروژ", "nok")),
+    "dkk": ("کرون دانمارک", "dk", ("کرون دانمارک", "dkk")),
+    "myr": ("رینگیت مالزی", "my", ("رینگیت", "رینگیت مالزی", "myr")),
+    "thb": ("بات تایلند", "th", ("بات تایلند", "thb")),
+    "krw": ("وون کره", "kr", ("وون", "وون کره", "krw")),
+    "tjs": ("سامانی تاجیکستان", "tj", ("سامانی", "سامانی تاجیکستان", "tjs")),
+    "uzs": ("سوم ازبکستان", "uz", ("سوم ازبکستان", "uzs")),
+    "kzt": ("تنگه قزاقستان", "kz", ("تنگه", "تنگه قزاقستان", "kzt")),
+    "kgs": ("سوم قرقیزستان", "kg", ("سوم قرقیزستان", "kgs")),
+    "brl": ("رئال برزیل", "br", ("رئال برزیل", "brl")),
+    "mxn": ("پزو مکزیک", "mx", ("پزو مکزیک", "mxn")),
+    "egp": ("پوند مصر", "eg", ("پوند مصر", "egp")),
+    "syp": ("لیر سوریه", "sy", ("لیر سوریه", "syp")),
+    "lbp": ("لیر لبنان", "lb", ("لیر لبنان", "lbp")),
+    "zar": ("راند آفریقای جنوبی", "za", ("راند", "راند آفریقای جنوبی", "zar")),
+    "pln": ("زلوتی لهستان", "pl", ("زلوتی", "زلوتی لهستان", "pln")),
+    "uah": ("گریونا اوکراین", "ua", ("گریونا", "گریونا اوکراین", "uah")),
+    "byn": ("روبل بلاروس", "by", ("روبل بلاروس", "byn")),
+    "php": ("پزو فیلیپین", "ph", ("پزو فیلیپین",)),
+    "vnd": ("دانگ ویتنام", "vn", ("دانگ", "دانگ ویتنام", "vnd")),
+}
+FLAG_CC = {"usd": "us", "eur": "eu", "gbp": "gb", "aed": "ae", "try": "tr"}
+
+
+def _flag_emoji(cc: str) -> str:
+    return "".join(chr(0x1F1E6 + ord(ch) - 97) for ch in cc.lower()) if len(cc) == 2 else "💱"
+
+
+for _code, (_name, _cc, _names) in WORLD_FIAT.items():
+    ASSETS[_code] = ("fiat", _name, _name, _flag_emoji(_cc), _names)
+    FLAG_CC[_code] = _cc
+
 _UNIT_WORDS = ("عدد", "تا", "واحد", "گرم")
 _FA = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 
@@ -103,7 +163,7 @@ def parse(text: str | None) -> tuple[float, str] | None:
 # کلمه‌های رایج گفتگو که نباید به‌عنوان نماد ارز جواب بگیرند
 _STOP = {"hi", "hello", "ok", "okay", "no", "yes", "the", "lol", "gm", "gn", "me", "you", "it", "is", "a", "an", "and", "or",
          "so", "go", "up", "hey", "bye", "thanks", "thx", "wow", "good", "nice", "love", "one", "all", "get", "any", "new",
-         "now", "win", "test", "bot", "start", "help", "admin", "free", "pls", "plz", "my", "we", "in", "on", "of", "to"}
+         "now", "win", "test", "try", "php", "amd", "bot", "start", "help", "admin", "free", "pls", "plz", "my", "we", "in", "on", "of", "to"}
 _PREFIX = re.compile(r"^(?:قیمت|price|/p|/price|\$)\s*(.+)$", re.I)
 
 
@@ -240,6 +300,7 @@ async def brs_items(bot_id: int) -> list[dict]:
 _BRS_SYMBOLS = {"18": ("IR_GOLD_18K",), "24": ("IR_GOLD_24K",), "امامی": ("IR_COIN_EMAMI", "IR_COIN_1"),
                 "نیم": ("IR_COIN_HALF",), "ربع": ("IR_COIN_QUARTER",), "انس": ("XAUUSD",), "دلار": ("USD",),
                 "یورو": ("EUR",), "پوند": ("GBP",), "درهم": ("AED",), "لیر": ("TRY",)}
+_BRS_SYMBOLS.update({_n: (_c.upper(),) for _c, (_n, _cc, _a) in WORLD_FIAT.items()})
 
 
 def find_brs(rows: list[dict], kind: str, ident: str) -> dict | None:
@@ -273,8 +334,18 @@ def find_brs(rows: list[dict], kind: str, ident: str) -> dict | None:
 _RIAL = contextvars.ContextVar("pq_rial", default=False)   # «… به ریال» ⇒ مبلغ‌های ایرانی به ریال
 
 
+def _num_fa(v: float) -> str:
+    """مبلغ ایرانی: بزرگ بدون اعشار؛ کوچک (مثل دانگ ویتنام) با اعشار کافی."""
+    a = abs(v)
+    if a >= 100:
+        return f"{v:,.0f}"
+    if a >= 1:
+        return f"{v:,.2f}".rstrip("0").rstrip(".")
+    return f"{v:.4f}".rstrip("0").rstrip(".") if a >= 0.0001 else f"{v:.2e}"
+
+
 def _tm(v: float) -> str:
-    return f"{v * (10 if _RIAL.get() else 1):,.0f} {'ریال' if _RIAL.get() else 'تومان'}"
+    return f"{_num_fa(v * (10 if _RIAL.get() else 1))} {'ریال' if _RIAL.get() else 'تومان'}"
 
 
 def _tm_label() -> str:
@@ -303,7 +374,9 @@ HELP_TEXT = ("🔎 <b>راهنمای قیمت‌یاب</b>\n\n"
              "🏅 <b>طلا، سکه و ارز</b>\n"
              "┤ <code>2 گرم طلا</code> · <code>طلای 24</code> · <code>انس طلا</code>\n"
              "┤ <code>سکه امامی</code> · <code>نیم سکه</code> · <code>ربع سکه</code>\n"
-             "┙ <code>5 دلار</code> · <code>100 یورو</code> · <code>درهم</code> · <code>لیر</code> · <code>پوند</code>\n\n"
+             "┤ <code>5 دلار</code> · <code>100 یورو</code> · <code>درهم</code> · <code>لیر</code> · <code>پوند</code>\n"
+             "┙ همهٔ پول‌های جهان: <code>1000 افغانی</code> · <code>یوان</code> · <code>روبل</code> · <code>دینار</code> · "
+             "<code>ریال عربستان</code> · <code>منات</code> · <code>دلار کانادا</code> …\n\n"
              "💱 <b>به ریال یا تومان</b>\n"
              "┙ آخرش بنویس «به ریال»: <code>قیمت 5 تون به ریال</code> (پیش‌فرض تومان)\n\n"
              "📊 جواب: قیمت دلاری و تومانی، تغییر و سود و ضرر 24 ساعته، رتبه، سقف و کف، حجم، ساپلای، کپ و نمودار کندلی.")
@@ -525,6 +598,8 @@ async def asset_card(bot_id: int, key: str, bot_username: str) -> bytes | None:
     """تصویر کارت برای دلار/ارز/طلا/سکه با لوگو یا پرچم و نمودار (دلار: کندل روزانهٔ نوبیتکس؛ طلا: انس جهانی)."""
     from tenant.shared import coin_data as cd
     meta = CARD_META.get(key)
+    if not meta and ASSETS.get(key, ("",))[0] == "fiat":            # PATCH_PRICE_WORLD_FIAT_V1
+        meta = (key.upper(), FLAG_CC.get(key, ""), "")
     if not meta:
         return None
     title, flag, icon = meta
@@ -612,7 +687,7 @@ async def quote(bot_id: int, qty: float, key: str) -> str:
 # ارزها: نسبت جهانی (CoinGecko exchange_rates) × نرخ زندهٔ دلار. همه با برچسب روشن که «محاسبه‌ای» است.
 OUNCE_G = 31.1034768
 COIN_GOLD_G = {"emami": 8.133 * 0.9, "nim": 4.0665 * 0.9, "rob": 2.03225 * 0.9}
-_FX_CODE = {"eur": "eur", "gbp": "gbp", "aed": "aed", "try": "try"}
+_FX_CODE = {k: k for k, v in ASSETS.items() if v[0] == "fiat" and k != "usd"}   # همهٔ ارزهای کاغذی (کد ISO)
 
 
 async def _fx_usd_per(code: str) -> float | None:

@@ -153,7 +153,7 @@ def render_card(*, title: str, subtitle: str, price: float, change_pct: float | 
     dark_accent = _shade(accent, -0.15)
     irt = unit == "irt"
     if irt:
-        ptxt = f"{price:,.0f}"
+        ptxt = f"{price:,.0f}" if price >= 100 else (f"{price:,.2f}" if price >= 1 else f"{price:.4f}".rstrip("0"))
         d.text((ix, iy + 120), ptxt, fill=TXT, font=font(130, True))
         d.text((ix + _tw(d, ptxt, font(130, True)) + 14, iy + 176), "IRT", fill=dark_accent, font=font(64, True))
     else:
