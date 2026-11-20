@@ -113,9 +113,10 @@ async def _bal(maker):
 
 
 def test_adapter_supports_only_marzban_family():
-    for k in ("marzban", "rebecca", "pasargad", "rickpanel", "marzban#2"):
+    # PATCH_PSEL_PASARGUARD_V1: «pasarguard» همان کلاینتِ «pasargad» است (از وقتی دو فایل یکی شدند)
+    for k in ("marzban", "rebecca", "pasargad", "pasarguard", "rickpanel", "marzban#2"):
         assert AD.supports(k)
-    for k in ("sanai", "hiddify", "alireza", "pasarguard", "marzneshin", None):
+    for k in ("sanai", "hiddify", "alireza", "marzneshin", None):
         assert not AD.supports(k)
 
 

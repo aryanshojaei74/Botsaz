@@ -125,6 +125,12 @@ async def test_pasarguard_family_uses_resubs_too_but_only_when_panel_says_enable
     assert await AD.PanelAdminAPI(off, "pasargad").create_resub("psabcdefgh", "Ab12!xyz-Qw9", 10) is None
     assert ("POST", "/accounting/api/resubs") not in off.calls            # فعال نبود ⇒ مسیرِ قدیمی، هیچ نوشتنی روی resubs
 
+    # PATCH_PSEL_PASARGUARD_V1 (دیار): همان پنل وقتی با نوعِ «pasarguard» وصل شده هم قابلِ فروش است و زیرنماینده می‌سازد
+    assert AD.supports("pasarguard") and AD.supports("pasarguard#2")
+    on2 = FakePG(True)
+    on2.base_url = "https://pg-guard.test"
+    assert await AD.PanelAdminAPI(on2, "pasarguard").create_resub("psabcdefgh", "Ab12!xyz-Qw9", 10) == f"{OWNER}_psabcdefgh"
+
 
 @pytest.mark.asyncio
 async def test_html_or_empty_answers_never_count_as_enabled_and_unsupported_panels_are_skipped():

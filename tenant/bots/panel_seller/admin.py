@@ -177,7 +177,7 @@ async def menu_content(row, scope: int = 0):
     if pend:
         text += f"\n\n📨 <b>{fa(pend)}</b> سفارشِ دستی منتظرِ ارسالِ مشخصات است."
     if panels and not sup and not manual_pk:
-        text += "\n\n⚠️ هیچ‌کدام از پنل‌هایِ متصل «ادمین» ندارند؛ فقط خانوادهٔ مرزبان (مرزبان/ربکا/پاسارگادِ قدیمی/ریک‌پنل) قابلِ فروش است."
+        text += "\n\n⚠️ هیچ‌کدام از پنل‌هایِ متصل «ادمین» ندارند؛ فقط خانوادهٔ مرزبان (مرزبان/ربکا/پاسارگاد/پاسارگارد/ریک‌پنل) قابلِ فروش است."
     top = [[btn("🔁 تغییرِ پنل", "psel:sc:x", style=ButtonStyle.SUCCESS)]] if len(sup) >= 2 else []
     return text, kb(
         *top,

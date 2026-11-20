@@ -14,7 +14,9 @@ from urllib.parse import quote
 
 from tenant.shared.panel_clients.vpn_panel import PanelError
 
-SUPPORTED_BASES = frozenset({"marzban", "rebecca", "pasargad", "rickpanel"})
+# PATCH_PSEL_PASARGUARD_V1 (دیار): «pasarguard» همان کلاینتِ «pasargad» است (pasarguard_panel فقط re-export می‌کند)؛
+# قبلاً جا مانده بود و پنلِ پاسارگاردی که با این نوع وصل شده بود «قابلِ فروش نیست» دیده می‌شد (حتی با API زیرنماینده).
+SUPPORTED_BASES = frozenset({"marzban", "rebecca", "pasargad", "pasarguard", "rickpanel"})
 
 
 def base_key(panel_key: str | None) -> str:
