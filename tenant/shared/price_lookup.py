@@ -210,7 +210,7 @@ def parse_brs(data) -> list[dict]:
         if "ریال" in str(it.get("unit") or ""):
             price /= 10
         out.append({"name": name, "price": price, "change": _num(it.get("change_percent")) if it.get("change_percent") is not None else None,
-                    "unit": str(it.get("unit") or "")})
+                    "unit": str(it.get("unit") or ""), "symbol": str(it.get("symbol") or "").upper()})
     return out
 
 
@@ -240,10 +240,20 @@ async def brs_items(bot_id: int) -> list[dict]:
     return await _cached(f"brs:{key[:6]}", go) or []
 
 
+_BRS_SYMBOLS = {"18": ("IR_GOLD_18K",), "24": ("IR_GOLD_24K",), "امامی": ("IR_COIN_EMAMI", "IR_COIN_1"),
+                "نیم": ("IR_COIN_HALF",), "ربع": ("IR_COIN_QUARTER",), "انس": ("XAUUSD",), "دلار": ("USD",),
+                "یورو": ("EUR",), "پوند": ("GBP",), "درهم": ("AED",), "لیر": ("TRY",)}
+
+
 def find_brs(rows: list[dict], kind: str, ident: str) -> dict | None:
-    """یافتن ردیف طلا/سکه/ارز بر اساس نام فارسی."""
+    """یافتن ردیف طلا/سکه/ارز: اول با نماد BrsApi (IR_GOLD_18K، IR_COIN_EMAMI، USD …)، بعد با نام فارسی."""
     def has(n, *ws):
         return all(w in n for w in ws)
+    sym = _BRS_SYMBOLS.get(ident)
+    if sym:
+        for r in rows:
+            if r.get("symbol") in sym:
+                return r
     for r in rows:
         n = _norm(r["name"])
         if kind == "fiat":
@@ -508,12 +518,67 @@ async def quote(bot_id: int, qty: float, key: str) -> str:
         return render(qty, key, qty, qty * usd_toman, None, usd_toman)
     row = find_brs(await brs_items(bot_id), kind, ident)
     if not row:
-        return f"⚠️ قیمت {title} فعلاً در دسترس نیست؛ کمی بعد دوباره امتحان کن."
+        return await global_fallback(qty, key, usd_toman)
     if key == "ons":                                       # انس جهانی به دلار است
         usd = row["price"] * qty
         return render(qty, key, usd, usd * usd_toman if usd_toman else None, row.get("change"), usd_toman)
     toman = row["price"] * qty
     return render(qty, key, toman / usd_toman if usd_toman else None, toman, row.get("change"), usd_toman)
+
+
+# ───────── جایگزین وقتی BrsApi جواب نمی‌دهد (PATCH_PRICE_GOLD_FALLBACK_V1) ─────────
+# طلا: انس جهانی از CoinGecko (PAX Gold = یک اونس طلا) × نرخ زندهٔ دلار. سکه: ارزش طلای خالص سکه (بدون حباب بازار).
+# ارزها: نسبت جهانی (CoinGecko exchange_rates) × نرخ زندهٔ دلار. همه با برچسب روشن که «محاسبه‌ای» است.
+OUNCE_G = 31.1034768
+COIN_GOLD_G = {"emami": 8.133 * 0.9, "nim": 4.0665 * 0.9, "rob": 2.03225 * 0.9}
+_FX_CODE = {"eur": "eur", "gbp": "gbp", "aed": "aed", "try": "try"}
+
+
+async def _fx_usd_per(code: str) -> float | None:
+    """چند دلار به‌ازای یک واحد ارز (از نرخ‌های BTC در CoinGecko)."""
+    from tenant.shared import coin_data as cd
+
+    async def go():
+        d = await _http_json(f"{cd.CG}/exchange_rates")
+        return (d or {}).get("rates") if isinstance(d, dict) else None
+    try:
+        rates = await _cached("cg_fx", go)
+        usd, other = float(rates["usd"]["value"]), float(rates[code]["value"])
+        return usd / other if other else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def global_fallback(qty: float, key: str, usd_toman: float | None) -> str:
+    kind, _ident, title, _em, _n = ASSETS[key]
+    unavailable = f"⚠️ قیمت {title} فعلاً در دسترس نیست؛ کمی بعد دوباره امتحان کن."
+    if kind == "fiat":
+        per = await _fx_usd_per(_FX_CODE.get(key, ""))
+        if not per:
+            return unavailable
+        usd = per * qty
+        note = "ℹ️ محاسبه از نرخ جهانی × نرخ زندهٔ دلار؛ ممکن است با بازار آزاد کمی فرق کند."
+        return _with_note(render(qty, key, usd, usd * usd_toman if usd_toman else None, None, usd_toman), note)
+    from tenant.shared import coin_data as cd
+    paxg = await cd.cg_coin("pax-gold")
+    if paxg is None or not paxg.price:
+        return unavailable
+    ounce = paxg.price
+    if key == "ons":
+        usd = ounce * qty
+        note = "ℹ️ انس جهانی (PAX Gold)."
+    elif key in ("gold18", "gold24"):
+        usd = ounce / OUNCE_G * (0.75 if key == "gold18" else 1.0) * qty
+        note = "ℹ️ محاسبه از انس جهانی × نرخ زندهٔ دلار؛ قیمت بازار طلای ایران ممکن است کمی فرق کند."
+    else:
+        usd = ounce / OUNCE_G * COIN_GOLD_G[key] * qty
+        note = "ℹ️ ارزش طلای خالص سکه (بدون حباب بازار)؛ قیمت بازار سکه معمولا بیشتر است."
+    return _with_note(render(qty, key, usd, usd * usd_toman if usd_toman else None, paxg.change_pct, usd_toman), note)
+
+
+def _with_note(text: str, note: str) -> str:
+    i = text.rfind("\n\n⏰")
+    return text[:i] + "\n\n" + note + text[i:] if i >= 0 else text + "\n\n" + note
 
 
 # ───────────────────────── تنظیمات مالک ─────────────────────────
