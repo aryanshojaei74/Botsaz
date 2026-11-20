@@ -35,13 +35,22 @@ logger = _get_logger(__name__)
 
 wager_inline_router = Router(name="wager_inline")
 
-INLINE_GAMES = ("xo", "rps", "dice", "quiz")
-_NAMES = {"xo": ("دوز", "xo", "اکس او", "ایکس او"), "rps": ("سنگ کاغذ قیچی", "rps"), "dice": ("تاس", "dice"), "quiz": ("کوییز", "کویز", "کوئیز", "quiz")}
-_TITLE = {"xo": "❌⭕ دوز", "rps": "🪨📄✂️ سنگ کاغذ قیچی", "dice": "🎲 تاس", "quiz": "❓ کوییز"}
+TYPED_GAMES = ("speed", "math", "pattern", "scramble", "emoji")     # PATCH_INLINE_TYPED_V1 (سینا): جواب در پیوی ربات
+INLINE_GAMES = ("xo", "rps", "dice", "quiz") + TYPED_GAMES
+_NAMES = {"xo": ("دوز", "xo", "اکس او", "ایکس او"), "rps": ("سنگ کاغذ قیچی", "rps"), "dice": ("تاس", "dice"), "quiz": ("کوییز", "کویز", "کوئیز", "quiz"),
+          "speed": ("سرعت",), "math": ("ریاضی",), "pattern": ("الگو",), "scramble": ("درهم",),
+          "emoji": ("حدس ایموجی", "ایموجی")}
+_TITLE = {"xo": "❌⭕ دوز", "rps": "🪨📄✂️ سنگ کاغذ قیچی", "dice": "🎲 تاس", "quiz": "❓ کوییز", "speed": "⚡️ سرعت", "math": "🧮 ریاضی",
+          "pattern": "🧩 الگو", "scramble": "🔀 درهم", "emoji": "🤔 حدس ایموجی"}
 _DESC = {"xo": "هرکی یه خط سه‌تایی بسازه برنده‌ست.",
          "rps": "سنگ قیچی رو می‌شکنه، قیچی کاغذ رو می‌بره، کاغذ سنگ رو می‌پیچه. ۳ راندی؛ هرکی زودتر ۲ تا ببره برنده‌ست.",
          "dice": "هر نفر یک تاس می‌اندازد؛ عددِ بزرگ‌تر برنده است. پرتاب داخلِ پیویِ ربات انجام می‌شود.",
-         "quiz": "یک سؤال با ۴ گزینه؛ هر کس زودتر گزینهٔ درست را بزند برنده است (هر نفر یک فرصت؛ غلط = حذف)."}
+         "quiz": "یک سؤال با ۴ گزینه؛ هر کس زودتر گزینهٔ درست را بزند برنده است (هر نفر یک فرصت؛ غلط = حذف).",
+         "speed": "یک متن نمایش داده می‌شود؛ هر کس زودتر دقیق در پیوی ربات بنویسد برنده است.",
+         "math": "یک حساب ساده؛ هر کس زودتر جواب را در پیوی ربات بفرستد برنده است.",
+         "pattern": "عدد بعدی دنباله را زودتر از حریف در پیوی ربات بفرست.",
+         "scramble": "حروف یک کلمه درهم شده؛ هر کس زودتر کلمه را در پیوی ربات بنویسد برنده است.",
+         "emoji": "چند ایموجی؛ هر کس زودتر بگوید چه کلمه‌ای است (در پیوی ربات) برنده است."}
 _AMT = r"([۰-۹0-9,،]+)"
 def _alt(names) -> str:
     """نام‌هایِ بازی ⇒ الگوی regex (فاصله ⇒ \\s*). جدا از f-string است چون پایتونِ ۳٫۱۰ بک‌اسلش داخلِ f-string را نمی‌پذیرد."""
@@ -323,7 +332,7 @@ async def iwg_join(cb: CallbackQuery, bot: Bot):
                 o = await core.set_option(w.id, creator, {"xo": "X", "dice": "hi"}.get(game, cat), bot_id=row.id)
                 if o.err:
                     raise RuntimeError(o.err)
-            if game == "quiz":
+            if game == "quiz" or game in TYPED_GAMES:
                 import platform_wager_race as R
                 r = await R.join_race(w.id, (joiner.id, joiner.full_name or "", joiner.username or ""), row.id)
             else:
@@ -352,13 +361,13 @@ async def iwg_join(cb: CallbackQuery, bot: Bot):
         _STARTED[imid] = True
         if len(_STARTED) > 5000:
             _STARTED.clear()
-        if game == "quiz":                                  # مسابقه‌ها «زنده» در حافظه ثبت می‌شوند؛ مهلت هم با تایمر
+        if game == "quiz" or game in TYPED_GAMES:           # مسابقه‌ها «زنده» در حافظه ثبت می‌شوند؛ مهلت هم با تایمر
             import platform_wager_race as R
             qst = core._st(r.w)
-            R.LIVE[r.w.id] = {"wid": r.w.id, "chat": 0, "bot": row.id, "kind": "quiz",
+            R.LIVE[r.w.id] = {"wid": r.w.id, "chat": 0, "bot": row.id, "kind": r.w.game,
                               "players": {r.w.creator_id, r.w.opponent_id}, "answer": qst.get("a"), "n": qst.get("n"),
-                              "st": qst, "alts": qst.get("alts"), "until": time.monotonic() + R.SECS["quiz"] + 5}
-            asyncio.create_task(R._expire_later(bot, r.w.id, R.SECS["quiz"]))
+                              "st": qst, "alts": qst.get("alts"), "until": time.monotonic() + R.SECS[r.w.game] + 5}
+            asyncio.create_task(R._expire_later(bot, r.w.id, R.SECS[r.w.game]))
         text, kb = core.render(r.w)
         kb = await inline_kb(bot, r.w, kb)
         await _edit(bot, imid, text, kb)
@@ -384,6 +393,15 @@ async def _username(bot: Bot) -> str | None:
 
 async def inline_kb(bot: Bot, w: PlatformWager, kb):
     """کیبوردِ بازیِ اینلاین: دکمهٔ «پرتاب تاس» (callback) ⇒ دکمهٔ لینک به پیویِ ربات. بقیهٔ بازی‌ها دست‌نخورده."""
+    if w.game in TYPED_GAMES and w.status == "playing":          # PATCH_INLINE_TYPED_V1
+        try:
+            uname = await _username(bot)
+        except Exception:  # noqa: BLE001
+            uname = None
+        if uname:
+            return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                text="✍️ ارسال جواب (در پیوی ربات)", url=f"https://t.me/{uname}?start=iwt_{w.id}", style=ButtonStyle.SUCCESS)]])
+        return kb
     if kb is None or w.game != "dice" or w.status != "playing":
         return kb
     try:
@@ -518,4 +536,69 @@ async def wallet_deeplink(msg, bot: Bot, row) -> bool:
     from tenant import get_or_create_user, show_wallet
     u = await get_or_create_user(row.id, msg.from_user.id, msg.from_user.full_name or "", msg.from_user.username or "")
     await show_wallet(msg, row.id, u)
+    return True
+
+
+# ───────────────────────── بازی‌های تایپی از راه پیوی (PATCH_INLINE_TYPED_V1، ترفند سینا) ─────────────────────────
+# پیام اینلاین چت ندارد که جواب در آن نوشته شود. سؤال روی همان پیام اینلاین دیده می‌شود؛ دکمهٔ «✍️ ارسال جواب» بازیکن را به پیوی
+# ربات می‌برد (`/start iwt_<id>`) و از آن به بعد هر پیام متنیِ او در پیوی تا پایان بازی جواب حساب می‌شود. اولین جوابِ درست برنده است.
+_PM_RACE: dict[tuple[str, int], int] = {}          # (توکن ربات، آیدی کاربر) → شناسهٔ بازی
+
+
+async def typed_deeplink(msg, bot: Bot, row, payload: str) -> bool:
+    import platform_wager_race as R
+    try:
+        wid = int(payload[4:])
+    except ValueError:
+        return False
+    async with Session() as s:
+        w = await s.get(PlatformWager, wid)
+    uid = msg.from_user.id
+    if not w or (w.bot_id or 0) != row.id or w.game not in TYPED_GAMES:
+        await msg.answer("❌ این بازی پیدا نشد.")
+    elif uid not in (w.creator_id, w.opponent_id):
+        await msg.answer("❌ تو بازیکن این بازی نیستی.")
+    elif w.status != "playing" or wid not in R.LIVE:
+        await msg.answer("⌛ این بازی تمام شده است؛ نتیجه را در همان پیام بازی ببین.")
+    else:
+        _PM_RACE[(getattr(bot, "token", ""), uid)] = wid
+        text, _kb = R.render_race(w)
+        await msg.answer("✍️ <b>جوابت را همین‌جا بفرست</b> (اولین جواب درست برنده است)\n\n" + text, parse_mode="HTML")
+    return True
+
+
+def _expected(lv: dict) -> set[str]:
+    out = {str(lv.get("answer") or "")}
+    out |= {str(a) for a in (lv.get("alts") or [])}
+    return {a for a in out if a}
+
+
+async def pm_race_answer(msg, bot: Bot) -> bool:
+    """پیام متنی در پیوی: اگر کاربر در یک بازی تایپی اینلاین است، جواب حساب می‌شود. True ⇒ پیام مصرف شد."""
+    key = (getattr(bot, "token", ""), msg.from_user.id if msg.from_user else 0)
+    wid = _PM_RACE.get(key)
+    if wid is None:
+        return False
+    import platform_wager_race as R
+    lv = R.LIVE.get(wid)
+    if not lv or msg.from_user.id not in lv.get("players", ()):
+        _PM_RACE.pop(key, None)
+        return False                    # بازی تمام شده ⇒ پیام برای بقیهٔ ربات آزاد است
+    if (msg.text or "").startswith("/"):
+        return False
+    if R.norm_answer(msg.text) not in _expected(lv):
+        await msg.answer("❌ درست نبود؛ دوباره امتحان کن.")
+        return True
+    w = await R.settle_to(wid, msg.from_user.id)
+    if w is None:
+        if not await R._still_active(wid):
+            R.LIVE.pop(wid, None)
+            _PM_RACE.pop(key, None)
+        await msg.answer("⌛ این بازی دیگر فعال نیست.")
+        return True
+    R.LIVE.pop(wid, None)
+    for k in [k for k, v in _PM_RACE.items() if v == wid]:
+        _PM_RACE.pop(k, None)
+    await R._edit(bot, w)
+    await msg.answer("🏁 درست بود؛ <b>برنده شدی!</b>\n" + R.prize_line(w), parse_mode="HTML")
     return True

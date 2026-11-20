@@ -225,8 +225,16 @@ class NewPGStats:
     async def close(self): pass
 
 
+def _resubs_off():
+    """این تست‌ها دربارهٔ مسیرِ «ادمین» است؛ کشِ «زیرنماینده فعال است؟» را صریحاً خاموش کن تا به ترتیبِ اجرایِ تست‌ها وابسته نباشد."""
+    import time as _t
+    from tenant.bots.panel_seller import resubs as _RS
+    _RS._ENABLED[("", "")] = (False, "", _t.monotonic())
+
+
 @pytest.mark.asyncio
 async def test_new_pasarguard_reads_usage_and_user_count_from_admin_list():
+    _resubs_off()
     NewPGStats.calls = []
     api = AD.PanelAdminAPI(NewPGStats())
     assert await api.usage_bytes("psabc") == 5_000_000_000             # فقط خودِ ادمین (نه «other»)؛ بدونِ حساسیت به حروف
@@ -335,6 +343,7 @@ def test_support_url_normalisation():
 
 @pytest.mark.asyncio
 async def test_snapshot_single_request_for_new_style_and_fallback_for_old():
+    _resubs_off()
     NewPGStats.calls = []
     snap = await AD.PanelAdminAPI(NewPGStats()).snapshot("psabc")
     assert snap == {"used_bytes": 5_000_000_000, "users": 7, "new_style": True} and len(NewPGStats.calls) == 1

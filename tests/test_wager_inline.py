@@ -580,3 +580,55 @@ def test_free_game_texts_do_not_mention_money():
     assert "برگشت" in W._final_text(w(status="draw", amount=D(10000)))             # پولی مثل قبل
     t, _ = R.render_race(w(game="speed", status="expired"))
     assert "برگشت" not in t
+
+
+# ───────────── بازی‌های تایپی اینلاین (سرعت، ریاضی، …) با جواب در پیوی ─────────────
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("game", ["speed", "math", "scramble"])
+async def test_inline_typed_game_answer_in_pm_settles_on_the_inline_message(db, monkeypatch, game):
+    bot = await _stub_bot(monkeypatch)
+
+    async def cfj(b, bid, uid, bypass_cache=False): return []
+    monkeypatch.setattr(tenant, "check_force_join", cfj)
+
+    async def keep(b, wid, secs): return None
+    monkeypatch.setattr(PR, "_expire_later", keep)
+    PR.LIVE.clear()
+    WI._PM_RACE.clear()
+    await WI.iwg_join(Cb(bot, U2, f"iwg:j:{game}:10000:{U1}"), bot)
+    async with db() as s:
+        w = (await s.scalars(select(models.PlatformWager))).one()
+    assert w.game == game and w.status == "playing" and PR.LIVE[w.id]["chat"] == 0
+    kb = bot.edits[-1][1]["reply_markup"]
+    assert kb.inline_keyboard[0][0].url == f"https://t.me/shop_bot?start=iwt_{w.id}"   # دکمهٔ «ارسال جواب در پیوی»
+    row = types.SimpleNamespace(id=BOT)
+    for uid in (U1, U2):
+        m = PmMsg(uid)
+        assert await WI.typed_deeplink(m, bot, row, f"iwt_{w.id}")
+        assert "جوابت را همین‌جا بفرست" in m.sent[0][0]
+    outsider = PmMsg(999)
+    await WI.typed_deeplink(outsider, bot, row, f"iwt_{w.id}")
+    assert "بازیکن این بازی نیستی" in outsider.sent[0][0]
+    bad = PmMsg(U1)
+    bad.text = "قطعا اشتباه ۹۹۹۹"
+    assert await WI.pm_race_answer(bad, bot) and "درست نبود" in bad.sent[0][0]
+    good = PmMsg(U2)
+    lv = PR.LIVE[w.id]
+    good.text = str((lv.get("st") or {}).get("w") or lv["answer"])
+    if game == "speed":
+        good.text = str(lv["st"]["q"])
+    assert await WI.pm_race_answer(good, bot) and "برنده شدی" in good.sent[0][0]
+    async with db() as s:
+        w2 = await s.get(models.PlatformWager, w.id)
+    assert w2.status == "settled" and w2.winner_id == U2 and w.id not in PR.LIVE
+    assert await bal(db, U2) > 100_000 and await bal(db, U1) == 90_000
+    assert bot.edits[-1][1]["inline_message_id"] == IMID and "برنده" in bot.edits[-1][0]
+    later = PmMsg(U1)
+    later.text = "سلام"
+    assert not await WI.pm_race_answer(later, bot)                      # بعد از پایان، پیوی آزاد است
+
+
+def test_parse_query_typed_games():
+    assert WI.parse_query("سرعت") == ("speed", 0, True) and WI.parse_query("ریاضی 5000") == ("math", 5000, True)
+    assert WI.parse_query("حدس ایموجی") == ("emoji", 0, True)

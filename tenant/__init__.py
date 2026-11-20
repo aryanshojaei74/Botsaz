@@ -5378,6 +5378,10 @@ async def tenant_start(msg: Message, command: CommandObject, bot: Bot, state: FS
         from tenant.shared.wager_inline import dice_deeplink
         if await dice_deeplink(msg, bot, row, command.args):
             return
+    if (command.args or "").startswith("iwt_") and msg.chat.type == "private":   # PATCH_INLINE_TYPED_V1
+        from tenant.shared.wager_inline import typed_deeplink
+        if await typed_deeplink(msg, bot, row, command.args):
+            return
     if (command.args or "") == "iwc" and msg.chat.type == "private":       # PATCH_INLINE_BALANCE_CHECK_V1: شارژ موجودی
         from tenant.shared.wager_inline import wallet_deeplink
         if await wallet_deeplink(msg, bot, row):
@@ -7336,6 +7340,10 @@ async def tenant_buttons_stuck_state_rescue(msg: Message, bot: Bot, state: FSMCo
 
 @tenant_router.message(StateFilter(None), F.text)
 async def tenant_buttons(msg: Message, bot: Bot, state: FSMContext):
+    if msg.chat.type == "private":           # PATCH_INLINE_TYPED_V1: جواب بازی تایپی اینلاین در پیوی
+        from tenant.shared.wager_inline import _PM_RACE, pm_race_answer
+        if _PM_RACE and await pm_race_answer(msg, bot):
+            return
     # === PATCH_COMMUNITY_GROUP_BUTTONS_BYPASS_V1 ===
     # علتِ ریشه‌ایِ گزارشِ «سکوت/اخطار/بن کلاً کار نمی‌کنند»، پیدا شد —
     # هیچ ربطی به Privacy Mode یا آنتی‌اسپم نداشت (آن دو باگ هم واقعی
@@ -14547,7 +14555,7 @@ async def tenant_inline_chpost(q: InlineQuery, bot: Bot):
 
 
 # === PATCH_BUILD_ID_V1 === شماره نسخهٔ کدی که همین پروسه اجرا می‌کند؛ با /version مالک می‌بیند آپدیت روی «همین» سرویس اعمال شده یا نه
-BUILD_ID = "690"
+BUILD_ID = "691"
 
 
 @tenant_router.message(Command("version"))
