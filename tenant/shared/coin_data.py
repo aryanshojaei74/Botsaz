@@ -49,6 +49,7 @@ class Coin:
     source: str = ""
     candles: list = field(default_factory=list)        # [(ts_sec, o, h, l, c)]
     candle_label: str = ""
+    image: str = ""                                    # آدرس لوگو (PATCH_PRICE_CARD_LOGO_V1)
 
 
 _CACHE: dict[str, tuple[float, object]] = {}
@@ -154,18 +155,18 @@ async def cg_coin(cg_id: str) -> Coin | None:
              change_pct=_f(m.get("price_change_percentage_24h")), rank=m.get("market_cap_rank"),
              high=_f(m.get("high_24h")), low=_f(m.get("low_24h")), volume=_f(m.get("total_volume")),
              supply=_f(m.get("circulating_supply")) or _f(m.get("total_supply")), cap=_f(m.get("market_cap")),
-             source="coingecko")
+             source="coingecko", image=str(m.get("image") or ""))
     return _put_c(f"cgm:{cg_id}", c)
 
 
-async def cg_candles(cg_id: str) -> list:
-    val, ok = _get_c(f"cgo:{cg_id}", TTL_CANDLES)
+async def cg_candles(cg_id: str, days: int = 1) -> list:
+    val, ok = _get_c(f"cgo:{cg_id}:{days}", TTL_CANDLES)
     if ok:
         return val
-    d = await _json(f"{CG}/coins/{cg_id}/ohlc?vs_currency=usd&days=1")
+    d = await _json(f"{CG}/coins/{cg_id}/ohlc?vs_currency=usd&days={days}")
     rows = [(r[0] / 1000, float(r[1]), float(r[2]), float(r[3]), float(r[4]))
             for r in (d or []) if isinstance(r, list) and len(r) >= 5 and None not in r[:5]]
-    return _put_c(f"cgo:{cg_id}", rows) or []
+    return _put_c(f"cgo:{cg_id}:{days}", rows) or []
 
 
 # ───────────────────────── DexScreener / GeckoTerminal ─────────────────────────
@@ -189,7 +190,8 @@ def coin_from_pair(p: dict) -> Coin:
     return Coin(name=str(bt.get("name") or bt.get("symbol") or "?"), symbol=str(bt.get("symbol") or "").upper(),
                 price=_f(p.get("priceUsd")) or 0, change_pct=_f((p.get("priceChange") or {}).get("h24")),
                 volume=_f((p.get("volume") or {}).get("h24")), cap=_f(p.get("marketCap")) or _f(p.get("fdv")),
-                chain=str(p.get("chainId") or ""), source="dexscreener")
+                chain=str(p.get("chainId") or ""), source="dexscreener",
+                image=str((p.get("info") or {}).get("imageUrl") or ""))
 
 
 async def dex_lookup(query: str) -> tuple[Coin, dict] | None:
@@ -285,3 +287,45 @@ async def lookup(query: str, *, cg_id: str | None = None, strict: bool = False, 
     if with_candles:
         coin.candles, coin.candle_label = await gt_candles(pair), "15m"
     return coin
+
+
+# ───────── لوگو و تاریخچهٔ دلار (PATCH_PRICE_CARD_LOGO_V1) ─────────
+TTL_IMAGE = 24 * 3600
+FLAG_URL = "https://flagcdn.com/w160/{cc}.png"
+
+
+async def fetch_image(url: str) -> bytes | None:
+    """بایت تصویر لوگو/پرچم با کش ۲۴ ساعته؛ None اگر نشد (کارت با آیکون ساده ساخته می‌شود)."""
+    if not url or not url.startswith("https://"):
+        return None
+    val, ok = _get_c(f"img:{url}", TTL_IMAGE)
+    if ok:
+        return val
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=6)) as s:
+            async with s.get(url, headers={"User-Agent": "Mozilla/5.0"}) as r:
+                if r.status != 200:
+                    return None
+                data = await r.read()
+    except Exception:  # noqa: BLE001
+        logger.info("coin_data: لوگو دریافت نشد %s", url, exc_info=True)
+        return None
+    return _put_c(f"img:{url}", data) if 0 < len(data) < 2_000_000 else None
+
+
+async def usdt_irt_daily(days: int = 90) -> list:
+    """کندل روزانهٔ تتر/تومان از نوبیتکس (ریال ÷ ۱۰) ⇒ [(ts, o, h, l, c)] به تومان."""
+    val, ok = _get_c(f"nbx:{days}", 1800)
+    if ok:
+        return val
+    now = int(time.time())
+    d = await _json(f"https://apiv2.nobitex.ir/market/udf/history?symbol=USDTIRT&resolution=D&from={now - days * 86400}&to={now}")
+    try:
+        if d.get("s") != "ok":
+            return []
+        rows = [(float(t), float(o) / 10, float(h) / 10, float(lo) / 10, float(c) / 10)
+                for t, o, h, lo, c in zip(d["t"], d["o"], d["h"], d["l"], d["c"])]
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return []
+    return _put_c(f"nbx:{days}", rows) or []

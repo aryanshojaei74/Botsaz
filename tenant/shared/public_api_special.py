@@ -178,8 +178,7 @@ async def _resolve_dest(bot_id: int, link: str) -> tuple[int, str, str]:
         if f"@{uname}".lower() not in label.lower():
             label += f"\n👤 یوزرنیم: @{uname}"
         return u.telegram_id, label, uname
-    return 0, (f"👤 یوزرنیم: @{uname}\n"
-               "⚠️ این شخص ربات را استارت نکرده — ارسال دستی است."), uname
+    return 0, f"👤 یوزرنیم: @{uname}", uname   # PATCH_HIDE_MANUAL_NOTE_V1
 
 
 async def _debit_and_create(bot_id: int, buyer_tid: int, price: int, note: str, **order_kw) -> tuple[int, str]:

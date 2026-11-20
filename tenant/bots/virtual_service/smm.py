@@ -20637,8 +20637,7 @@ async def _stars_show_invoice(target: Message, bot: Bot, dest_id: int, dest_labe
     # callback_data می‌بریم تا مرحلهٔ پرداخت بدونِ نیاز به state بتونه
     # دوباره بسازدش.
     uname_part = f":{dest_username}" if dest_id == 0 and dest_username else ""
-    note = ("\n\n⚠️ این شخص ربات را استارت نکرده — سفارش ثبت می‌شود ولی "
-            "ارسال کاملاً دستی خواهد بود." if dest_id == 0 else "")
+    note = ""   # PATCH_HIDE_MANUAL_NOTE_V1: هشدار «ارسال دستی» به مشتری نشان داده نمی‌شود
     from tenant.bots.virtual_service.vs_discount import vsd_rows   # PATCH_VS_DISCOUNT_V1
     from tenant.shared import vs_pay as _vp   # PATCH_VS_PAY_V1 — تیک‌هایِ مالک + شارژ حساب
     _pay_rows = await _vp.pay_rows(row.id, _vp.tg_of(target), price, f"star:pay:{dest_id}:{qty}{uname_part}",
@@ -20771,8 +20770,7 @@ async def place_stars_order(bot: Bot, row, *, buyer_tg_id: int, buyer_name: str,
                 id=buyer_tg_id, username=buyer_username or None))
         elif dest_id == 0 and dest_username:
             # === PATCH_STARS_UNSTARTED_DEST_V1 ===
-            dest_label = (f"👤 یوزرنیم: @{dest_username}\n"
-                          "⚠️ این شخص ربات را استارت نکرده — ارسال کاملاً دستی است.")
+            dest_label = f"👤 یوزرنیم: @{dest_username}"   # PATCH_HIDE_MANUAL_NOTE_V1 (سینا: مشتری نباید بداند دستی است)
         else:
             dest_label = await _resolve_dest_label(row.id, dest_id)
         order = GiftOrder(bot_id=row.id, buyer_user_id=b.id, gift_id=f"starsell_{qty}",
@@ -20920,8 +20918,7 @@ async def star_cardpay_start(cb: CallbackQuery, bot: Bot, state: FSMContext):
     if dest_id == cb.from_user.id:
         dest_label = _self_dest_label(cb.from_user)
     elif dest_id == 0 and dest_username:
-        dest_label = (f"👤 یوزرنیم: @{dest_username}\n"
-                      "⚠️ این شخص ربات را استارت نکرده — ارسال کاملاً دستی است.")
+        dest_label = f"👤 یوزرنیم: @{dest_username}"   # PATCH_HIDE_MANUAL_NOTE_V1
     else:
         dest_label = await _resolve_dest_label(row.id, dest_id)
     async with Session() as s:

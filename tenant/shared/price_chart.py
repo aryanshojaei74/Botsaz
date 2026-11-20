@@ -69,43 +69,110 @@ def _tw(d, text, f) -> int:
     return b[2] - b[0]
 
 
+def accent_of(logo: bytes | None):
+    """رنگ غالب لوگو (پیکسل‌های پررنگ و غیرشفاف) ⇒ (r, g, b)؛ اگر نشد آبی پیش‌فرض."""
+    if not logo:
+        return BLUE
+    try:
+        from PIL import Image
+        im = Image.open(io.BytesIO(logo)).convert("RGBA").resize((48, 48))
+        best, n = [0, 0, 0], 0
+        for r, g, b, a in im.getdata():
+            mx, mn = max(r, g, b), min(r, g, b)
+            if a < 128 or mx - mn < 40 or mx < 60:          # شفاف، خاکستری یا خیلی تیره
+                continue
+            best[0] += r
+            best[1] += g
+            best[2] += b
+            n += 1
+        if n < 20:
+            return BLUE
+        return tuple(int(v / n) for v in best)
+    except Exception:  # noqa: BLE001
+        return BLUE
+
+
+def _shade(c, k: float):
+    """k>0 روشن‌تر، k<0 تیره‌تر."""
+    if k >= 0:
+        return tuple(int(v + (255 - v) * k) for v in c)
+    return tuple(int(v * (1 + k)) for v in c)
+
+
+def _paste_logo(img, logo: bytes | None, x: int, y: int, size: int, accent, kind: str = ""):
+    from PIL import Image, ImageDraw
+    d = ImageDraw.Draw(img)
+    if logo:
+        try:
+            lg = Image.open(io.BytesIO(logo)).convert("RGBA")
+            k = size / min(lg.width, lg.height)                  # پرکردن دایره (پرچم مستطیل هم کامل دیده شود)
+            lg = lg.resize((max(size, round(lg.width * k)), max(size, round(lg.height * k))))
+            left, top = (lg.width - size) // 2, (lg.height - size) // 2
+            lg = lg.crop((left, top, left + size, top + size))
+            canvas = Image.new("RGBA", (size, size), (255, 255, 255, 0))
+            canvas.paste(lg, (0, 0), lg)
+            mask = Image.new("L", (size, size), 0)
+            ImageDraw.Draw(mask).ellipse([0, 0, size - 1, size - 1], fill=255)
+            img.paste(canvas, (x, y), Image.composite(canvas.split()[3], Image.new("L", (size, size), 0), mask))
+            return
+        except Exception:  # noqa: BLE001
+            logo = None                                     # تصویر خراب ⇒ آیکون ساده
+    d.ellipse([x, y, x + size, y + size], fill=accent)
+    if kind == "gold":                                      # شمش ساده
+        d.polygon([(x + 18, y + 58), (x + 28, y + 30), (x + 58, y + 30), (x + 68, y + 58)], fill=(255, 236, 160))
+    else:                                                   # الماس ساده
+        d.polygon([(x + 22, y + 34), (x + 32, y + 22), (x + 54, y + 22), (x + 64, y + 34), (x + 43, y + 64)],
+                  fill=(255, 255, 255))
+
+
 def render_card(*, title: str, subtitle: str, price: float, change_pct: float | None, change_usd: float | None,
-                candles: list, bot_username: str = "", stamp: str = "") -> bytes:
-    """candles: [(ts_sec, o, h, l, c)] — اگر خالی بود کارت بدون نمودار ساخته می‌شود."""
+                candles: list, bot_username: str = "", stamp: str = "", logo: bytes | None = None,
+                unit: str = "usd", icon_kind: str = "") -> bytes:
+    """candles: [(ts_sec, o, h, l, c)]. unit="usd" ⇒ «$1.02»؛ unit="irt" ⇒ «269,970 IRT» (تومان، بدون اعشار).
+    logo: بایت تصویر لوگوی ارز/پرچم؛ رنگ زمینه از رنگ غالب لوگو ساخته می‌شود."""
     from PIL import Image, ImageDraw
 
-    img = Image.new("RGB", (W, H), BLUE)
+    accent = accent_of(logo) if logo else ((212, 160, 23) if icon_kind == "gold" else BLUE)
+    top_c, bot_c = _shade(accent, 0.35), _shade(accent, -0.45)
+    img = Image.new("RGB", (W, H), top_c)
     d = ImageDraw.Draw(img)
-    for y in range(H):                                       # پس‌زمینهٔ گرادیان آبی
-        t = y / H
-        d.line([(0, y), (W, y)], fill=(int(96 - 70 * t), int(178 - 90 * t), int(245 - 95 * t)))
+    for yy in range(H):                                      # گرادیان هم‌رنگ لوگو
+        t = yy / H
+        d.line([(0, yy), (W, yy)], fill=tuple(int(top_c[k] + (bot_c[k] - top_c[k]) * t) for k in range(3)))
     cx0, cy0, cx1, cy1 = 56, 56, W - 56, H - 56
     d.rounded_rectangle([cx0, cy0, cx1, cy1], radius=40, fill=(255, 255, 255))
 
     if bot_username:
         u = "@" + bot_username.lstrip("@")
         d.text(((W - _tw(d, u, font(26))) / 2, cy0 + 36), u, fill=MUTED, font=font(26))
-    # آیکون الماس ساده + عنوان
     ix, iy = cx0 + 44, cy0 + 86
-    d.ellipse([ix, iy, ix + 86, iy + 86], fill=BLUE)
-    d.polygon([(ix + 22, iy + 34), (ix + 32, iy + 22), (ix + 54, iy + 22), (ix + 64, iy + 34), (ix + 43, iy + 64)],
-              fill=(255, 255, 255))
+    _paste_logo(img, logo, ix, iy, 86, accent, icon_kind)
+    d = ImageDraw.Draw(img)
     d.text((ix + 104, iy + 2), title[:28], fill=TXT, font=font(62, True))
     d.text((ix + 104, iy + 84), subtitle[:70], fill=MUTED, font=font(28, True))
-    d.text((ix, iy + 130), "$", fill=BLUE, font=font(120, True))
-    d.text((ix + 80, iy + 120), fmt_price(price), fill=TXT, font=font(130, True))
+    dark_accent = _shade(accent, -0.15)
+    irt = unit == "irt"
+    if irt:
+        ptxt = f"{price:,.0f}"
+        d.text((ix, iy + 120), ptxt, fill=TXT, font=font(130, True))
+        d.text((ix + _tw(d, ptxt, font(130, True)) + 14, iy + 176), "IRT", fill=dark_accent, font=font(64, True))
+    else:
+        d.text((ix, iy + 130), "$", fill=dark_accent, font=font(120, True))
+        d.text((ix + 80, iy + 120), fmt_price(price), fill=TXT, font=font(130, True))
     if change_pct is not None:
         col = GREEN if change_pct >= 0 else RED
         t1 = f"{change_pct:+.2f}%"
         d.text((cx1 - 44 - _tw(d, t1, font(40, True)), iy + 6), t1, fill=col, font=font(40, True))
         if change_usd is not None:
-            t2 = f"{'+' if change_pct >= 0 else '-'}${fmt_price(abs(change_usd))}"
+            sign = "+" if change_pct >= 0 else "-"
+            t2 = f"{sign}{abs(change_usd):,.0f} IRT" if irt else f"{sign}${fmt_price(abs(change_usd))}"
             d.text((cx1 - 44 - _tw(d, t2, font(30, True)), iy + 58), t2, fill=col, font=font(30, True))
 
     # نمودار
     gx0, gy0, gx1, gy1 = cx0 + 36, cy0 + 350, cx1 - 150, cy1 - 96
     d.rectangle([gx0, gy0, gx1, gy1], outline=GRID, width=2)
     cs = [c for c in candles or [] if len(c) >= 5][-96:]
+    fmt_axis = (lambda v: f"{v:,.0f}") if irt else fmt_price
     if len(cs) >= 2:
         lo = min(c[3] for c in cs)
         hi = max(c[2] for c in cs)
@@ -118,14 +185,15 @@ def render_card(*, title: str, subtitle: str, price: float, change_pct: float | 
         for v in _axis_labels(lo, hi):
             yy = y(v)
             d.line([(gx0, yy), (gx1, yy)], fill=GRID, width=2)
-            d.text((gx1 + 14, yy - 14), fmt_price(v), fill=MUTED, font=font(24))
+            d.text((gx1 + 14, yy - 14), fmt_axis(v), fill=MUTED, font=font(22 if irt else 24))
         n = len(cs)
         step = (gx1 - gx0) / n
         bw = max(2, step * 0.6)
-        for i in range(0, n, max(1, n // 7)):                    # برچسب ساعت (به وقت ایران)
+        daily = (cs[-1][0] - cs[0][0]) > 3 * 86400            # بازهٔ چندروزه ⇒ برچسب تاریخ
+        for i in range(0, n, max(1, n // 7)):
             xx = gx0 + step * (i + 0.5)
             d.line([(xx, gy0), (xx, gy1)], fill=GRID, width=2)
-            lbl = time.strftime("%H:%M", time.gmtime(cs[i][0] + 12600))
+            lbl = time.strftime("%m/%d" if daily else "%H:%M", time.gmtime(cs[i][0] + 12600))
             d.text((xx - _tw(d, lbl, font(24)) / 2, gy1 + 12), lbl, fill=MUTED, font=font(24))
         for i, (_ts, o, h, l, c) in enumerate(cs):
             xx = gx0 + step * (i + 0.5)

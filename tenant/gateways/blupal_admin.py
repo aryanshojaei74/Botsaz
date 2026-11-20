@@ -379,8 +379,15 @@ async def _issue(message: Message, bot: Bot, amount: int, payer, from_text: bool
     from tenant.shared.kyc_user import invoice_card_block as _icb      # PATCH_INVOICE_KYC_CARD_V1
     _kyc_txt, _kyc_rows = await _icb(row.id, payer.id)
     _show_pay = await BP._get(row.id, "blupal_show_pay_btn", "1") == "1"      # PATCH_BLUPAL_PAYBTN_V1
+    # PATCH_BLUPAL_COPY_BTNS_V1 (سینا): مثل تون‌پیز، دکمهٔ کپیِ مبلغِ دقیق (ریال) و شمارهٔ کارت
+    from aiogram.types import CopyTextButton as _Copy
+    _card_digits = "".join(c for c in card if c.isdigit())
+    _copy_row = [InlineKeyboardButton(text="📋 کپی مبلغ دقیق (ریال)", copy_text=_Copy(text=str(final_rial)))]
+    if _card_digits:
+        _copy_row.append(InlineKeyboardButton(text="📋 کپی شمارهٔ کارت", copy_text=_Copy(text=_card_digits)))
     kb = InlineKeyboardMarkup(inline_keyboard=(
-        ([[InlineKeyboardButton(text="💳 صفحهٔ پرداخت", url=str(res["payment_link"]))]] if _show_pay else []) + [
+        ([[InlineKeyboardButton(text="💳 صفحهٔ پرداخت", url=str(res["payment_link"]))]] if _show_pay else []) +
+        [_copy_row] + [
         [InlineKeyboardButton(text="🔍 بررسیِ پرداخت", callback_data=f"bpu:check:{oid}", style=ButtonStyle.SUCCESS)],
         [InlineKeyboardButton(text="❌ لغو و بازگشت", callback_data=f"bpu:cancel:{oid}", style=ButtonStyle.DANGER)],
     ]))

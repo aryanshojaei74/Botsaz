@@ -292,6 +292,8 @@ class _HXParser(HTMLParser):
             href = dict(attrs).get("href", "")
             self._open.append({"type": "text_link", "start": self.utf16_pos, "url": href})
             return
+        if etype == "blockquote" and any(k == "expandable" for k, _v in attrs):
+            etype = "expandable_blockquote"      # PATCH_EXPANDABLE_QUOTE_V1: قبلاً expandable دور ریخته می‌شد
         if etype:
             self._open.append({"type": etype, "start": self.utf16_pos})
 
@@ -317,7 +319,8 @@ class _HXParser(HTMLParser):
         for idx in range(len(self._open) - 1, -1, -1):
             frame = self._open[idx]
             if (tag == "a" and frame["type"] == "text_link") or \
-               (_TAG_TO_ENTITY.get(tag) == frame["type"]):
+               (_TAG_TO_ENTITY.get(tag) == frame["type"]) or \
+               (tag == "blockquote" and frame["type"] == "expandable_blockquote"):
                 start = frame["start"]
                 length = self.utf16_pos - start
                 if length > 0:

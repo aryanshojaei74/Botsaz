@@ -181,6 +181,8 @@ async def test_amount_flow_converts_toman_to_rial_and_shows_exact_amount(env, mo
     assert "1,000,123 ریال" in text and "6219861012345678" in text
     assert "مبلغِ شارژ" not in text and "100,000" not in text            # فدایی: فقط مبلغِ دقیقِ واریز
     assert kb.inline_keyboard[0][0].url == "https://blupal.top/payment/T101"
+    copies = [b.copy_text.text for b in kb.inline_keyboard[1]]           # PATCH_BLUPAL_COPY_BTNS_V1
+    assert copies == ["1000123", "6219861012345678"]
     assert fb.invoices[101]["amount"] == 1_000_000                       # تومان×۱۰ = ریال
     async with maker() as s:
         ch = await s.scalar(select(models.BluPalCharge))

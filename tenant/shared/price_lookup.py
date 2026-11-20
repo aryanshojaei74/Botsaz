@@ -466,7 +466,7 @@ async def _usd_toman() -> float | None:
     return v or None
 
 
-def _card(coin, bot_username: str) -> bytes | None:
+def _card(coin, bot_username: str, logo: bytes | None = None) -> bytes | None:
     import datetime as dt
     from tenant.shared.price_chart import render_card
     sub = " • ".join(x for x in (f"#{coin.rank}" if coin.rank else "", f"{coin.supply:,.0f} supply" if coin.supply else "",
@@ -476,9 +476,86 @@ def _card(coin, bot_username: str) -> bytes | None:
     ch_usd = (coin.price - coin.price / (1 + coin.change_pct / 100)) if coin.change_pct not in (None,) and coin.change_pct > -100 else None
     try:
         return render_card(title=title, subtitle=sub, price=coin.price, change_pct=coin.change_pct, change_usd=ch_usd,
-                           candles=coin.candles, bot_username=bot_username, stamp=now.strftime("%d %b %Y • %H:%M"))
+                           candles=coin.candles, bot_username=bot_username, stamp=now.strftime("%d %b %Y • %H:%M"),
+                           logo=logo)
     except Exception:  # noqa: BLE001
         logger.warning("price_lookup: ساخت تصویر نمودار ناموفق", exc_info=True)
+        return None
+
+
+# ───────── کارت تصویری طلا، سکه و ارز (PATCH_PRICE_CARD_LOGO_V1، سینا: «طلا و دلار هم عکس دارند») ─────────
+CARD_META = {   # key ⇒ (عنوان لاتین، کد پرچم یا "" ، نوع آیکون)
+    "usd": ("USD", "us", ""), "eur": ("EUR", "eu", ""), "gbp": ("GBP", "gb", ""), "aed": ("AED", "ae", ""),
+    "try": ("TRY", "tr", ""), "gold18": ("GOLD 18K", "", "gold"), "gold24": ("GOLD 24K", "", "gold"),
+    "emami": ("EMAMI COIN", "", "gold"), "nim": ("HALF COIN", "", "gold"), "rob": ("QUARTER COIN", "", "gold"),
+    "ons": ("GOLD OUNCE", "", "gold")}
+
+
+async def unit_value(bot_id: int, key: str, usd_toman: float | None) -> tuple[float | None, str]:
+    """قیمت یک واحد ⇒ (مقدار، "irt" یا "usd"). همان منابع quote: BrsApi، بعد محاسبه از نرخ جهانی."""
+    kind, ident, _t, _e, _n = ASSETS[key]
+    if key == "usd":
+        return usd_toman, "irt"
+    row = find_brs(await brs_items(bot_id), kind, ident)
+    if row:
+        return row["price"], ("usd" if key == "ons" else "irt")
+    if kind == "fiat":
+        per = await _fx_usd_per(_FX_CODE.get(key, ""))
+        return (per * usd_toman if per and usd_toman else None), "irt"
+    from tenant.shared import coin_data as cd
+    paxg = await cd.cg_coin("pax-gold")
+    if paxg is None or not paxg.price:
+        return None, "irt"
+    if key == "ons":
+        return paxg.price, "usd"
+    grams = (0.75 if key == "gold18" else 1.0) if key.startswith("gold") else COIN_GOLD_G[key]
+    usd = paxg.price / OUNCE_G * grams
+    return (usd * usd_toman if usd_toman else None), "irt"
+
+
+def _day_change(cs: list) -> tuple[float | None, float | None]:
+    """درصد و مقدار تغییر ۲۴ ساعت از روی کندل‌ها."""
+    if len(cs) < 2:
+        return None, None
+    last_ts, last = cs[-1][0], cs[-1][4]
+    prev = next((c[4] for c in reversed(cs[:-1]) if c[0] <= last_ts - 86400 + 3600), cs[-2][4])
+    if not prev:
+        return None, None
+    return (last - prev) / prev * 100, last - prev
+
+
+async def asset_card(bot_id: int, key: str, bot_username: str) -> bytes | None:
+    """تصویر کارت برای دلار/ارز/طلا/سکه با لوگو یا پرچم و نمودار (دلار: کندل روزانهٔ نوبیتکس؛ طلا: انس جهانی)."""
+    from tenant.shared import coin_data as cd
+    meta = CARD_META.get(key)
+    if not meta:
+        return None
+    title, flag, icon = meta
+    rate = (await live_rate())[0] or None
+    value, unit = await unit_value(bot_id, key, rate)
+    if not value:
+        return None
+    if ASSETS[key][0] == "fiat":
+        base = await cd.usdt_irt_daily(90)
+        k = value / base[-1][4] if base and base[-1][4] else 0
+        cs, label = [(t, o * k, h * k, lo * k, c * k) for t, o, h, lo, c in base] if k else [], "1d"
+    else:
+        base = await cd.cg_candles("pax-gold", 30)
+        k = value / base[-1][4] if base and base[-1][4] else 0
+        cs, label = [(t, o * k, h * k, lo * k, c * k) for t, o, h, lo, c in base] if k else [], "4h"
+    if cs:                                               # آخرین کندل دقیقاً همان قیمت نمایش‌داده‌شده
+        cs[-1] = (cs[-1][0], cs[-1][1], max(cs[-1][2], value), min(cs[-1][3], value), value)
+    pct, diff = _day_change(cs)
+    logo = await cd.fetch_image(cd.FLAG_URL.format(cc=flag)) if flag else None
+    import datetime as dt
+    now = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=3, minutes=30)
+    from tenant.shared.price_chart import render_card
+    try:
+        return await asyncio.to_thread(
+            render_card, title=title, subtitle=label, price=value, change_pct=pct, change_usd=diff, candles=cs,
+            bot_username=bot_username, stamp=now.strftime("%d %b %Y • %H:%M"), logo=logo, unit=unit, icon_kind=icon)
+    except Exception:  # noqa: BLE001
+        logger.warning("price_lookup: کارت تصویری %s ساخته نشد", key, exc_info=True)
         return None
 
 
@@ -489,7 +566,9 @@ async def answer_for(bot_id: int, q, bot_username: str = "") -> tuple[str, bytes
         _k, qty, key = q
         kind, ident, title, _em, _n = ASSETS[key]
         if kind != "crypto":
-            return await quote(bot_id, qty, key), None
+            text = await quote(bot_id, qty, key)
+            img = None if text.startswith("⚠️") else await asset_card(bot_id, key, bot_username)
+            return text, img
         coin = await coin_data.lookup(key, cg_id=ident)
         if coin is None:
             return f"⚠️ قیمت {title} فعلاً در دسترس نیست؛ کمی بعد دوباره امتحان کن.", None
@@ -500,7 +579,10 @@ async def answer_for(bot_id: int, q, bot_username: str = "") -> tuple[str, bytes
             return None if strict else ("⚠️ ارزی با این نام، نماد یا آدرس پیدا نشد (یا منبع قیمت فعلاً جواب نمی‌دهد).", None)
         title = ""
     text = render_crypto(qty, coin, await _usd_toman(), title=title)
-    img = await asyncio.to_thread(_card, coin, bot_username) if coin.candles else None
+    img = None
+    if coin.candles:
+        logo = await coin_data.fetch_image(coin.image) if coin.image else None
+        img = await asyncio.to_thread(_card, coin, bot_username, logo)
     return text, img
 
 
