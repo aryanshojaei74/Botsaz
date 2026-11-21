@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="origin">
+<title>انتقال به درگاه پرداخت</title>
+<style>
+  body{font-family:Tahoma,sans-serif;background:#f3f4f6;margin:0;display:flex;
+       min-height:100vh;align-items:center;justify-content:center}
+  .box{background:#fff;border-radius:16px;padding:28px;max-width:380px;width:90%;
+       text-align:center;box-shadow:0 4px 20px rgba(0,0,0,.08)}
+  /* === PATCH_PAY_HTML_INSTANT_REDIRECT_V1 ===
+     گزارش: بعضی مرورگرهایِ داخلِ اپ (مثلِ تلگرام) ریدایرکتِ خودکارِ
+     تأخیری (setTimeout) را چون «ناوبریِ بدونِ کنشِ مستقیمِ کاربر»
+     تشخیص می‌دادند مسدود می‌کردند — کاربر هیچ خطایی نمی‌دید، فقط برایِ
+     همیشه همین‌جا می‌ماند. حالا دکمهٔ دستی از همان اول بزرگ، پررنگ، و
+     با یک انیمیشنِ ساده (پالس) است تا حتی اگر ریدایرکتِ خودکار مسدود
+     شود، کاربر بلافاصله می‌بیند باید خودش لمسش کند. */
+  a.btn{display:block;margin-top:18px;padding:16px;border-radius:12px;background:#0a7c3e;
+        color:#fff;text-decoration:none;font-weight:bold;font-size:16px;
+        animation:pulse 1.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(10,124,62,.5)}
+                   50%{box-shadow:0 0 0 10px rgba(10,124,62,0)}}
+  .hint{color:#888;font-size:12px;margin-top:10px}
+  .err{color:#c00}
+</style>
+</head>
+<body>
+<div class="box">
+  <h2>🔐 پرداخت امن</h2>
+  <p id="msg">در حال انتقال به درگاه پرداخت…</p>
+  <a class="btn" id="go" href="#">👆 ورود به درگاه پرداخت</a>
+  <p class="hint" id="hint" style="display:none">اگر خودکار منتقل نشدی، همین دکمهٔ بالا را لمس کن.</p>
+</div>
+<script>
+  var q = new URLSearchParams(location.search);
+  var a = q.get("a") || "";
+  var gw = q.get("gw") || "zarinpal";
+  var bases = {
+    zarinpal: "https://payment.zarinpal.com/pg/StartPay/",
+    zibal: "https://gateway.zibal.ir/start/"
+  };
+  if (!bases[gw] || !/^[A-Za-z0-9_-]{6,80}$/.test(a)) {
+    document.getElementById("msg").innerHTML = '<span class="err">لینکِ پرداخت نامعتبر است.</span>';
+    document.getElementById("go").style.display = "none";
+  } else {
+    var url = bases[gw] + a;
+    document.getElementById("go").href = url;
+    // === PATCH_PAY_HTML_INSTANT_REDIRECT_V1 ===
+    // بدونِ هیچ تأخیرِ مصنوعی — همان لحظه‌ای که صفحه لود شد تلاش می‌کنیم.
+    // replace() به‌جایِ href= تا این صفحه در تاریخچهٔ مرورگر نماند (اگر
+    // کاربر «بازگشت» زد، دوباره همین صفحه را نبیند).
+    try { location.replace(url); } catch (e) { location.href = url; }
+    // اگر تا ۹۰۰ میلی‌ثانیهٔ بعد هنوز همین صفحه باز بود (یعنی ریدایرکتِ
+    // خودکار مسدود شده)، راهنماییِ دکمهٔ دستی را نشان بده.
+    setTimeout(function(){ document.getElementById("hint").style.display = "block"; }, 900);
+  }
+</script>
+</body>
+</html>

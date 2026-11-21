@@ -1,0 +1,7 @@
+[Unit]
+Description=Botsaz: custom domains -> nginx + SSL (PATCH_CDOM_NGINX_V1)
+After=network-online.target nginx.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /opt/botsaz/deploy/cdom_sync.sh

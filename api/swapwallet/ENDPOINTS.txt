@@ -1,0 +1,16 @@
+GET    /v1/utils/authentication/check — بررسی توکن
+GET    /v1/market/prices — دریافت قیمت لحظه‌ای ارز‌ها
+POST   /v1/market/otc/fast-swap — سواپ سریع
+POST   /v1/market/otc/price — دریافت قیمت OTC
+POST   /v1/market/otc/order — تأیید و اجرای سواپ OTC
+GET    /v2/user/balance — موجودی همه‌ی توکن‌ها
+GET    /v2/user/balance/{token} — موجودی یک توکن
+GET    /v1/transaction/{id} — دریافت تراکنش با شناسه
+GET    /v2/transaction — فیلتر تراکنش‌ها
+GET    /v1/wallet/crypto-withdraw/config/{token} — تنظیمات برداشت کریپتو
+POST   /v1/wallet/crypto-withdraw — ارسال درخواست برداشت کریپتو
+GET    /v1/bank/fiat-withdraw/config — تنظیمات برداشت ریالی
+POST   /v1/bank/fiat-withdraw — ارسال درخواست برداشت ریالی
+GET    /v1/shop/prices — قیمت محصولات فروشگاه
+POST   /v1/shop/telegram/stars — خرید تلگرام استارز
+POST   /v1/shop/telegram/premium — خرید تلگرام پریمیوم

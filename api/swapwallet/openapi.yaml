@@ -1,0 +1,2990 @@
+openapi: 3.1.0
+info:
+  version: 2.0.0
+  title: مستندات API سواپ‌ولت
+  description: |
+    این مستند برای آشنایی شما با API [سواپ‌ولت](https://t.me/SwapWalletBot) تهیه شده است تا بتوانید بیشترین بهره را از حساب کاربری خود ببرید.
+
+    با استفاده از API سواپ‌ولت، می‌توانید کارهایی مانند موارد زیر را انجام دهید:
+    - مدیریت کیف پول و تراکنش‌ها  
+    - دریافت و ارسال پرداخت‌ها  
+    - مشاهده وضعیت تراکنش‌ها  
+    - اتصال سرویس‌های خودکار به حساب سواپ‌ولت  
+
+    ---
+
+    ## پیش‌نیازها و قوانین
+
+    پیش از استفاده از APIها، لطفاً  [قوانین استفاده از سواپ‌ولت](https://swapwallet.app/tos) را مطالعه کرده و بپذیرید
+    همچنین برای دریافت اطلاعیه‌های رسمی و تغییرات نسخه‌ها، در [گروه اطلاع‌رسانی سواپ‌ولت](https://t.me/SwapWalletGroup) عضو شوید.
+
+    ---
+
+    ## راهنمای شروع
+
+    اگر برای اولین بار از API استفاده می‌کنید، پیشنهاد می‌شود ابتدا بخش **راهنمای شروع به کار با API** را مطالعه کنید تا با نحوه‌ی احراز هویت و ساخت درخواست‌ها آشنا شوید.
+
+    ---
+
+    ## دریافت کلید API
+
+    برای استفاده از API لازم است یک **کلید API** برای حساب خود ایجاد کنید.
+
+    مراحل دریافت:
+    1. ورود به اپلیکیشن سواپ‌ولت
+    2. رفتن به بخش **پروفایل ← کلید API**
+    3. کلیک روی گزینه‌ی **ایجاد کلید جدید**
+
+    سپس کلید خود را در هدر درخواست‌ها به‌صورت زیر ارسال کنید:
+
+    ```http
+    Authorization: Bearer apikey-xxx
+    ```
+
+    > [!note]
+    > کلیدهای API برای استفاده‌ی برنامه‌نویسی بهینه‌سازی شده‌اند؛ هنگام استفاده از این کلیدها، محدودیت‌های دومرحله‌ای نظیر ایمیل، پیامک و Google Authenticator اعمال نمی‌شوند.
+
+    > [!note]
+    > اگر به کلیدی با دسترسی‌های خاص (مانند محدودیت روی IP مشخص یا سطح دسترسی سفارشی) نیاز دارید، با پشتیبانی ما تماس بگیرید.
+
+    ---
+
+    ## جایگزینی کلید API
+
+    برای غیرفعال‌سازی کلید فعلی و صدور کلید جدید:
+
+    **پروفایل ← کلید API ← جایگزینی با کلید جدید**
+
+    پس از تأیید، کلید قبلی بلافاصله از کار می‌افتد و یک کلید جدید برای شما صادر می‌شود.
+
+    ---
+
+    ## نکات امنیتی
+
+    > [!caution] **هشدار امنیتی**  
+    > توکن خود را تحت هیچ شرایطی با دیگران به اشتراک نگذارید.  
+    > در صورت لو رفتن یا شک به دسترسی غیرمجاز، فوراً از طریق اپلیکیشن، توکن خود را منقضی کرده و توکن جدید دریافت کنید.
+
+    در صورت نیاز به استفاده از توکن در کد، مطمئن شوید که با روش‌های امن نگهداری داده‌های حساس آشنا هستید (مانند متغیرهای محیطی و رمزنگاری فایل‌های پیکربندی).
+
+    ---
+
+    ✨ با رعایت این نکات، می‌توانید به‌صورت ایمن و مؤثر از API سواپ‌ولت در پروژه‌های خود استفاده کنید.
+
+
+servers:
+  - url: "https://swapwallet.app/api"
+    description: |
+      سرور پروداکشن
+
+tags:
+  - name: توکن
+    description: |
+      برای استفاده از API سواپ‌ولت لازم است یک **کلید API** برای حساب خود ایجاد کنید.
+      
+      ## دریافت کلید
+      
+      1. ورود به اپلیکیشن سواپ‌ولت
+      2. رفتن به بخش **پروفایل ← کلید API**
+      3. کلیک روی گزینه‌ی **ایجاد کلید جدید**
+      
+      سپس کلید خود را در هدر تمام درخواست‌ها به‌صورت زیر ارسال کنید:
+      
+      ```http
+      Authorization: Bearer apikey-xxx
+      ```
+      
+      > [!note]
+      > کلیدهای API برای استفاده‌ی برنامه‌نویسی بهینه‌سازی شده‌اند؛ محدودیت‌های دومرحله‌ای نظیر ایمیل، پیامک و Google Authenticator اعمال نمی‌شوند.
+      
+      ## جایگزینی کلید
+      
+      برای غیرفعال‌سازی کلید فعلی و صدور کلید جدید از مسیر زیر اقدام کنید:
+      
+      **پروفایل ← کلید API ← جایگزینی با کلید جدید**
+      
+      پس از تأیید، کلید قبلی بلافاصله از کار می‌افتد و یک کلید جدید صادر می‌شود.
+      
+      ## بررسی کلید
+      
+      پس از دریافت کلید، می‌توانید با استفاده از endpoint زیر از صحت و فعال بودن آن اطمینان حاصل کنید:
+      
+      ```http
+      GET /api/v1/utils/authentication/check
+      Authorization: Bearer apikey-xxx
+      ```
+      
+      پاسخ موفق:
+      
+      ```json
+      { "status": "OK" }
+      ```
+      
+      در غیر این صورت سرور پاسخ `401 Unauthorized` برمی‌گرداند.
+      
+      > [!caution]
+      > کلید خود را تحت هیچ شرایطی با دیگران به اشتراک نگذارید. در صورت لو رفتن، فوراً آن را جایگزین کنید.
+
+  - name: بازار
+    description: |
+      با استفاده از این APIها می‌توانید قیمت لحظه‌ای توکن‌ها را دریافت کرده و عملیات سواپ (تبدیل توکن به توکن) را انجام دهید.
+
+      ## قیمت‌های لحظه‌ای
+
+      نام هر جفت قیمتی به‌صورت `TOKEN/QUOTE` نمایش داده می‌شود؛ مثلاً `TON/USDT` قیمت TON بر حسب تتر را نشان می‌دهد. ارزهای مرجع تنها USDT و IRT هستند.
+
+      ## سواپ OTC
+
+      دو روش برای سواپ توکن وجود دارد:
+
+      | روش | توضیح |
+      |---:|---:|
+      | **سواپ سریع** | تبدیل فوری با بهترین قیمت لحظه‌ای بدون نیاز به تأیید |
+      | **قیمت + تأیید** | ابتدا قیمت قفل‌شده دریافت کنید، سپس ظرف ۱۰ ثانیه تأیید کنید |
+
+      در هر درخواست سواپ، یکی از دو حالت زیر را مشخص کنید:
+
+      - **`sourceAmount`** — مقدار مشخصی از توکن مبدأ فروخته می‌شود
+      - **`destinationAmount`** — مقدار مشخصی از توکن مقصد دریافت می‌شود
+
+  - name: موجودی
+    description: |
+      موجودی لحظه‌ای حساب خود را به تفکیک هر توکن مشاهده کنید.
+
+  - name: برداشت کریپتو
+    description: |
+      توکن‌های کریپتو را به آدرس دلخواه روی شبکه‌های پشتیبانی‌شده برداشت کنید.
+
+      فرایند برداشت در دو مرحله انجام می‌شود:
+
+      1. **دریافت تنظیمات** — تنظیمات شبکه را دریافت کنید تا از کارمزد، محدودیت مقدار، و پشتیبانی از memo مطلع شوید.
+      2. **ارسال درخواست برداشت** — درخواست را با مقدار، شبکه، و آدرس مقصد ارسال کنید.
+
+      ## نحوه‌ی کسر کارمزد
+
+      | مقدار `feeDeductType` | رفتار |
+      |---:|---:|
+      | `INTERNAL` | کارمزد از مقدار اصلی کسر می‌شود؛ گیرنده کمتر از مقدار درخواستی دریافت می‌کند |
+      | `EXTERNAL` | کارمزد از موجودی کیف پول کسر می‌شود؛ مقدار برداشت دقیقاً همان عدد درخواستی باقی می‌ماند |
+
+      > [!note]
+      > فیلد `fee` اختیاری است و در صورت ارسال، سرور مقدار آن را با کارمزد واقعی مقایسه می‌کند. اگر مقادیر مطابقت نداشته باشند، درخواست با خطا رد می‌شود.
+
+      > [!note]
+      > فیلد `memo` تنها برای شبکه‌هایی که از آن پشتیبانی می‌کنند معتبر است و در غیر این صورت نادیده گرفته می‌شود. وضعیت پشتیبانی را از طریق فیلد `supportMemo` در endpoint تنظیمات بررسی کنید.
+
+  - name: برداشت ریالی
+    description: |
+      وجه ریالی را به شماره شبای ثبت‌شده در حساب خود برداشت کنید.
+
+      فرایند برداشت در دو مرحله انجام می‌شود:
+
+      1. **دریافت تنظیمات** — با ارسال شبا و مقدار، کارمزد دقیق، مقدار دریافتی، و زمان تخمینی تسویه را دریافت کنید.
+      2. **ارسال درخواست برداشت** — درخواست را با مقدار، شبا، و نحوه‌ی کسر کارمزد ارسال کنید.
+
+      > [!warning]
+      > شبا باید متعلق به خود شما باشد. استفاده از شبای دیگران مجاز نیست و درخواست رد خواهد شد.
+
+  - name: تراکنش‌ها
+    description: |
+      با استفاده از این APIها می‌توانید اطلاعات تراکنش‌های حساب خود را دریافت کنید.
+
+      هر تراکنش دارای یک فیلد `type` است که نوع آن را مشخص می‌کند. بسته به نوع تراکنش، یک آبجکت جزئیات اختصاصی نیز در پاسخ وجود دارد:
+
+      | نوع (`type`) | شرح | آبجکت جزئیات |
+      |---:|---:|---:|
+      | `TRANSFER` | انتقال بین کاربران سواپ‌ولت | `transfer` |
+      | `TRADE` | سواپ توکن به توکن | `trade` |
+      | `CRYPTO_DEPOSIT` | واریز کریپتو | `cryptoDeposit` |
+      | `CRYPTO_WITHDRAW` | برداشت کریپتو | `cryptoWithdraw` |
+      | `FIAT_DEPOSIT` | واریز ریالی | `fiatDeposit` |
+      | `FIAT_WITHDRAW` | برداشت ریالی | `fiatWithdraw` |
+      | `PAYMENT` | پرداخت فاکتور | `payment` |
+
+  - name: فاکتور
+    description: |
+      با استفاده از این APIها می‌توانید فاکتورهای پرداخت کریپتویی برای فروشگاه خود ایجاد و مدیریت کنید.
+
+      کاربر پس از دریافت لینک پرداخت، مبلغ را مستقیماً به کیف پول اختصاص‌یافته واریز می‌کند. پس از تأیید تراکنش روی شبکه، وب‌هوک شما فراخوانی می‌شود.
+
+  - name: رسید
+    description: |
+      رسیدها برای دریافت پرداخت با **مقدار ثابت به تومان (IRT)** طراحی شده‌اند.
+
+      مقدار دریافتی نهایی در لحظه‌ی پرداخت بر اساس نرخ لحظه‌ای محاسبه و به معادل کریپتو تبدیل می‌شود.
+
+  - name: قیمت‌های فروشگاه
+    description: |
+      قیمت فعلی تمام محصولات موجود در فروشگاه سواپ‌ولت را دریافت کنید.
+
+  - name: خدمات تلگرامی
+    description: |
+      محصولات تلگرامی را مستقیماً از کیف پول سواپ‌ولت خریداری کنید.
+
+      خرید بلافاصله پس از ارسال درخواست انجام می‌شود و نتیجه در قالب یک تراکنش از نوع `PAYMENT` برگردانده می‌شود.
+
+      ## تلگرام استارز
+
+      استارز تلگرام به حساب کاربری با `username` مشخص‌شده ارسال می‌شود. تعداد مجاز: **۱۰۰، ۲۵۰، ۵۰۰، ۱۰۰۰، ۵۰۰۰**.
+
+      ## تلگرام پریمیوم
+
+      اشتراک تلگرام پریمیوم برای کاربر مشخص‌شده فعال می‌شود. مدت‌های مجاز: **۳ ماه، ۶ ماه، ۱۲ ماه**.
+
+  - name: examples
+    x-displayName: نمونه‌های رایج
+    description: |
+      ## Deposit Detector
+
+      اگر می‌خواهید هر واریز کریپتو به حساب سواپ‌ولت خود را تشخیص دهید، نیازی به درگیر شدن با بلاکچین ندارید. کافی است این endpoint را هر ۱ دقیقه یک‌بار فراخوانی کنید.
+
+      واریز دریافتی از دو نوع می‌تواند باشد:
+
+      - **`CRYPTO_DEPOSIT`** — واریز مستقیم از یک کیف پول خارجی روی شبکه‌ی بلاکچین. جزئیات در فیلد `cryptoDeposit` است.
+      - **`TRANSFER`** — انتقال از کاربر دیگری در سواپ‌ولت. جزئیات در فیلد `transfer` است.
+
+      با `limit=20` نیازی به cursor یا صفحه‌بندی ندارید — در بازه‌ی ۱ دقیقه معمولاً بیش از ۲۰ واریز اتفاق نمی‌افتد و همین یک فراخوانی کافی است.
+
+      ### درخواست
+
+      ```http
+      GET /api/v2/transaction?types=CRYPTO_DEPOSIT&types=TRANSFER&tokens=USDT&tokens=TON&tokens=TRX&sortDir=DESC&limit=20
+      Authorization: Bearer apikey-yourApikeyHere
+      ```
+
+      ### پاسخ
+
+      ```json
+      {
+        "status": "OK",
+        "result": {
+          "hasNext": false,
+          "data": [
+            {
+              "id": 170811,
+              "supportCode": "SW-M3NP8QR-TXVW",
+              "timestamp": 1742198500000,
+              "type": "TRANSFER",
+              "status": "SUCCEED",
+              "network": "INTERNAL",
+              "exchangeFee": { "number": "0", "unit": "TON" },
+              "transfer": {
+                "amount": { "number": "5", "unit": "TON" },
+                "value": { "number": "15.30", "unit": "USD" },
+                "userCurrencyValue": { "number": "2532000", "unit": "IRT" },
+                "fromUser": { "id": 4821, "name": "علی رضایی" },
+                "toUser": { "id": 1, "isYou": true, "name": "شما" }
+              }
+            },
+            {
+              "id": 170810,
+              "supportCode": "SW-K7NP2QR-MXVT",
+              "timestamp": 1742198400000,
+              "type": "CRYPTO_DEPOSIT",
+              "status": "SUCCEED",
+              "network": "TRON",
+              "exchangeFee": { "number": "0", "unit": "USDT" },
+              "cryptoDeposit": {
+                "amount": { "number": "50", "unit": "USDT" },
+                "value": { "number": "50", "unit": "USD" },
+                "userCurrencyValue": { "number": "8275000", "unit": "IRT" },
+                "sourceAddress": "TQ9yLxm1yC6uX3YgYvG6S4w7HxQvQ1pNnA",
+                "hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+              }
+            }
+          ]
+        }
+      }
+      ```
+
+x-tagGroups:
+  - name: عمومی
+    tags:
+      - بازار
+      - تراکنش‌ها
+  - name: کیف پول
+    tags:
+      - موجودی
+      - برداشت کریپتو
+      - برداشت ریالی
+  - name: "فروشگاه"
+    tags:
+      - قیمت‌های فروشگاه
+      - خدمات تلگرامی
+  - name: "درگاه پرداخت کریپتویی"
+    tags:
+      - فاکتور
+  - name: "رسید پرداخت"
+    tags:
+      - رسید
+  - name: نمونه‌ها
+    tags:
+      - examples
+
+paths:
+  /v1/utils/authentication/check:
+    get:
+      tags:
+        - توکن
+      summary: بررسی توکن
+      description: |
+        با استفاده از این API می‌توانید از درست بودن توکن و روش استفاده از آن اطمینان حاصل پیدا کنید.
+      operationId: checkAuthentication
+      x-scalar-ignore: true
+      responses:
+        '200':
+          description: احراز با موفقیت انجام شد
+          content:
+            'application/json':
+              schema:
+                $ref: "#/components/schemas/EmptyResponse"
+        '401':
+          description: عدم احراز هویت
+      parameters:
+        - $ref: '#/components/parameters/AuthorizationHeader'
+
+  /v1/market/prices:
+    get:
+      tags:
+        - بازار
+      summary: دریافت قیمت لحظه‌ای ارز‌ها
+      description: |
+        این API را می‌توانید جهت دریافت قیمت لحظه‌ای ارزها استفاده کنید.  
+        توکن و ارز مرجع توسط `/` از یکدیگر جدا شده‌اند و ارزهای مرجع تنها IRT (تومان) و USDT (تتر) می‌باشند.
+      operationId: getAllMarketPrices
+      responses:
+        '200':
+          description: OK
+          content:
+            'application/json':
+              schema:
+                type: object
+                additionalProperties:
+                  type: string
+                  format: string
+                example:
+                  "TON/USDT": "2.00"
+                  "TON/IRT": "235000"
+                  "TRX/USDT": "0.40"
+                  "TRX/IRT": "40000"
+                  "...": "..."
+
+  /v1/market/otc/fast-swap:
+    post:
+      tags:
+        - بازار
+      summary: سواپ سریع
+      description: |
+        تبدیل فوری یک توکن به توکن دیگر با بهترین قیمت لحظه‌ای، بدون نیاز به تأیید قیمت.
+
+        یکی از دو فیلد `sourceAmount` یا `destinationAmount` را ارسال کنید:
+
+        | فیلد | رفتار |
+        |---:|---:|
+        | `sourceAmount` | مقدار مشخصی از توکن مبدأ فروخته می‌شود و توکن مقصد معادل آن دریافت می‌شود |
+        | `destinationAmount` | مقدار مشخصی از توکن مقصد دریافت می‌شود و توکن مبدأ به همان اندازه فروخته می‌شود |
+      operationId: fastSwap
+      parameters:
+        - $ref: '#/components/parameters/AuthorizationHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OtcSwapRequest'
+      responses:
+        '200':
+          description: سواپ با موفقیت انجام شد
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TradeTransactionResponseWrapper'
+        '400':
+          description: درخواست نامعتبر (توکن پشتیبانی‌نشده، مقدار خارج از محدوده، یا موجودی ناکافی)
+        '401':
+          description: عدم احراز هویت
+
+  /v1/market/otc/price:
+    post:
+      tags:
+        - بازار
+      summary: دریافت قیمت OTC
+      description: |
+        یک قیمت قفل‌شده برای سواپ دریافت کنید. قیمت به مدت **۱۰ ثانیه** معتبر است.
+
+        برای اجرای سواپ با این قیمت، باید `swapToken` دریافتی را در endpoint تأیید سواپ ارسال کنید.
+
+        > [!warning]
+        > در هر لحظه فقط یک `swapToken` فعال می‌تواند وجود داشته باشد. ایجاد قیمت جدید، توکن قبلی را باطل می‌کند.
+
+        > [!note]
+        > برای اجرای سریع بدون نیاز به تأیید قیمت، از endpoint **سواپ سریع** استفاده کنید.
+      operationId: getOtcPrice
+      parameters:
+        - $ref: '#/components/parameters/AuthorizationHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OtcSwapRequest'
+      responses:
+        '200':
+          description: قیمت با موفقیت دریافت شد
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OtcPriceResponseWrapper'
+        '400':
+          description: درخواست نامعتبر
+        '401':
+          description: عدم احراز هویت
+
+  /v1/market/otc/order:
+    post:
+      tags:
+        - بازار
+      summary: تأیید و اجرای سواپ OTC
+      description: |
+        سواپ را با استفاده از `swapToken` دریافت‌شده از endpoint قیمت، تأیید و اجرا کنید.
+
+        > [!warning]
+        > `swapToken` تنها **۱۰ ثانیه** اعتبار دارد. در صورت انقضا باید قیمت جدیدی دریافت کنید.
+      operationId: executeOtcOrder
+      parameters:
+        - $ref: '#/components/parameters/AuthorizationHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OtcOrderRequest'
+      responses:
+        '200':
+          description: سواپ با موفقیت اجرا شد
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TradeTransactionResponseWrapper'
+        '400':
+          description: توکن منقضی‌شده یا نامعتبر
+        '401':
+          description: عدم احراز هویت
+
+  /v2/user/balance:
+    get:
+      tags:
+        - موجودی
+      summary: موجودی همه‌ی توکن‌ها
+      description: لیست موجودی حساب به تفکیک تمام توکن‌های پشتیبانی‌شده را برمی‌گرداند.
+      operationId: getAllBalances
+      parameters:
+        - $ref: '#/components/parameters/AuthorizationHeader'
+      responses:
+        '200':
+          description: موجودی‌ها با موفقیت دریافت شدند
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenBalanceListResponseWrapper'
+              example:
+                status: "OK"
+                result:
+                  - token: "ETH"
+                    amount:
+                      number: "0"
+                      unit: "ETH"
+                  - token: "BNB"
+                    amount:
+                      number: "0"
+                      unit: "BNB"
+                  - token: "TON"
+                    amount:
+                      number: "12.5"
+                      unit: "TON"
+                  - token: "TRX"
+                    amount:
+                      number: "340"
+                      unit: "TRX"
+                  - token: "USDT"
+                    amount:
+                      number: "999800"
+                      unit: "USDT"
+                  - token: "IRT"
+                    amount:
+                      number: "150000000"
+                      unit: "IRT"
+        '401':
+          description: عدم احراز هویت
+
+  /v2/user/balance/{token}:
+    get:
+      tags:
+        - موجودی
+      summary: موجودی یک توکن
+      description: موجودی حساب برای یک توکن مشخص را برمی‌گرداند.
+      operationId: getTokenBalance
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: نماد توکن (مثلاً USDT، TON)
+          schema:
+            $ref: '#/components/schemas/TokenEnum'
+        - $ref: '#/components/parameters/AuthorizationHeader'
+      responses:
+        '200':
+          description: موجودی با موفقیت دریافت شد
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenBalanceSingleResponseWrapper'
+              example:
+                status: "OK"
+                result:
+                  token: "USDT"
+                  amount:
+                    number: "999800"
+                    unit: "USDT"
+        '401':
+          description: عدم احراز هویت
+        '404':
+          description: توکن یافت نشد
+
+  /v1/transaction/{id}:
+    get:
+      tags:
+        - تراکنش‌ها
+      summary: دریافت تراکنش با شناسه
+      description: |
+        اطلاعات کامل یک تراکنش را بر اساس شناسه‌ی عددی آن برمی‌گرداند.
+
+        بسته به مقدار فیلد `type`، یکی از آبجکت‌های جزئیات (`transfer`، `trade`، `fiatWithdraw` و ...) در پاسخ وجود خواهد داشت و بقیه `null` هستند.
+      operationId: getTransactionById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: شناسه‌ی عددی تراکنش
+          schema:
+            type: integer
+            format: int64
+            example: 170776
+        - $ref: '#/components/parameters/AuthorizationHeader'
+      responses:
+        '200':
+          description: تراکنش با موفقیت دریافت شد
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionResponseWrapper'
+        '401':
+          description: عدم احراز هویت
+        '404':
+          description: تراکنش یافت نشد
+
+  /v2/transaction:
+    get:
+      tags:
+        - تراکنش‌ها
+        - examples
+      summary: فیلتر تراکنش‌ها
+      description: |
+        لیست تراکنش‌های حساب را با امکانات فیلتر پیشرفته و cursor-based pagination برمی‌گرداند.
+
+        برای دریافت صفحات بعدی، مقدار `id` آخرین آیتم دریافتی را به عنوان `afterId` ارسال کنید. اگر `result.hasNext` برابر `true` بود، صفحه‌ی بعدی وجود دارد.
+
+        > [!note]
+        > بسته به مقدار فیلد `type`، فقط یکی از فیلدهای جزئیات مقدار خواهد داشت و بقیه `null` خواهند بود:
+        >
+        > | نوع (`type`) | فیلد جزئیات |
+        > |---:|---:|
+        > | `TRANSFER` | `transfer` |
+        > | `TRADE` | `trade` |
+        > | `CRYPTO_DEPOSIT` | `cryptoDeposit` |
+        > | `CRYPTO_WITHDRAW` | `cryptoWithdraw` |
+        > | `FIAT_DEPOSIT` | `fiatDeposit` |
+        > | `FIAT_WITHDRAW` | `fiatWithdraw` |
+        > | `PAYMENT` | `payment` |
+        > | `CREDIT` | `credit` |
+      operationId: getTransactionsV2
+      parameters:
+        - $ref: '#/components/parameters/AuthorizationHeader'
+        - name: types
+          in: query
+          required: false
+          description: |
+            فیلتر بر اساس نوع تراکنش. می‌توان چند مقدار ارسال کرد.
+
+            مثال: `types=PAYMENT&types=TRADE`
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/TransactionTypeEnum'
+        - name: tokens
+          in: query
+          required: false
+          description: |
+            فیلتر بر اساس توکن. می‌توان چند مقدار ارسال کرد.
+
+            مثال: `tokens=USDT&tokens=TON`
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/TokenEnum'
+        - name: networks
+          in: query
+          required: false
+          description: |
+            فیلتر بر اساس شبکه. می‌توان چند مقدار ارسال کرد.
+
+            مثال: `networks=BSC&networks=TRON`
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/NetworkEnum'
+        - name: startDate
+          in: query
+          required: false
+          description: دریافت تراکنش‌ها از این تاریخ به بعد (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+            example: "2026-01-01T00:00:00Z"
+        - name: endDate
+          in: query
+          required: false
+          description: دریافت تراکنش‌ها تا این تاریخ (ISO 8601)
+          schema:
+            type: string
+            format: date-time
+            example: "2026-04-30T23:59:59Z"
+        - name: query
+          in: query
+          required: false
+          description: جستجوی آزاد — بر اساس آدرس کیف پول، هش تراکنش یا کد پشتیبانی
+          schema:
+            type: string
+            example: "TX-9F3K2M1"
+        - name: supportCodes
+          in: query
+          required: false
+          description: فیلتر بر اساس کد پشتیبانی. می‌توان چند مقدار ارسال کرد.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+            example:
+              - TX-9F3K2M1
+        - name: ids
+          in: query
+          required: false
+          description: فیلتر بر اساس شناسه‌ی عددی تراکنش. می‌توان چند مقدار ارسال کرد.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: integer
+              format: int64
+        - name: afterId
+          in: query
+          required: false
+          description: |
+            **cursor برای صفحه‌ی بعد** — تراکنش‌هایی که `id` آن‌ها از این مقدار بزرگ‌تر است.
+
+            برای دریافت صفحه‌ی بعدی، مقدار `id` آخرین آیتم دریافتی را ارسال کنید.
+          schema:
+            type: integer
+            format: int64
+            example: 170776
+        - name: beforeId
+          in: query
+          required: false
+          description: |
+            **cursor برای صفحه‌ی قبل** — تراکنش‌هایی که `id` آن‌ها از این مقدار کوچک‌تر است.
+
+            برای دریافت صفحه‌ی قبلی، مقدار `id` اولین آیتم دریافتی را ارسال کنید.
+          schema:
+            type: integer
+            format: int64
+            example: 170800
+        - name: sortBy
+          in: query
+          required: false
+          description: فیلد مرتب‌سازی (پیش‌فرض `id`)
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+              enum:
+                - id
+                - timestamp
+            default:
+              - id
+        - name: sortDir
+          in: query
+          required: false
+          description: جهت مرتب‌سازی (پیش‌فرض `DESC`)
+          style: form
+          explode: true
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/SortDirEnum'
+            default:
+              - DESC
+        - name: limit
+          in: query
+          required: false
+          description: تعداد نتایج در هر صفحه (۱ تا ۱۰۰، پیش‌فرض ۲۰)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+            example: 20
+      responses:
+        '200':
+          description: لیست تراکنش‌ها با موفقیت دریافت شد
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionV2ListResponse'
+              examples:
+                depositDetector:
+                  summary: Deposit Detector
+                  value:
+                    status: OK
+                    result:
+                      hasNext: false
+                      data:
+                        - id: 170811
+                          supportCode: "SW-M3NP8QR-TXVW"
+                          timestamp: 1742198500000
+                          type: TRANSFER
+                          status: SUCCEED
+                          network: INTERNAL
+                          exchangeFee:
+                            number: "0"
+                            unit: "TON"
+                          transfer:
+                            amount:
+                              number: "5"
+                              unit: "TON"
+                            value:
+                              number: "15.30"
+                              unit: "USD"
+                            userCurrencyValue:
+                              number: "2532000"
+                              unit: "IRT"
+                            fromUser:
+                              id: 4821
+                              isYou: false
+                              name: "علی رضایی"
+                            toUser:
+                              id: 1
+                              isYou: true
+                              name: "شما"
+                        - id: 170810
+                          supportCode: "SW-K7NP2QR-MXVT"
+                          timestamp: 1742198400000
+                          type: CRYPTO_DEPOSIT
+                          status: SUCCEED
+                          network: TRON
+                          exchangeFee:
+                            number: "0"
+                            unit: "USDT"
+                          cryptoDeposit:
+                            amount:
+                              number: "50"
+                              unit: "USDT"
+                            value:
+                              number: "50"
+                              unit: "USD"
+                            userCurrencyValue:
+                              number: "8275000"
+                              unit: "IRT"
+                            sourceAddress: "TQ9yLxm1yC6uX3YgYvG6S4w7HxQvQ1pNnA"
+                            hash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+        '401':
+          description: عدم احراز هویت
+
+  /v1/wallet/crypto-withdraw/config/{token}:
+    get:
+      tags:
+        - برداشت کریپتو
+      summary: تنظیمات برداشت کریپتو
+      description: |
+        تنظیمات برداشت یک توکن مشخص را برمی‌گرداند. پیش از ارسال درخواست برداشت، این endpoint را فراخوانی کنید تا از شبکه‌های پشتیبانی‌شده، کارمزد، محدودیت مقدار، و پشتیبانی از memo مطلع شوید.
+      operationId: getCryptoWithdrawConfig
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: نماد توکن (مثلاً USDT، TON)
+          schema:
+            $ref: '#/components/schemas/TokenEnum'
+        - $ref: '#/components/parameters/AuthorizationHeader'
+      responses:
+        '200':
+          description: تنظیمات با موفقیت دریافت شد
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WithdrawConfigResponseWrapper'
+        '401':
+          description: عدم احراز هویت
+        '404':
+          description: توکن یافت نشد
+
+  /v1/wallet/crypto-withdraw:
+    post:
+      tags:
+        - برداشت کریپتو
+      summary: ارسال درخواست برداشت کریپتو
+      description: |
+        یک درخواست برداشت کریپتو ایجاد می‌کند. پس از تأیید، تراکنش روی شبکه ارسال می‌شود و اطلاعات کامل آن برگردانده می‌شود.
+
+        پیش از فراخوانی این endpoint، تنظیمات برداشت توکن مورد نظر را از endpoint تنظیمات دریافت کنید.
+      operationId: sendCryptoWithdraw
+      parameters:
+        - $ref: '#/components/parameters/AuthorizationHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CryptoWithdrawRequest'
+      responses:
+        '200':
+          description: درخواست برداشت با موفقیت ثبت شد
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CryptoWithdrawTransactionResponseWrapper'
+        '400':
+          description: درخواست نامعتبر (مقدار خارج از محدوده، کارمزد اشتباه، یا آدرس نامعتبر)
+        '401':
+          description: عدم احراز هویت
+
+  /v1/bank/fiat-withdraw/config:
+    get:
+      tags:
+        - برداشت ریالی
+      summary: تنظیمات برداشت ریالی
+      description: |
+        پیش از ارسال درخواست برداشت ریالی، این endpoint را فراخوانی کنید تا کارمزد دقیق، مقدار دریافتی، محدودیت‌های مقدار، و زمان تخمینی تسویه را دریافت کنید.
+
+        > [!warning]
+        > شماره شبا باید متعلق به شباهای ثبت‌شده در حساب کاربری شما باشد. استفاده از شبای دیگران مجاز نیست و درخواست رد خواهد شد.
+      operationId: getFiatWithdrawConfig
+      parameters:
+        - name: iban
+          in: query
+          required: true
+          description: شماره شبا (باید از شباهای ثبت‌شده در حساب کاربری شما باشد)
+          schema:
+            type: string
+            example: "IR360560083380003034720002"
+        - name: amount
+          in: query
+          required: true
+          description: مقدار برداشت به تومان — کارمزد بر اساس این مقدار محاسبه می‌شود
+          schema:
+            type: string
+            example: "15000"
+        - name: feeDeductType
+          in: query
+          required: false
+          description: نحوه‌ی کسر کارمزد (پیش‌فرض `INTERNAL`)
+          schema:
+            $ref: '#/components/schemas/FeeDeductTypeEnum'
+        - $ref: '#/components/parameters/AuthorizationHeader'
+      responses:
+        '200':
+          description: تنظیمات با موفقیت دریافت شد
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FiatWithdrawConfigResponseWrapper'
+        '400':
+          description: درخواست نامعتبر (شبا نامعتبر یا مقدار خارج از محدوده)
+        '401':
+          description: عدم احراز هویت
+
+  /v1/bank/fiat-withdraw:
+    post:
+      tags:
+        - برداشت ریالی
+      summary: ارسال درخواست برداشت ریالی
+      description: |
+        یک درخواست برداشت ریالی به شماره شبای مشخص‌شده ثبت می‌کند.
+
+        > [!warning]
+        > شماره شبا باید متعلق به شباهای ثبت‌شده در حساب کاربری شما باشد. استفاده از شبای دیگران مجاز نیست.
+
+        > [!note]
+        > توصیه می‌شود پیش از ارسال این درخواست، endpoint تنظیمات را فراخوانی کنید تا از کارمزد و مقدار دریافتی نهایی مطلع شوید.
+      operationId: sendFiatWithdraw
+      parameters:
+        - $ref: '#/components/parameters/AuthorizationHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FiatWithdrawRequest'
+      responses:
+        '200':
+          description: درخواست برداشت با موفقیت ثبت شد
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FiatWithdrawTransactionResponseWrapper'
+        '400':
+          description: درخواست نامعتبر (شبا نامعتبر، مقدار خارج از محدوده، یا موجودی ناکافی)
+        '401':
+          description: عدم احراز هویت
+
+  /v1/shop/prices:
+    get:
+      tags:
+        - قیمت‌های فروشگاه
+      summary: قیمت محصولات فروشگاه
+      description: لیست تمام محصولات موجود در فروشگاه به همراه قیمت فعلی هر کدام را برمی‌گرداند.
+      operationId: getShopPrices
+      parameters:
+        - $ref: '#/components/parameters/AuthorizationHeader'
+      responses:
+        '200':
+          description: قیمت‌ها با موفقیت دریافت شدند
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopPriceListResponseWrapper'
+              example:
+                status: "OK"
+                result:
+                  - id: 1
+                    name: "Telegram Premium 3 Months"
+                    code: "TG-PREMIUM-3M"
+                    price:
+                      number: "12.99"
+                      unit: "USDT"
+                  - id: 2
+                    name: "Telegram Premium 6 Months"
+                    code: "TG-PREMIUM-6M"
+                    price:
+                      number: "17.99"
+                      unit: "USDT"
+                  - id: 3
+                    name: "Telegram Premium 12 Months"
+                    code: "TG-PREMIUM-12M"
+                    price:
+                      number: "31.99"
+                      unit: "USDT"
+                  - id: 52
+                    name: "Telegram 100 Stars"
+                    code: "TG-STARS-100"
+                    price:
+                      number: "1.65"
+                      unit: "USDT"
+                  - id: 53
+                    name: "Telegram 250 Stars"
+                    code: "TG-STARS-250"
+                    price:
+                      number: "4.125"
+                      unit: "USDT"
+                  - id: 54
+                    name: "Telegram 500 Stars"
+                    code: "TG-STARS-500"
+                    price:
+                      number: "8.25"
+                      unit: "USDT"
+                  - id: 55
+                    name: "Telegram 1000 Stars"
+                    code: "TG-STARS-1000"
+                    price:
+                      number: "16.5"
+                      unit: "USDT"
+                  - id: 56
+                    name: "Telegram 5000 Stars"
+                    code: "TG-STARS-5000"
+                    price:
+                      number: "82.5"
+                      unit: "USDT"
+        '401':
+          description: عدم احراز هویت
+
+  /v1/shop/telegram/stars:
+    post:
+      tags:
+        - خدمات تلگرامی
+      summary: خرید تلگرام استارز
+      description: |
+        تلگرام استارز را برای یک کاربر تلگرام خریداری کنید. استارزها بلافاصله پس از پرداخت موفق به حساب کاربر ارسال می‌شوند.
+
+        تعداد مجاز: `100`، `250`، `500`، `1000`، `5000`
+      operationId: buyTelegramStars
+      parameters:
+        - $ref: '#/components/parameters/AuthorizationHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelegramStarsRequest'
+      responses:
+        '200':
+          description: خرید با موفقیت انجام شد
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopTransactionResponseWrapper'
+              example:
+                status: "OK"
+                result:
+                  id: 153
+                  supportCode: "SW-HCPDS6V-PWAN"
+                  timestamp: 1771564086571
+                  type: "PAYMENT"
+                  status: "SUCCEED"
+                  network: "INTERNAL"
+                  exchangeFee:
+                    number: "0"
+                    unit: "USDT"
+                  payment:
+                    invoice:
+                      id: 3
+                      supportCode: "NN-2HFN9B9-NK8R"
+                      status: "PAID"
+                      title: "TELEGRAM_STARS"
+                      readableTitle: "تلگرام استارز"
+                      type: "JETTON"
+                      amount:
+                        number: "15"
+                        unit: "USDT"
+                      value:
+                        number: "2482320"
+                        unit: "IRT"
+                      allowedPaymentTokens: [ "USDT", "IRT", "TON" ]
+                      fee:
+                        number: "0"
+                        unit: "USDT"
+                      createdAt: "2026-02-20T05:08:06Z"
+                      expiredAt: "2026-02-20T05:11:06Z"
+                      paidWith:
+                        number: "15"
+                        unit: "USDT"
+                      paidAt: "2026-02-20T05:08:06Z"
+                    amount:
+                      number: "15"
+                      unit: "USDT"
+                    value:
+                      number: "15"
+                      unit: "USD"
+                    userCurrencyValue:
+                      number: "2482320"
+                      unit: "IRT"
+        '400':
+          description: تعداد نامعتبر یا نام کاربری اشتباه
+        '401':
+          description: عدم احراز هویت
+
+  /v1/shop/telegram/premium:
+    post:
+      tags:
+        - خدمات تلگرامی
+      summary: خرید تلگرام پریمیوم
+      description: |
+        اشتراک تلگرام پریمیوم را برای یک کاربر تلگرام خریداری کنید. اشتراک بلافاصله پس از پرداخت موفق فعال می‌شود.
+
+        مدت‌های مجاز: `3m` (۳ ماه)، `6m` (۶ ماه)، `12m` (۱۲ ماه)
+      operationId: buyTelegramPremium
+      parameters:
+        - $ref: '#/components/parameters/AuthorizationHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelegramPremiumRequest'
+      responses:
+        '200':
+          description: خرید با موفقیت انجام شد
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopTransactionResponseWrapper'
+        '400':
+          description: مدت نامعتبر یا نام کاربری اشتباه
+        '401':
+          description: عدم احراز هویت
+
+components:
+  parameters:
+    AuthorizationHeader:
+      name: Authorization
+      in: header
+      required: true
+      schema:
+        type: string
+        example: Bearer apikey-yourApikeyHere
+      description: >
+        هدر احراز هویت
+
+  schemas:
+    TokenNetworkListResponse:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          type: array
+          items:
+            $ref: '#/components/schemas/TokenNetworkDto'
+      example:
+        status: "OK"
+        result:
+          - token: "USDT"
+            network: "TRON"
+          - token: "TON"
+            network: "TON"
+
+    EmptyResponse:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+
+    TokenNetworkDto:
+      type: object
+      properties:
+        token:
+          $ref: '#/components/schemas/TokenEnum'
+        network:
+          $ref: '#/components/schemas/NetworkEnum'
+      required:
+        - token
+        - network
+      example:
+        token: "USDT"
+        network: "TRON"
+
+    Money:
+      type: object
+      properties:
+        number:
+          type: string
+        unit:
+          type: string
+          description: واحد ارزی (مثلاً USDT، IRT، USD)
+      required:
+        - number
+        - unit
+      example:
+        number: "100.50"
+        unit: "USDT"
+
+    ResponseStatusEnum:
+      type: string
+      enum:
+        - OK
+        - ERROR
+
+    FeePayerEnum:
+      type: string
+      enum:
+        - USER
+        - APPLICATION
+
+    FeeDeductTypeEnum:
+      type: string
+      enum:
+        - INTERNAL
+        - EXTERNAL
+      description: |
+        نحوه‌ی کسر کارمزد از برداشت:
+        - `INTERNAL` — کارمزد از مقدار اصلی کسر می‌شود
+        - `EXTERNAL` — کارمزد از موجودی کیف پول کسر می‌شود و مقدار برداشت تغییر نمی‌کند
+
+    WithdrawStatusEnum:
+      type: string
+      enum:
+        - PENDING
+        - PROCESSING
+        - COMPLETED
+        - FAILED
+
+    FiatWithdrawConfigDto:
+      type: object
+      properties:
+        fee:
+          $ref: '#/components/schemas/Money'
+          description: کارمزد محاسبه‌شده بر اساس مقدار و شبای درخواستی
+        receivedAmount:
+          $ref: '#/components/schemas/Money'
+          description: مقدار نهایی که گیرنده دریافت خواهد کرد
+        isInstantWithdrawAvailable:
+          type: boolean
+          description: آیا تسویه‌ی آنی حساب به حساب در حال حاضر فعال است دقت کنید که با توجه به محدودیت‌های بانک مرکزی، تضمینی جهت ارائه‌ی سرویس تسویه‌ی آنی وجود ندارد
+        minWithdraw:
+          $ref: '#/components/schemas/Money'
+          description: حداقل مقدار قابل برداشت
+        maxWithdraw:
+          $ref: '#/components/schemas/Money'
+          description: حداکثر مقدار قابل برداشت
+        iban:
+          type: string
+          description: شماره شبای تأییدشده
+        bank:
+          type: string
+          description: نام بانک مقصد
+        predictedDoneDate:
+          type: string
+          format: date-time
+          description: تاریخ و ساعت تخمینی تسویه
+      example:
+        fee:
+          number: "2500"
+          unit: "IRT"
+        receivedAmount:
+          number: "15000"
+          unit: "IRT"
+        isInstantWithdrawAvailable: false
+        minWithdraw:
+          number: "15000"
+          unit: "IRT"
+        maxWithdraw:
+          number: "200000000"
+          unit: "IRT"
+        iban: "IR360560083380003034720002"
+        bank: "SAMAN"
+        predictedDoneDate: "2026-02-20T03:49:22Z"
+
+    FiatWithdrawConfigResponseWrapper:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          $ref: '#/components/schemas/FiatWithdrawConfigDto'
+
+    FiatWithdrawRequest:
+      type: object
+      properties:
+        amount:
+          $ref: '#/components/schemas/Money'
+          description: مقدار برداشت به تومان
+        iban:
+          type: string
+          description: شماره شبا (باید از شباهای ثبت‌شده در حساب کاربری شما باشد)
+        feeDeductType:
+          allOf:
+            - $ref: '#/components/schemas/FeeDeductTypeEnum'
+          type:
+            - string
+            - "null"
+          description: نحوه‌ی کسر کارمزد (پیش‌فرض `INTERNAL`)
+        remark:
+          type: [ string, "null" ]
+          description: یادداشت داخلی
+      required:
+        - amount
+        - iban
+      example:
+        amount:
+          number: "15000"
+          unit: "IRT"
+        iban: "IR360560083380003034720002"
+        feeDeductType: "INTERNAL"
+        remark: "پرداخت فاکتور ۴۵۶"
+
+    FiatWithdrawDetailDto:
+      type: object
+      properties:
+        amount:
+          $ref: '#/components/schemas/Money'
+          description: مقدار برداشت‌شده به تومان
+        value:
+          $ref: '#/components/schemas/Money'
+          description: ارزش معادل به دلار
+        userCurrencyValue:
+          $ref: '#/components/schemas/Money'
+          description: ارزش معادل به ارز کاربر
+        iban:
+          type: string
+          description: شماره شبای مقصد
+        bank:
+          type: string
+          description: نام بانک مقصد
+        holderName:
+          type: string
+          description: نام صاحب حساب مقصد
+      example:
+        amount:
+          number: "15000"
+          unit: "IRT"
+        value:
+          number: "0.09"
+          unit: "USD"
+        userCurrencyValue:
+          number: "14886"
+          unit: "IRT"
+        iban: "IR360560083380003034720002"
+        bank: "SAMAN"
+        holderName: "محمدصادق حایری مهریزی"
+
+    FiatWithdrawTransactionDto:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: شناسه‌ی عددی تراکنش
+        supportCode:
+          type: string
+          description: کد پشتیبانی
+        timestamp:
+          type: integer
+          format: int64
+          description: زمان ثبت تراکنش (Unix milliseconds)
+        type:
+          type: string
+          enum:
+            - FIAT_WITHDRAW
+          description: نوع تراکنش
+        status:
+          $ref: '#/components/schemas/WithdrawStatusEnum'
+        network:
+          type: string
+          description: شبکه‌ی انتقال
+        exchangeFee:
+          $ref: '#/components/schemas/Money'
+          description: کارمزد کسرشده
+        fiatWithdraw:
+          $ref: '#/components/schemas/FiatWithdrawDetailDto'
+          description: جزئیات برداشت ریالی
+      example:
+        id: 727609
+        supportCode: "SW-9MZT3HL-IB1N"
+        timestamp: 1771559480908
+        type: "FIAT_WITHDRAW"
+        status: "PENDING"
+        network: "INTERNAL"
+        exchangeFee:
+          number: "2500"
+          unit: "IRT"
+        fiatWithdraw:
+          amount:
+            number: "15000"
+            unit: "IRT"
+          value:
+            number: "0.09"
+            unit: "USD"
+          userCurrencyValue:
+            number: "14886"
+            unit: "IRT"
+          iban: "IR360560083380003034720002"
+          bank: "SAMAN"
+          holderName: "محمدصادق حایری مهریزی"
+
+    FiatWithdrawTransactionResponseWrapper:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          $ref: '#/components/schemas/FiatWithdrawTransactionDto'
+
+    OtcSwapRequest:
+      type: object
+      properties:
+        sourceToken:
+          $ref: '#/components/schemas/TokenEnum'
+          description: توکن مبدأ
+        destinationToken:
+          $ref: '#/components/schemas/TokenEnum'
+          description: توکن مقصد
+        sourceAmount:
+          type: [ string, "null" ]
+          description: مقدار توکن مبدأ برای فروش (با `destinationAmount` نمی‌توان همزمان ارسال کرد)
+        destinationAmount:
+          type: [ string, "null" ]
+          description: مقدار توکن مقصد مورد نیاز (با `sourceAmount` نمی‌توان همزمان ارسال کرد)
+      required:
+        - sourceToken
+        - destinationToken
+      example:
+        sourceToken: "USDT"
+        sourceAmount: "0.1"
+        destinationToken: "TRX"
+
+    OtcOrderRequest:
+      type: object
+      properties:
+        swapToken:
+          type: string
+          format: uuid
+          description: توکن قیمت دریافت‌شده از endpoint قیمت (اعتبار ۱۰ ثانیه)
+      required:
+        - swapToken
+      example:
+        swapToken: "1bb2d955-5d39-450a-b9a2-d900387e09f0"
+
+    OtcPriceDto:
+      type: object
+      properties:
+        swapToken:
+          type: string
+          format: uuid
+          description: توکن یکتا برای تأیید سواپ (اعتبار ۱۰ ثانیه)
+        source:
+          $ref: '#/components/schemas/Money'
+          description: مقدار توکن مبدأ
+        destination:
+          $ref: '#/components/schemas/Money'
+          description: مقدار توکن مقصد
+        marketRate:
+          type: number
+          description: نرخ تبدیل لحظه‌ای
+        expiresIn:
+          type: string
+          format: date-time
+          description: زمان انقضای توکن قیمت
+      example:
+        swapToken: "5f8b4f2c-d963-4e8c-8674-574a5bd32470"
+        source:
+          number: "136141"
+          unit: "USDT"
+        destination:
+          number: "409.55336"
+          unit: "TRX"
+        marketRate: 332.41
+        expiresIn: "2026-02-20T04:03:09Z"
+
+    OtcPriceResponseWrapper:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          $ref: '#/components/schemas/OtcPriceDto'
+
+    TradeDetailDto:
+      type: object
+      properties:
+        market:
+          type: string
+          description: جفت معاملاتی (مثلاً TRX/USDT)
+        side:
+          type: string
+          enum: [ BUY, SELL ]
+          description: جهت معامله از دیدگاه توکن مقصد
+        type:
+          type: string
+          enum: [ OTC ]
+          description: نوع معامله
+        sourceAmount:
+          $ref: '#/components/schemas/Money'
+          description: مقدار توکن مبدأ فروخته‌شده
+        sourceValue:
+          $ref: '#/components/schemas/Money'
+          description: ارزش معادل دلاری مبدأ
+        sourceUserCurrencyValue:
+          $ref: '#/components/schemas/Money'
+          description: ارزش معادل به ارز کاربر
+        destinationAmount:
+          $ref: '#/components/schemas/Money'
+          description: مقدار توکن مقصد دریافت‌شده
+        destinationValue:
+          $ref: '#/components/schemas/Money'
+          description: ارزش معادل دلاری مقصد
+        destinationUserCurrencyValue:
+          $ref: '#/components/schemas/Money'
+          description: ارزش معادل به ارز کاربر
+        marketRate:
+          type: string
+          description: نرخ تبدیل اعمال‌شده
+      example:
+        market: "TRX/USDT"
+        side: "BUY"
+        type: "OTC"
+        sourceAmount:
+          number: "0.1"
+          unit: "USDT"
+        sourceValue:
+          number: "0.1"
+          unit: "USD"
+        sourceUserCurrencyValue:
+          number: "16550"
+          unit: "IRT"
+        destinationAmount:
+          number: "0.35"
+          unit: "TRX"
+        destinationValue:
+          number: "0.09"
+          unit: "USD"
+        destinationUserCurrencyValue:
+          number: "14895"
+          unit: "IRT"
+        marketRate: "0.28571"
+
+    TradeTransactionDto:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: شناسه‌ی عددی تراکنش
+        supportCode:
+          type: string
+          description: کد پشتیبانی
+        timestamp:
+          type: integer
+          format: int64
+          description: زمان ثبت تراکنش (Unix milliseconds)
+        type:
+          type: string
+          enum: [ TRADE ]
+          description: نوع تراکنش
+        status:
+          type: string
+          enum: [ SUCCEED, PENDING, FAILED ]
+          description: وضعیت تراکنش
+        network:
+          type: string
+          description: شبکه‌ی انتقال
+        exchangeFee:
+          $ref: '#/components/schemas/Money'
+          description: کارمزد کسرشده
+        trade:
+          $ref: '#/components/schemas/TradeDetailDto'
+          description: جزئیات معامله
+      example:
+        id: 727611
+        supportCode: "SW-PGE4VWR-YJAX"
+        timestamp: 1771559521746
+        type: "TRADE"
+        status: "SUCCEED"
+        network: "INTERNAL"
+        exchangeFee:
+          number: "0"
+          unit: "TRX"
+        trade:
+          market: "TRX/USDT"
+          side: "BUY"
+          type: "OTC"
+          sourceAmount:
+            number: "0.1"
+            unit: "USDT"
+          sourceValue:
+            number: "0.1"
+            unit: "USD"
+          sourceUserCurrencyValue:
+            number: "16550"
+            unit: "IRT"
+          destinationAmount:
+            number: "0.35"
+            unit: "TRX"
+          destinationValue:
+            number: "0.09"
+            unit: "USD"
+          destinationUserCurrencyValue:
+            number: "14895"
+            unit: "IRT"
+          marketRate: "0.28571"
+
+    TradeTransactionResponseWrapper:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          $ref: '#/components/schemas/TradeTransactionDto'
+
+    TransactionTypeEnum:
+      type: string
+      enum:
+        - TRANSFER
+        - TRADE
+        - CRYPTO_DEPOSIT
+        - CRYPTO_WITHDRAW
+        - FIAT_DEPOSIT
+        - FIAT_WITHDRAW
+        - PAYMENT
+        - CREDIT
+
+    TransactionStatusEnum:
+      type: string
+      enum:
+        - SUCCEED
+        - PENDING
+        - PROCESSING
+        - FAILED
+        - CANCELED
+
+    UserDto:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: شناسه‌ی کاربر
+        isYou:
+          type: boolean
+          description: آیا این کاربر خود شما هستید
+        name:
+          type: string
+          description: نام نمایشی کاربر
+        profileUrl:
+          type: [ string, "null" ]
+          description: آدرس تصویر پروفایل
+      example:
+        id: 1
+        isYou: true
+        name: "Sadegh Hayeri"
+        profileUrl: "https://swapwallet.app/media/public/profile-picture/1/9728c1b4.png"
+
+    TransferDetailDto:
+      type: object
+      properties:
+        amount:
+          $ref: '#/components/schemas/Money'
+          description: مقدار انتقال‌یافته
+        value:
+          $ref: '#/components/schemas/Money'
+          description: ارزش معادل دلاری
+        userCurrencyValue:
+          $ref: '#/components/schemas/Money'
+          description: ارزش معادل به ارز کاربر
+        fromUser:
+          $ref: '#/components/schemas/UserDto'
+          description: فرستنده
+        toUser:
+          $ref: '#/components/schemas/UserDto'
+          description: گیرنده
+      example:
+        amount:
+          number: "0.01"
+          unit: "TON"
+        value:
+          number: "0.06"
+          unit: "USD"
+        userCurrencyValue:
+          number: "9912"
+          unit: "IRT"
+        fromUser:
+          id: 1
+          isYou: true
+          name: "Sadegh Hayeri"
+          profileUrl: "https://swapwallet.app/media/public/profile-picture/1/9728c1b4.png"
+        toUser:
+          id: 21
+          isYou: false
+          name: "Mohammad Mahdi Haeri"
+          profileUrl: "https://swapwallet.app/media/public/profile-picture/21/0d389a91.png"
+
+    TransactionDto:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: شناسه‌ی عددی تراکنش
+        supportCode:
+          type: string
+          description: کد پشتیبانی
+        timestamp:
+          type: integer
+          format: int64
+          description: زمان ثبت تراکنش (Unix milliseconds)
+        type:
+          $ref: '#/components/schemas/TransactionTypeEnum'
+        status:
+          $ref: '#/components/schemas/TransactionStatusEnum'
+        network:
+          type: string
+          description: شبکه‌ی انتقال
+        exchangeFee:
+          $ref: '#/components/schemas/Money'
+          description: کارمزد کسرشده
+        transfer:
+          allOf:
+            - $ref: '#/components/schemas/TransferDetailDto'
+          type:
+            - object
+            - "null"
+          description: جزئیات انتقال (فقط برای نوع `TRANSFER`)
+        trade:
+          allOf:
+            - $ref: '#/components/schemas/TradeDetailDto'
+          type:
+            - object
+            - "null"
+          description: جزئیات سواپ (فقط برای نوع `TRADE`)
+        fiatWithdraw:
+          allOf:
+            - $ref: '#/components/schemas/FiatWithdrawDetailDto'
+          type:
+            - object
+            - "null"
+          description: جزئیات برداشت ریالی (فقط برای نوع `FIAT_WITHDRAW`)
+      example:
+        id: 170776
+        supportCode: "SW-RU2QA0J-9A7P"
+        timestamp: 1722074366698
+        type: "TRANSFER"
+        status: "SUCCEED"
+        network: "INTERNAL"
+        exchangeFee:
+          number: "0"
+          unit: "TON"
+        transfer:
+          amount:
+            number: "0.01"
+            unit: "TON"
+          value:
+            number: "0.06"
+            unit: "USD"
+          userCurrencyValue:
+            number: "9912"
+            unit: "IRT"
+          fromUser:
+            id: 1
+            isYou: true
+            name: "Sadegh Hayeri"
+            profileUrl: "https://swapwallet.app/media/public/profile-picture/1/9728c1b4.png"
+          toUser:
+            id: 21
+            isYou: false
+            name: "Mohammad Mahdi Haeri"
+            profileUrl: "https://swapwallet.app/media/public/profile-picture/21/0d389a91.png"
+
+    TransactionResponseWrapper:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          $ref: '#/components/schemas/TransactionDto'
+
+    TelegramStarsRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          description: نام کاربری تلگرام گیرنده (بدون @)
+        count:
+          type: integer
+          enum: [ 100, 250, 500, 1000, 5000 ]
+          description: تعداد استارز
+      required:
+        - username
+        - count
+      example:
+        username: "SadeghHayer"
+        count: 100
+
+    TelegramPremiumRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          description: نام کاربری تلگرام گیرنده (بدون @)
+        month:
+          type: string
+          enum: [ "3m", "6m", "12m" ]
+          description: مدت اشتراک
+      required:
+        - username
+        - month
+      example:
+        username: "SadeghHayer"
+        month: "3m"
+
+    ShopInvoiceDto:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: شناسه‌ی فاکتور
+        supportCode:
+          type: string
+          description: کد پشتیبانی فاکتور
+        status:
+          type: string
+          description: وضعیت فاکتور
+        title:
+          type: string
+          description: عنوان فنی محصول
+        readableTitle:
+          type: string
+          description: عنوان قابل‌نمایش محصول
+        type:
+          type: string
+          description: نوع فاکتور
+        amount:
+          $ref: '#/components/schemas/Money'
+          description: مبلغ فاکتور
+        value:
+          $ref: '#/components/schemas/Money'
+          description: ارزش معادل
+        allowedPaymentTokens:
+          type: array
+          items:
+            type: string
+          description: توکن‌های مجاز برای پرداخت
+        fee:
+          $ref: '#/components/schemas/Money'
+          description: کارمزد فاکتور
+        createdAt:
+          type: string
+          format: date-time
+        expiredAt:
+          type: string
+          format: date-time
+        paidWith:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          type:
+            - object
+            - "null"
+          description: توکن پرداخت‌شده
+        paidAt:
+          type: [ string, "null" ]
+          format: date-time
+
+    ShopPaymentDetailDto:
+      type: object
+      properties:
+        invoice:
+          $ref: '#/components/schemas/ShopInvoiceDto'
+        amount:
+          $ref: '#/components/schemas/Money'
+          description: مبلغ پرداخت‌شده
+        value:
+          $ref: '#/components/schemas/Money'
+          description: ارزش معادل دلاری
+        userCurrencyValue:
+          $ref: '#/components/schemas/Money'
+          description: ارزش معادل به ارز کاربر
+
+    ShopTransactionDto:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: شناسه‌ی عددی تراکنش
+        supportCode:
+          type: string
+          description: کد پشتیبانی
+        timestamp:
+          type: integer
+          format: int64
+          description: زمان ثبت تراکنش (Unix milliseconds)
+        type:
+          type: string
+          enum: [ PAYMENT ]
+        status:
+          $ref: '#/components/schemas/TransactionStatusEnum'
+        network:
+          type: string
+        exchangeFee:
+          $ref: '#/components/schemas/Money'
+        payment:
+          $ref: '#/components/schemas/ShopPaymentDetailDto'
+
+    ShopTransactionResponseWrapper:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          $ref: '#/components/schemas/ShopTransactionDto'
+
+    ShopProductDto:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: شناسه‌ی محصول
+        name:
+          type: string
+          description: نام محصول
+        code:
+          type: string
+          description: کد یکتای محصول
+        price:
+          $ref: '#/components/schemas/Money'
+          description: قیمت فعلی محصول
+      example:
+        id: 52
+        name: "Telegram 100 Stars"
+        code: "TG-STARS-100"
+        price:
+          number: "1.65"
+          unit: "USDT"
+
+    ShopPriceListResponseWrapper:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShopProductDto'
+
+    TokenBalanceDto:
+      type: object
+      properties:
+        token:
+          $ref: '#/components/schemas/TokenEnum'
+        amount:
+          $ref: '#/components/schemas/Money'
+      example:
+        token: "USDT"
+        amount:
+          number: "999800"
+          unit: "USDT"
+
+    TokenBalanceListResponseWrapper:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          type: array
+          items:
+            $ref: '#/components/schemas/TokenBalanceDto'
+      example:
+        status: "OK"
+        result:
+          - token: "ETH"
+            amount:
+              number: "0"
+              unit: "ETH"
+          - token: "BNB"
+            amount:
+              number: "0"
+              unit: "BNB"
+          - token: "TON"
+            amount:
+              number: "0"
+              unit: "TON"
+          - token: "USDT"
+            amount:
+              number: "999800"
+              unit: "USDT"
+
+    TokenBalanceSingleResponseWrapper:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          $ref: '#/components/schemas/TokenBalanceDto'
+      example:
+        status: "OK"
+        result:
+          token: "USDT"
+          amount:
+            number: "999800"
+            unit: "USDT"
+
+    WithdrawConfig:
+      type: object
+      properties:
+        network:
+          $ref: '#/components/schemas/NetworkEnum'
+        withdrawFee:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          type:
+            - object
+            - "null"
+          description: کارمزد برداشت (در صورت null بودن، شبکه غیرفعال است)
+        minWithdraw:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          type:
+            - object
+            - "null"
+          description: حداقل مقدار قابل برداشت
+        maxWithdraw:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          type:
+            - object
+            - "null"
+          description: حداکثر مقدار قابل برداشت
+        withdrawEnabled:
+          type: boolean
+          description: آیا برداشت روی این شبکه فعال است
+        supportMemo:
+          type: boolean
+          description: آیا این شبکه از فیلد memo پشتیبانی می‌کند
+      example:
+        network: "TRON"
+        withdrawFee:
+          number: "1.00"
+          unit: "USDT"
+        minWithdraw:
+          number: "5.00"
+          unit: "USDT"
+        maxWithdraw:
+          number: "50000.00"
+          unit: "USDT"
+        withdrawEnabled: true
+        supportMemo: false
+
+    WithdrawConfigResponseWrapper:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          type: array
+          items:
+            $ref: '#/components/schemas/WithdrawConfig'
+          description: لیست تنظیمات برداشت به ازای هر شبکه‌ی پشتیبانی‌شده
+      example:
+        status: "OK"
+        result:
+          - network: "TRON"
+            withdrawFee:
+              number: "1.00"
+              unit: "USDT"
+            minWithdraw:
+              number: "5.00"
+              unit: "USDT"
+            maxWithdraw:
+              number: "50000.00"
+              unit: "USDT"
+            withdrawEnabled: true
+            supportMemo: false
+          - network: "BSC"
+            withdrawFee:
+              number: "0.50"
+              unit: "USDT"
+            minWithdraw:
+              number: "2.00"
+              unit: "USDT"
+            maxWithdraw:
+              number: "50000.00"
+              unit: "USDT"
+            withdrawEnabled: true
+            supportMemo: false
+
+    CryptoWithdrawRequest:
+      type: object
+      properties:
+        amount:
+          $ref: '#/components/schemas/Money'
+          description: مقدار برداشت
+        network:
+          $ref: '#/components/schemas/NetworkEnum'
+        address:
+          type: string
+          description: آدرس کیف پول مقصد
+        fee:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          type:
+            - object
+            - "null"
+          description: |
+            کارمزد مورد انتظار (اختیاری). در صورت ارسال، سرور مقدار را با کارمزد واقعی مقایسه می‌کند
+            و در صورت عدم تطابق، درخواست رد می‌شود. برای جلوگیری از تغییر ناخواسته‌ی کارمزد توصیه می‌شود.
+        feeDeductType:
+          allOf:
+            - $ref: '#/components/schemas/FeeDeductTypeEnum'
+          type:
+            - string
+            - "null"
+          description: نحوه‌ی کسر کارمزد (پیش‌فرض `INTERNAL`)
+        remark:
+          type: [ string, "null" ]
+          description: یادداشت داخلی (برای استفاده‌ی شخصی، روی شبکه ارسال نمی‌شود)
+        memo:
+          type: [ string, "null" ]
+          description: |
+            برچسب/memo شبکه (برای شبکه‌هایی مثل TON که از memo پشتیبانی می‌کنند).
+            در شبکه‌هایی که پشتیبانی ندارند نادیده گرفته می‌شود.
+      required:
+        - amount
+        - network
+        - address
+      example:
+        amount:
+          number: "100.00"
+          unit: "USDT"
+        network: "TRON"
+        address: "TQ9yLxm1yC6uX3YgYvG6S4w7HxQvQ1pNnA"
+        fee:
+          number: "1.00"
+          unit: "USDT"
+        feeDeductType: "EXTERNAL"
+        remark: "پرداخت فاکتور ۱۲۳"
+        memo: null
+
+    CryptoWithdrawTransactionDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: شناسه UUID تراکنش
+        status:
+          $ref: '#/components/schemas/WithdrawStatusEnum'
+        token:
+          $ref: '#/components/schemas/TokenEnum'
+        network:
+          $ref: '#/components/schemas/NetworkEnum'
+        amount:
+          $ref: '#/components/schemas/Money'
+          description: مقدار برداشت‌شده
+        fee:
+          $ref: '#/components/schemas/Money'
+          description: کارمزد کسرشده
+        feeDeductType:
+          $ref: '#/components/schemas/FeeDeductTypeEnum'
+        address:
+          type: string
+          description: آدرس مقصد
+        memo:
+          type: [ string, "null" ]
+          description: memo ارسال‌شده روی شبکه
+        remark:
+          type: [ string, "null" ]
+          description: یادداشت داخلی
+        txHash:
+          type: [ string, "null" ]
+          description: هش تراکنش روی شبکه (پس از تأیید تکمیل می‌شود)
+        createdAt:
+          type: string
+          format: date-time
+          description: زمان ثبت درخواست
+      example:
+        id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        status: "PROCESSING"
+        token: "USDT"
+        network: "TRON"
+        amount:
+          number: "100.00"
+          unit: "USDT"
+        fee:
+          number: "1.00"
+          unit: "USDT"
+        feeDeductType: "EXTERNAL"
+        address: "TQ9yLxm1yC6uX3YgYvG6S4w7HxQvQ1pNnA"
+        memo: null
+        remark: "پرداخت فاکتور ۱۲۳"
+        txHash: null
+        createdAt: "2025-12-15T10:00:00Z"
+
+    CryptoWithdrawTransactionResponseWrapper:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          $ref: '#/components/schemas/CryptoWithdrawTransactionDto'
+
+    TokenEnum:
+      type: string
+      enum:
+        - USDT
+        - TON
+        - TRX
+        - IRT
+        - ETH
+        - BNB
+
+    NetworkEnum:
+      type: string
+      enum:
+        - TRON
+        - TON
+        - BSC
+
+    # V2 API Schemas
+    CreateApplicationInvoiceRequestV2:
+      type: object
+      properties:
+        amount:
+          $ref: '#/components/schemas/Money'
+        allowedTokens:
+          type: array
+          items:
+            $ref: '#/components/schemas/TokenNetworkDto'
+          description: لیست توکن‌ها و شبکه‌های مجاز برای پرداخت
+        feePayer:
+          allOf:
+            - $ref: '#/components/schemas/FeePayerEnum'
+          type:
+            - string
+            - "null"
+          description: پرداخت‌کننده کارمزد
+        userLanguage:
+          allOf:
+            - $ref: '#/components/schemas/LanguageEnum'
+          example: "FA"
+          type:
+            - string
+            - "null"
+          description: زبان کاربر
+        ttl:
+          type: integer
+          format: int64
+          minimum: 300
+          maximum: 21600
+          description: مدت زمان اعتبار فاکتور به ثانیه
+        underPaidCoveragePercent:
+          type: [ string, "null" ]
+          description: درصد پوشش کم‌پرداختی (0 تا 60 درصد)
+          default: "0.5"
+        returnUrl:
+          type: [ string, "null" ]
+          format: uri
+          maxLength: 255
+          description: آدرس بازگشت پس از پرداخت
+        webhookUrl:
+          type: [ string, "null" ]
+          format: uri
+          maxLength: 255
+          description: آدرس وب‌هوک برای اعلان‌ها
+        orderId:
+          type: [ string, "null" ]
+          maxLength: 255
+          description: شناسه سفارش خارجی
+        description:
+          type: [ string, "null" ]
+          maxLength: 512
+          description: توضیحات فاکتور
+        customData:
+          type: [ string, "null" ]
+          maxLength: 512
+          description: داده‌های سفارشی
+        userId:
+          type: [ string, "null" ]
+          maxLength: 255
+          description: شناسه کاربر در سیستم شما
+        userEmail:
+          type: [ string, "null" ]
+          format: email
+          maxLength: 320
+          description: ایمیل کاربر
+        userPhoneNumber:
+          type: [ string, "null" ]
+          format: phone
+          maxLength: 16
+          description: شماره تلفن کاربر
+      example:
+        amount:
+          number: "150.00"
+          unit: "USDT"
+        allowedTokens:
+          - token: "USDT"
+            network: "TRON"
+          - token: "TON"
+            network: "TON"
+        feePayer: "APPLICATION"
+        userLanguage: "FA"
+        ttl: 86400
+        underPaidCoveragePercent: "0.5"
+        returnUrl: "https://webhook.site/return/demo-invoice"
+        webhookUrl: "https://webhook.site/payment-callback-demo"
+        orderId: "ORDER-7842"
+        description: "Invoice for monthly SaaS plan"
+        customData: "{\"plan\":\"pro\"}"
+        userId: "user-90210"
+        userEmail: "customer@example.com"
+        userPhoneNumber: "+989121234567"
+      required:
+        - amount
+        - allowedTokens
+        - ttl
+
+    CreateApplicationInvoiceWithTemporaryWalletRequest:
+      type: object
+      properties:
+        amount:
+          type: object
+          description: ارزش فاکتور که می‌خواهید معادل آن را دریافت کنید
+          properties:
+            number:
+              type: string
+            unit:
+              type: string
+              enum:
+                - USDT
+                - IRT
+                - TON
+                - TRX
+                - ETH
+          required:
+            - number
+            - unit
+          example:
+            number: "100000"
+            unit: "IRT"
+        allowedToken:
+          $ref: '#/components/schemas/TokenEnum'
+        network:
+          allOf:
+            - $ref: '#/components/schemas/NetworkEnum'
+          example: "BSC"
+        ttl:
+          type: integer
+          format: int64
+          minimum: 300
+          maximum: 21600
+          description: مدت زمان اعتبار فاکتور به ثانیه
+          example: 3600
+        underPaidCoveragePercent:
+          type: [ string, "null" ]
+          description: درصد پوشش پرداخت کمتر (0 تا 60 درصد)
+        orderId:
+          type: [ string, "null" ]
+          maxLength: 255
+          description: شناسه سفارش خارجی
+        webhookUrl:
+          type: [ string, "null" ]
+          format: uri
+          maxLength: 255
+          description: آدرس وب‌هوک برای اعلان‌ها
+        customData:
+          type: [ string, "null" ]
+          maxLength: 512
+          description: داده‌های سفارشی
+        description:
+          type: [ string, "null" ]
+          maxLength: 512
+          description: توضیحات فاکتور
+        userId:
+          type: [ string, "null" ]
+          maxLength: 255
+          description: شناسه کاربر در سیستم شما
+        userEmail:
+          type: [ string, "null" ]
+          format: email
+          maxLength: 320
+          description: ایمیل کاربر
+        userPhoneNumber:
+          type: [ string, "null" ]
+          format: phone
+          maxLength: 16
+          description: شماره تلفن کاربر
+      example:
+        amount:
+          number: "2500000"
+          unit: "IRT"
+        allowedToken: "USDT"
+        network: "TRON"
+        ttl: 3600
+        underPaidCoveragePercent: "0.5"
+        orderId: "ORDER-2399"
+        webhookUrl: "https://webhook.site/temporary-wallet-callback"
+        customData: "{\"cartId\":\"c-431\"}"
+        description: "Payment for order 2399"
+        userId: "user-2399"
+        userEmail: "buyer@example.com"
+        userPhoneNumber: "+989901234567"
+      required:
+        - amount
+        - network
+        - ttl
+
+    UpdateInvoiceTokenRequest:
+      type: object
+      properties:
+        token:
+          $ref: '#/components/schemas/TokenEnum'
+        network:
+          $ref: '#/components/schemas/NetworkEnum'
+      example:
+        token: "TON"
+        network: "TON"
+      required:
+        - token
+        - network
+
+    ApplicationInvoiceWithPaymentLinksResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: شناسه UUID فاکتور
+        paymentLinks:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvoicePaymentLinkDto'
+          description: لینک‌های پرداخت
+        expiredAt:
+          type: string
+          format: date-time
+          description: زمان انقضای فاکتور
+        createdAt:
+          type: string
+          format: date-time
+          description: زمان ایجاد فاکتور
+      example:
+        id: "8c5b5f83-1f6b-45b5-bb09-4b1b1db5ecb8"
+        paymentLinks:
+          - type: "TELEGRAM_WEBAPP"
+            url: "https://t.me/SwapWalletBot/app?startapp=xp-withdraw-1_05-USDT-325"
+        expiredAt: "2025-12-15T10:45:00Z"
+        createdAt: "2025-12-15T09:45:00Z"
+
+    CreateApplicationInvoiceWithTemporaryWalletResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: شناسه UUID فاکتور
+        walletAddress:
+          type: string
+          description: آدرس کیف پول موقت
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeepLinkDto'
+          description: لینک‌های عمیق کیف پول‌ها
+        amount:
+          $ref: '#/components/schemas/AmountAndValueDto'
+        expiredAt:
+          type: string
+          format: date-time
+          description: زمان انقضای فاکتور
+        createdAt:
+          type: string
+          format: date-time
+          description: زمان ایجاد فاکتور
+      example:
+        id: "b2b76e4b-167d-4ff9-a8c6-56b8434d3c44"
+        walletAddress: "TQ9yLxm1yC6uX3YgYvG6S4w7HxQvQ1pNnA"
+        links:
+          - name: "SWAP_WALLET"
+            logo: "https://swapwallet.app/assets/logo.png"
+            url: "https://t.me/SwapWalletBot/app?startapp=xp-withdraw-1_05-USDT-325"
+          - name: "TRUST_WALLET"
+            logo: "https://trustwallet.com/logo.png"
+            url: "https://link.trustwallet.com/send?address=TQ9yLxm1yC6uX3YgYvG6S4w7HxQvQ1pNnA"
+        amount:
+          amount:
+            number: "2500000"
+            unit: "IRT"
+          usdValue:
+            number: "45.20"
+            unit: "USDT"
+          userCurrencyValue:
+            number: "2500000"
+            unit: "IRT"
+        expiredAt: "2025-12-15T10:45:00Z"
+        createdAt: "2025-12-15T09:45:00Z"
+
+    ApplicationInvoiceV2Dto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: شناسه UUID فاکتور
+        supportCode:
+          type: string
+          description: کد پشتیبانی
+        status:
+          $ref: '#/components/schemas/ApplicationInvoiceStatusEnum'
+        description:
+          type: [ string, "null" ]
+          description: توضیحات فاکتور
+        customData:
+          type: [ string, "null" ]
+          description: داده‌های سفارشی
+        wallet:
+          allOf:
+            - $ref: "#/components/schemas/ApplicationInvoiceWalletDto"
+          type:
+            - object
+            - "null"
+        userId:
+          type: [ string, "null" ]
+          maxLength: 255
+          description: شناسه کاربر در سیستم شما
+          example: "user-123456"
+        userEmail:
+          type: [ string, "null" ]
+          format: email
+          maxLength: 320
+          description: ایمیل کاربر
+          example: "user@example.com"
+        userPhoneNumber:
+          type: [ string, "null" ]
+          format: phone
+          maxLength: 16
+          description: شماره تلفن کاربر
+          example: "+989121234567"
+        userLanguage:
+          allOf:
+            - $ref: '#/components/schemas/LanguageEnum'
+          example: "FA"
+          type:
+            - string
+            - "null"
+          description: زبان کاربر
+        returnUrl:
+          type: [ string, "null" ]
+          format: uri
+          maxLength: 255
+          description: آدرس بازگشت
+        webhookUrl:
+          type: [ string, "null" ]
+          format: uri
+          maxLength: 255
+          description: آدرس وب‌هوک برای اعلان‌ها
+        orderId:
+          type: [ string, "null" ]
+          description: شناسه خارجی
+        amount:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          type:
+            - object
+            - "null"
+          description: مبلغ فاکتور
+        value:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          type:
+            - object
+            - "null"
+          description: ارزش فاکتور
+        feePayer:
+          $ref: '#/components/schemas/FeePayerEnum'
+        feeAmount:
+          allOf:
+            - $ref: '#/components/schemas/Money'
+          type:
+            - object
+            - "null"
+          description: مبلغ کارمزد
+        paymentLinks:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvoicePaymentLinkDto'
+          description: لینک‌های پرداخت
+        paidAt:
+          type: [ string, "null" ]
+          format: date-time
+          description: زمان پرداخت
+        expiredAt:
+          type: string
+          format: date-time
+          description: زمان انقضا
+        createdAt:
+          type: string
+          format: date-time
+          description: زمان ایجاد
+      example:
+        id: "5f3f3b28-7c38-4b24-9f1d-6b9e5d9a9c77"
+        supportCode: "SW-482193"
+        status: "ACTIVE"
+        description: "Invoice for order 482193"
+        customData: "{\"cartId\":\"482193\"}"
+        wallet:
+          network: "TRON"
+          token: "USDT"
+          address: "TNm9Kx8ZxX4p4rXfsVqk1uNpjrA1jE7P7U"
+          validUntil: "2025-12-15T11:00:00Z"
+          deepLinks:
+            - name: "SWAP_WALLET"
+              logo: "https://swapwallet.app/assets/logo.png"
+              url: "https://t.me/SwapWalletBot/app?startapp=xp-withdraw-1_05-USDT-325"
+        userLanguage: "FA"
+        returnUrl: "https://webhook.site/return/order-482193"
+        webhookUrl: "https://webhook.site/payment/order-482193"
+        orderId: "ORDER-482193"
+        amount:
+          number: "95.00"
+          unit: "USDT"
+        value:
+          number: "95.00"
+          unit: "USDT"
+        feePayer: "APPLICATION"
+        feeAmount:
+          number: "0.95"
+          unit: "USDT"
+        paymentLinks:
+          - type: "TELEGRAM_BOT"
+            url: "https://t.me/SwapWalletBot/pay?invoice=5f3f3b28"
+        paidAt: null
+        expiredAt: "2025-12-15T11:00:00Z"
+        createdAt: "2025-12-15T09:00:00Z"
+
+    InvoicePaymentLinkDto:
+      type: object
+      properties:
+        type:
+          $ref: '#/components/schemas/PaymentLinkTypeEnum'
+        url:
+          type: string
+          description: آدرس لینک پرداخت
+      example:
+        type: "WEBSITE"
+        url: "https://swapwallet.app/pay/8c5b5f83"
+
+    ApplicationInvoiceWalletDto:
+      type: object
+      properties:
+        network:
+          $ref: '#/components/schemas/NetworkEnum'
+        token:
+          $ref: '#/components/schemas/TokenEnum'
+        address:
+          type: string
+          description: آدرس کیف پول
+        validUntil:
+          type: string
+          format: date-time
+          description: زمان اعتبار کیف پول
+        deepLinks:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeepLinkDto'
+          description: لینک‌های عمیق کیف پول‌ها
+      example:
+        network: "TRON"
+        token: "USDT"
+        address: "TP3u4JdW5m1pVa9oX2y9pQdF6xB3rP7q8s"
+        validUntil: "2025-12-15T11:00:00Z"
+        deepLinks:
+          - name: "TRUST_WALLET"
+            logo: "https://trustwallet.com/logo.png"
+            url: "trust://pay?address=TP3u4JdW5m1pVa9oX2y9pQdF6xB3rP7q8s"
+
+    AmountAndValueDto:
+      type: object
+      properties:
+        amount:
+          $ref: '#/components/schemas/Money'
+        usdValue:
+          $ref: '#/components/schemas/Money'
+        userCurrencyValue:
+          $ref: '#/components/schemas/Money'
+      example:
+        amount:
+          number: "2500000"
+          unit: "IRT"
+        usdValue:
+          number: "45.20"
+          unit: "USDT"
+        userCurrencyValue:
+          number: "2500000"
+          unit: "IRT"
+
+    DeepLinkDto:
+      type: object
+      properties:
+        name:
+          $ref: '#/components/schemas/WalletProvidersEnum'
+        logo:
+          type: string
+          description: آدرس لوگو کیف پول
+        url:
+          type: [ string, "null" ]
+          description: لینک عمیق کیف پول
+      example:
+        name: "TON_KEEPER"
+        logo: "https://tonkeeper.com/logo.png"
+        url: "tonkeeper://transfer?address=UQDLbY2mNw7w4KVs_0dGthQ"
+
+    # V2 Response Wrappers
+    ApplicationInvoiceWithPaymentLinksResponseWrapper:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          $ref: '#/components/schemas/ApplicationInvoiceWithPaymentLinksResponse'
+
+    CreateApplicationInvoiceWithTemporaryWalletResponseWrapper:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          $ref: '#/components/schemas/CreateApplicationInvoiceWithTemporaryWalletResponse'
+
+    ApplicationInvoiceV2ResponseWrapper:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          $ref: '#/components/schemas/ApplicationInvoiceV2Dto'
+
+    ApplicationInvoiceV2PaginationResponse:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApplicationInvoiceV2Dto'
+        totalCount:
+          type: integer
+          format: int64
+          description: تعداد کل آیتم‌ها
+        totalPages:
+          type: integer
+          description: تعداد کل صفحات
+        currentPage:
+          type: integer
+          description: شماره صفحه فعلی
+        pageSize:
+          type: integer
+          description: تعداد آیتم در هر صفحه
+
+    PaymentLinkTypeEnum:
+      type: string
+      enum:
+        - TELEGRAM_BOT
+        - TELEGRAM_WEBAPP
+        - WEBSITE
+
+    ApplicationInvoiceStatusEnum:
+      type: string
+      enum:
+        - ACTIVE
+        - PAID
+        - EXPIRED
+        - CANCELED
+
+    LanguageEnum:
+      type: string
+      enum:
+        - EN
+        - FA
+
+    WalletProvidersEnum:
+      type: string
+      enum:
+        - SWAP_WALLET
+        - TRUST_WALLET
+        - METAMASK
+        - TON_KEEPER
+        - TONHUB
+        - MYTONWALLET
+
+    CreateResidRequestV1:
+      type: "object"
+      properties:
+        amount:
+          allOf:
+            - $ref: "#/components/schemas/Money"
+          description: مبلغ فاکتور
+          example:
+            number: "19000"
+            unit: "IRT"
+        ttl:
+          type: integer
+          format: int64
+          minimum: 300
+          maximum: 21600
+          description: مدت زمان اعتبار فاکتور به ثانیه
+          example: 3600
+        userLanguage:
+          allOf:
+            - $ref: "#/components/schemas/LanguageEnum"
+          example: "FA"
+          type: [ string, "null" ]
+          description: زبان کاربر
+        webhookUrl:
+          type: [ string, "null" ]
+          format: uri
+          maxLength: 255
+          description: آدرس وب‌هوک برای اعلان‌ها
+        returnUrl:
+          type: [ string, "null" ]
+          format: uri
+          maxLength: 255
+          description: آدرس بازگشت کاربر پس از پرداخت
+        orderId:
+          type: [ string, "null" ]
+          maxLength: 255
+          description: شناسه سفارش خارجی
+        description:
+          type: [ string, "null" ]
+          maxLength: 512
+          description: توضیحات رسید
+        customData:
+          type: [ string, "null" ]
+          maxLength: 512
+          description: متادیتا
+        userId:
+          type: [ string, "null" ]
+          maxLength: 255
+          description: شناسه کاربر در سیستم شما
+        userEmail:
+          type: [ string, "null" ]
+          format: email
+          maxLength: 320
+          description: ایمیل کاربر
+        userPhoneNumber:
+          type: [ string, "null" ]
+          format: phone
+          maxLength: 16
+          description: شماره تلفن کاربر
+      example:
+        amount:
+          number: "19000"
+          unit: "IRT"
+        ttl: 3600
+        userLanguage: "FA"
+        webhookUrl: "https://webhook.site/resid-callback"
+        orderId: "ORDER-19000"
+        description: "Receipt for order 19000"
+        customData: "{\"note\":\"express\"}"
+        userId: "user-19000"
+        userEmail: "payer@example.com"
+        userPhoneNumber: "+989121112233"
+      required:
+        - amount
+        - ttl
+
+    CreateIrtResidResponseV1:
+      type: "object"
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: شناسه UUID رسید
+        paymentLinks:
+          type: array
+          items:
+            $ref: "#/components/schemas/InvoicePaymentLinkDto"
+          description: لینک‌های پرداخت
+        expiredAt:
+          type: string
+          format: date-time
+          description: زمان انقضای رسید
+        createdAt:
+          type: string
+          format: date-time
+          description: زمان ایجاد رسید
+      example:
+        id: "d4e5f6a7-8b9c-4d0e-9f1a-2b3c4d5e6f78"
+        paymentLinks:
+          - type: "TELEGRAM_WEBAPP"
+            url: "https://t.me/SwapWalletBot/app?startapp=xp-resid-d4e5f6a7-8b9c-4d0e-9f1a-2b3c4d5e6f78"
+          - type: "WEBSITE"
+            url: "https://swapwallet.app/express-resid/invoice?id=d4e5f6a7-8b9c-4d0e-9f1a-2b3c4d5e6f78"
+        expiredAt: "2025-12-15T10:45:00Z"
+        createdAt: "2025-12-15T09:45:00Z"
+
+    SortDirEnum:
+      type: string
+      enum:
+        - ASC
+        - DESC
+
+    TransactionV2Dto:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: شناسه‌ی عددی تراکنش
+          example: 170776
+        supportCode:
+          type: string
+          description: کد پشتیبانی تراکنش
+          example: SW-PGE4VWR-YJAX
+        timestamp:
+          type: integer
+          format: int64
+          description: زمان ثبت تراکنش — Unix timestamp به میلی‌ثانیه
+          example: 1742114712000
+        type:
+          $ref: '#/components/schemas/TransactionTypeEnum'
+        status:
+          $ref: '#/components/schemas/TransactionStatusEnum'
+        network:
+          $ref: '#/components/schemas/NetworkEnum'
+        exchangeFee:
+          $ref: '#/components/schemas/Money'
+        trade:
+          anyOf:
+            - $ref: '#/components/schemas/TradeDetailDto'
+            - type: 'null'
+          description: جزئیات سواپ — فقط برای نوع `TRADE`
+        transfer:
+          anyOf:
+            - $ref: '#/components/schemas/TransferDetailDto'
+            - type: 'null'
+          description: جزئیات انتقال — فقط برای نوع `TRANSFER`
+        cryptoDeposit:
+          anyOf:
+            - type: object
+            - type: 'null'
+          description: جزئیات واریز کریپتو — فقط برای نوع `CRYPTO_DEPOSIT`
+        cryptoWithdraw:
+          anyOf:
+            - type: object
+            - type: 'null'
+          description: جزئیات برداشت کریپتو — فقط برای نوع `CRYPTO_WITHDRAW`
+        fiatDeposit:
+          anyOf:
+            - type: object
+            - type: 'null'
+          description: جزئیات واریز ریالی — فقط برای نوع `FIAT_DEPOSIT`
+        fiatWithdraw:
+          anyOf:
+            - $ref: '#/components/schemas/FiatWithdrawDetailDto'
+            - type: 'null'
+          description: جزئیات برداشت ریالی — فقط برای نوع `FIAT_WITHDRAW`
+        payment:
+          anyOf:
+            - type: object
+            - type: 'null'
+          description: جزئیات پرداخت فاکتور — فقط برای نوع `PAYMENT`
+        credit:
+          anyOf:
+            - type: object
+            - type: 'null'
+          description: جزئیات اعتبار — فقط برای نوع `CREDIT`
+
+    TransactionV2ListResponse:
+      type: object
+      properties:
+        status:
+          $ref: '#/components/schemas/ResponseStatusEnum'
+        result:
+          type: object
+          properties:
+            hasNext:
+              type: boolean
+              description: آیا صفحه‌ی بعدی وجود دارد
+              example: true
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/TransactionV2Dto'

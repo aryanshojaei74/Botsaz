@@ -1,0 +1,13 @@
+{
+  "name": "mts-arena",
+  "version": "1.3.5",
+  "private": true,
+  "description": "MTS Arena mini app and low-latency multiplayer relay",
+  "main": "mts-arena-server.js",
+  "scripts": {
+    "start": "node mts-arena-server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

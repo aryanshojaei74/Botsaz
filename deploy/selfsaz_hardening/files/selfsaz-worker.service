@@ -1,0 +1,34 @@
+[Unit]
+Description=SelfSaz account supervisor
+After=selfsaz.service
+
+[Service]
+Type=simple
+User=selfsaz
+Group=selfsaz
+WorkingDirectory=/opt/selfsaz
+EnvironmentFile=-/opt/selfsaz/.env
+ExecStart=/opt/selfsaz/.venv/bin/python /opt/selfsaz/selfsaz_service/supervisor.py
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/opt/selfsaz/data
+# سقف کل مصرف همهٔ workerها (هر worker هم جداگانه با SELFSAZ_WORKER_RSS_MB کنترل می‌شود)
+MemoryHigh=3G
+MemoryMax=4G
+TasksMax=4096
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
